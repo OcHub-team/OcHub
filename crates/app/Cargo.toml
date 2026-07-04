@@ -1,0 +1,27 @@
+[package]
+name = "routedeck-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "RouteDeck desktop UI (GPUI)"
+
+[[bin]]
+name = "routedeck"
+path = "src/main.rs"
+
+[dependencies]
+routedeck-core = { workspace = true }
+routedeck-server = { workspace = true }
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+log.workspace = true
+uuid.workspace = true
+unicode-segmentation.workspace = true
+auto-launch.workspace = true
+chrono.workspace = true
