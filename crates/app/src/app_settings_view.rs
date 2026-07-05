@@ -275,7 +275,6 @@ fn config_dir_meta(app: AppType) -> Option<(&'static str, &'static str)> {
             "~/.codex",
             "默认 ~/.codex；影响 auth.json、config.toml 和会话历史。",
         )),
-        AppType::Gemini => Some(("~/.gemini", "默认 ~/.gemini；影响 settings.json 和 .env。")),
         AppType::OpenCode => Some((
             "~/.config/opencode",
             "默认 ~/.config/opencode；影响 opencode.json。",
@@ -290,7 +289,6 @@ fn read_config_dir(settings: &AppSettings, app: AppType) -> Option<String> {
     match app {
         AppType::Claude => settings.claude_config_dir.clone(),
         AppType::Codex => settings.codex_config_dir.clone(),
-        AppType::Gemini => settings.gemini_config_dir.clone(),
         AppType::OpenCode => settings.opencode_config_dir.clone(),
         AppType::OpenClaw => settings.openclaw_config_dir.clone(),
         AppType::Hermes => settings.hermes_config_dir.clone(),
@@ -302,7 +300,6 @@ fn write_config_dir(settings: &mut AppSettings, app: AppType, value: Option<Stri
     match app {
         AppType::Claude => settings.claude_config_dir = value,
         AppType::Codex => settings.codex_config_dir = value,
-        AppType::Gemini => settings.gemini_config_dir = value,
         AppType::OpenCode => settings.opencode_config_dir = value,
         AppType::OpenClaw => settings.openclaw_config_dir = value,
         AppType::Hermes => settings.hermes_config_dir = value,
@@ -315,7 +312,6 @@ fn app_label(app: AppType) -> &'static str {
         AppType::Claude => "Claude Code",
         AppType::ClaudeDesktop => "Claude Desktop",
         AppType::Codex => "Codex",
-        AppType::Gemini => "Gemini CLI",
         AppType::OpenCode => "OpenCode",
         AppType::OpenClaw => "OpenClaw",
         AppType::Hermes => "Hermes",

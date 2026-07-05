@@ -8,6 +8,7 @@ use routedeck_core::db::legacy_json::{McpApps, McpServer};
 use routedeck_core::services::McpService;
 use routedeck_core::{AppState, AppType};
 
+use crate::components::{self, ButtonTone, ConfirmModal};
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -29,6 +30,8 @@ pub struct McpView {
     description: Entity<TextInput>,
     spec_json: Entity<TextInput>,
     apps: McpApps,
+    /// Pending delete awaiting confirmation: (server id, display name).
+    pending_delete: Option<(String, String)>,
 }
 
 impl McpView {
@@ -47,6 +50,7 @@ impl McpView {
             description,
             spec_json,
             apps: McpApps::default(),
+            pending_delete: None,
         };
         this.reload();
         this
@@ -62,11 +66,10 @@ impl McpView {
         }
     }
 
-    fn mcp_apps() -> [AppType; 5] {
+    fn mcp_apps() -> [AppType; 4] {
         [
             AppType::Claude,
             AppType::Codex,
-            AppType::Gemini,
             AppType::OpenCode,
             AppType::Hermes,
         ]
@@ -76,7 +79,6 @@ impl McpView {
         match app {
             AppType::Claude => "Claude",
             AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini",
             AppType::OpenCode => "OpenCode",
             AppType::Hermes => "Hermes",
             AppType::ClaudeDesktop => "Claude Desktop",
@@ -231,6 +233,23 @@ impl McpView {
         cx.notify();
     }
 
+    fn request_delete(&mut self, id: String, name: String, cx: &mut Context<Self>) {
+        self.pending_delete = Some((id, name));
+        cx.notify();
+    }
+
+    fn cancel_delete(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete = None;
+        cx.notify();
+    }
+
+    fn confirm_delete(&mut self, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.pending_delete.take() else {
+            return;
+        };
+        self.do_delete(id, cx);
+    }
+
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
         match McpService::delete_server(&self.app, &id) {
             Ok(true) => self.status = Some(SharedString::from("服务器已删除")),
@@ -262,7 +281,6 @@ impl McpView {
         let imports = [
             ("Claude", McpService::import_from_claude(&self.app)),
             ("Codex", McpService::import_from_codex(&self.app)),
-            ("Gemini", McpService::import_from_gemini(&self.app)),
             ("OpenCode", McpService::import_from_opencode(&self.app)),
             ("Hermes", McpService::import_from_hermes(&self.app)),
         ];
@@ -336,6 +354,7 @@ impl McpView {
 
     fn render_card(&self, server: &McpServer, cx: &mut Context<Self>) -> impl IntoElement {
         let delete_id = server.id.clone();
+        let delete_name = server.name.clone();
         let edit_server = server.clone();
         let endpoint = Self::endpoint(server);
         let apps = Self::enabled_apps_label(server);
@@ -427,7 +446,11 @@ impl McpView {
                                     .text_sm()
                                     .child("删除")
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.do_delete(delete_id.clone(), cx);
+                                        this.request_delete(
+                                            delete_id.clone(),
+                                            delete_name.clone(),
+                                            cx,
+                                        );
                                     })),
                             ),
                     ),
@@ -638,10 +661,42 @@ impl McpView {
     }
 }
 
+impl McpView {
+    fn render_with_confirm(
+        &self,
+        base: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some((_, name)) = self.pending_delete.clone() else {
+            return base;
+        };
+        let modal = ConfirmModal::delete(
+            "删除 MCP 服务器",
+            format!("确定要删除 MCP 服务器“{name}”吗？此操作无法撤销。"),
+        );
+        let confirm =
+            components::action_button_tone("mcp-delete-confirm", "删除", ButtonTone::Danger)
+                .on_click(cx.listener(|this, _event, _window, cx| this.confirm_delete(cx)));
+        let cancel = components::action_button("mcp-delete-cancel", "取消", false)
+            .on_click(cx.listener(|this, _event, _window, cx| this.cancel_delete(cx)));
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(base)
+            .child(components::confirm_overlay(&modal, confirm, cancel))
+            .into_any_element()
+    }
+}
+
 impl Render for McpView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.form_mode != FormMode::List {
-            return self.render_form(cx).into_any_element();
+            let base = self.render_form(cx).into_any_element();
+            return self.render_with_confirm(base, cx);
         }
 
         let cards: Vec<_> = self
@@ -651,12 +706,12 @@ impl Render for McpView {
             .collect();
         let is_empty = cards.is_empty();
 
-        layout::page()
+        let base = layout::page()
             .child(
                 layout::page_header(
                     "MCP 服务器",
                     Some(
-                        "统一管理 MCP，并同步到 Claude、Codex、Gemini、OpenCode 和 Hermes。".into(),
+                        "统一管理 MCP，并同步到 Claude、Codex、OpenCode 和 Hermes。".into(),
                     ),
                 )
                 .child(
@@ -741,6 +796,7 @@ impl Render for McpView {
                     })
                     .children(cards),
             ))
-            .into_any_element()
+            .into_any_element();
+        self.render_with_confirm(base, cx)
     }
 }

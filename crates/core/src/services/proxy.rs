@@ -26,7 +26,8 @@ use crate::db::Database;
 use crate::error::AppError;
 use crate::model::Provider;
 use crate::paths::{
-    delete_file, get_claude_settings_path, read_json_file, write_json_file, write_text_file,
+    delete_file, get_claude_settings_path, get_home_dir, read_json_file, write_json_file,
+    write_text_file,
 };
 use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
@@ -38,9 +39,8 @@ use crate::services::provider::{
     write_live_with_common_config,
 };
 
-// Codex / Gemini config helpers (ported under crate::apps::*).
+// Codex config helpers (ported under crate::apps::*).
 use crate::apps::codex as codex_config;
-use crate::apps::gemini as gemini_config;
 
 /// Claude live-config model-override env keys removed when taking over (the
 /// proxy rewrites `*_MODEL` to stable role aliases mapped upstream).
@@ -574,16 +574,9 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
-        let gemini = self
-            .db
-            .get_proxy_config_for_app("gemini")
-            .await
-            .map(|c| c.enabled)
-            .unwrap_or(false);
         Ok(ProxyTakeoverStatus {
             claude,
             codex,
-            gemini,
             opencode: false,
             openclaw: false,
         })
@@ -742,7 +735,6 @@ impl ProxyService {
         let live_config = match app_type {
             AppType::Claude => self.read_claude_live()?,
             AppType::Codex => self.read_codex_live()?,
-            AppType::Gemini => self.read_gemini_live()?,
             _ => return Err("app does not support proxy".to_string()),
         };
         self.sync_live_config_to_provider(app_type, &live_config)
@@ -880,49 +872,6 @@ impl ProxyService {
                     }
                 }
             }
-            AppType::Gemini => {
-                let provider_id =
-                    crate::settings::get_effective_current_provider(&self.db, &AppType::Gemini)
-                        .map_err(|e| format!("get gemini current provider failed: {e}"))?;
-                if let Some(provider_id) = provider_id {
-                    if let Ok(Some(mut provider)) =
-                        self.db.get_provider_by_id(&provider_id, "gemini")
-                    {
-                        if let Some(token) = live_config
-                            .get("env")
-                            .and_then(|v| v.get("GEMINI_API_KEY"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.trim())
-                            .filter(|s| !s.is_empty() && *s != PROXY_TOKEN_PLACEHOLDER)
-                        {
-                            if let Some(env_obj) = provider
-                                .settings_config
-                                .get_mut("env")
-                                .and_then(|v| v.as_object_mut())
-                            {
-                                env_obj.insert("GEMINI_API_KEY".to_string(), json!(token));
-                            } else {
-                                if provider.settings_config.is_null() {
-                                    provider.settings_config = json!({});
-                                }
-                                if let Some(root) = provider.settings_config.as_object_mut() {
-                                    root.insert(
-                                        "env".to_string(),
-                                        json!({ "GEMINI_API_KEY": token }),
-                                    );
-                                }
-                            }
-                            if let Err(e) = self.db.update_provider_settings_config(
-                                "gemini",
-                                &provider_id,
-                                &provider.settings_config,
-                            ) {
-                                log::warn!("sync gemini token to db failed: {e}");
-                            }
-                        }
-                    }
-                }
-            }
             _ => {}
         }
         Ok(())
@@ -935,10 +884,6 @@ impl ProxyService {
         }
         if let Ok(live_config) = self.read_codex_live() {
             self.sync_live_config_to_provider(&AppType::Codex, &live_config)
-                .await?;
-        }
-        if let Ok(live_config) = self.read_gemini_live() {
-            self.sync_live_config_to_provider(&AppType::Gemini, &live_config)
                 .await?;
         }
         Ok(())
@@ -1017,7 +962,7 @@ impl ProxyService {
             .set_live_takeover_active(false)
             .await
             .map_err(|e| format!("clear takeover state failed: {e}"))?;
-        for app_type in ["claude", "codex", "gemini"] {
+        for app_type in ["claude", "codex"] {
             if let Ok(mut config) = self.db.get_proxy_config_for_app(app_type).await {
                 if config.enabled {
                     config.enabled = false;
@@ -1062,16 +1007,6 @@ impl ProxyService {
                     .map_err(|e| format!("backup codex config failed: {e}"))?;
             }
         }
-        if let Ok(config) = self.read_gemini_live() {
-            if !Self::live_has_proxy_placeholder_for_app(&AppType::Gemini, &config) {
-                let json_str = serde_json::to_string(&config)
-                    .map_err(|e| format!("serialize gemini config failed: {e}"))?;
-                self.db
-                    .save_live_backup("gemini", &json_str)
-                    .await
-                    .map_err(|e| format!("backup gemini config failed: {e}"))?;
-            }
-        }
         Ok(())
     }
 
@@ -1079,7 +1014,6 @@ impl ProxyService {
         let (app_type_str, config) = match app_type {
             AppType::Claude => ("claude", self.read_claude_live()?),
             AppType::Codex => ("codex", self.read_codex_live()?),
-            AppType::Gemini => ("gemini", self.read_gemini_live()?),
             _ => return Err("app does not support proxy".to_string()),
         };
         if Self::live_has_proxy_placeholder_for_app(app_type, &config) {
@@ -1175,20 +1109,6 @@ impl ProxyService {
             log::info!("Codex live taken over: {proxy_codex_base_url}");
         }
 
-        if let Ok(mut live_config) = self.read_gemini_live() {
-            if let Some(env) = live_config.get_mut("env").and_then(|v| v.as_object_mut()) {
-                env.insert("GOOGLE_GEMINI_BASE_URL".to_string(), json!(&proxy_url));
-                env.insert("GEMINI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-            } else {
-                live_config["env"] = json!({
-                    "GOOGLE_GEMINI_BASE_URL": &proxy_url,
-                    "GEMINI_API_KEY": PROXY_TOKEN_PLACEHOLDER
-                });
-            }
-            self.write_gemini_live(&live_config)?;
-            log::info!("Gemini live taken over: {proxy_url}");
-        }
-
         Ok(())
     }
 
@@ -1228,19 +1148,6 @@ impl ProxyService {
                     Some(&codex_provider),
                 );
                 self.write_codex_takeover_live_for_provider(&live_config, Some(&codex_provider))?;
-            }
-            AppType::Gemini => {
-                let mut live_config = self.read_gemini_live()?;
-                if let Some(env) = live_config.get_mut("env").and_then(|v| v.as_object_mut()) {
-                    env.insert("GOOGLE_GEMINI_BASE_URL".to_string(), json!(&proxy_url));
-                    env.insert("GEMINI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-                } else {
-                    live_config["env"] = json!({
-                        "GOOGLE_GEMINI_BASE_URL": &proxy_url,
-                        "GEMINI_API_KEY": PROXY_TOKEN_PLACEHOLDER
-                    });
-                }
-                self.write_gemini_live(&live_config)?;
             }
             _ => return Err("app does not support proxy".to_string()),
         }
@@ -1304,20 +1211,6 @@ impl ProxyService {
                     );
                 }
             }
-            AppType::Gemini => {
-                if let Ok(mut live_config) = self.read_gemini_live() {
-                    if let Some(env) = live_config.get_mut("env").and_then(|v| v.as_object_mut()) {
-                        env.insert("GOOGLE_GEMINI_BASE_URL".to_string(), json!(&proxy_url));
-                        env.insert("GEMINI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-                    } else {
-                        live_config["env"] = json!({
-                            "GOOGLE_GEMINI_BASE_URL": &proxy_url,
-                            "GEMINI_API_KEY": PROXY_TOKEN_PLACEHOLDER
-                        });
-                    }
-                    let _ = self.write_gemini_live(&live_config);
-                }
-            }
             _ => {}
         }
         Ok(())
@@ -1341,13 +1234,6 @@ impl ProxyService {
                     self.write_codex_live(&config)?;
                 }
             }
-            AppType::Gemini => {
-                if let Ok(Some(backup)) = self.db.get_live_backup("gemini").await {
-                    let config: Value = serde_json::from_str(&backup.original_config)
-                        .map_err(|e| format!("parse gemini backup failed: {e}"))?;
-                    self.write_gemini_live(&config)?;
-                }
-            }
             _ => {}
         }
         Ok(())
@@ -1355,7 +1241,7 @@ impl ProxyService {
 
     async fn restore_live_configs(&self) -> Result<(), String> {
         let mut errors = Vec::new();
-        for app_type in [AppType::Claude, AppType::Codex, AppType::Gemini] {
+        for app_type in [AppType::Claude, AppType::Codex] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
                 .await
@@ -1430,7 +1316,6 @@ impl ProxyService {
         match app_type {
             AppType::Claude => self.write_claude_live(config),
             AppType::Codex => self.write_codex_live(config),
-            AppType::Gemini => self.write_gemini_live(config),
             _ => Err("app does not support proxy".to_string()),
         }
     }
@@ -1471,10 +1356,6 @@ impl ProxyService {
                 Ok(config) => Self::is_codex_live_taken_over(&config),
                 Err(_) => false,
             },
-            AppType::Gemini => match self.read_gemini_live() {
-                Ok(config) => Self::is_gemini_live_taken_over(&config),
-                Err(_) => false,
-            },
             _ => false,
         }
     }
@@ -1487,11 +1368,6 @@ impl ProxyService {
         }
         if let Ok(config) = self.read_codex_live() {
             if Self::is_codex_live_taken_over(&config) {
-                return true;
-            }
-        }
-        if let Ok(config) = self.read_gemini_live() {
-            if Self::is_gemini_live_taken_over(&config) {
                 return true;
             }
         }
@@ -1537,18 +1413,10 @@ impl ProxyService {
         Self::codex_live_has_proxy_placeholder(config)
     }
 
-    fn is_gemini_live_taken_over(config: &Value) -> bool {
-        let Some(env) = config.get("env").and_then(|v| v.as_object()) else {
-            return false;
-        };
-        env.get("GEMINI_API_KEY").and_then(|v| v.as_str()) == Some(PROXY_TOKEN_PLACEHOLDER)
-    }
-
     fn live_has_proxy_placeholder_for_app(app_type: &AppType, config: &Value) -> bool {
         match app_type {
             AppType::Claude => Self::is_claude_live_taken_over(config),
             AppType::Codex => Self::codex_live_has_proxy_placeholder(config),
-            AppType::Gemini => Self::is_gemini_live_taken_over(config),
             _ => false,
         }
     }
@@ -1629,15 +1497,6 @@ impl ProxyService {
                     });
                 Ok(Self::codex_live_has_proxy_placeholder(&config) && base_url_matches)
             }
-            AppType::Gemini => {
-                let config = self.read_gemini_live()?;
-                let base_url_matches = config
-                    .get("env")
-                    .and_then(|value| value.get("GOOGLE_GEMINI_BASE_URL"))
-                    .and_then(|value| value.as_str())
-                    .is_some_and(|url| Self::proxy_urls_match(url, &proxy_url));
-                Ok(Self::is_gemini_live_taken_over(&config) && base_url_matches)
-            }
             _ => Ok(false),
         }
     }
@@ -1649,7 +1508,6 @@ impl ProxyService {
         match app_type {
             AppType::Claude => self.cleanup_claude_takeover_placeholders_in_live(),
             AppType::Codex => self.cleanup_codex_takeover_placeholders_in_live(),
-            AppType::Gemini => self.cleanup_gemini_takeover_placeholders_in_live(),
             _ => Ok(()),
         }
     }
@@ -1706,31 +1564,11 @@ impl ProxyService {
         codex_config::remove_codex_toml_base_url_if(toml_str, Self::is_local_proxy_url)
     }
 
-    fn cleanup_gemini_takeover_placeholders_in_live(&self) -> Result<(), String> {
-        let mut config = self.read_gemini_live()?;
-        let Some(env) = config.get_mut("env").and_then(|v| v.as_object_mut()) else {
-            return Ok(());
-        };
-        if env.get("GEMINI_API_KEY").and_then(|v| v.as_str()) == Some(PROXY_TOKEN_PLACEHOLDER) {
-            env.remove("GEMINI_API_KEY");
-        }
-        if env
-            .get("GOOGLE_GEMINI_BASE_URL")
-            .and_then(|v| v.as_str())
-            .map(Self::is_local_proxy_url)
-            .unwrap_or(false)
-        {
-            env.remove("GOOGLE_GEMINI_BASE_URL");
-        }
-        self.write_gemini_live(&config)?;
-        Ok(())
-    }
-
     // ===================== crash recovery =====================
 
     pub async fn is_takeover_active(&self) -> Result<bool, String> {
         let status = self.get_takeover_status().await?;
-        Ok(status.claude || status.codex || status.gemini)
+        Ok(status.claude || status.codex)
     }
 
     pub async fn recover_from_crash(&self) -> Result<(), String> {
@@ -1744,6 +1582,131 @@ impl ProxyService {
             .await
             .map_err(|e| format!("delete backups failed: {e}"))?;
         log::info!("recovered live configs from crash");
+        Ok(())
+    }
+
+    // ===================== legacy gemini takeover restore =====================
+    //
+    // Gemini app support was removed. The normal restore/cleanup paths now only
+    // iterate Claude + Codex, so a user who upgraded while a Gemini takeover was
+    // active would otherwise keep `GEMINI_API_KEY=<placeholder>` and
+    // `GOOGLE_GEMINI_BASE_URL` pointed at the (now dead) local proxy in
+    // `~/.gemini/.env` forever, and the DB `live_backup` row for 'gemini' would
+    // never be cleared. This LEGACY one-time path restores that stranded state
+    // without reintroducing `AppType::Gemini`. It is keyed on the raw string
+    // "gemini" and is a no-op when no 'gemini' backup row exists.
+
+    /// Path to the legacy Gemini env file (`~/.gemini/.env`). Honors
+    /// `CC_SWITCH_TEST_HOME` via `get_home_dir` for tests.
+    fn legacy_gemini_env_path() -> std::path::PathBuf {
+        get_home_dir().join(".gemini").join(".env")
+    }
+
+    /// Minimal private copy of the removed `write_gemini_live` logic: serialize
+    /// the backed-up `{"env": { .. }}` JSON back to `~/.gemini/.env` (sorted
+    /// `KEY=VALUE` lines) with the same 0700 dir / 0600 file permissions the
+    /// deleted `apps/gemini.rs` used. Does NOT reintroduce the gemini module.
+    fn write_legacy_gemini_env(config: &Value) -> Result<(), String> {
+        let path = Self::legacy_gemini_env_path();
+
+        let mut entries: Vec<(String, String)> = Vec::new();
+        if let Some(env_obj) = config.get("env").and_then(|v| v.as_object()) {
+            for (key, value) in env_obj {
+                if let Some(val_str) = value.as_str() {
+                    entries.push((key.clone(), val_str.to_string()));
+                }
+            }
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let content = entries
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create gemini dir failed: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(parent) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o700);
+                    let _ = std::fs::set_permissions(parent, perms);
+                }
+            }
+        }
+
+        write_text_file(&path, &content).map_err(|e| format!("write gemini env failed: {e}"))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&path) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&path, perms);
+            }
+        }
+        Ok(())
+    }
+
+    /// LEGACY one-time restore of a stranded Gemini takeover. Reads the
+    /// string-keyed `live_backup` row for app 'gemini'; if present, writes the
+    /// backed-up `~/.gemini/.env` back, then clears the backup row and any
+    /// stale 'gemini' proxy_config takeover flag so it runs exactly once. A
+    /// no-op when no backup row exists.
+    pub async fn restore_legacy_gemini_takeover(&self) -> Result<(), String> {
+        let backup = self
+            .db
+            .get_live_backup("gemini")
+            .await
+            .map_err(|e| format!("read gemini live backup failed: {e}"))?;
+        let Some(backup) = backup else {
+            // No stranded Gemini takeover to restore.
+            return Ok(());
+        };
+
+        let config: Value = serde_json::from_str(&backup.original_config)
+            .map_err(|e| format!("parse gemini backup failed: {e}"))?;
+
+        let backup_is_placeholder = config
+            .get("env")
+            .and_then(|v| v.as_object())
+            .and_then(|env| env.get("GEMINI_API_KEY"))
+            .and_then(|v| v.as_str())
+            == Some(PROXY_TOKEN_PLACEHOLDER);
+
+        if backup_is_placeholder {
+            // The backup itself is a proxy placeholder (should not happen given
+            // backup guards, but be defensive): don't re-poison the live file.
+            log::warn!(
+                "legacy gemini backup is itself a proxy placeholder; clearing takeover without rewriting ~/.gemini/.env"
+            );
+        } else {
+            Self::write_legacy_gemini_env(&config)?;
+            log::info!("restored legacy gemini live config (~/.gemini/.env) from live backup");
+        }
+
+        // Clear the backup row so this restore runs exactly once.
+        self.db
+            .delete_live_backup("gemini")
+            .await
+            .map_err(|e| format!("delete gemini live backup failed: {e}"))?;
+
+        // Clear any stale 'gemini' proxy_config takeover flag.
+        if let Ok(mut gemini_config) = self.db.get_proxy_config_for_app("gemini").await {
+            if gemini_config.enabled {
+                gemini_config.enabled = false;
+                if let Err(e) = self.db.update_proxy_config_for_app(gemini_config).await {
+                    log::warn!("clear gemini takeover flag failed: {e}");
+                } else {
+                    log::info!("cleared stale gemini takeover flag");
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1800,15 +1763,6 @@ impl ProxyService {
         let backup_json = match app_type_enum {
             AppType::Claude | AppType::Codex => serde_json::to_string(&effective_settings)
                 .map_err(|e| format!("serialize {app_type} config failed: {e}"))?,
-            AppType::Gemini => {
-                let env_backup = if let Some(env) = effective_settings.get("env") {
-                    json!({ "env": env })
-                } else {
-                    json!({ "env": {} })
-                };
-                serde_json::to_string(&env_backup)
-                    .map_err(|e| format!("serialize gemini config failed: {e}"))?
-            }
             _ => return Err(format!("unknown app type: {app_type}")),
         };
 
@@ -2212,24 +2166,6 @@ impl ProxyService {
         Ok(())
     }
 
-    fn read_gemini_live(&self) -> Result<Value, String> {
-        let env_path = gemini_config::get_gemini_env_path();
-        if !env_path.exists() {
-            return Err("gemini .env file does not exist".to_string());
-        }
-        let env_map =
-            gemini_config::read_gemini_env().map_err(|e| format!("read gemini env failed: {e}"))?;
-        Ok(gemini_config::env_to_json(&env_map))
-    }
-
-    fn write_gemini_live(&self, config: &Value) -> Result<(), String> {
-        let env_map = gemini_config::json_to_env(config)
-            .map_err(|e| format!("convert gemini config failed: {e}"))?;
-        gemini_config::write_gemini_env_atomic(&env_map)
-            .map_err(|e| format!("write gemini env failed: {e}"))?;
-        Ok(())
-    }
-
     // ===================== status / config =====================
 
     pub async fn get_status(&self) -> Result<ProxyStatus, String> {
@@ -2308,10 +2244,6 @@ impl ProxyService {
                     self.takeover_live_config_best_effort(&AppType::Codex)
                         .await?;
                 }
-                if takeover.gemini {
-                    self.takeover_live_config_best_effort(&AppType::Gemini)
-                        .await?;
-                }
             }
             return Ok(());
         } else if let Some(server) = server_guard.as_ref() {
@@ -2371,6 +2303,106 @@ impl ProxyService {
                 .await
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod legacy_gemini_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    fn make_service(db: Arc<Database>, dir: std::path::PathBuf) -> ProxyService {
+        let copilot_auth = Arc::new(RwLock::new(CopilotAuthManager::new(dir.clone())));
+        let codex_oauth = Arc::new(RwLock::new(CodexOAuthManager::new(dir)));
+        ProxyService::new(db, copilot_auth, codex_oauth)
+    }
+
+    #[tokio::test]
+    async fn restore_legacy_gemini_takeover_restores_env_and_clears_backup() {
+        let _guard = crate::test_support::env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let old_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+        std::env::set_var("HOME", temp.path());
+
+        // Simulate a stranded takeover: ~/.gemini/.env poisoned with the proxy
+        // placeholder + a local-proxy base URL.
+        let gemini_dir = temp.path().join(".gemini");
+        std::fs::create_dir_all(&gemini_dir).unwrap();
+        let env_path = gemini_dir.join(".env");
+        std::fs::write(
+            &env_path,
+            format!("GEMINI_API_KEY={PROXY_TOKEN_PLACEHOLDER}\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8080"),
+        )
+        .unwrap();
+
+        let db = Arc::new(Database::memory().unwrap());
+        // Real backed-up config (what backup_live_configs would have stored).
+        let backup = json!({
+            "env": {
+                "GEMINI_API_KEY": "real-secret-key",
+                "GOOGLE_GEMINI_BASE_URL": "https://generativelanguage.googleapis.com"
+            }
+        });
+        db.save_live_backup("gemini", &serde_json::to_string(&backup).unwrap())
+            .await
+            .unwrap();
+
+        let service = make_service(db.clone(), temp.path().to_path_buf());
+        service.restore_legacy_gemini_takeover().await.unwrap();
+
+        // Live .env restored to the real config (no placeholder / no local proxy).
+        let restored = std::fs::read_to_string(&env_path).unwrap();
+        assert!(restored.contains("GEMINI_API_KEY=real-secret-key"), "{restored}");
+        assert!(
+            restored.contains("GOOGLE_GEMINI_BASE_URL=https://generativelanguage.googleapis.com"),
+            "{restored}"
+        );
+        assert!(!restored.contains(PROXY_TOKEN_PLACEHOLDER), "{restored}");
+        assert!(!restored.contains("127.0.0.1"), "{restored}");
+
+        // Backup row cleared; second call is a no-op that leaves the file intact.
+        assert!(db.get_live_backup("gemini").await.unwrap().is_none());
+        service.restore_legacy_gemini_takeover().await.unwrap();
+        let after = std::fs::read_to_string(&env_path).unwrap();
+        assert_eq!(restored, after);
+        assert!(db.get_live_backup("gemini").await.unwrap().is_none());
+
+        match old_test_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        match old_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_legacy_gemini_takeover_is_noop_without_backup() {
+        let _guard = crate::test_support::env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let old_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+        std::env::set_var("HOME", temp.path());
+
+        let db = Arc::new(Database::memory().unwrap());
+        let service = make_service(db.clone(), temp.path().to_path_buf());
+        // No 'gemini' backup row -> must be a no-op, no ~/.gemini/.env created.
+        service.restore_legacy_gemini_takeover().await.unwrap();
+        assert!(!temp.path().join(".gemini").join(".env").exists());
+
+        match old_test_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        match old_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
         }
     }
 }

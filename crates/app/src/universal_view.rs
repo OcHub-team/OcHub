@@ -1,13 +1,13 @@
 //! Universal provider management. This ports the cc-switch "统一供应商" page
-//! into GPUI: one shared endpoint/key can generate Claude, Codex, and Gemini
+//! into GPUI: one shared endpoint/key can generate Claude and Codex
 //! providers via `ProviderService::sync_universal_to_apps`.
 
 use std::sync::Arc;
 
 use gpui::{div, prelude::*, Context, Entity, FontWeight, SharedString, Window};
 use routedeck_core::model::{
-    ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, UniversalProvider,
-    UniversalProviderApps, UniversalProviderModels,
+    ClaudeModelConfig, CodexModelConfig, UniversalProvider, UniversalProviderApps,
+    UniversalProviderModels,
 };
 use routedeck_core::services::ProviderService;
 use routedeck_core::AppState;
@@ -30,10 +30,8 @@ pub struct UniversalView {
     notes: Entity<TextInput>,
     claude_model: Entity<TextInput>,
     codex_model: Entity<TextInput>,
-    gemini_model: Entity<TextInput>,
     claude_enabled: bool,
     codex_enabled: bool,
-    gemini_enabled: bool,
     status: Option<SharedString>,
 }
 
@@ -54,12 +52,6 @@ impl UniversalView {
             input.set_content("gpt-5.5", cx);
             input
         });
-        let gemini_model = cx.new(|cx| {
-            let mut input = TextInput::new(cx, "gemini-2.5-pro");
-            input.set_content("gemini-2.5-pro", cx);
-            input
-        });
-
         let mut this = Self {
             app,
             providers: Vec::new(),
@@ -71,10 +63,8 @@ impl UniversalView {
             notes,
             claude_model,
             codex_model,
-            gemini_model,
             claude_enabled: true,
             codex_enabled: true,
-            gemini_enabled: true,
             status: None,
         };
         this.reload();
@@ -116,10 +106,8 @@ impl UniversalView {
         Self::set_input(&self.notes, "", cx);
         Self::set_input(&self.claude_model, "claude-sonnet-4-20250514", cx);
         Self::set_input(&self.codex_model, "gpt-5.5", cx);
-        Self::set_input(&self.gemini_model, "gemini-2.5-pro", cx);
         self.claude_enabled = true;
         self.codex_enabled = true;
-        self.gemini_enabled = true;
         self.status = Some(SharedString::from("已清空表单"));
         cx.notify();
     }
@@ -155,19 +143,8 @@ impl UniversalView {
                 .unwrap_or_else(|| "gpt-5.5".to_string()),
             cx,
         );
-        Self::set_input(
-            &self.gemini_model,
-            provider
-                .models
-                .gemini
-                .as_ref()
-                .and_then(|model| model.model.clone())
-                .unwrap_or_else(|| "gemini-2.5-pro".to_string()),
-            cx,
-        );
         self.claude_enabled = provider.apps.claude;
         self.codex_enabled = provider.apps.codex;
-        self.gemini_enabled = provider.apps.gemini;
         self.status = Some(SharedString::from("正在编辑统一供应商"));
         cx.notify();
     }
@@ -189,7 +166,7 @@ impl UniversalView {
         provider.apps = UniversalProviderApps {
             claude: self.claude_enabled,
             codex: self.codex_enabled,
-            gemini: self.gemini_enabled,
+            gemini: false,
         };
         provider.models = UniversalProviderModels {
             claude: Some(ClaudeModelConfig {
@@ -202,9 +179,7 @@ impl UniversalView {
                 model: Some(Self::input_value(&self.codex_model, cx)),
                 reasoning_effort: Some("high".to_string()),
             }),
-            gemini: Some(GeminiModelConfig {
-                model: Some(Self::input_value(&self.gemini_model, cx)),
-            }),
+            gemini: None,
         };
         provider.website_url = nonempty(Self::input_value(&self.website_url, cx));
         provider.notes = nonempty(Self::input_value(&self.notes, cx));
@@ -286,7 +261,6 @@ impl UniversalView {
         match app {
             "claude" => self.claude_enabled = !self.claude_enabled,
             "codex" => self.codex_enabled = !self.codex_enabled,
-            "gemini" => self.gemini_enabled = !self.gemini_enabled,
             _ => {}
         }
         cx.notify();
@@ -334,8 +308,7 @@ impl UniversalView {
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 let key = match label {
                     "Claude" => "claude",
-                    "Codex" => "codex",
-                    _ => "gemini",
+                    _ => "codex",
                 };
                 this.toggle_app(key, cx);
             }))
@@ -366,7 +339,6 @@ impl UniversalView {
         let app_labels = [
             (provider.apps.claude, "Claude"),
             (provider.apps.codex, "Codex"),
-            (provider.apps.gemini, "Gemini"),
         ]
         .into_iter()
         .filter_map(|(enabled, label)| enabled.then_some(label))
@@ -468,7 +440,7 @@ impl Render for UniversalView {
             .child(
                 layout::page_header(
                     "统一供应商",
-                    Some("同时生成并同步 Claude、Codex 和 Gemini 的供应商配置。".into()),
+                    Some("同时生成并同步 Claude 和 Codex 的供应商配置。".into()),
                 )
                 .child(
                     div()
@@ -544,12 +516,6 @@ impl Render for UniversalView {
                                         "Codex",
                                         self.codex_enabled,
                                         cx,
-                                    ))
-                                    .child(Self::render_toggle(
-                                        "universal-toggle-gemini",
-                                        "Gemini",
-                                        self.gemini_enabled,
-                                        cx,
                                     )),
                             )
                             .child(
@@ -574,10 +540,6 @@ impl Render for UniversalView {
                                     .child(Self::render_input_row(
                                         "Codex 模型",
                                         self.codex_model.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "Gemini 模型",
-                                        self.gemini_model.clone(),
                                     )),
                             )
                             .child(Self::render_input_row("备注", self.notes.clone()))

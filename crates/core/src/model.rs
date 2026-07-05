@@ -465,12 +465,6 @@ impl Provider {
                     .unwrap_or_default();
                 (base_url, api_key)
             }
-            AppType::Gemini => {
-                let env = settings.get("env");
-                let base_url = str_at(env.and_then(|e| e.get("GOOGLE_GEMINI_BASE_URL")));
-                let api_key = first_non_empty(env, &["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
-                (base_url, api_key)
-            }
             AppType::Hermes => (
                 str_at(settings.get("base_url")),
                 str_at(settings.get("api_key")),
@@ -686,41 +680,6 @@ requires_openai_auth = true"#
 
         Some(Provider {
             id: format!("universal-codex-{}", self.id),
-            name: self.name.clone(),
-            settings_config,
-            website_url: self.website_url.clone(),
-            category: Some("aggregator".to_string()),
-            created_at: self.created_at,
-            sort_index: self.sort_index,
-            notes: self.notes.clone(),
-            meta: self.meta.clone(),
-            icon: self.icon.clone(),
-            icon_color: self.icon_color.clone(),
-            in_failover_queue: false,
-        })
-    }
-
-    /// Generate the Gemini sub-provider config from this universal provider.
-    pub fn to_gemini_provider(&self) -> Option<Provider> {
-        if !self.apps.gemini {
-            return None;
-        }
-
-        let models = self.models.gemini.as_ref();
-        let model = models
-            .and_then(|m| m.model.clone())
-            .unwrap_or_else(|| "gemini-2.5-pro".to_string());
-
-        let settings_config = serde_json::json!({
-            "env": {
-                "GOOGLE_GEMINI_BASE_URL": self.base_url,
-                "GEMINI_API_KEY": self.api_key,
-                "GEMINI_MODEL": model,
-            }
-        });
-
-        Some(Provider {
-            id: format!("universal-gemini-{}", self.id),
             name: self.name.clone(),
             settings_config,
             website_url: self.website_url.clone(),

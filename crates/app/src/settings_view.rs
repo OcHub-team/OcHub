@@ -441,8 +441,24 @@ impl SettingsView {
         self.status = Some(SharedString::from("正在检查更新..."));
         cx.notify();
 
+        // check_for_updates uses reqwest/hyper, which panics without a tokio
+        // reactor. GPUI's executor has none, so build an explicit current-thread
+        // runtime on a background thread and block_on there (see app_ui.rs).
+        let task = cx.background_spawn(async move {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => {
+                    runtime.block_on(routedeck_core::services::update::check_for_updates(None))
+                }
+                Err(err) => Err(routedeck_core::AppError::Config(format!(
+                    "构建 tokio 运行时失败: {err}"
+                ))),
+            }
+        });
         cx.spawn(async move |this, cx| {
-            let result = routedeck_core::services::update::check_for_updates(None).await;
+            let result = task.await;
             this.update(cx, |this, cx| {
                 this.update_checking = false;
                 match result {
@@ -777,19 +793,6 @@ impl SettingsView {
                         "显示 Codex 供应商入口。",
                         self.settings.visible_apps.clone().unwrap_or_default().codex,
                         |this, cx| this.toggle_visible_app(AppType::Codex, cx),
-                        cx,
-                    )
-                    .into_any_element(),
-                    self.render_toggle_row(
-                        "visible-gemini",
-                        "Gemini CLI",
-                        "显示 Gemini CLI 供应商入口。",
-                        self.settings
-                            .visible_apps
-                            .clone()
-                            .unwrap_or_default()
-                            .gemini,
-                        |this, cx| this.toggle_visible_app(AppType::Gemini, cx),
                         cx,
                     )
                     .into_any_element(),
@@ -1133,7 +1136,6 @@ fn visible_app_count(visible: &VisibleApps) -> usize {
         visible.claude,
         visible.claude_desktop,
         visible.codex,
-        visible.gemini,
         visible.opencode,
         visible.openclaw,
         visible.hermes,
@@ -1148,7 +1150,6 @@ fn set_visible_app(visible: &mut VisibleApps, app: AppType, value: bool) {
         AppType::Claude => visible.claude = value,
         AppType::ClaudeDesktop => visible.claude_desktop = value,
         AppType::Codex => visible.codex = value,
-        AppType::Gemini => visible.gemini = value,
         AppType::OpenCode => visible.opencode = value,
         AppType::OpenClaw => visible.openclaw = value,
         AppType::Hermes => visible.hermes = value,

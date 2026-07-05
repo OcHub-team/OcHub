@@ -215,7 +215,7 @@ impl<'a> UsageLogger<'a> {
         app_type: &str,
     ) -> (Decimal, String) {
         // Claude Desktop 网关没有独立的全局计费配置（proxy_config 的 CHECK 仅
-        // 允许 claude/codex/gemini，前端也只暴露三项），全局默认继承 claude；
+        // 允许 claude/codex/gemini 历史值，前端只暴露 claude/codex），全局默认继承 claude；
         // 供应商级 meta 覆盖仍按 claude-desktop 查找（providers 表按该 app_type 存）。
         let default_app_type = if app_type == "claude-desktop" {
             "claude"

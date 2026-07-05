@@ -13,7 +13,7 @@ use routedeck_core::{AppState, AppType, Provider};
 
 use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
 use crate::auth_view::AuthView;
-use crate::components::{self, ButtonTone};
+use crate::components::{self, ButtonTone, ConfirmModal};
 use crate::icons::{icon, IconName};
 use crate::mcp_view::McpView;
 use crate::notifications::{NotificationHost, NotificationLevel};
@@ -120,6 +120,20 @@ pub struct AppRoot {
     /// provider list when `showing_app_settings` is set.
     app_settings_view: Entity<AppSettingsView>,
     showing_app_settings: bool,
+    /// Provider awaiting delete confirmation: (id, display name).
+    pending_delete: Option<(String, String)>,
+    /// A newer release was found by the startup update check.
+    update_available: bool,
+    /// Latest version string from the update check, for the notice text.
+    update_latest: Option<String>,
+    /// The provider-list update notice was dismissed for this session.
+    update_notice_dismissed: bool,
+    /// Env-var conflicts scanned for the selected app (once per app switch).
+    env_conflict_count: usize,
+    /// The provider-list env-conflict banner was dismissed for this app.
+    env_banner_dismissed: bool,
+    /// Show the first-run welcome notice (until acknowledged + persisted).
+    show_first_run_notice: bool,
 }
 
 impl AppRoot {
@@ -164,6 +178,13 @@ impl AppRoot {
             tools_view,
             app_settings_view,
             showing_app_settings: false,
+            pending_delete: None,
+            update_available: false,
+            update_latest: None,
+            update_notice_dismissed: false,
+            env_conflict_count: 0,
+            env_banner_dismissed: false,
+            show_first_run_notice: crate::shell_support::first_run_notice_pending(),
         };
         cx.subscribe(
             &this.app_settings_view,
@@ -176,6 +197,8 @@ impl AppRoot {
         )
         .detach();
         this.reload();
+        this.rescan_env_conflicts();
+        this.spawn_startup_update_check(cx);
         if initial_section == Section::Providers
             && std::env::var("MS_START_EDITOR")
                 .map(|value| value.eq_ignore_ascii_case("add"))
@@ -205,12 +228,11 @@ impl AppRoot {
         this
     }
 
-    fn all_apps() -> [AppType; 7] {
+    fn all_apps() -> [AppType; 6] {
         [
             AppType::Claude,
             AppType::ClaudeDesktop,
             AppType::Codex,
-            AppType::Gemini,
             AppType::OpenCode,
             AppType::OpenClaw,
             AppType::Hermes,
@@ -230,7 +252,6 @@ impl AppRoot {
             AppType::Claude => "Claude Code",
             AppType::ClaudeDesktop => "Claude Desktop",
             AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini CLI",
             AppType::OpenCode => "OpenCode",
             AppType::OpenClaw => "OpenClaw",
             AppType::Hermes => "Hermes",
@@ -242,7 +263,6 @@ impl AppRoot {
             AppType::Claude => theme::BRAND_CLAUDE,
             AppType::ClaudeDesktop => theme::BRAND_CLAUDE_DESKTOP,
             AppType::Codex => theme::BRAND_CODEX,
-            AppType::Gemini => theme::BRAND_GEMINI,
             AppType::OpenCode => theme::BRAND_OPENCODE,
             AppType::OpenClaw => theme::BRAND_OPENCLAW,
             AppType::Hermes => theme::BRAND_HERMES,
@@ -254,7 +274,6 @@ impl AppRoot {
             AppType::Claude => IconName::AgentClaudeCode,
             AppType::ClaudeDesktop => IconName::AgentClaude,
             AppType::Codex => IconName::AgentCodex,
-            AppType::Gemini => IconName::AgentGemini,
             AppType::OpenCode => IconName::AgentOpenCode,
             AppType::OpenClaw => IconName::AgentOpenClaw,
             AppType::Hermes => IconName::AgentHermes,
@@ -365,9 +384,52 @@ impl AppRoot {
             self.editor = None;
             self.showing_app_settings = false;
             self.status = None;
+            self.pending_delete = None;
             self.reload();
+            self.rescan_env_conflicts();
             cx.notify();
         }
+    }
+
+    /// Scan env-var conflicts for the selected app. Called once per app switch
+    /// (not per frame); the result feeds the dismissible provider-list banner.
+    fn rescan_env_conflicts(&mut self) {
+        self.env_conflict_count = routedeck_core::check_env_conflicts(self.selected_app.as_str())
+            .map(|conflicts| conflicts.len())
+            .unwrap_or(0);
+        self.env_banner_dismissed = false;
+    }
+
+    /// Kick off a background update check on startup; a newer release lights up
+    /// the sidebar badge and the dismissible provider-list notice.
+    fn spawn_startup_update_check(&self, cx: &mut Context<Self>) {
+        // check_for_updates uses reqwest/hyper, which panics without a tokio
+        // reactor. GPUI's executor has none, so build an explicit current-thread
+        // runtime on a background thread and block_on there (see tools_view.rs).
+        let task = cx.background_spawn(async move {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()
+                .and_then(|runtime| {
+                    runtime
+                        .block_on(routedeck_core::services::update::check_for_updates(None))
+                        .ok()
+                })
+        });
+        cx.spawn(async move |this, cx| {
+            if let Some(info) = task.await {
+                if info.has_update {
+                    this.update(cx, |this, cx| {
+                        this.update_available = true;
+                        this.update_latest = info.latest_version.clone();
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            }
+        })
+        .detach();
     }
 
     fn open_app_settings(&mut self, cx: &mut Context<Self>) {
@@ -384,6 +446,7 @@ impl AppRoot {
             self.section = section;
             self.editor = None;
             self.showing_app_settings = false;
+            self.pending_delete = None;
             // Reload the destination view's data so it reflects current state.
             match section {
                 Section::Mcp => self.mcp_view.update(cx, |v, _| v.reload()),
@@ -482,6 +545,23 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn request_delete(&mut self, id: String, name: String, cx: &mut Context<Self>) {
+        self.pending_delete = Some((id, name));
+        cx.notify();
+    }
+
+    fn cancel_delete(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete = None;
+        cx.notify();
+    }
+
+    fn confirm_delete(&mut self, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.pending_delete.take() else {
+            return;
+        };
+        self.do_delete(id, cx);
+    }
+
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
         match ProviderService::delete(&self.app, self.selected_app, &id) {
             Ok(()) => {
@@ -492,6 +572,56 @@ impl AppRoot {
         }
         self.reload();
         shell_menu::refresh(&self.app, cx);
+        cx.notify();
+    }
+
+    /// Move a provider up (`delta = -1`) or down (`delta = 1`) in the list and
+    /// persist the new order via the sort service. Providers are stored/loaded
+    /// ordered by `sort_index`, so re-indexing the whole list keeps it stable.
+    fn move_provider(&mut self, id: String, delta: isize, cx: &mut Context<Self>) {
+        let Some(pos) = self.providers.iter().position(|p| p.id == id) else {
+            return;
+        };
+        let target = pos as isize + delta;
+        if target < 0 || target as usize >= self.providers.len() {
+            return;
+        }
+        self.providers.swap(pos, target as usize);
+        let updates: Vec<provider::ProviderSortUpdate> = self
+            .providers
+            .iter()
+            .enumerate()
+            .map(|(index, p)| provider::ProviderSortUpdate {
+                id: p.id.clone(),
+                sort_index: index,
+            })
+            .collect();
+        if let Err(err) = ProviderService::update_sort_order(&self.app, self.selected_app, updates) {
+            self.notify_error("调整供应商顺序失败", err.to_string(), cx);
+        }
+        self.reload();
+        cx.notify();
+    }
+
+    fn jump_to_tools(&mut self, cx: &mut Context<Self>) {
+        self.select_section(Section::Tools, cx);
+    }
+
+    fn dismiss_env_banner(&mut self, cx: &mut Context<Self>) {
+        self.env_banner_dismissed = true;
+        cx.notify();
+    }
+
+    fn dismiss_update_notice(&mut self, cx: &mut Context<Self>) {
+        self.update_notice_dismissed = true;
+        cx.notify();
+    }
+
+    /// Acknowledge the first-run notice and persist the confirmation so it does
+    /// not appear again on subsequent launches.
+    fn acknowledge_first_run(&mut self, cx: &mut Context<Self>) {
+        crate::shell_support::confirm_first_run_notice();
+        self.show_first_run_notice = false;
         cx.notify();
     }
 
@@ -782,9 +912,73 @@ impl AppRoot {
                     .flex_col()
                     .gap_1()
                     .px_2()
-                    .child(self.render_nav_item("nav-settings", "设置", Section::Settings, cx))
+                    .child(
+                        div()
+                            .relative()
+                            .child(self.render_nav_item(
+                                "nav-settings",
+                                "设置",
+                                Section::Settings,
+                                cx,
+                            ))
+                            .when(self.update_available, |s| {
+                                s.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(6.))
+                                        .right(px(6.))
+                                        .w(px(8.))
+                                        .h(px(8.))
+                                        .rounded_full()
+                                        .bg(theme::c(theme::RED))
+                                        .border_1()
+                                        .border_color(theme::c(theme::MANTLE)),
+                                )
+                            }),
+                    )
                     .child(self.render_nav_item("nav-proxy", "代理", Section::Proxy, cx)),
             )
+    }
+
+    /// A compact up/down reorder button for a provider row. Disabled (no click)
+    /// at the ends of the list.
+    fn reorder_button(
+        &self,
+        id: String,
+        glyph: &'static str,
+        aria: String,
+        enabled: bool,
+        provider_id: String,
+        delta: isize,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let base = div()
+            .id(SharedString::from(id))
+            .role(gpui::Role::Button)
+            .aria_label(SharedString::from(aria))
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(24.))
+            .h(px(24.))
+            .rounded_md()
+            .text_sm()
+            .bg(theme::c(theme::INSET))
+            .text_color(theme::c(if enabled {
+                theme::SUBTEXT
+            } else {
+                theme::MUTED
+            }))
+            .child(glyph);
+        if enabled {
+            base.cursor_pointer()
+                .hover(|s| s.bg(theme::c(theme::SURFACE_HOVER)))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.move_provider(provider_id.clone(), delta, cx);
+                }))
+        } else {
+            base
+        }
     }
 
     fn render_provider_card(
@@ -796,7 +990,17 @@ impl AppRoot {
         let id = provider.id.clone();
         let edit_provider = provider.clone();
         let delete_id = provider.id.clone();
+        let delete_name = provider.name.clone();
         let live_id = provider.id.clone();
+        let pos = self
+            .providers
+            .iter()
+            .position(|p| p.id == provider.id)
+            .unwrap_or(0);
+        let is_first = pos == 0;
+        let is_last = pos + 1 >= self.providers.len();
+        let up_id = provider.id.clone();
+        let down_id = provider.id.clone();
         let base_url = self.provider_base_url(provider);
         let is_additive = self.selected_app.is_additive_mode();
         let is_in_live = provider
@@ -922,6 +1126,30 @@ impl AppRoot {
                     .items_center()
                     .gap_2()
                     .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(self.reorder_button(
+                                format!("move-up-{}", provider.id),
+                                "↑",
+                                format!("上移 {}", provider.name),
+                                !is_first,
+                                up_id,
+                                -1,
+                                cx,
+                            ))
+                            .child(self.reorder_button(
+                                format!("move-down-{}", provider.id),
+                                "↓",
+                                format!("下移 {}", provider.name),
+                                !is_last,
+                                down_id,
+                                1,
+                                cx,
+                            )),
+                    )
+                    .child(
                         components::action_button(
                             SharedString::from(format!("edit-{}", provider.id)),
                             "编辑",
@@ -943,7 +1171,7 @@ impl AppRoot {
                         .aria_label(SharedString::from(format!("删除 {}", provider.name)))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.do_delete(delete_id.clone(), cx);
+                                this.request_delete(delete_id.clone(), delete_name.clone(), cx);
                             },
                         )),
                     )
@@ -1141,6 +1369,151 @@ impl AppRoot {
         card
     }
 
+    /// Small circular dismiss (×) button shared by the provider-list banners.
+    fn banner_dismiss(
+        id: &'static str,
+        accent: u32,
+        on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .role(gpui::Role::Button)
+            .aria_label("关闭提示")
+            .flex()
+            .items_center()
+            .justify_center()
+            .flex_shrink_0()
+            .w(px(22.))
+            .h(px(22.))
+            .rounded_md()
+            .cursor_pointer()
+            .text_color(theme::c(theme::MUTED))
+            .hover(|s| {
+                s.bg(theme::translucent(accent, 0.12))
+                    .text_color(theme::c(theme::TEXT))
+            })
+            .child(icon(IconName::Close, theme::MUTED, 13.))
+            .on_click(cx.listener(move |this, _event, _window, cx| on_click(this, cx)))
+    }
+
+    /// Dismissible warning banner surfaced on the provider list when the env-var
+    /// scan for the current app found conflicts. Offers a jump to the Tools page.
+    fn render_env_banner(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let message = format!(
+            "检测到 {} 处可能覆盖 {} 供应商配置的环境变量。",
+            self.env_conflict_count,
+            Self::app_label(self.selected_app)
+        );
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .border_1()
+            .border_color(theme::translucent(theme::YELLOW, 0.32))
+            .bg(theme::translucent(theme::YELLOW_SOFT, 0.8))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(theme::c(theme::TEXT))
+                    .text_sm()
+                    .child(SharedString::from(message)),
+            )
+            .child(
+                components::action_button("env-banner-goto", "前往高级工具", false)
+                    .aria_label("前往高级工具查看环境变量冲突")
+                    .on_click(cx.listener(|this, _event, _window, cx| this.jump_to_tools(cx))),
+            )
+            .child(Self::banner_dismiss(
+                "env-banner-dismiss",
+                theme::YELLOW,
+                |this, cx| this.dismiss_env_banner(cx),
+                cx,
+            ))
+    }
+
+    /// Dismissible notice surfaced on the provider list when the startup update
+    /// check found a newer release. Jumps to Settings for the details.
+    fn render_update_banner(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let message = match self.update_latest.as_deref() {
+            Some(latest) => format!("发现新版本 {latest}，可在设置中查看。"),
+            None => "发现新版本，可在设置中查看。".to_string(),
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .border_1()
+            .border_color(theme::translucent(theme::ACCENT, 0.32))
+            .bg(theme::translucent(theme::ACCENT_SOFT, 0.8))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(theme::c(theme::TEXT))
+                    .text_sm()
+                    .child(SharedString::from(message)),
+            )
+            .child(
+                components::action_button("update-banner-goto", "前往设置", false)
+                    .aria_label("前往设置查看更新")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.select_section(Section::Settings, cx);
+                    })),
+            )
+            .child(Self::banner_dismiss(
+                "update-banner-dismiss",
+                theme::ACCENT,
+                |this, cx| this.dismiss_update_notice(cx),
+                cx,
+            ))
+    }
+
+    /// The provider delete confirm dialog overlay, hosted at the app root.
+    fn render_delete_confirm(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let name = self
+            .pending_delete
+            .as_ref()
+            .map(|(_, name)| name.clone())
+            .unwrap_or_default();
+        let modal = ConfirmModal::delete(
+            "删除供应商",
+            format!("确定要删除供应商“{name}”吗？此操作无法撤销。"),
+        );
+        let confirm =
+            components::action_button_tone("provider-delete-confirm", "删除", ButtonTone::Danger)
+                .on_click(cx.listener(|this, _event, _window, cx| this.confirm_delete(cx)));
+        let cancel = components::action_button("provider-delete-cancel", "取消", false)
+            .on_click(cx.listener(|this, _event, _window, cx| this.cancel_delete(cx)));
+        components::confirm_overlay(&modal, confirm, cancel)
+    }
+
+    /// First-run welcome notice overlay, hosted at the app root. A single
+    /// acknowledge button persists the confirmation (mirrors cc-switch's
+    /// FirstRunNoticeDialog). Reuses the shared confirm overlay with no cancel.
+    fn render_first_run_notice(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let modal = ConfirmModal {
+            title: SharedString::from("欢迎使用 RouteDeck"),
+            message: SharedString::from(
+                "RouteDeck 会在本机管理各 AI 编码工具的供应商配置，切换供应商时会直接改写对应工具的配置文件。\n\n\
+                 首次使用建议先备份现有配置。相关操作均在本地进行，不会上传你的密钥。",
+            ),
+            danger: false,
+        };
+        let confirm = components::action_button("first-run-confirm", "我知道了", true)
+            .on_click(cx.listener(|this, _event, _window, cx| this.acknowledge_first_run(cx)));
+        components::confirm_overlay(&modal, confirm, gpui::div())
+    }
+
     fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.selected_app;
         let is_switch = !app.is_additive_mode();
@@ -1294,6 +1667,14 @@ impl AppRoot {
             .when_some(self.status.clone(), |s, status| {
                 s.child(div().px_6().py_2().child(components::status_banner(status)))
             })
+            .when(
+                self.update_available && !self.update_notice_dismissed,
+                |s| s.child(div().px_6().pt_2().child(self.render_update_banner(cx))),
+            )
+            .when(
+                self.env_conflict_count > 0 && !self.env_banner_dismissed,
+                |s| s.child(div().px_6().pt_2().child(self.render_env_banner(cx))),
+            )
             .child(
                 div()
                     .id("provider-list")
@@ -1380,5 +1761,11 @@ impl Render for AppRoot {
                     .child(self.render_content(cx)),
             )
             .child(self.notifications.clone())
+            .when(self.pending_delete.is_some(), |s| {
+                s.child(self.render_delete_confirm(cx))
+            })
+            .when(self.show_first_run_notice, |s| {
+                s.child(self.render_first_run_notice(cx))
+            })
     }
 }

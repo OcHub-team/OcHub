@@ -8,6 +8,7 @@ use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
 use routedeck_core::session_manager::{self, SessionMessage, SessionMeta};
 use routedeck_core::AppState;
 
+use crate::components::{self, ButtonTone, ConfirmModal};
 use crate::layout;
 use crate::theme;
 
@@ -30,6 +31,8 @@ pub struct SessionsView {
     page: usize,
     /// When `Some`, the transcript viewer replaces the list.
     detail: Option<SessionDetail>,
+    /// Pending delete awaiting confirmation: (session index, display title).
+    pending_delete: Option<(usize, String)>,
 }
 
 impl SessionsView {
@@ -40,6 +43,7 @@ impl SessionsView {
             status: None,
             page: 0,
             detail: None,
+            pending_delete: None,
         };
         this.reload();
         this
@@ -50,6 +54,7 @@ impl SessionsView {
         // Returning to the list (refresh / re-entering the section) closes any
         // open transcript.
         self.detail = None;
+        self.pending_delete = None;
         // Keep the current page in range after the list size changes.
         let max_page = self.total_pages().saturating_sub(1);
         if self.page > max_page {
@@ -76,6 +81,23 @@ impl SessionsView {
             .clone()
             .or_else(|| session.summary.clone())
             .unwrap_or_else(|| session.session_id.clone())
+    }
+
+    fn request_delete(&mut self, idx: usize, title: String, cx: &mut Context<Self>) {
+        self.pending_delete = Some((idx, title));
+        cx.notify();
+    }
+
+    fn cancel_delete(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete = None;
+        cx.notify();
+    }
+
+    fn confirm_delete(&mut self, cx: &mut Context<Self>) {
+        let Some((idx, _)) = self.pending_delete.take() else {
+            return;
+        };
+        self.do_delete(idx, cx);
     }
 
     fn do_delete(&mut self, idx: usize, cx: &mut Context<Self>) {
@@ -323,6 +345,7 @@ impl SessionsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let title = Self::title_for(session);
+        let delete_title = title.clone();
         let provider = session.provider_id.clone();
         let project = session.project_dir.clone();
 
@@ -431,7 +454,7 @@ impl SessionsView {
                             .hover(|s| s.bg(theme::c(theme::RED_SOFT)))
                             .child("删除")
                             .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.do_delete(idx, cx);
+                                this.request_delete(idx, delete_title.clone(), cx);
                             })),
                     ),
             )
@@ -527,6 +550,37 @@ impl SessionsView {
     }
 }
 
+impl SessionsView {
+    fn render_with_confirm(
+        &self,
+        base: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some((_, title)) = self.pending_delete.clone() else {
+            return base;
+        };
+        let modal = ConfirmModal::delete(
+            "删除会话",
+            format!("确定要删除会话“{title}”吗？磁盘上的会话文件将被移除，此操作无法撤销。"),
+        );
+        let confirm =
+            components::action_button_tone("session-delete-confirm", "删除", ButtonTone::Danger)
+                .on_click(cx.listener(|this, _event, _window, cx| this.confirm_delete(cx)));
+        let cancel = components::action_button("session-delete-cancel", "取消", false)
+            .on_click(cx.listener(|this, _event, _window, cx| this.cancel_delete(cx)));
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(base)
+            .child(components::confirm_overlay(&modal, confirm, cancel))
+            .into_any_element()
+    }
+}
+
 impl Render for SessionsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(detail) = self.detail.as_ref() {
@@ -543,7 +597,7 @@ impl Render for SessionsView {
         let is_empty = total == 0;
         let show_pagination = total > PAGE_SIZE;
 
-        layout::page()
+        let base = layout::page()
             .child(
                 layout::page_header("会话", None).child(
                     div()
@@ -587,6 +641,7 @@ impl Render for SessionsView {
                     .children(cards),
             ))
             .when(show_pagination, |s| s.child(self.render_pagination(cx)))
-            .into_any_element()
+            .into_any_element();
+        self.render_with_confirm(base, cx)
     }
 }

@@ -1,6 +1,6 @@
 //! Shared GPUI building blocks for the desktop shell.
 
-use gpui::{div, prelude::*, ElementId, FontWeight, SharedString};
+use gpui::{div, prelude::*, px, ElementId, FontWeight, SharedString};
 
 use crate::icons::{icon, IconName};
 use crate::theme;
@@ -158,6 +158,109 @@ impl StatusTone {
             Self::Error => (theme::RED_SOFT, theme::RED, theme::TEXT, IconName::Wrench),
         }
     }
+}
+
+/// Descriptor for the shared confirm dialog. `danger` selects destructive
+/// (red) styling per theme.rs; otherwise the neutral accent is used.
+#[derive(Clone)]
+pub struct ConfirmModal {
+    pub title: SharedString,
+    pub message: SharedString,
+    pub danger: bool,
+}
+
+impl ConfirmModal {
+    /// A destructive-delete confirm dialog descriptor.
+    pub fn delete(title: impl Into<SharedString>, message: impl Into<SharedString>) -> Self {
+        Self {
+            title: title.into(),
+            message: message.into(),
+            danger: true,
+        }
+    }
+}
+
+/// Render the shared confirm dialog as a full-view modal overlay. `confirm` and
+/// `cancel` are the footer buttons — the caller wires their `.on_click` with
+/// `cx.listener`, so this stays view-agnostic. Host it inside a `relative()`
+/// container sized to the view (or the app root) so the backdrop covers it.
+pub fn confirm_overlay(
+    modal: &ConfirmModal,
+    confirm: impl IntoElement,
+    cancel: impl IntoElement,
+) -> impl IntoElement {
+    let (accent, accent_soft) = if modal.danger {
+        (theme::RED, theme::RED_SOFT)
+    } else {
+        (theme::ACCENT, theme::ACCENT_SOFT)
+    };
+    div()
+        .id("confirm-overlay")
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p_6()
+        .bg(theme::translucent(0x000000, 0.38))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .w(px(400.))
+                .p_5()
+                .rounded_lg()
+                .bg(theme::c(theme::SURFACE))
+                .border_1()
+                .border_color(theme::c(theme::BORDER))
+                .shadow(theme::shadow_popover())
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .flex_shrink_0()
+                                .w(px(24.))
+                                .h(px(24.))
+                                .rounded_full()
+                                .bg(theme::c(accent_soft))
+                                .text_color(theme::c(accent))
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .child("!"),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme::c(theme::TEXT))
+                                .text_lg()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(modal.title.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_color(theme::c(theme::SUBTEXT))
+                        .text_sm()
+                        .line_height(px(20.))
+                        .child(modal.message.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .gap_2()
+                        .child(cancel)
+                        .child(confirm),
+                ),
+        )
 }
 
 pub fn status_banner(message: impl Into<SharedString>) -> impl IntoElement {

@@ -26,7 +26,7 @@ use crate::text_input::TextInput;
 use crate::theme;
 
 const LOG_PAGE_SIZE: u32 = 20;
-const PRICING_APPS: [&str; 3] = ["claude", "codex", "gemini"];
+const PRICING_APPS: [&str; 2] = ["claude", "codex"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UsageRange {
@@ -124,7 +124,6 @@ pub struct UsageView {
     pricing_cache_creation_cost: Entity<TextInput>,
     multiplier_claude: Entity<TextInput>,
     multiplier_codex: Entity<TextInput>,
-    multiplier_gemini: Entity<TextInput>,
     stream_timeout_secs: Entity<TextInput>,
     stream_max_retries: Entity<TextInput>,
     stream_degraded_threshold_ms: Entity<TextInput>,
@@ -169,7 +168,6 @@ impl UsageView {
             pricing_cache_creation_cost: cx.new(|cx| text_input(cx, "3.75", "0")),
             multiplier_claude: cx.new(|cx| text_input(cx, "1", "1")),
             multiplier_codex: cx.new(|cx| text_input(cx, "1", "1")),
-            multiplier_gemini: cx.new(|cx| text_input(cx, "1", "1")),
             stream_timeout_secs: cx.new(|cx| text_input(cx, "8", "8")),
             stream_max_retries: cx.new(|cx| text_input(cx, "1", "1")),
             stream_degraded_threshold_ms: cx.new(|cx| text_input(cx, "6000", "6000")),
@@ -285,7 +283,6 @@ impl UsageView {
             match app {
                 "claude" => set_input(&self.multiplier_claude, multiplier, cx),
                 "codex" => set_input(&self.multiplier_codex, multiplier, cx),
-                "gemini" => set_input(&self.multiplier_gemini, multiplier, cx),
                 _ => {}
             }
         }
@@ -379,10 +376,6 @@ impl UsageView {
             (
                 "Codex",
                 services::session_usage_codex::sync_codex_usage(&self.app.db),
-            ),
-            (
-                "Gemini",
-                services::session_usage_gemini::sync_gemini_usage(&self.app.db),
             ),
             (
                 "OpenCode",
@@ -504,14 +497,6 @@ impl UsageView {
                 input_value(&self.multiplier_codex, cx),
                 self.pricing_sources
                     .get("codex")
-                    .cloned()
-                    .unwrap_or_else(|| "response".to_string()),
-            ),
-            (
-                "gemini",
-                input_value(&self.multiplier_gemini, cx),
-                self.pricing_sources
-                    .get("gemini")
                     .cloned()
                     .unwrap_or_else(|| "response".to_string()),
             ),
@@ -819,7 +804,6 @@ impl UsageView {
             (None, "全部", IconName::Layers),
             (Some("claude"), "Claude", IconName::Desktop),
             (Some("codex"), "Codex", IconName::Code),
-            (Some("gemini"), "Gemini", IconName::Diamond),
             (Some("opencode"), "OpenCode", IconName::Terminal),
         ]
         .into_iter()
@@ -1875,7 +1859,6 @@ impl UsageView {
         let input = match app {
             "claude" => self.multiplier_claude.clone(),
             "codex" => self.multiplier_codex.clone(),
-            "gemini" => self.multiplier_gemini.clone(),
             _ => self.multiplier_claude.clone(),
         };
 

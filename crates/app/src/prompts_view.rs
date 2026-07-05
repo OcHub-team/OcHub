@@ -10,6 +10,7 @@ use routedeck_core::db::legacy_json::Prompt;
 use routedeck_core::services::PromptService;
 use routedeck_core::{AppState, AppType};
 
+use crate::components::{self, ButtonTone, ConfirmModal};
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -33,6 +34,8 @@ pub struct PromptsView {
     name: Entity<TextInput>,
     description: Entity<TextInput>,
     content: Entity<TextInput>,
+    /// Pending delete awaiting confirmation: (prompt id, display name).
+    pending_delete: Option<(String, String)>,
 }
 
 impl PromptsView {
@@ -52,17 +55,17 @@ impl PromptsView {
             name,
             description,
             content,
+            pending_delete: None,
         };
         this.reload();
         this
     }
 
-    fn apps() -> [AppType; 7] {
+    fn apps() -> [AppType; 6] {
         [
             AppType::Claude,
             AppType::ClaudeDesktop,
             AppType::Codex,
-            AppType::Gemini,
             AppType::OpenCode,
             AppType::OpenClaw,
             AppType::Hermes,
@@ -74,7 +77,6 @@ impl PromptsView {
             AppType::Claude => "Claude",
             AppType::ClaudeDesktop => "Claude Desktop",
             AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini",
             AppType::OpenCode => "OpenCode",
             AppType::OpenClaw => "OpenClaw",
             AppType::Hermes => "Hermes",
@@ -96,6 +98,7 @@ impl PromptsView {
             self.selected_app = app;
             self.status = None;
             self.form_mode = FormMode::List;
+            self.pending_delete = None;
             self.clear_form(cx);
             self.reload();
             cx.notify();
@@ -231,6 +234,23 @@ impl PromptsView {
         }
     }
 
+    fn request_delete(&mut self, id: String, name: String, cx: &mut Context<Self>) {
+        self.pending_delete = Some((id, name));
+        cx.notify();
+    }
+
+    fn cancel_delete(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete = None;
+        cx.notify();
+    }
+
+    fn confirm_delete(&mut self, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.pending_delete.take() else {
+            return;
+        };
+        self.do_delete(id, cx);
+    }
+
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
         match PromptService::delete_prompt(&self.app, self.selected_app, &id) {
             Ok(()) => self.status = Some(SharedString::from("提示词已删除")),
@@ -276,6 +296,7 @@ impl PromptsView {
         let enable_id = prompt.id.clone();
         let edit_prompt = prompt.clone();
         let delete_id = prompt.id.clone();
+        let delete_name = prompt.name.clone();
         let name = prompt.name.clone();
         let desc = prompt.description.clone();
         let preview = Self::prompt_preview(prompt);
@@ -404,7 +425,7 @@ impl PromptsView {
                             .text_sm()
                             .child("删除")
                             .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.do_delete(delete_id.clone(), cx);
+                                this.request_delete(delete_id.clone(), delete_name.clone(), cx);
                             })),
                     ),
             )
@@ -545,10 +566,42 @@ impl PromptsView {
     }
 }
 
+impl PromptsView {
+    fn render_with_confirm(
+        &self,
+        base: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some((_, name)) = self.pending_delete.clone() else {
+            return base;
+        };
+        let modal = ConfirmModal::delete(
+            "删除提示词",
+            format!("确定要删除提示词“{name}”吗？此操作无法撤销。"),
+        );
+        let confirm =
+            components::action_button_tone("prompt-delete-confirm", "删除", ButtonTone::Danger)
+                .on_click(cx.listener(|this, _event, _window, cx| this.confirm_delete(cx)));
+        let cancel = components::action_button("prompt-delete-cancel", "取消", false)
+            .on_click(cx.listener(|this, _event, _window, cx| this.cancel_delete(cx)));
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(base)
+            .child(components::confirm_overlay(&modal, confirm, cancel))
+            .into_any_element()
+    }
+}
+
 impl Render for PromptsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.form_mode != FormMode::List {
-            return self.render_form(cx).into_any_element();
+            let base = self.render_form(cx).into_any_element();
+            return self.render_with_confirm(base, cx);
         }
 
         let cards: Vec<_> = self
@@ -558,7 +611,7 @@ impl Render for PromptsView {
             .collect();
         let is_empty = cards.is_empty();
 
-        layout::page()
+        let base = layout::page()
             .child(
                 div()
                     .px_6()
@@ -646,6 +699,7 @@ impl Render for PromptsView {
                     })
                     .children(cards),
             ))
-            .into_any_element()
+            .into_any_element();
+        self.render_with_confirm(base, cx)
     }
 }

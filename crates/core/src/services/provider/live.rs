@@ -1,10 +1,8 @@
 //! Live configuration operations
 //!
-//! Handles reading and writing live configuration files for Claude, Codex, and Gemini.
+//! Handles reading and writing live configuration files for Claude and Codex.
 
-use std::collections::HashMap;
-
-use serde_json::{json, Value};
+use serde_json::Value;
 use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::app_state::AppState;
@@ -15,9 +13,6 @@ use crate::error::AppError;
 use crate::model::Provider;
 use crate::paths::{delete_file, get_claude_settings_path, read_json_file, write_json_file};
 
-use super::gemini_auth::{
-    detect_gemini_auth_type, ensure_google_oauth_security_flag, GeminiAuthType,
-};
 use super::normalize_claude_models_in_value;
 
 pub(crate) fn sanitize_claude_settings_for_live(settings: &Value) -> Value {
@@ -333,19 +328,6 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
 
             toml_item_is_subset(target_doc.as_item(), source_doc.as_item())
         }
-        AppType::Gemini => match serde_json::from_str::<Value>(trimmed) {
-            Ok(Value::Object(source_map)) => {
-                let Some(target_map) = settings.get("env").and_then(Value::as_object) else {
-                    return false;
-                };
-                source_map.iter().all(|(key, source_value)| {
-                    target_map
-                        .get(key)
-                        .is_some_and(|target_value| json_is_subset(target_value, source_value))
-                })
-            }
-            _ => false,
-        },
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::ClaudeDesktop => false,
     }
 }
@@ -407,15 +389,6 @@ pub(crate) fn remove_common_config_from_settings(
             }
             Ok(result)
         }
-        AppType::Gemini => {
-            let source = serde_json::from_str::<Value>(trimmed)
-                .map_err(|e| AppError::Message(format!("Invalid Gemini common config: {e}")))?;
-            let mut result = settings.clone();
-            if let Some(env) = result.get_mut("env") {
-                json_deep_remove(env, &source);
-            }
-            Ok(result)
-        }
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::ClaudeDesktop => {
             Ok(settings.clone())
         }
@@ -459,17 +432,6 @@ fn apply_common_config_to_settings(
             merge_toml_table_like(target_doc.as_table_mut(), source_doc.as_table());
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("config".to_string(), Value::String(target_doc.to_string()));
-            }
-            Ok(result)
-        }
-        AppType::Gemini => {
-            let source = serde_json::from_str::<Value>(trimmed)
-                .map_err(|e| AppError::Message(format!("Invalid Gemini common config: {e}")))?;
-            let mut result = settings.clone();
-            if let Some(env) = result.get_mut("env") {
-                json_deep_merge(env, &source);
-            } else if let Some(obj) = result.as_object_mut() {
-                obj.insert("env".to_string(), source);
             }
             Ok(result)
         }
@@ -672,10 +634,6 @@ pub(crate) enum LiveSnapshot {
         auth: Option<Value>,
         config: Option<String>,
     },
-    Gemini {
-        env: Option<HashMap<String, String>>,
-        config: Option<Value>,
-    },
 }
 
 impl LiveSnapshot {
@@ -703,30 +661,6 @@ impl LiveSnapshot {
                     crate::paths::write_text_file(&config_path, text)?;
                 } else if config_path.exists() {
                     delete_file(&config_path)?;
-                }
-            }
-            LiveSnapshot::Gemini { env, .. } => {
-                use crate::apps::gemini::{
-                    get_gemini_env_path, get_gemini_settings_path, write_gemini_env_atomic,
-                };
-                let path = get_gemini_env_path();
-                if let Some(env_map) = env {
-                    write_gemini_env_atomic(env_map)?;
-                } else if path.exists() {
-                    delete_file(&path)?;
-                }
-
-                let settings_path = get_gemini_settings_path();
-                match self {
-                    LiveSnapshot::Gemini {
-                        config: Some(cfg), ..
-                    } => {
-                        write_json_file(&settings_path, cfg)?;
-                    }
-                    LiveSnapshot::Gemini { config: None, .. } if settings_path.exists() => {
-                        delete_file(&settings_path)?;
-                    }
-                    _ => {}
                 }
             }
         }
@@ -765,10 +699,6 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 auth,
                 config_str,
             )?;
-        }
-        AppType::Gemini => {
-            // Delegate to write_gemini_live which handles env file writing correctly
-            write_gemini_live(provider)?;
         }
         AppType::OpenCode => {
             // OpenCode uses additive mode - write provider to config
@@ -1020,13 +950,8 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
     // MCP sync
     crate::services::mcp::McpService::sync_all_enabled(state)?;
 
-    // Skill sync
-    for app_type in AppType::all() {
-        if let Err(e) = crate::services::skill::SkillService::sync_to_app(&state.db, &app_type) {
-            log::warn!("同步 Skill 到 {app_type:?} 失败: {e}");
-            // Continue syncing other apps, don't abort
-        }
-    }
+    // Skills need no per-switch sync: the skills CLI installs directly into
+    // each agent's own directory, so files persist across provider switches.
 
     Ok(())
 }
@@ -1066,39 +991,6 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             "Claude Desktop 3P 配置不支持作为通用 live 配置导入，请使用“从 Claude 导入兼容供应商”。",
             "Claude Desktop 3P configuration cannot be imported as a generic live config. Use 'Import compatible providers from Claude' instead.",
         )),
-        AppType::Gemini => {
-            use crate::apps::gemini::{
-                env_to_json, get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
-            };
-
-            // Read .env file (environment variables)
-            let env_path = get_gemini_env_path();
-            if !env_path.exists() {
-                return Err(AppError::localized(
-                    "gemini.env.missing",
-                    "Gemini .env 文件不存在",
-                    "Gemini .env file not found",
-                ));
-            }
-
-            let env_map = read_gemini_env()?;
-            let env_json = env_to_json(&env_map);
-            let env_obj = env_json.get("env").cloned().unwrap_or_else(|| json!({}));
-
-            // Read settings.json file (MCP config etc.)
-            let settings_path = get_gemini_settings_path();
-            let config_obj = if settings_path.exists() {
-                read_json_file(&settings_path)?
-            } else {
-                json!({})
-            };
-
-            // Return complete structure: { "env": {...}, "config": {...} }
-            Ok(json!({
-                "env": env_obj,
-                "config": config_obj
-            }))
-        }
         AppType::OpenCode => {
             use crate::apps::opencode::{get_opencode_config_path, read_opencode_config};
 
@@ -1202,39 +1094,6 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
                 "Claude Desktop 3P config cannot be imported through the generic import flow. Use 'Import compatible providers from Claude' instead.",
             ));
         }
-        AppType::Gemini => {
-            use crate::apps::gemini::{
-                env_to_json, get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
-            };
-
-            // Read .env file (environment variables)
-            let env_path = get_gemini_env_path();
-            if !env_path.exists() {
-                return Err(AppError::localized(
-                    "gemini.live.missing",
-                    "Gemini 配置文件不存在",
-                    "Gemini configuration file is missing",
-                ));
-            }
-
-            let env_map = read_gemini_env()?;
-            let env_json = env_to_json(&env_map);
-            let env_obj = env_json.get("env").cloned().unwrap_or_else(|| json!({}));
-
-            // Read settings.json file (MCP config etc.)
-            let settings_path = get_gemini_settings_path();
-            let config_obj = if settings_path.exists() {
-                read_json_file(&settings_path)?
-            } else {
-                json!({})
-            };
-
-            // Return complete structure: { "env": {...}, "config": {...} }
-            json!({
-                "env": env_obj,
-                "config": config_obj
-            })
-        }
         // OpenCode, OpenClaw and Hermes use additive mode and are handled by early return above
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => {
             unreachable!("additive mode apps are handled by early return")
@@ -1297,88 +1156,6 @@ pub fn should_import_default_config_on_startup(
     }
 
     Ok(!state.db.has_any_provider_for_app(app_type.as_str())?)
-}
-
-/// Write Gemini live configuration with authentication handling
-pub(crate) fn write_gemini_live(provider: &Provider) -> Result<(), AppError> {
-    use crate::apps::gemini::{
-        get_gemini_settings_path, json_to_env, validate_gemini_settings_strict,
-        write_gemini_env_atomic,
-    };
-
-    // One-time auth type detection to avoid repeated detection
-    let auth_type = detect_gemini_auth_type(provider);
-
-    let env_map = json_to_env(&provider.settings_config)?;
-
-    // Prepare config to write to ~/.gemini/settings.json
-    // Behavior:
-    // - config is object: use it (merge with existing to preserve mcpServers etc.)
-    // - config is null or absent: preserve existing file content
-    let settings_path = get_gemini_settings_path();
-    let mut config_to_write: Option<Value> = None;
-
-    if let Some(config_value) = provider.settings_config.get("config") {
-        if config_value.is_object() {
-            // Merge with existing settings to preserve mcpServers and other fields
-            let mut merged = if settings_path.exists() {
-                read_json_file::<Value>(&settings_path).unwrap_or_else(|_| json!({}))
-            } else {
-                json!({})
-            };
-
-            // Merge provider config into existing settings
-            if let (Some(merged_obj), Some(config_obj)) =
-                (merged.as_object_mut(), config_value.as_object())
-            {
-                for (k, v) in config_obj {
-                    merged_obj.insert(k.clone(), v.clone());
-                }
-            }
-            config_to_write = Some(merged);
-        } else if !config_value.is_null() {
-            return Err(AppError::localized(
-                "gemini.validation.invalid_config",
-                "Gemini 配置格式错误: config 必须是对象或 null",
-                "Gemini config invalid: config must be an object or null",
-            ));
-        }
-        // config is null: don't modify existing settings.json (preserve mcpServers etc.)
-    }
-
-    // If no config specified or config is null, preserve existing file
-    if config_to_write.is_none() && settings_path.exists() {
-        config_to_write = Some(read_json_file(&settings_path)?);
-    }
-
-    match auth_type {
-        GeminiAuthType::GoogleOfficial => {
-            // Google Official uses OAuth, no API key validation needed.
-            // Write user's env vars as-is (e.g. GEMINI_MODEL, custom vars).
-            write_gemini_env_atomic(&env_map)?;
-        }
-        GeminiAuthType::Packycode | GeminiAuthType::Generic => {
-            // API Key mode -- require GEMINI_API_KEY
-            validate_gemini_settings_strict(&provider.settings_config)?;
-            write_gemini_env_atomic(&env_map)?;
-        }
-    }
-
-    if let Some(config_value) = config_to_write {
-        write_json_file(&settings_path, &config_value)?;
-    }
-
-    // Set security.auth.selectedType based on auth type
-    // - Google Official: OAuth mode
-    // - All others: API Key mode
-    match auth_type {
-        GeminiAuthType::GoogleOfficial => ensure_google_oauth_security_flag(provider)?,
-        GeminiAuthType::Packycode | GeminiAuthType::Generic => {
-            crate::apps::gemini::write_packycode_settings()?;
-        }
-    }
-
-    Ok(())
 }
 
 /// Remove an OpenCode provider from the live configuration

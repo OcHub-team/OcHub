@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::app_type::AppType;
 use crate::db::PRICING_SOURCE_REQUEST;
 use crate::model::Provider;
+use crate::proxy::content_encoding;
 use crate::proxy::error::ProxyError;
 use crate::proxy::usage::parser::TokenUsage;
 use crate::proxy::PROXY_TOKEN_PLACEHOLDER;
@@ -61,8 +62,6 @@ enum AuthStrategy {
     Bearer,
     /// `x-api-key: <token>`
     ApiKey,
-    /// `x-goog-api-key: <token>` (Gemini)
-    GoogApiKey,
 }
 
 /// Resolved upstream target for a provider.
@@ -98,8 +97,21 @@ pub async fn forward(
 ) -> Response {
     let request_start = std::time::Instant::now();
     record_request_started(&state, &app_type).await;
+
+    // reqwest 的自动解压已禁用（透传 accept-encoding），故压缩的客户端请求体
+    // （如 Codex Desktop 登录态发的 zstd/gzip）需在解析/转发前手动解压，否则
+    // 后续所有 serde_json::from_slice（passthrough 与 transform 两路）都会失败。
+    let (headers, body) = match decode_request_body(headers, body) {
+        Ok(pair) => pair,
+        Err(encoding) => {
+            let message = format!("Unsupported request content-encoding: {encoding}");
+            record_request_failed(&state, &message).await;
+            return error_response(StatusCode::BAD_REQUEST, &message);
+        }
+    };
+
     let parsed_body = serde_json::from_slice::<Value>(&body).ok();
-    let request_model = request_model_for_app(&app_type, path, parsed_body.as_ref());
+    let request_model = request_model_for_app(parsed_body.as_ref());
     let session_format = session_format_for_app(&app_type);
     let session_id = super::session::extract_session_id(
         &headers,
@@ -290,7 +302,23 @@ pub async fn forward(
             build_url(&target.base_url, &prepared.path, prepared.query.as_deref())
         };
         let codex_chat_conversion = prepared.codex_chat_conversion;
-        let result = send_upstream(&state, &method, &url, &headers, &target, prepared.body).await;
+        // Streaming/SSE passthrough must force upstream accept-encoding: identity so
+        // the usage-logging tee sees plaintext SSE — a compressed event stream defeats
+        // the substring matching and token accounting is silently skipped. Mirrors
+        // cc-switch forwarder::force_identity_encoding (request_is_streaming branch).
+        let prepared_endpoint = endpoint_with_query(&prepared.path, prepared.query.as_deref());
+        let force_identity_encoding = codex_chat_conversion.is_some()
+            || is_streaming_request(&prepared_endpoint, &prepared.body, &headers);
+        let result = send_upstream(
+            &state,
+            &method,
+            &url,
+            &headers,
+            &target,
+            prepared.body,
+            force_identity_encoding,
+        )
+        .await;
 
         match result {
             Ok(resp) => {
@@ -493,11 +521,6 @@ fn normalize_passthrough_path(app_type: &AppType, path: &str) -> String {
             .filter(|rest| rest.starts_with('/'))
             .unwrap_or(path)
             .to_string(),
-        AppType::Gemini => path
-            .strip_prefix("/gemini")
-            .filter(|rest| rest.starts_with('/'))
-            .unwrap_or(path)
-            .to_string(),
         AppType::Claude | AppType::ClaudeDesktop => path
             .strip_prefix("/claude")
             .filter(|rest| rest.starts_with('/'))
@@ -517,6 +540,33 @@ fn endpoint_with_query(path: &str, query: Option<&str>) -> String {
         Some(query) if !query.is_empty() => format!("{path}?{query}"),
         _ => path.to_string(),
     }
+}
+
+/// Whether the request is streaming / SSE-bound. Mirrors cc-switch
+/// `forwarder::is_streaming_request`: a streaming request on the passthrough path
+/// must force upstream `accept-encoding: identity` so the usage-logging tee sees
+/// plaintext — a compressed event stream defeats the substring matching used to
+/// extract usage rows, and token accounting is silently dropped.
+fn is_streaming_request(endpoint: &str, body: &[u8], headers: &HeaderMap) -> bool {
+    if let Ok(value) = serde_json::from_slice::<Value>(body) {
+        if value
+            .get("stream")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+
+    if endpoint.contains("streamGenerateContent") || endpoint.contains("alt=sse") {
+        return true;
+    }
+
+    headers
+        .get("accept")
+        .and_then(|value| value.to_str().ok())
+        .map(|accept| accept.contains("text/event-stream"))
+        .unwrap_or(false)
 }
 
 fn apply_media_prevention(state: &ProxyState, body: &mut Value, provider: &Provider) {
@@ -707,21 +757,11 @@ fn session_format_for_app(app_type: &AppType) -> &'static str {
     match app_type {
         AppType::Claude | AppType::ClaudeDesktop => "claude",
         AppType::Codex => "codex",
-        AppType::Gemini => "gemini",
         other => other.as_str(),
     }
 }
 
-fn request_model_for_app(app_type: &AppType, path: &str, body: Option<&Value>) -> String {
-    if matches!(app_type, AppType::Gemini) {
-        return extract_gemini_model_from_path(path).unwrap_or_else(|| {
-            body.and_then(|value| value.get("model"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string()
-        });
-    }
-
+fn request_model_for_app(body: Option<&Value>) -> String {
     body.and_then(|value| value.get("model"))
         .and_then(Value::as_str)
         .or_else(|| {
@@ -733,25 +773,12 @@ fn request_model_for_app(app_type: &AppType, path: &str, body: Option<&Value>) -
         .to_string()
 }
 
-fn extract_gemini_model_from_path(path: &str) -> Option<String> {
-    let marker = "/models/";
-    let start = path.find(marker)? + marker.len();
-    let rest = &path[start..];
-    let end = rest
-        .find(':')
-        .or_else(|| rest.find('/'))
-        .unwrap_or(rest.len());
-    let model = &rest[..end];
-    (!model.is_empty()).then(|| model.to_string())
-}
-
 fn passthrough_stream_usage_event_filter(app_type: &AppType, data: &str) -> bool {
     match app_type {
         AppType::Claude | AppType::ClaudeDesktop => {
             data.contains("\"message_start\"") || data.contains("\"message_delta\"")
         }
         AppType::Codex => data.contains("\"response.completed\"") || data.contains("\"usage\""),
-        AppType::Gemini => data.contains("\"usageMetadata\""),
         _ => data.contains("\"usage\""),
     }
 }
@@ -771,7 +798,6 @@ async fn log_passthrough_usage_from_stream_events(
     let usage = match app_type {
         AppType::Claude | AppType::ClaudeDesktop => TokenUsage::from_claude_stream_events(&events),
         AppType::Codex => TokenUsage::from_codex_stream_events_auto(&events),
-        AppType::Gemini => TokenUsage::from_gemini_stream_chunks(&events),
         _ => None,
     };
 
@@ -815,7 +841,6 @@ async fn log_passthrough_usage_from_response(
     let usage = match app_type {
         AppType::Claude | AppType::ClaudeDesktop => TokenUsage::from_claude_response(response),
         AppType::Codex => TokenUsage::from_codex_response_auto(response),
-        AppType::Gemini => TokenUsage::from_gemini_response(response),
         _ => None,
     };
 
@@ -907,6 +932,7 @@ async fn send_upstream(
     headers: &HeaderMap,
     target: &UpstreamTarget,
     body: bytes::Bytes,
+    force_identity_encoding: bool,
 ) -> Result<reqwest::Response, String> {
     let mut req = state.http_client.request(method.clone(), url);
 
@@ -914,6 +940,12 @@ async fn send_upstream(
     for (name, value) in headers.iter() {
         let name_str = name.as_str().to_ascii_lowercase();
         if STRIP_REQUEST_HEADERS.contains(&name_str.as_str()) {
+            continue;
+        }
+        // On the Codex Responses→Chat conversion path we must decode + re-parse
+        // the upstream response, so drop the client's accept-encoding and force
+        // identity below rather than letting a compressed body reach the parser.
+        if force_identity_encoding && name_str == "accept-encoding" {
             continue;
         }
         // Drop placeholder-bearing values defensively.
@@ -926,6 +958,9 @@ async fn send_upstream(
         }
         req = req.header(name.clone(), value.clone());
     }
+    if force_identity_encoding {
+        req = req.header("accept-encoding", "identity");
+    }
 
     // Inject the real credential.
     if let Some(token) = target.token.as_deref() {
@@ -935,9 +970,6 @@ async fn send_upstream(
             }
             AuthStrategy::ApiKey => {
                 req = req.header("x-api-key", token);
-            }
-            AuthStrategy::GoogApiKey => {
-                req = req.header("x-goog-api-key", token);
             }
         }
     }
@@ -1017,7 +1049,10 @@ async fn stream_back_with_usage(
         }
     };
 
-    if let Ok(json) = serde_json::from_slice::<Value>(&bytes) {
+    // 用量统计仅解析解压后的副本；透传给客户端的仍是保头的原始字节。压缩的
+    // 非 SSE 响应若不先解压，serde_json 解析必然失败、token 计费被静默跳过。
+    let parse_bytes = decompressed_for_parse(&headers, &bytes);
+    if let Ok(json) = serde_json::from_slice::<Value>(&parse_bytes) {
         log_passthrough_usage_from_response(
             &state,
             &app_type,
@@ -1031,6 +1066,7 @@ async fn stream_back_with_usage(
         )
         .await;
     }
+    drop(parse_bytes);
 
     build_response_from_headers(status, &headers, Body::from(bytes))
 }
@@ -1084,26 +1120,43 @@ async fn stream_back_codex_chat_converted_with_usage(
             );
         }
     };
-    let upstream_json = serde_json::from_slice::<Value>(&bytes).ok();
+    // accept-encoding: identity 已在上游请求强制，正常拿到明文；仍保留解压兜底，
+    // 以防上游忽略 identity 而压缩响应体，否则 JSON/SSE 解析会失败。
+    let parse_bytes = decompressed_for_parse(&headers, &bytes);
     let converted = if status.is_success() {
-        match upstream_json {
-            Some(json) => {
-                crate::proxy::providers::transform_codex_chat::chat_completion_to_response_with_context(
-                    json,
-                    &conversion.tool_context,
-                )
+        let parsed = match serde_json::from_slice::<Value>(&parse_bytes) {
+            Ok(json) => Ok(json),
+            // 与 Claude 侧对称的兜底嗅探（#2234）：上游对 stream:false 返回未标记
+            // Content-Type 的 SSE 体时按 Chat SSE 聚合成单个 JSON 再走既有转换器。
+            Err(error) => {
+                let body_str = String::from_utf8_lossy(&parse_bytes);
+                if body_looks_like_sse(&body_str) {
+                    log::warn!(
+                        "[Codex] 上游对非流请求返回未标记的 SSE 体，按 Chat SSE 聚合兜底"
+                    );
+                    chat_sse_to_response_value(&body_str)
+                } else {
+                    Err(ProxyError::TransformError(format!(
+                        "parse chat completion response: {error}"
+                    )))
+                }
             }
-            None => Err(ProxyError::TransformError(
-                "parse chat completion response".to_string(),
-            )),
-        }
+        };
+        parsed.and_then(|json| {
+            crate::proxy::providers::transform_codex_chat::chat_completion_to_response_with_context(
+                json,
+                &conversion.tool_context,
+            )
+        })
     } else {
+        let upstream_json = serde_json::from_slice::<Value>(&parse_bytes).ok();
         Ok(
             crate::proxy::providers::transform_codex_chat::chat_error_to_response_error(
                 upstream_json.as_ref(),
             ),
         )
     };
+    drop(parse_bytes);
 
     let converted = match converted {
         Ok(value) => value,
@@ -1156,7 +1209,10 @@ async fn stream_back_codex_chat_error(upstream: reqwest::Response) -> Response {
             );
         }
     };
-    let json = serde_json::from_slice::<Value>(&bytes).ok();
+    // 与成功路径对称：identity 已被强制，但上游可能无视并压缩错误体，解压兜底
+    // 后再解析，否则错误细节会退化成通用错误。
+    let parse_bytes = decompressed_for_parse(&headers, &bytes);
+    let json = serde_json::from_slice::<Value>(&parse_bytes).ok();
     let converted =
         crate::proxy::providers::transform_codex_chat::chat_error_to_response_error(json.as_ref());
     match serde_json::to_vec(&converted) {
@@ -1175,6 +1231,9 @@ async fn stream_back_codex_chat_error(upstream: reqwest::Response) -> Response {
 fn codex_responses_headers(headers: &HeaderMap, is_sse: bool) -> HeaderMap {
     let mut next = headers.clone();
     next.remove("content-length");
+    // 该路径的 body 一律重建为明文（转换后的 JSON / 重编码 SSE）；上游若无视
+    // identity 返回压缩体，残留的 content-encoding 会让客户端把明文当压缩字节解。
+    next.remove("content-encoding");
     next.insert(
         "content-type",
         if is_sse {
@@ -1298,6 +1357,501 @@ fn error_response(status: StatusCode, message: &str) -> Response {
         .unwrap_or_else(|_| Response::new(Body::from(message.to_string())))
 }
 
+/// Decompress a compressed client request body before it is parsed / forwarded.
+///
+/// reqwest 的自动解压已禁用（为了透传 accept-encoding），需要手动解压请求侧的
+/// 压缩体。解压成功后剥掉已失真的实体头（content-encoding / content-length /
+/// transfer-encoding）——转发层会基于明文 body 重新生成正确的头。返回
+/// `Err(encoding)` 表示编码不受支持、调用方应直接拒绝（400）；无 content-encoding
+/// 时原样返回。镜像 cc-switch handlers.rs `decode_codex_request_body`。
+fn decode_request_body(mut headers: HeaderMap, body: Bytes) -> Result<(HeaderMap, Bytes), String> {
+    let Some(encoding) = content_encoding::get_content_encoding(&headers) else {
+        return Ok((headers, body));
+    };
+    if !content_encoding::is_supported_content_encoding(&encoding) {
+        return Err(encoding);
+    }
+    match content_encoding::decompress_body(&encoding, &body) {
+        Ok(Some(decompressed)) => {
+            headers.remove("content-encoding");
+            headers.remove("content-length");
+            headers.remove("transfer-encoding");
+            log::debug!("[Forward] 解压请求体: content-encoding={encoding}");
+            Ok((headers, Bytes::from(decompressed)))
+        }
+        // is_supported_content_encoding 已确保受支持，正常不会返回 None；
+        // 防御性兜底：宁可拒绝，也不能把压缩字节当 JSON 透传下去。
+        Ok(None) => Err(encoding),
+        Err(error) => {
+            log::warn!("[Forward] 请求体解压失败 (content-encoding={encoding}): {error}");
+            Err(encoding)
+        }
+    }
+}
+
+/// 为解析（用量统计 / 格式转换）而解压响应体，**绝不改动**透传给客户端的原始
+/// 字节。无 content-encoding、编码不受支持或解压失败时借用原始字节，让调用方
+/// 的 JSON 解析按既有逻辑（成功或降级）继续。
+pub(super) fn decompressed_for_parse<'a>(
+    headers: &HeaderMap,
+    bytes: &'a [u8],
+) -> std::borrow::Cow<'a, [u8]> {
+    let Some(encoding) = content_encoding::get_content_encoding(headers) else {
+        return std::borrow::Cow::Borrowed(bytes);
+    };
+    match content_encoding::decompress_body(&encoding, bytes) {
+        Ok(Some(decompressed)) => std::borrow::Cow::Owned(decompressed),
+        _ => std::borrow::Cow::Borrowed(bytes),
+    }
+}
+
+// ============================================================================
+// 未标记 SSE 兜底聚合（#2234）
+//
+// 部分网关对 `stream:false` 请求强制返回 SSE 体，却把 Content-Type 标成
+// application/json（或不标），使 header 层的 is_sse 检查失效、直接 JSON 解析失败。
+// 这里在 JSON 解析失败后按 SSE 聚合成单个 JSON，再喂给既有非流转换器，客户端
+// 仍收到合法 JSON、非流语义不变。镜像 cc-switch handlers.rs 的同名函数。
+// ============================================================================
+
+/// 判断响应体是否"看起来像" SSE 文本（#2234 兜底嗅探）。
+///
+/// 仅在 JSON 解析已失败后调用：合法 JSON 不可能以这些前缀开头，误判面为零。
+/// 覆盖 SSE 规范的全部四种字段行；包含 ":" 是因为 OpenRouter 等会在流前发
+/// `: PROCESSING` 注释行。
+pub(super) fn body_looks_like_sse(body: &str) -> bool {
+    let trimmed = body.trim_start_matches('\u{feff}').trim_start();
+    ["data:", "event:", "id:", "retry:", ":"]
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+}
+
+/// 从 SSE chunk 的 error 字段提取可报告的错误消息。占位形状（空对象、空消息、
+/// false、空字符串等，常见于 OpenAI 兼容网关每 chunk 附带的 error 字段）返回
+/// None——不应据此判定整条流失败（否则会把成功流误杀成 422）。
+fn error_event_message(error: &Value) -> Option<String> {
+    if let Some(msg) = error.get("message").and_then(|m| m.as_str()) {
+        return (!msg.is_empty()).then(|| msg.to_string());
+    }
+    if let Some(s) = error.as_str() {
+        return (!s.is_empty()).then(|| s.to_string());
+    }
+    None
+}
+
+/// 解析单个 SSE 块的 event 名与 data 负载（多行 data 按规范以 \n 连接）。
+/// 行首允许前导空白后再匹配字段名——与 body_looks_like_sse 的 trim 宽容度对齐。
+/// 返回 None 表示无 data 行。
+fn sse_block_parts(block: &str) -> Option<(String, String)> {
+    let mut event_name = String::new();
+    let mut data_lines: Vec<&str> = Vec::new();
+    for line in block.lines() {
+        let line = line.trim_start();
+        if let Some(evt) = super::sse::strip_sse_field(line, "event") {
+            event_name = evt.trim().to_string();
+        } else if let Some(d) = super::sse::strip_sse_field(line, "data") {
+            data_lines.push(d);
+        }
+    }
+    (!data_lines.is_empty()).then(|| (event_name, data_lines.join("\n")))
+}
+
+/// envelope 字段是否"有意义"：过滤 null、空串与数值 0（含浮点 0.0——Azure
+/// content-filter 前置块的占位值），避免占位值抢先冻结 id/model/created。
+fn envelope_value_meaningful(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::String(s) => !s.is_empty(),
+        Value::Number(n) => n.as_f64() != Some(0.0),
+        _ => true,
+    }
+}
+
+/// 合并单条 tool_calls 增量到按 index 聚合的 BTreeMap：OpenAI 流式把 id/name 放
+/// 首个增量、arguments 分片下发，按 delta.index 定位目标；缺 index 时退到所在数组
+/// 中的位置（message 形态的完整 tool_calls 常不带 index，按 0 会互相覆盖）。
+fn merge_tool_call_delta(
+    tool_calls: &mut std::collections::BTreeMap<usize, Value>,
+    delta: &Value,
+    fallback_index: usize,
+) {
+    let index = delta
+        .get("index")
+        .and_then(|i| i.as_u64())
+        .map(|i| i as usize)
+        .unwrap_or(fallback_index);
+    let target = tool_calls.entry(index).or_insert_with(|| {
+        serde_json::json!({
+            "id": "",
+            "type": "function",
+            "function": {"name": "", "arguments": ""}
+        })
+    });
+    if let Some(v) = delta
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        target["id"] = serde_json::json!(v);
+    }
+    if let Some(func) = delta.get("function") {
+        if let Some(name) = func
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            target["function"]["name"] = serde_json::json!(name);
+        }
+        // arguments：string 直接拼接；object/array 序列化后拼接——非流 message
+        // 快照常把 arguments 作对象回传（OpenAI 兼容偏差），只认 string 会丢参数。
+        match func.get("arguments") {
+            Some(Value::String(args)) => {
+                if let Some(existing) = target["function"]["arguments"].as_str() {
+                    target["function"]["arguments"] = serde_json::json!(format!("{existing}{args}"));
+                }
+            }
+            Some(v @ (Value::Object(_) | Value::Array(_))) => {
+                let serialized = serde_json::to_string(v).unwrap_or_default();
+                if let Some(existing) = target["function"]["arguments"].as_str() {
+                    target["function"]["arguments"] =
+                        serde_json::json!(format!("{existing}{serialized}"));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 把 Responses 流式 SSE 聚合为单个 response JSON（#2234 兜底）。
+pub(super) fn responses_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
+    let mut buffer = body.trim_start_matches('\u{feff}').to_string();
+    let mut completed_response: Option<Value> = None;
+    let mut output_items = Vec::new();
+
+    // strict=false 用于残余尾块：截断的半截 JSON 忽略而非报错，避免破坏
+    // 已聚合好的完整响应。
+    let mut process_block = |block: &str, strict: bool| -> Result<(), ProxyError> {
+        // 已拿到 completed 后残余尾块整体跳过，避免残余里的 response.failed
+        // 把成功响应翻成失败。
+        if !strict && completed_response.is_some() {
+            return Ok(());
+        }
+        let mut event_name = "";
+        let mut data_lines: Vec<&str> = Vec::new();
+
+        for line in block.lines() {
+            let line = line.trim_start();
+            if let Some(evt) = super::sse::strip_sse_field(line, "event") {
+                event_name = evt.trim();
+            } else if let Some(d) = super::sse::strip_sse_field(line, "data") {
+                data_lines.push(d);
+            }
+        }
+
+        if data_lines.is_empty() {
+            return Ok(());
+        }
+
+        let data_str = data_lines.join("\n");
+        if data_str.trim() == "[DONE]" {
+            return Ok(());
+        }
+
+        let data: Value = match serde_json::from_str(&data_str) {
+            Ok(v) => v,
+            Err(_) if !strict => return Ok(()),
+            Err(e) => {
+                return Err(ProxyError::TransformError(format!(
+                    "Failed to parse upstream SSE event: {e}"
+                )))
+            }
+        };
+
+        match event_name {
+            "response.output_item.done" => {
+                if let Some(item) = data.get("item") {
+                    output_items.push(item.clone());
+                }
+            }
+            "response.completed" => {
+                completed_response = Some(data.get("response").cloned().unwrap_or(data));
+            }
+            "response.failed" => {
+                let message = data
+                    .pointer("/response/error/message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("response.failed event received");
+                return Err(ProxyError::TransformError(message.to_string()));
+            }
+            _ => {}
+        }
+        Ok(())
+    };
+
+    while let Some(block) = super::sse::take_sse_block(&mut buffer) {
+        process_block(&block, true)?;
+    }
+    // 最后一个事件后可能没有空行分隔（错标 SSE 兜底/非规范上游常见）：
+    // 残余 buffer 当最后一块处理，否则尾部的 response.completed 会被丢掉。
+    process_block(&buffer, false)?;
+
+    let mut response = completed_response.ok_or_else(|| {
+        ProxyError::TransformError("No response.completed event in upstream SSE".to_string())
+    })?;
+
+    if !output_items.is_empty() {
+        if let Some(obj) = response.as_object_mut() {
+            obj.insert("output".to_string(), Value::Array(output_items));
+        } else {
+            return Err(ProxyError::TransformError(
+                "response.completed payload is not an object".to_string(),
+            ));
+        }
+    }
+
+    Ok(response)
+}
+
+/// 把 Chat Completions 流式 SSE 聚合为单个 chat.completion JSON（#2234 兜底）。
+///
+/// 增量合并语义与 providers/streaming.rs 对齐：tool_calls 按 delta.index 定位，
+/// id/name 出现即覆盖、arguments 字符串拼接；reasoning 各形态经公共提取器并入
+/// 同一累加器；finish_reason 首个非 null 即锁定。
+pub(super) fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
+    // 剥 BOM：嗅探器接受 BOM 开头，但 strip_sse_field 按行首精确匹配，
+    // 不剥会让首个 data 行静默丢失。
+    let mut buffer = body.trim_start_matches('\u{feff}').to_string();
+
+    let mut id = Value::Null;
+    let mut created = Value::Null;
+    let mut model = Value::Null;
+    let mut content = String::new();
+    let mut reasoning_content = String::new();
+    // tool_calls 以 BTreeMap 按 index 聚合：上游可控的 index（u64）不会 densify
+    // 数组——旧的 `while len() <= index { push }` 写法遇到超大 index 会 OOM。
+    let mut tool_calls: std::collections::BTreeMap<usize, Value> =
+        std::collections::BTreeMap::new();
+    let mut finish_reason = Value::Null;
+    let mut usage = Value::Null;
+    let mut saw_choice = false;
+    let mut saw_done = false;
+
+    let mut process_event =
+        |event_name: &str, data_str: &str, strict: bool| -> Result<(), ProxyError> {
+            let trimmed = data_str.trim();
+            if trimmed == "[DONE]" {
+                saw_done = true;
+                return Ok(());
+            }
+            if trimmed.is_empty() {
+                return Ok(());
+            }
+            let chunk: Value = match serde_json::from_str(data_str) {
+                Ok(v) => v,
+                Err(_) if !strict => return Ok(()),
+                Err(e) => {
+                    return Err(ProxyError::TransformError(format!(
+                        "Failed to parse upstream SSE chunk: {e}"
+                    )))
+                }
+            };
+
+            // `event: error` 事件：错误由事件名标记，data 体未必有 error 键。
+            if event_name.eq_ignore_ascii_case("error") {
+                let message = chunk
+                    .get("error")
+                    .and_then(error_event_message)
+                    .or_else(|| error_event_message(&chunk))
+                    .unwrap_or_else(|| "upstream error event in SSE stream".to_string());
+                return Err(ProxyError::TransformError(message));
+            }
+            // 网关把错误作为普通 data chunk 下发：仅在 error 含可报告消息时判失败。
+            if let Some(message) = chunk
+                .get("error")
+                .filter(|e| !e.is_null())
+                .and_then(error_event_message)
+            {
+                return Err(ProxyError::TransformError(message));
+            }
+
+            // 首个"有意义"的值锁定 envelope（过滤 Azure content-filter 的占位值）。
+            for (slot, key) in [
+                (&mut id, "id"),
+                (&mut created, "created"),
+                (&mut model, "model"),
+            ] {
+                if slot.is_null() {
+                    if let Some(v) = chunk.get(key).filter(|v| envelope_value_meaningful(v)) {
+                        *slot = v.clone();
+                    }
+                }
+            }
+            // OpenAI 语义：usage 只在最终 chunk 非 null。
+            if let Some(u) = chunk.get("usage").filter(|u| !u.is_null()) {
+                usage = u.clone();
+            }
+
+            // 代理上下文只存在单选择（n=1），仅聚合 index==0 的 choice。
+            let Some(choice) = chunk
+                .get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|ch| ch.get("index").and_then(|i| i.as_u64()).unwrap_or(0) == 0)
+                })
+            else {
+                return Ok(());
+            };
+
+            saw_choice = true;
+
+            // finish_reason 首个非 null 即锁定（first-wins）。
+            if finish_reason.is_null() {
+                if let Some(fr) = choice.get("finish_reason").filter(|v| !v.is_null()) {
+                    finish_reason = fr.clone();
+                }
+            }
+            // payload 选择：正常增量走 delta；假流式中转会把完整 chat.completion
+            // 包成单事件（message 而非 delta）。delta 为空对象且存在 message 时改用
+            // message 快照（覆盖此前累计的增量），否则内容被静默丢弃。
+            let delta_nonempty = choice
+                .get("delta")
+                .and_then(|d| d.as_object())
+                .is_some_and(|o| !o.is_empty());
+            let (payload, is_full_message) = if delta_nonempty {
+                (choice.get("delta").unwrap(), false)
+            } else if let Some(message) = choice.get("message") {
+                (message, true)
+            } else if let Some(delta) = choice.get("delta") {
+                (delta, false)
+            } else {
+                return Ok(());
+            };
+            if is_full_message {
+                content.clear();
+                reasoning_content.clear();
+                tool_calls.clear();
+            }
+            match payload.get("content") {
+                Some(Value::String(text)) => content.push_str(text),
+                Some(Value::Array(parts)) => {
+                    for part in parts {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            content.push_str(text);
+                        } else if let Some(refusal) = part.get("refusal").and_then(|r| r.as_str()) {
+                            content.push_str(refusal);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // refusal：OpenAI 官方拒绝形态（delta.refusal / message.refusal 字符串）。
+            if let Some(refusal) = payload.get("refusal").and_then(|r| r.as_str()) {
+                content.push_str(refusal);
+            }
+            // reasoning 字段穷举提取复用 codex_chat_common，避免第三份手写实现漏档。
+            if let Some(text) =
+                crate::proxy::providers::codex_chat_common::extract_reasoning_field_text(payload)
+            {
+                reasoning_content.push_str(&text);
+            }
+            if let Some(deltas) = payload.get("tool_calls").and_then(|t| t.as_array()) {
+                for (pos, tc) in deltas.iter().enumerate() {
+                    merge_tool_call_delta(&mut tool_calls, tc, pos);
+                }
+            } else if let Some(fc) = payload.get("function_call").filter(|v| !v.is_null()) {
+                // legacy function_call（弃用但仍有中转回传）→ 当单个 tool_call。
+                let synthetic = serde_json::json!({
+                    "index": 0,
+                    "id": fc.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "type": "function",
+                    "function": fc,
+                });
+                merge_tool_call_delta(&mut tool_calls, &synthetic, 0);
+            }
+            Ok(())
+        };
+
+    while let Some(block) = super::sse::take_sse_block(&mut buffer) {
+        if let Some((event, data)) = sse_block_parts(&block) {
+            process_event(&event, &data, true)?;
+        }
+    }
+    // 最后一个事件后可能没有空行分隔：残余 buffer 当最后一块处理（strict=false）。
+    if let Some((event, data)) = sse_block_parts(&buffer) {
+        process_event(&event, &data, false)?;
+    }
+
+    if !saw_choice {
+        return Err(ProxyError::TransformError(
+            "No chat completion choices in upstream SSE".to_string(),
+        ));
+    }
+    // 完成性守卫：缺少 finish_reason 与 [DONE] 两个完成证据时按截断处理。
+    if finish_reason.is_null() && !saw_done {
+        return Err(ProxyError::TransformError(
+            "Upstream SSE stream appears truncated (no finish_reason or [DONE] marker)".to_string(),
+        ));
+    }
+
+    // tool_calls 终结化：全空壳丢弃；缺 id/name 的按原始 index 回填合成值。
+    let tool_calls: Vec<Value> = tool_calls
+        .into_iter()
+        .filter(|(_, tc)| {
+            tc["id"].as_str().is_some_and(|s| !s.is_empty())
+                || tc["function"]["name"].as_str().is_some_and(|s| !s.is_empty())
+                || tc["function"]["arguments"]
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty())
+        })
+        .map(|(index, mut tc)| {
+            if tc["id"].as_str().is_none_or(str::is_empty) {
+                tc["id"] = serde_json::json!(format!("tool_call_{index}"));
+            }
+            if tc["function"]["name"].as_str().is_none_or(str::is_empty) {
+                tc["function"]["name"] = serde_json::json!("unknown_tool");
+            }
+            tc
+        })
+        .collect();
+
+    let mut message = serde_json::Map::new();
+    message.insert("role".to_string(), serde_json::json!("assistant"));
+    message.insert("content".to_string(), serde_json::json!(content));
+    if !reasoning_content.is_empty() {
+        message.insert(
+            "reasoning_content".to_string(),
+            serde_json::json!(reasoning_content),
+        );
+    }
+    if !tool_calls.is_empty() {
+        message.insert("tool_calls".to_string(), Value::Array(tool_calls));
+    }
+
+    // 上游未回传有效 id 时合成 UUID，避免下游 dedup 退化为常量键全局碰撞。
+    let id = if envelope_value_meaningful(&id) {
+        id
+    } else {
+        serde_json::json!(uuid::Uuid::new_v4().to_string())
+    };
+
+    let mut response = serde_json::json!({
+        "id": id,
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": Value::Object(message),
+            "finish_reason": finish_reason,
+        }],
+    });
+    if !usage.is_null() {
+        response["usage"] = usage;
+    }
+    Ok(response)
+}
+
 fn build_url(base_url: &str, path: &str, query: Option<&str>) -> String {
     let base = base_url.trim_end_matches('/');
     let path = if path.starts_with('/') {
@@ -1324,7 +1878,6 @@ fn resolve_upstream(app_type: &AppType, provider: &Provider) -> Result<UpstreamT
     match app_type {
         AppType::Claude => resolve_claude(provider),
         AppType::Codex => resolve_codex(provider),
-        AppType::Gemini => resolve_gemini(provider),
         other => Err(format!(
             "{} does not support proxy forwarding",
             other.as_str()
@@ -1421,28 +1974,6 @@ fn resolve_codex(provider: &Provider) -> Result<UpstreamTarget, String> {
     })
 }
 
-fn resolve_gemini(provider: &Provider) -> Result<UpstreamTarget, String> {
-    let cfg = &provider.settings_config;
-
-    let base_url = env_str(cfg, "GOOGLE_GEMINI_BASE_URL")
-        .or_else(|| settings_str(cfg, "base_url"))
-        .or_else(|| settings_str(cfg, "baseURL"))
-        .map(|s| s.trim_end_matches('/').to_string())
-        .ok_or_else(|| "Gemini provider missing base_url".to_string())?;
-
-    let token = env_str(cfg, "GEMINI_API_KEY")
-        .or_else(|| env_str(cfg, "GOOGLE_API_KEY"))
-        .filter(|t| !is_placeholder(t))
-        .or_else(|| settings_str(cfg, "api_key").filter(|t| !is_placeholder(t)))
-        .map(str::to_string);
-
-    Ok(UpstreamTarget {
-        base_url,
-        token,
-        strategy: AuthStrategy::GoogApiKey,
-    })
-}
-
 fn parse_toml_base_url(config_str: &str) -> Option<String> {
     if let Some(start) = config_str.find("base_url = \"") {
         let rest = &config_str[start + 12..];
@@ -1457,4 +1988,197 @@ fn parse_toml_base_url(config_str: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn gzip(payload: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(payload).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn decode_request_body_decompresses_gzip_and_strips_entity_headers() {
+        // 回归 (#gzip request body through transform path)：客户端发 gzip 压缩的
+        // JSON 请求体，解压后转发/转换层的 serde_json::from_slice 才能成功；同时
+        // 已失真的实体头必须被剥掉，否则转发的明文 body 会带上错误的 content-encoding。
+        let payload = br#"{"model":"claude-3","stream":false}"#;
+        let compressed = gzip(payload);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+        headers.insert(
+            "content-length",
+            HeaderValue::from_str(&compressed.len().to_string()).unwrap(),
+        );
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+        let (out_headers, out_body) =
+            decode_request_body(headers, Bytes::from(compressed)).expect("supported encoding");
+
+        assert_eq!(out_body.as_ref(), payload);
+        assert!(out_headers.get("content-encoding").is_none());
+        assert!(out_headers.get("content-length").is_none());
+        // 非实体头保持不变
+        assert_eq!(
+            out_headers.get("content-type").unwrap(),
+            "application/json"
+        );
+        // 解压后可被 JSON 解析
+        let parsed: Value = serde_json::from_slice(&out_body).unwrap();
+        assert_eq!(parsed["model"], "claude-3");
+    }
+
+    #[test]
+    fn decode_request_body_passes_through_uncompressed() {
+        let payload = Bytes::from_static(br#"{"ok":true}"#);
+        let headers = HeaderMap::new();
+        let (out_headers, out_body) =
+            decode_request_body(headers, payload.clone()).expect("no encoding");
+        assert_eq!(out_body, payload);
+        assert!(out_headers.get("content-encoding").is_none());
+    }
+
+    #[test]
+    fn decode_request_body_rejects_unsupported_encoding() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", HeaderValue::from_static("snappy"));
+        let err = decode_request_body(headers, Bytes::from_static(b"\x00\x01"))
+            .expect_err("unsupported must reject");
+        assert_eq!(err, "snappy");
+    }
+
+    #[test]
+    fn body_looks_like_sse_detects_event_stream_prefixes() {
+        assert!(body_looks_like_sse("data: {\"x\":1}\n\n"));
+        assert!(body_looks_like_sse("event: message\ndata: {}\n\n"));
+        assert!(body_looks_like_sse(": PROCESSING\n\n"));
+        assert!(body_looks_like_sse("\u{feff}data: {}\n\n"));
+        assert!(!body_looks_like_sse("{\"object\":\"chat.completion\"}"));
+        assert!(!body_looks_like_sse("<html>blocked</html>"));
+    }
+
+    #[test]
+    fn chat_sse_fallback_aggregates_unlabeled_stream() {
+        // 回归 (#2234)：非流请求收到未标记 Content-Type 的 Chat SSE 体，
+        // 按 SSE 聚合成单个 chat.completion JSON。
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hel\"}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"}}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        assert!(body_looks_like_sse(body));
+        let value = chat_sse_to_response_value(body).expect("aggregates");
+        assert_eq!(value["object"], "chat.completion");
+        assert_eq!(value["id"], "chatcmpl-1");
+        assert_eq!(value["choices"][0]["message"]["content"], "Hello");
+        assert_eq!(value["choices"][0]["finish_reason"], "stop");
+        assert_eq!(value["usage"]["completion_tokens"], 2);
+    }
+
+    #[test]
+    fn chat_sse_fallback_rejects_truncated_stream() {
+        // 无 finish_reason 且无 [DONE]：按截断处理，避免半截内容伪装成成功。
+        let body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n";
+        assert!(chat_sse_to_response_value(body).is_err());
+    }
+
+    #[test]
+    fn responses_sse_fallback_aggregates_completed_event() {
+        let body = concat!(
+            "event: response.output_item.done\n",
+            "data: {\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}}\n\n",
+            "event: response.completed\n",
+            "data: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n",
+        );
+        let value = responses_sse_to_response_value(body).expect("aggregates");
+        assert_eq!(value["id"], "resp_1");
+        assert_eq!(value["output"][0]["type"], "message");
+    }
+
+    #[test]
+    fn decompressed_for_parse_gzip_yields_parseable_json() {
+        // 回归 (Finding 7)：上游忽略 accept-encoding: identity 而 gzip 压缩 stream:false
+        // 响应体时，non_stream_back_transformed 的 serde_json 解析必须走解压兜底才能成功；
+        // 否则用量统计 / 格式转换被静默跳过。
+        let payload = br#"{"object":"chat.completion","usage":{"prompt_tokens":5}}"#;
+        let compressed = gzip(payload);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+
+        // 原始压缩字节解析必然失败（这正是 finding 描述的漏计费根因）。
+        assert!(serde_json::from_slice::<Value>(&compressed).is_err());
+
+        let parse_bytes = decompressed_for_parse(&headers, &compressed);
+        let parsed: Value = serde_json::from_slice(&parse_bytes).expect("decompressed parses");
+        assert_eq!(parsed["object"], "chat.completion");
+        assert_eq!(parsed["usage"]["prompt_tokens"], 5);
+    }
+
+    #[test]
+    fn decompressed_for_parse_gzip_sse_body_passes_sniff() {
+        // 兜底嗅探同样需要先解压：gzip 压缩的未标记 SSE 体解压后 body_looks_like_sse
+        // 才能命中，进而走 SSE 聚合。压缩态直接嗅探会漏判。
+        let sse = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n";
+        let compressed = gzip(sse);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+
+        assert!(!body_looks_like_sse(&String::from_utf8_lossy(&compressed)));
+
+        let parse_bytes = decompressed_for_parse(&headers, &compressed);
+        assert!(body_looks_like_sse(&String::from_utf8_lossy(&parse_bytes)));
+    }
+
+    #[test]
+    fn decompressed_for_parse_plaintext_borrows_untouched() {
+        let payload = br#"{"ok":true}"#;
+        let headers = HeaderMap::new();
+        let parse_bytes = decompressed_for_parse(&headers, payload);
+        assert_eq!(parse_bytes.as_ref(), payload);
+    }
+
+    #[test]
+    fn is_streaming_request_detects_stream_body_flag() {
+        let headers = HeaderMap::new();
+        assert!(is_streaming_request(
+            "/v1/messages",
+            br#"{"model":"claude-3","stream":true}"#,
+            &headers,
+        ));
+        assert!(!is_streaming_request(
+            "/v1/messages",
+            br#"{"model":"claude-3","stream":false}"#,
+            &headers,
+        ));
+        // 无 stream 字段、非 SSE 端点、无 accept 头：非流。
+        assert!(!is_streaming_request(
+            "/v1/messages",
+            br#"{"model":"claude-3"}"#,
+            &headers,
+        ));
+    }
+
+    #[test]
+    fn is_streaming_request_detects_sse_endpoint_and_accept_header() {
+        let headers = HeaderMap::new();
+        assert!(is_streaming_request(
+            "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+            b"{}",
+            &headers,
+        ));
+
+        let mut accept = HeaderMap::new();
+        accept.insert("accept", HeaderValue::from_static("text/event-stream"));
+        assert!(is_streaming_request("/v1/messages", b"{}", &accept));
+    }
 }

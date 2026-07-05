@@ -55,7 +55,6 @@ pub const HEADER: u32 = 0xfbfbf9;
 pub const BRAND_CLAUDE: u32 = 0xd97757; // Anthropic coral
 pub const BRAND_CLAUDE_DESKTOP: u32 = 0xbd5d3a; // deeper Anthropic terracotta (distinct from the CLI)
 pub const BRAND_CODEX: u32 = 0x0d0d0d; // OpenAI near-black
-pub const BRAND_GEMINI: u32 = 0x4285f4; // Google blue
 pub const BRAND_OPENCODE: u32 = 0x211e1e; // OpenCode charcoal
 pub const BRAND_OPENCLAW: u32 = 0xe23b3b; // OpenClaw red
 pub const BRAND_HERMES: u32 = 0x2b2b33; // Hermes slate (monochrome brand, kept apart from the other darks)

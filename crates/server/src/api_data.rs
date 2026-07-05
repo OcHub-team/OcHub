@@ -204,10 +204,6 @@ async fn usage_session_sync(State(s): State<ServerState>) -> ApiResult<Json<Valu
             routedeck_core::services::session_usage_codex::sync_codex_usage(&s.app.db),
         ),
         (
-            "Gemini",
-            routedeck_core::services::session_usage_gemini::sync_gemini_usage(&s.app.db),
-        ),
-        (
             "OpenCode",
             routedeck_core::services::session_usage_opencode::sync_opencode_usage(&s.app.db),
         ),
@@ -522,6 +518,11 @@ async fn deeplink_parse(Json(body): Json<DeeplinkBody>) -> ApiResult<Json<Value>
     to_value(routedeck_core::deeplink::parse_deeplink_url(&body.url)?)
 }
 
+async fn deeplink_merge(Json(body): Json<DeeplinkBody>) -> ApiResult<Json<Value>> {
+    let request = routedeck_core::deeplink::parse_deeplink_url(&body.url)?;
+    to_value(routedeck_core::deeplink::parse_and_merge_config(&request)?)
+}
+
 async fn deeplink_import(
     State(s): State<ServerState>,
     Json(body): Json<DeeplinkBody>,
@@ -599,5 +600,6 @@ pub fn router() -> Router<ServerState> {
             axum::routing::delete(db_backup_delete),
         )
         .route("/api/deeplink/parse", post(deeplink_parse))
+        .route("/api/deeplink/merge", post(deeplink_merge))
         .route("/api/deeplink/import", post(deeplink_import))
 }

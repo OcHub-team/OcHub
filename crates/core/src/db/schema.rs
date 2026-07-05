@@ -136,11 +136,11 @@ impl Database {
             created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 初始化三行数据（每应用不同默认值）
+        // 初始化每应用默认行（每应用不同默认值）
         //
         // 兼容旧数据库：
-        // - 老版本 proxy_config 是单例表（没有 app_type 列），此时不能执行三行 seed insert；
-        // - 旧表会在 apply_schema_migrations() 中迁移为三行结构后再插入。
+        // - 老版本 proxy_config 是单例表（没有 app_type 列），此时不能执行 per-app seed insert；
+        // - 旧表会在 apply_schema_migrations() 中迁移为 per-app 结构后再插入。
         if Self::has_column(conn, "proxy_config", "app_type")? {
             conn.execute(
                 "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
@@ -157,15 +157,6 @@ impl Database {
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests)
                 VALUES ('codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
-                [],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-            conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -743,19 +734,6 @@ impl Database {
                 old_cb.3,
                 old_cb.4,
             ),
-            (
-                "gemini",
-                get_bool("proxy_takeover_gemini"),
-                get_bool("auto_failover_enabled_gemini"),
-                5,
-                old_config.4,
-                old_config.5,
-                old_cb.0,
-                old_cb.1,
-                old_cb.2,
-                old_cb.3,
-                old_cb.4,
-            ),
         ];
 
         // 创建新表
@@ -775,7 +753,7 @@ impl Database {
             created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )", [])?;
 
-        // 插入三行配置
+        // 插入每应用配置行
         for (app, takeover, failover, retries, fb, idle, cb_f, cb_s, cb_t, cb_r, cb_m) in apps {
             conn.execute(
                 "INSERT INTO proxy_config_new (app_type, proxy_enabled, listen_address, listen_port, enable_logging,
@@ -894,7 +872,8 @@ impl Database {
     ///
     /// 迁移策略：
     /// 1. 旧数据库只存储安装记录，真正的 skill 文件在文件系统
-    /// 2. 直接重建新表结构，后续由 SkillService 在首次启动时扫描文件系统重建数据
+    /// 2. 直接重建新表结构，后续由 SkillService 在下次 skill 操作时从
+    ///    skills CLI 全局存储（`skills list -g`）对账重建注册表
     fn migrate_v2_to_v3(conn: &Connection) -> Result<(), AppError> {
         // 检查是否已经是新结构（通过检查是否有 enabled_claude 列）
         if Self::has_column(conn, "skills", "enabled_claude")? {
@@ -967,7 +946,7 @@ impl Database {
 
         log::info!(
             "skills 表已迁移到 v3 结构。\n\
-             注意：旧的安装记录已清除，首次启动时将自动扫描文件系统重建数据。"
+             注意：旧的安装记录已清除，后续 skill 操作时将从 skills CLI 存储对账重建。"
         );
 
         Ok(())

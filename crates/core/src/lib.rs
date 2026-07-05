@@ -5,7 +5,7 @@
 //! crate and the GPUI `routedeck-app` crate both build on this.
 //!
 //! Persistence and live-config paths are kept byte-compatible with cc-switch
-//! (`~/.cc-switch/`, `~/.claude`, `~/.codex`, `~/.gemini`, …) so RouteDeck is
+//! (`~/.cc-switch/`, `~/.claude`, `~/.codex`, …) so RouteDeck is
 //! a drop-in backend replacement.
 
 pub mod app_state;

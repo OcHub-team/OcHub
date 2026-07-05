@@ -45,7 +45,6 @@ impl McpApps {
         match app {
             AppType::Claude => self.claude,
             AppType::Codex => self.codex,
-            AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::OpenClaw => false,
             AppType::Hermes => self.hermes,
@@ -57,7 +56,6 @@ impl McpApps {
         match app {
             AppType::Claude => self.claude = enabled,
             AppType::Codex => self.codex = enabled,
-            AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::OpenClaw => {}
             AppType::Hermes => self.hermes = enabled,
@@ -73,9 +71,6 @@ impl McpApps {
         if self.codex {
             apps.push(AppType::Codex);
         }
-        if self.gemini {
-            apps.push(AppType::Gemini);
-        }
         if self.opencode {
             apps.push(AppType::OpenCode);
         }
@@ -86,7 +81,7 @@ impl McpApps {
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.gemini && !self.opencode && !self.hermes
+        !self.claude && !self.codex && !self.opencode && !self.hermes
     }
 }
 
@@ -237,7 +232,6 @@ impl SkillApps {
         match app {
             AppType::Claude => self.claude,
             AppType::Codex => self.codex,
-            AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
             AppType::OpenClaw => false,
@@ -249,7 +243,6 @@ impl SkillApps {
         match app {
             AppType::Claude => self.claude = enabled,
             AppType::Codex => self.codex = enabled,
-            AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::OpenClaw => {}
@@ -265,9 +258,6 @@ impl SkillApps {
         if self.codex {
             apps.push(AppType::Codex);
         }
-        if self.gemini {
-            apps.push(AppType::Gemini);
-        }
         if self.opencode {
             apps.push(AppType::OpenCode);
         }
@@ -278,7 +268,7 @@ impl SkillApps {
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.gemini && !self.opencode && !self.hermes
+        !self.claude && !self.codex && !self.opencode && !self.hermes
     }
 
     /// Build a `SkillApps` with only the given app enabled.
@@ -417,7 +407,6 @@ impl CommonConfigSnippets {
             AppType::Claude => self.claude.as_ref(),
             AppType::ClaudeDesktop => None,
             AppType::Codex => self.codex.as_ref(),
-            AppType::Gemini => self.gemini.as_ref(),
             AppType::OpenCode => self.opencode.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::Hermes => self.hermes.as_ref(),
@@ -429,7 +418,6 @@ impl CommonConfigSnippets {
             AppType::Claude => self.claude = snippet,
             AppType::ClaudeDesktop => {}
             AppType::Codex => self.codex = snippet,
-            AppType::Gemini => self.gemini = snippet,
             AppType::OpenCode => self.opencode = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::Hermes => self.hermes = snippet,
@@ -472,7 +460,6 @@ impl Default for MultiAppConfig {
         apps.insert("claude".to_string(), ProviderManager::default());
         apps.insert("claude-desktop".to_string(), ProviderManager::default());
         apps.insert("codex".to_string(), ProviderManager::default());
-        apps.insert("gemini".to_string(), ProviderManager::default());
         apps.insert("opencode".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
         apps.insert("hermes".to_string(), ProviderManager::default());

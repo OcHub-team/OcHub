@@ -6,7 +6,7 @@ use std::process::Command;
 use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
 use routedeck_core::services::{DailyMemoryFileInfo, DailyMemorySearchResult, WorkspaceService};
 
-use crate::components;
+use crate::components::{self, ButtonTone, ConfirmModal};
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -28,6 +28,8 @@ pub struct WorkspaceView {
     memory_content: Entity<TextInput>,
     memory_query: Entity<TextInput>,
     status: Option<SharedString>,
+    /// Daily-memory file awaiting delete confirmation.
+    pending_delete: Option<String>,
 }
 
 impl WorkspaceView {
@@ -52,6 +54,7 @@ impl WorkspaceView {
             memory_content,
             memory_query,
             status: None,
+            pending_delete: None,
         };
         this.reload();
         this
@@ -166,6 +169,23 @@ impl WorkspaceView {
             }
             Err(err) => self.set_status(format!("保存每日记忆失败: {err}"), cx),
         }
+    }
+
+    fn request_delete_memory(&mut self, filename: String, cx: &mut Context<Self>) {
+        self.pending_delete = Some(filename);
+        cx.notify();
+    }
+
+    fn cancel_delete_memory(&mut self, cx: &mut Context<Self>) {
+        self.pending_delete = None;
+        cx.notify();
+    }
+
+    fn confirm_delete_memory(&mut self, cx: &mut Context<Self>) {
+        let Some(filename) = self.pending_delete.take() else {
+            return;
+        };
+        self.delete_memory_file(filename, cx);
     }
 
     fn delete_memory_file(&mut self, filename: String, cx: &mut Context<Self>) {
@@ -334,11 +354,42 @@ impl WorkspaceView {
                         .text_color(theme::c(theme::RED))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.delete_memory_file(delete_name.clone(), cx);
+                                this.request_delete_memory(delete_name.clone(), cx);
                             },
                         )),
                     ),
             )
+    }
+}
+
+impl WorkspaceView {
+    fn render_with_confirm(
+        &self,
+        base: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(filename) = self.pending_delete.clone() else {
+            return base;
+        };
+        let modal = ConfirmModal::delete(
+            "删除每日记忆",
+            format!("确定要删除每日记忆文件“{filename}”吗？此操作无法撤销。"),
+        );
+        let confirm =
+            components::action_button_tone("memory-delete-confirm", "删除", ButtonTone::Danger)
+                .on_click(cx.listener(|this, _event, _window, cx| this.confirm_delete_memory(cx)));
+        let cancel = components::action_button("memory-delete-cancel", "取消", false)
+            .on_click(cx.listener(|this, _event, _window, cx| this.cancel_delete_memory(cx)));
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(base)
+            .child(components::confirm_overlay(&modal, confirm, cancel))
+            .into_any_element()
     }
 }
 
@@ -385,7 +436,7 @@ impl Render for WorkspaceView {
             })
             .collect();
 
-        layout::page()
+        let base = layout::page()
             .child(
                 layout::page_header("工作区", Some("OpenClaw workspace 文件与每日记忆。".into()))
                     .child(
@@ -538,6 +589,8 @@ impl Render for WorkspaceView {
                             .children(search_rows),
                     ),
             ))
+            .into_any_element();
+        self.render_with_confirm(base, cx)
     }
 }
 

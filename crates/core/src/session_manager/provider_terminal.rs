@@ -67,7 +67,7 @@ fn extract_env_vars_from_config(
         return env_vars;
     };
 
-    // 处理 env 字段（Claude/Gemini 通用）
+    // 处理 env 字段（Claude 通用）
     if let Some(env) = obj.get("env").and_then(|v| v.as_object()) {
         for (key, value) in env {
             if let Some(str_val) = value.as_str() {
@@ -78,7 +78,6 @@ fn extract_env_vars_from_config(
         // 处理 base_url: 根据应用类型添加对应的环境变量
         let base_url_key = match app_type {
             AppType::Claude | AppType::ClaudeDesktop => Some("ANTHROPIC_BASE_URL"),
-            AppType::Gemini => Some("GOOGLE_GEMINI_BASE_URL"),
             _ => None,
         };
 
@@ -93,13 +92,6 @@ fn extract_env_vars_from_config(
     if *app_type == AppType::Codex {
         if let Some(auth) = obj.get("auth").and_then(|v| v.as_str()) {
             env_vars.push(("OPENAI_API_KEY".to_string(), auth.to_string()));
-        }
-    }
-
-    // Gemini 使用 api_key 字段转换为 GEMINI_API_KEY
-    if *app_type == AppType::Gemini {
-        if let Some(api_key) = obj.get("api_key").and_then(|v| v.as_str()) {
-            env_vars.push(("GEMINI_API_KEY".to_string(), api_key.to_string()));
         }
     }
 

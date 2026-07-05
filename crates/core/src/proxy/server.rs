@@ -16,7 +16,7 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, RawQuery, State};
 use axum::http::{HeaderMap, Method};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
@@ -271,10 +271,6 @@ impl ProxyServer {
             .route("/codex/v1/responses/compact", post(handle_codex))
             .route("/models", get(handle_codex))
             .route("/v1/models", get(handle_codex))
-            // Gemini API (any method: SDK/CLI sends GET /models too)
-            .route("/v1beta/*path", any(handle_gemini))
-            .route("/gemini/v1beta/*path", any(handle_gemini))
-            .route("/gemini/v1/*path", any(handle_gemini))
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
             .with_state(self.state.clone())
     }
@@ -324,22 +320,3 @@ async fn handle_codex(
     .await
 }
 
-async fn handle_gemini(
-    State(state): State<ProxyState>,
-    method: Method,
-    RawQuery(query): RawQuery,
-    uri: axum::http::Uri,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    forward::forward(
-        state,
-        AppType::Gemini,
-        method,
-        uri.path(),
-        query.as_deref(),
-        headers,
-        body,
-    )
-    .await
-}

@@ -762,6 +762,7 @@ async fn non_stream_back_transformed(
     start: std::time::Instant,
     tool_schema_hints: Option<&transform_gemini::AnthropicToolSchemaHints>,
 ) -> Result<Response, ProxyError> {
+    let headers = upstream.headers().clone();
     let bytes = upstream
         .bytes()
         .await
@@ -777,8 +778,45 @@ async fn non_stream_back_transformed(
         });
     }
 
-    let upstream_json: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| ProxyError::TransformError(format!("parse upstream JSON: {e}")))?;
+    // 用量统计 / 格式转换仅解析解压后的副本。accept-encoding: identity 已在上游请求
+    // 强制，正常拿到明文；仍保留解压兜底（与 codex 的 stream_back_codex_chat_converted
+    // _with_usage 对称），以防上游忽略 identity 而压缩响应体，否则 JSON 解析与 SSE
+    // 嗅探都会失败、转换被静默跳过。重建的明文响应只带 content-type，天然剥离了
+    // content-encoding/content-length。
+    let parse_bytes = super::forward::decompressed_for_parse(&headers, &bytes);
+
+    let upstream_json: Value = match serde_json::from_slice(&parse_bytes) {
+        Ok(value) => value,
+        // 兜底嗅探（#2234）：部分网关对 stream:false 强制返回 SSE 体，却把
+        // Content-Type 标成 application/json，upstream_is_sse 检查失效。此时按 SSE
+        // 聚合成单个 JSON 再走既有非流转换器，客户端仍收到 Anthropic JSON。
+        // gemini_native 暂无聚合器，落诊断错误。
+        Err(error) if api_format != "gemini_native" => {
+            let body_str = String::from_utf8_lossy(&parse_bytes);
+            if super::forward::body_looks_like_sse(&body_str) {
+                log::warn!(
+                    "[Forward/Transform] 上游对非流请求返回未标记的 SSE 体 (api_format={api_format})，按 SSE 聚合兜底"
+                );
+                let aggregated = if api_format == "openai_responses" {
+                    super::forward::responses_sse_to_response_value(&body_str)
+                } else {
+                    super::forward::chat_sse_to_response_value(&body_str)
+                };
+                aggregated.map_err(|agg| {
+                    ProxyError::TransformError(format!("SSE aggregate fallback failed: {agg}"))
+                })?
+            } else {
+                return Err(ProxyError::TransformError(format!(
+                    "parse upstream JSON: {error}"
+                )));
+            }
+        }
+        Err(error) => {
+            return Err(ProxyError::TransformError(format!(
+                "parse upstream JSON: {error}"
+            )))
+        }
+    };
 
     let anthropic = match api_format {
         "openai_responses" => transform_responses::responses_to_anthropic(upstream_json),

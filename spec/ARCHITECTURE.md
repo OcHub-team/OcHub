@@ -2,6 +2,17 @@
 
 Living notes that anchor the port. Source of truth is `cc-switch/src-tauri/src`.
 
+Divergences from cc-switch (2026-07: see `spec/PLAN-ccswitch-parity.md`):
+- Gemini CLI app support removed (no `AppType::Gemini`, no `/v1beta` inbound
+  routes, takeover is Claude+Codex only). The DB schema stays cc-switch-v11
+  compatible: `enabled_gemini` columns and vestigial serde `gemini` fields
+  remain, and historical Gemini usage rows still display. Gemini as an
+  *upstream provider format* (`api_format="gemini_native"`) is fully supported.
+- Skills management wraps the Vercel `skills` CLI (`npx -y skills`) instead of
+  the SSOT filesystem engine; the SQLite registry (`skills`, `skill_repos`) is
+  unchanged. Skill backups/migrate-storage/install-zip/scan-unmanaged routes
+  were dropped.
+
 ## Crates
 - `routedeck-core` (`crates/core`): domain + config + SQLite store + services. No Tauri/GPUI.
 - `routedeck-server` (`crates/server`): axum control API + local proxy. Depends on `routedeck-core`.
@@ -33,7 +44,7 @@ Key API (all take `&AppState`):
   `update_sort_order`, speedtest/endpoint helpers, usage helpers.
 
 ### Switch modes (from `AppType::is_additive_mode`)
-- **Switch mode** (Claude, ClaudeDesktop, Codex, Gemini): only the current provider
+- **Switch mode** (Claude, ClaudeDesktop, Codex): only the current provider
   is written to the live config; switching replaces it.
 - **Additive mode** (OpenCode, OpenClaw, Hermes): all enabled providers are written;
   per-provider `meta.live_config_managed` tracks membership.
@@ -44,7 +55,6 @@ Key API (all take `&AppState`):
 - Claude Desktop → `claude_desktop_config.rs` (direct vs proxy mode, model routes).
 - Codex → `codex_config.rs`: writes `~/.codex/auth.json` + `~/.codex/config.toml`
   from `settings_config.{auth, config}`; OAuth + session-history bucketing logic.
-- Gemini → `gemini_config.rs`: `~/.gemini/settings.json` (env-based).
 - OpenCode → `opencode_config.rs`: `opencode.json` providers map (additive).
 - OpenClaw → `openclaw_config.rs`: `openclaw.json` (additive).
 - Hermes → `hermes_config.rs`: `config.yaml` (additive).
@@ -61,10 +71,12 @@ files, env management, deeplink, settings, update/restart, lightweight mode.
 
 ## Port phases (each ends with `cargo check -p routedeck-core` green)
 1. ✅ Foundation: error, app_type, model, settings, app_store, paths.
-2. ⏳ DB store: database/* → `crates/core/src/db/` (delegated).
-3. Per-app writers + ProviderService + AppState (+ minimal ProxyService/UsageCache).
-4. axum server: control API routes calling services; in-process host from app.
-5. GPUI UI wired to live data (replace `demo_providers`): list/switch/add/edit/delete.
-6. Proxy server (forward/failover/circuit-breaker/transforms/usage).
-7. Remaining subsystems: MCP, prompts, skills, sessions, sync, auth, OMO/OpenClaw/
-   Hermes specifics, deeplink, env, tray, updater, usage UI.
+2. ✅ DB store: database/* → `crates/core/src/db/`.
+3. ✅ Per-app writers + ProviderService + AppState (+ ProxyService/UsageCache).
+4. ✅ axum server: control API routes calling services; in-process host from app.
+5. ✅ GPUI UI wired to live data: list/switch/add/edit/delete/reorder.
+6. ✅ Proxy server (forward/failover/circuit-breaker/transforms/content-encoding/
+   usage incl. rquickjs usage scripts).
+7. ✅ Remaining subsystems: MCP, prompts, skills (via `skills` CLI), sessions,
+   sync, auth, OMO/OpenClaw/Hermes specifics, deeplink, env, usage UI.
+   Still open: tray icon, updater download/install (see README Status).

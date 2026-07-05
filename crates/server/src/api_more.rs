@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
-use routedeck_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
+use routedeck_core::apps::{claude_desktop, claude_plugin, codex, hermes, openclaw, opencode};
 use routedeck_core::settings::{self, S3SyncSettings, WebDavSyncSettings};
 use routedeck_core::{AppError, AppType};
 
@@ -660,7 +660,6 @@ fn app_config_dir(app: AppType) -> Result<std::path::PathBuf, AppError> {
         AppType::Claude => routedeck_core::paths::get_claude_config_dir(),
         AppType::ClaudeDesktop => claude_desktop::get_config_library_path()?,
         AppType::Codex => codex::get_codex_config_dir(),
-        AppType::Gemini => gemini::get_gemini_dir(),
         AppType::OpenCode => opencode::get_opencode_dir(),
         AppType::OpenClaw => openclaw::get_openclaw_dir(),
         AppType::Hermes => hermes::get_hermes_dir(),
@@ -691,13 +690,6 @@ fn app_config_status_sync(
             routedeck_core::paths::ConfigStatus {
                 exists: auth_path.exists() || !config_text.trim().is_empty(),
                 path: codex::get_codex_config_dir().to_string_lossy().to_string(),
-            }
-        }
-        AppType::Gemini => {
-            let env_path = gemini::get_gemini_env_path();
-            routedeck_core::paths::ConfigStatus {
-                exists: env_path.exists(),
-                path: gemini::get_gemini_dir().to_string_lossy().to_string(),
             }
         }
         AppType::OpenCode => {

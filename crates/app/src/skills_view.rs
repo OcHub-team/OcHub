@@ -1,57 +1,65 @@
-//! Skills panel. Lists installed skills from the SSOT registry and exposes the
-//! installed-skill lifecycle actions that can run safely inside the GPUI app.
+//! Skills panel. Lists installed skills from the SQLite registry and drives
+//! the Vercel `skills` CLI wrapper for install/uninstall/toggle/update.
 
 use std::sync::Arc;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
-use routedeck_core::db::legacy_json::{InstalledSkill, SkillApps, UnmanagedSkill};
-use routedeck_core::services::skill::{
-    DiscoverableSkill, ImportSkillSelection, SkillBackupEntry, SkillUpdateInfo,
-};
+use routedeck_core::db::legacy_json::InstalledSkill;
+use routedeck_core::services::skill::DiscoverableSkill;
 use routedeck_core::services::SkillService;
 use routedeck_core::{AppState, AppType};
 
 use crate::components;
 use crate::layout;
-use crate::text_input::TextInput;
 use crate::theme;
+
+/// Drive a tokio-dependent future to completion on a dedicated current-thread
+/// runtime. GPUI's executor has no tokio reactor, so SkillService calls that
+/// reach into tokio::process / reqwest must be run here — and only ever from a
+/// `cx.background_spawn` task, never inline on the UI thread. Mirrors the
+/// pattern in tools_view.rs / usage_view.rs.
+fn block_on_tokio<F, T>(fut: F) -> anyhow::Result<T>
+where
+    F: std::future::Future<Output = anyhow::Result<T>>,
+{
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(fut),
+        Err(e) => Err(anyhow::anyhow!("创建异步运行时失败: {e}")),
+    }
+}
 
 pub struct SkillsView {
     app: Arc<AppState>,
     skills: Vec<InstalledSkill>,
     discoverable: Vec<DiscoverableSkill>,
-    backups: Vec<SkillBackupEntry>,
-    unmanaged: Vec<UnmanagedSkill>,
-    updates: HashMap<String, SkillUpdateInfo>,
     updating: HashSet<String>,
-    checking_updates: bool,
+    updating_all: bool,
     discovering: bool,
     installing: HashSet<String>,
-    restoring: HashSet<String>,
+    uninstalling: HashSet<String>,
+    toggling: HashSet<String>,
     selected_app: AppType,
-    zip_path: gpui::Entity<TextInput>,
     status: Option<SharedString>,
 }
 
 impl SkillsView {
-    pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
-        let zip_path = cx.new(|cx| TextInput::new(cx, "/path/to/skill.zip"));
+    pub fn new(app: Arc<AppState>, _cx: &mut Context<Self>) -> Self {
         let mut this = Self {
             app,
             skills: Vec::new(),
             discoverable: Vec::new(),
-            backups: Vec::new(),
-            unmanaged: Vec::new(),
-            updates: HashMap::new(),
             updating: HashSet::new(),
-            checking_updates: false,
+            updating_all: false,
             discovering: false,
             installing: HashSet::new(),
-            restoring: HashSet::new(),
+            uninstalling: HashSet::new(),
+            toggling: HashSet::new(),
             selected_app: AppType::Claude,
-            zip_path,
             status: None,
         };
         this.reload();
@@ -66,7 +74,6 @@ impl SkillsView {
                 self.status = Some(SharedString::from(format!("加载技能失败: {err}")));
             }
         }
-        self.backups = SkillService::list_backups().unwrap_or_default();
     }
 
     /// InstalledSkill has no version field; surface the source repo (the closest
@@ -81,39 +88,38 @@ impl SkillsView {
         }
     }
 
-    fn enabled_apps_label(skill: &InstalledSkill) -> String {
-        let mut apps = Vec::new();
-        if skill.apps.claude {
-            apps.push("claude");
-        }
-        if skill.apps.codex {
-            apps.push("codex");
-        }
-        if skill.apps.gemini {
-            apps.push("gemini");
-        }
-        if skill.apps.opencode {
-            apps.push("opencode");
-        }
-        if skill.apps.hermes {
-            apps.push("hermes");
-        }
-        if apps.is_empty() {
-            "未启用应用".to_string()
-        } else {
-            apps.join(", ")
-        }
-    }
-
     fn do_uninstall(&mut self, id: String, cx: &mut Context<Self>) {
-        match SkillService::uninstall(&self.app.db, &id) {
-            Ok(_) => self.status = Some(SharedString::from("技能已卸载")),
-            Err(err) => self.status = Some(SharedString::from(format!("卸载失败: {err}"))),
+        if self.uninstalling.contains(&id) {
+            return;
         }
-        self.updates.remove(&id);
-        self.updating.remove(&id);
-        self.reload();
+        self.uninstalling.insert(id.clone());
+        self.status = Some(SharedString::from("正在卸载技能..."));
         cx.notify();
+
+        let app = self.app.clone();
+        let task = cx.background_spawn(async move {
+            let result = block_on_tokio(SkillService::uninstall(&app.db, &id));
+            (id, result)
+        });
+        cx.spawn(async move |this, cx| {
+            let (id, result) = task.await;
+            this.update(cx, |this, cx| {
+                this.uninstalling.remove(&id);
+                match result {
+                    Ok(_) => {
+                        this.status = Some(SharedString::from("技能已卸载"));
+                        this.updating.remove(&id);
+                        this.reload();
+                    }
+                    Err(err) => {
+                        this.status = Some(SharedString::from(format!("卸载失败: {err}")));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn select_app(&mut self, app: AppType, cx: &mut Context<Self>) {
@@ -132,15 +138,18 @@ impl SkillsView {
         cx.notify();
 
         let app = self.app.clone();
-        cx.spawn(async move |this, cx| {
-            let result = app
+        let task = cx.background_spawn(async move {
+            let repos = app
                 .db
                 .get_skill_repos()
                 .map_err(|err| anyhow::anyhow!(err.to_string()));
-            let result = match result {
-                Ok(repos) => SkillService::new().discover_available(repos).await,
+            match repos {
+                Ok(repos) => block_on_tokio(SkillService::new().discover_available(repos)),
                 Err(err) => Err(err),
-            };
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
             this.update(cx, |this, cx| {
                 this.discovering = false;
                 match result {
@@ -172,10 +181,11 @@ impl SkillsView {
 
         let app = self.app.clone();
         let target_app = self.selected_app;
+        let task = cx.background_spawn(async move {
+            block_on_tokio(SkillService::new().install(&app.db, &skill, &target_app))
+        });
         cx.spawn(async move |this, cx| {
-            let result = SkillService::new()
-                .install(&app.db, &skill, &target_app)
-                .await;
+            let result = task.await;
             this.update(cx, |this, cx| {
                 this.installing.remove(&key);
                 match result {
@@ -195,126 +205,72 @@ impl SkillsView {
         .detach();
     }
 
-    fn scan_unmanaged(&mut self, cx: &mut Context<Self>) {
-        match SkillService::scan_unmanaged(&self.app.db) {
-            Ok(list) => {
-                let count = list.len();
-                self.unmanaged = list;
-                self.status = Some(SharedString::from(format!("发现 {count} 个未管理技能")));
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("扫描未管理技能失败: {err}")));
-            }
-        }
-        cx.notify();
-    }
-
-    fn import_unmanaged(&mut self, directory: String, cx: &mut Context<Self>) {
-        let selection = ImportSkillSelection {
-            directory: directory.clone(),
-            apps: SkillApps::only(&self.selected_app),
-        };
-        match SkillService::import_from_apps(&self.app.db, vec![selection]) {
-            Ok(imported) => {
-                self.status = Some(SharedString::from(format!(
-                    "已导入 {} 个技能",
-                    imported.len()
-                )));
-                self.unmanaged.retain(|skill| skill.directory != directory);
-                self.reload();
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("导入失败: {err}")));
-            }
-        }
-        cx.notify();
-    }
-
-    fn install_zip(&mut self, cx: &mut Context<Self>) {
-        let path = self.zip_path.read(cx).content().trim().to_string();
-        if path.is_empty() {
-            self.status = Some(SharedString::from("请输入 ZIP 文件路径"));
-            cx.notify();
+    fn toggle_app_for_skill(
+        &mut self,
+        id: String,
+        target: AppType,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let toggle_key = format!("{id}:{}", target.as_str());
+        if self.toggling.contains(&toggle_key) {
             return;
         }
-        match SkillService::install_from_zip(
-            &self.app.db,
-            std::path::Path::new(&path),
-            &self.selected_app,
-        ) {
-            Ok(skills) => {
-                self.status = Some(SharedString::from(format!(
-                    "已从 ZIP 安装 {} 个技能",
-                    skills.len()
-                )));
-                self.reload();
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("ZIP 安装失败: {err}")));
-            }
-        }
-        cx.notify();
-    }
-
-    fn restore_backup(&mut self, backup_id: String, cx: &mut Context<Self>) {
-        if self.restoring.contains(&backup_id) {
-            return;
-        }
-        self.restoring.insert(backup_id.clone());
-        match SkillService::restore_from_backup(&self.app.db, &backup_id, &self.selected_app) {
-            Ok(skill) => {
-                self.status = Some(SharedString::from(format!("{} 已从备份恢复", skill.name)));
-                self.reload();
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("恢复备份失败: {err}")));
-            }
-        }
-        self.restoring.remove(&backup_id);
-        cx.notify();
-    }
-
-    fn delete_backup(&mut self, backup_id: String, cx: &mut Context<Self>) {
-        match SkillService::delete_backup(&backup_id) {
-            Ok(()) => {
-                self.status = Some(SharedString::from("技能备份已删除"));
-                self.backups = SkillService::list_backups().unwrap_or_default();
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("删除备份失败: {err}")));
-            }
-        }
-        cx.notify();
-    }
-
-    fn check_updates(&mut self, cx: &mut Context<Self>) {
-        if self.checking_updates {
-            return;
-        }
-        self.checking_updates = true;
-        self.status = Some(SharedString::from("正在检查技能更新..."));
+        self.toggling.insert(toggle_key.clone());
+        self.status = Some(SharedString::from("正在切换技能启用状态..."));
         cx.notify();
 
         let app = self.app.clone();
+        let task = cx.background_spawn(async move {
+            block_on_tokio(SkillService::toggle_app(&app.db, &id, &target, enabled))
+        });
         cx.spawn(async move |this, cx| {
-            let service = SkillService::new();
-            let result = service.check_updates(&app.db).await;
+            let result = task.await;
             this.update(cx, |this, cx| {
-                this.checking_updates = false;
+                this.toggling.remove(&toggle_key);
                 match result {
-                    Ok(updates) => {
-                        this.updates = updates
-                            .into_iter()
-                            .map(|update| (update.id.clone(), update))
-                            .collect();
-                        this.status = Some(SharedString::from(if this.updates.is_empty() {
-                            "所有远程技能都是最新版本".to_string()
+                    Ok(()) => {
+                        this.status = Some(SharedString::from(if enabled {
+                            "技能已启用"
                         } else {
-                            format!("发现 {} 个技能可更新", this.updates.len())
+                            "技能已禁用"
                         }));
+                        this.reload();
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("检查更新失败: {err}")));
+                        this.status = Some(SharedString::from(format!("切换失败: {err}")));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn update_all(&mut self, cx: &mut Context<Self>) {
+        if self.updating_all {
+            return;
+        }
+        self.updating_all = true;
+        self.status = Some(SharedString::from("正在更新全部技能..."));
+        cx.notify();
+
+        let app = self.app.clone();
+        let task = cx.background_spawn(async move {
+            block_on_tokio(SkillService::new().update_all(&app.db))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.updating_all = false;
+                match result {
+                    Ok(()) => {
+                        this.status = Some(SharedString::from("全部技能已更新"));
+                        this.reload();
+                    }
+                    Err(err) => {
+                        this.status = Some(SharedString::from(format!("更新失败: {err}")));
                     }
                 }
                 cx.notify();
@@ -333,15 +289,17 @@ impl SkillsView {
         cx.notify();
 
         let app = self.app.clone();
+        let task = cx.background_spawn(async move {
+            let result = block_on_tokio(SkillService::new().update_skill(&app.db, &id));
+            (id, result)
+        });
         cx.spawn(async move |this, cx| {
-            let service = SkillService::new();
-            let result = service.update_skill(&app.db, &id).await;
+            let (id, result) = task.await;
             this.update(cx, |this, cx| {
                 this.updating.remove(&id);
                 match result {
                     Ok(skill) => {
                         this.status = Some(SharedString::from(format!("{} 已更新", skill.name)));
-                        this.updates.remove(&id);
                         this.reload();
                     }
                     Err(err) => {
@@ -353,16 +311,6 @@ impl SkillsView {
             .ok();
         })
         .detach();
-    }
-
-    fn update_summary(&self) -> String {
-        if self.checking_updates {
-            return "检查中".to_string();
-        }
-        match self.updates.len() {
-            0 => "无待更新".to_string(),
-            count => format!("{count} 个可更新"),
-        }
     }
 
     fn render_stat(label: &str, value: String, color: u32) -> impl IntoElement {
@@ -386,11 +334,11 @@ impl SkillsView {
             )
     }
 
-    fn skill_apps() -> [AppType; 5] {
+    /// Apps the `skills` CLI can install into and the registry can persist.
+    fn skill_apps() -> [AppType; 4] {
         [
             AppType::Claude,
             AppType::Codex,
-            AppType::Gemini,
             AppType::OpenCode,
             AppType::Hermes,
         ]
@@ -400,7 +348,6 @@ impl SkillsView {
         match app {
             AppType::Claude => "Claude",
             AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini",
             AppType::OpenCode => "OpenCode",
             AppType::Hermes => "Hermes",
             AppType::ClaudeDesktop => "Claude Desktop",
@@ -435,7 +382,7 @@ impl SkillsView {
                 div()
                     .text_color(theme::c(theme::MUTED))
                     .text_xs()
-                    .child("安装/导入目标"),
+                    .child("安装目标"),
             )
             .children(Self::skill_apps().map(|app| {
                 let selected = self.selected_app == app;
@@ -551,131 +498,66 @@ impl SkillsView {
             )
     }
 
-    fn render_unmanaged_row(
+    fn render_app_toggles(
         &self,
-        skill: &UnmanagedSkill,
+        skill: &InstalledSkill,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let directory = skill.directory.clone();
+        let id = skill.id.clone();
+        let apps = skill.apps.clone();
         div()
             .flex()
             .flex_row()
+            .flex_wrap()
             .items_center()
-            .justify_between()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
-            .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .gap_2()
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .min_w_0()
-                    .flex_1()
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::TEXT))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(skill.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .truncate()
-                            .child(SharedString::from(format!(
-                                "{} · {}",
-                                skill.found_in.join(", "),
-                                skill.path
-                            ))),
-                    ),
+                    .text_color(theme::c(theme::MUTED))
+                    .text_xs()
+                    .child("应用"),
             )
-            .child(
-                Self::action_button(format!("skill-import-{}", skill.directory), "导入", true)
+            .children(Self::skill_apps().map(|app| {
+                let enabled = apps.is_enabled_for(&app);
+                let toggle_id = id.clone();
+                let busy = self
+                    .toggling
+                    .contains(&format!("{}:{}", id, app.as_str()));
+                div()
+                    .id(SharedString::from(format!(
+                        "skill-toggle-{}-{}",
+                        id,
+                        app.as_str()
+                    )))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(format!(
+                        "切换 {} 的 {} 启用状态",
+                        toggle_id,
+                        Self::app_label(app)
+                    )))
+                    .aria_selected(enabled)
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(theme::c(if enabled {
+                        theme::ACCENT
+                    } else {
+                        theme::SURFACE_HOVER
+                    }))
+                    .text_color(theme::c(if busy {
+                        theme::SUBTEXT
+                    } else if enabled {
+                        theme::ACCENT_TEXT
+                    } else {
+                        theme::TEXT
+                    }))
+                    .text_xs()
+                    .child(Self::app_label(app))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.import_unmanaged(directory.clone(), cx);
-                    })),
-            )
-    }
-
-    fn render_backup_row(
-        &self,
-        backup: &SkillBackupEntry,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let restore_id = backup.backup_id.clone();
-        let delete_id = backup.backup_id.clone();
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
-            .border_1()
-            .border_color(theme::c(theme::BORDER))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .min_w_0()
-                    .flex_1()
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::TEXT))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .child(SharedString::from(backup.skill.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .truncate()
-                            .child(SharedString::from(format!(
-                                "{} · {}",
-                                backup.backup_id, backup.backup_path
-                            ))),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .flex_shrink_0()
-                    .child(
-                        Self::action_button(
-                            format!("skill-backup-restore-{}", backup.backup_id),
-                            "恢复",
-                            true,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.restore_backup(restore_id.clone(), cx);
-                            },
-                        )),
-                    )
-                    .child(
-                        Self::action_button(
-                            format!("skill-backup-delete-{}", backup.backup_id),
-                            "删除",
-                            false,
-                        )
-                        .text_color(theme::c(theme::RED))
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.delete_backup(delete_id.clone(), cx);
-                            },
-                        )),
-                    ),
-            )
+                        this.toggle_app_for_skill(toggle_id.clone(), app, !enabled, cx);
+                    }))
+            }))
     }
 
     fn render_card(&self, skill: &InstalledSkill, cx: &mut Context<Self>) -> impl IntoElement {
@@ -683,10 +565,9 @@ impl SkillsView {
         let update_id = skill.id.clone();
         let name = skill.name.clone();
         let source = Self::source_label(skill);
-        let apps = Self::enabled_apps_label(skill);
         let desc = skill.description.clone();
-        let update = self.updates.get(&skill.id).cloned();
         let is_updating = self.updating.contains(&skill.id);
+        let is_uninstalling = self.uninstalling.contains(&skill.id);
         let is_remote = skill.repo_owner.is_some() && skill.repo_name.is_some();
 
         div()
@@ -698,11 +579,7 @@ impl SkillsView {
             .rounded_lg()
             .bg(theme::c(theme::SURFACE))
             .border_1()
-            .border_color(theme::c(if update.is_some() {
-                theme::YELLOW
-            } else {
-                theme::BORDER
-            }))
+            .border_color(theme::c(theme::BORDER))
             .child(
                 div()
                     .flex()
@@ -712,30 +589,9 @@ impl SkillsView {
                     .w_full()
                     .child(
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_color(theme::c(theme::TEXT))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(SharedString::from(name)),
-                            )
-                            .when(update.is_some(), |s| {
-                                s.child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_md()
-                                        .bg(theme::c(theme::YELLOW))
-                                        .text_color(theme::c(theme::ACCENT_TEXT))
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("可更新"),
-                                )
-                            }),
+                            .text_color(theme::c(theme::TEXT))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(SharedString::from(name)),
                     )
                     .child(
                         div()
@@ -755,27 +611,7 @@ impl SkillsView {
                                 .child(SharedString::from(d)),
                         )
                     })
-                    .child(
-                        div()
-                            .w_full()
-                            .text_color(theme::c(theme::TEAL))
-                            .text_xs()
-                            .truncate()
-                            .child(SharedString::from(format!("应用：{apps}"))),
-                    )
-                    .when_some(update, |s, update| {
-                        s.child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
-                            SharedString::from(format!(
-                                    "本地 {} → 远程 {}",
-                                    update
-                                        .current_hash
-                                        .as_deref()
-                                        .map(short_hash)
-                                        .unwrap_or("未知".to_string()),
-                                    short_hash(&update.remote_hash)
-                                )),
-                        ))
-                    }),
+                    .child(self.render_app_toggles(skill, cx)),
             )
             .child(
                 div()
@@ -785,7 +621,7 @@ impl SkillsView {
                     .justify_end()
                     .gap_2()
                     .w_full()
-                    .when(self.updates.contains_key(&skill.id), |s| {
+                    .when(is_remote, |s| {
                         s.child(
                             div()
                                 .id(SharedString::from(format!("skill-update-{}", update_id)))
@@ -825,7 +661,7 @@ impl SkillsView {
                             .bg(theme::c(theme::SURFACE_HOVER))
                             .text_color(theme::c(theme::RED))
                             .text_sm()
-                            .child("卸载")
+                            .child(if is_uninstalling { "卸载中" } else { "卸载" })
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.do_uninstall(uninstall_id.clone(), cx);
                             })),
@@ -855,21 +691,8 @@ impl Render for SkillsView {
             .take(12)
             .map(|s| self.render_discoverable_card(s, cx))
             .collect();
-        let unmanaged_rows: Vec<_> = self
-            .unmanaged
-            .iter()
-            .map(|s| self.render_unmanaged_row(s, cx))
-            .collect();
-        let backup_rows: Vec<_> = self
-            .backups
-            .iter()
-            .take(8)
-            .map(|backup| self.render_backup_row(backup, cx))
-            .collect();
         let is_empty = cards.is_empty();
         let discoverable_empty = discoverable_cards.is_empty();
-        let unmanaged_empty = unmanaged_rows.is_empty();
-        let backup_empty = backup_rows.is_empty();
         let remote_count = self
             .skills
             .iter()
@@ -878,7 +701,7 @@ impl Render for SkillsView {
 
         layout::page()
             .child(
-                layout::page_header("技能", Some("SSOT 技能库、应用同步与远程更新".into())).child(
+                layout::page_header("技能", Some("由 skills CLI 安装与同步的技能库".into())).child(
                     div()
                         .flex()
                         .flex_row()
@@ -900,24 +723,18 @@ impl Render for SkillsView {
                             )),
                         )
                         .child(
-                            Self::action_button("skill-scan-unmanaged", "扫描导入", false)
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.scan_unmanaged(cx);
-                                })),
-                        )
-                        .child(
                             Self::action_button(
-                                "skill-check-updates",
-                                if self.checking_updates {
-                                    "检查中"
+                                "skill-update-all",
+                                if self.updating_all {
+                                    "更新中"
                                 } else {
-                                    "检查更新"
+                                    "全部更新"
                                 },
                                 false,
                             )
                             .on_click(cx.listener(
                                 |this, _event, _window, cx| {
-                                    this.check_updates(cx);
+                                    this.update_all(cx);
                                 },
                             )),
                         ),
@@ -953,37 +770,7 @@ impl Render for SkillsView {
                                 "远程来源",
                                 remote_count.to_string(),
                                 theme::TEAL,
-                            ))
-                            .child(Self::render_stat(
-                                "更新状态",
-                                self.update_summary(),
-                                if self.updates.is_empty() {
-                                    theme::GREEN
-                                } else {
-                                    theme::YELLOW
-                                },
                             )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .pt_2()
-                            .child(Self::header("从 ZIP 安装"))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap_2()
-                                    .child(self.zip_path.clone())
-                                    .child(
-                                        Self::action_button("skill-install-zip", "安装 ZIP", true)
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.install_zip(cx);
-                                            })),
-                                    ),
-                            ),
                     )
                     .child(
                         div()
@@ -1002,40 +789,6 @@ impl Render for SkillsView {
                             })
                             .children(discoverable_cards),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .pt_2()
-                            .child(Self::header("未管理技能"))
-                            .when(unmanaged_empty, |s| {
-                                s.child(
-                                    div()
-                                        .text_color(theme::c(theme::MUTED))
-                                        .text_xs()
-                                        .child("点击“扫描导入”查找应用目录中尚未纳管的技能。"),
-                                )
-                            })
-                            .children(unmanaged_rows),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .pt_2()
-                            .child(Self::header("卸载备份"))
-                            .when(backup_empty, |s| {
-                                s.child(
-                                    div()
-                                        .text_color(theme::c(theme::MUTED))
-                                        .text_xs()
-                                        .child("暂无可恢复的技能备份。"),
-                                )
-                            })
-                            .children(backup_rows),
-                    )
                     .child(Self::header("已安装技能"))
                     .when(is_empty, |s| {
                         s.child(
@@ -1047,8 +800,4 @@ impl Render for SkillsView {
                     .children(cards),
             ))
     }
-}
-
-fn short_hash(hash: &str) -> String {
-    hash.chars().take(8).collect()
 }

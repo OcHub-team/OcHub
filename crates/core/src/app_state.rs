@@ -11,6 +11,35 @@ use crate::proxy::providers::copilot_auth::CopilotAuthManager;
 use crate::services::provider::ProviderService;
 use crate::services::{ProxyService, UsageCache};
 
+/// Drive a future to completion on the current thread without a Tokio runtime.
+///
+/// Only sound for futures that never register a real waker / return `Pending`
+/// pending external IO (used here for synchronous, std-mutex-guarded DB work).
+/// This lets `bootstrap` run the same code whether or not it is called from
+/// inside a Tokio runtime, where `block_in_place` / a nested `Runtime` panic.
+fn block_on_sync<F: std::future::Future>(fut: F) -> F::Output {
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+    fn noop_raw_waker() -> RawWaker {
+        fn no_op(_: *const ()) {}
+        fn clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+
+    let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = std::pin::pin!(fut);
+    loop {
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
 /// Global application state shared across the switching layer and writers.
 pub struct AppState {
     pub db: Arc<Database>,
@@ -88,6 +117,22 @@ impl AppState {
             }
             Ok(_) => {}
             Err(e) => log::warn!("failed to backfill historical usage costs: {e}"),
+        }
+
+        // LEGACY one-time recovery: restore a stranded Gemini takeover left over
+        // from before Gemini app support was removed (the normal restore paths
+        // only iterate Claude + Codex, so an active pre-upgrade Gemini takeover
+        // would otherwise poison `~/.gemini/.env` forever). No-op when there is
+        // no 'gemini' live-backup row.
+        //
+        // Driven with a runtime-independent poll because `bootstrap` runs both
+        // outside a Tokio runtime (GPUI app) and inside one (`#[tokio::main]`
+        // server / current-thread `#[tokio::test]`), where the usual bridges
+        // (`block_in_place`, a nested `Runtime`) panic. The restore future only
+        // touches std-mutex-guarded DB access and synchronous fs writes, so it
+        // never yields and completes on the first poll.
+        if let Err(e) = block_on_sync(self.proxy_service.restore_legacy_gemini_takeover()) {
+            log::warn!("legacy gemini takeover restore failed: {e}");
         }
 
         let db_for_codex_history_migration = self.db.clone();

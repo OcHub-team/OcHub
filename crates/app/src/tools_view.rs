@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 use gpui::{div, prelude::*, Context, Entity, FontWeight, SharedString, Window};
-use routedeck_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
+use routedeck_core::apps::{claude_desktop, claude_plugin, codex, hermes, openclaw, opencode};
 use routedeck_core::services::{OmoService, WorkspaceService};
 use routedeck_core::{AppError, AppState, AppType};
 use serde_json::Value;
@@ -211,12 +211,11 @@ impl ToolsView {
         self.hermes_limits = hermes::read_memory_limits().ok();
     }
 
-    fn all_apps() -> [(AppType, &'static str); 7] {
+    fn all_apps() -> [(AppType, &'static str); 6] {
         [
             (AppType::Claude, "Claude Code"),
             (AppType::ClaudeDesktop, "Claude Desktop"),
             (AppType::Codex, "Codex"),
-            (AppType::Gemini, "Gemini CLI"),
             (AppType::OpenCode, "OpenCode"),
             (AppType::OpenClaw, "OpenClaw"),
             (AppType::Hermes, "Hermes"),
@@ -1743,22 +1742,6 @@ impl Render for ToolsView {
                                         ),
                                     )
                                     .child(
-                                        Self::action_button(
-                                            "env-app-gemini",
-                                            if self.env_app == AppType::Gemini {
-                                                "Gemini ✓"
-                                            } else {
-                                                "Gemini"
-                                            },
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _event, _window, cx| {
-                                                this.select_env_app(AppType::Gemini, cx);
-                                            }),
-                                        ),
-                                    )
-                                    .child(
                                         Self::action_button("env-scan", "扫描冲突", false)
                                             .on_click(cx.listener(|this, _event, _window, cx| {
                                                 this.scan_env_conflicts(cx);
@@ -2434,7 +2417,6 @@ fn config_dir(app: AppType) -> Result<PathBuf, AppError> {
         AppType::Claude => routedeck_core::paths::get_claude_config_dir(),
         AppType::ClaudeDesktop => claude_desktop::get_config_library_path()?,
         AppType::Codex => codex::get_codex_config_dir(),
-        AppType::Gemini => gemini::get_gemini_dir(),
         AppType::OpenCode => opencode::get_opencode_dir(),
         AppType::OpenClaw => openclaw::get_openclaw_dir(),
         AppType::Hermes => hermes::get_hermes_dir(),
@@ -2460,13 +2442,6 @@ fn config_status(app: &Arc<AppState>, app_type: AppType) -> Result<(bool, String
             (
                 auth_path.exists() || !config_text.trim().is_empty(),
                 codex::get_codex_config_dir().to_string_lossy().to_string(),
-            )
-        }
-        AppType::Gemini => {
-            let env_path = gemini::get_gemini_env_path();
-            (
-                env_path.exists(),
-                gemini::get_gemini_dir().to_string_lossy().to_string(),
             )
         }
         AppType::OpenCode => {
@@ -2541,10 +2516,8 @@ fn hermes_outcome_message(prefix: &str, outcome: hermes::HermesWriteOutcome) -> 
 }
 
 fn cli_tool_ids() -> Vec<String> {
-    [
-        "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
-    ]
-    .into_iter()
+    ["claude", "codex", "opencode", "openclaw", "hermes"]
+        .into_iter()
     .map(str::to_string)
     .collect()
 }
@@ -2553,7 +2526,6 @@ fn env_app_label(app: AppType) -> &'static str {
     match app {
         AppType::Claude => "Claude",
         AppType::Codex => "Codex",
-        AppType::Gemini => "Gemini",
         _ => app.as_str(),
     }
 }

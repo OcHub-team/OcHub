@@ -1151,14 +1151,10 @@ impl Render for ProxyView {
             "—".to_string()
         };
         let logging_enabled = self.config.enable_logging;
-        let takeover_count = [
-            self.takeover.claude,
-            self.takeover.codex,
-            self.takeover.gemini,
-        ]
-        .into_iter()
-        .filter(|enabled| *enabled)
-        .count();
+        let takeover_count = [self.takeover.claude, self.takeover.codex]
+            .into_iter()
+            .filter(|enabled| *enabled)
+            .count();
         let failover_groups = self.failover_groups.clone();
         let failover_queue_count: usize =
             failover_groups.iter().map(|group| group.queue.len()).sum();
@@ -1222,8 +1218,8 @@ impl Render for ProxyView {
                             ))
                             .child(Self::metric_tile(
                                 "接管",
-                                format!("{takeover_count}/3"),
-                                "Claude / Codex / Gemini",
+                                format!("{takeover_count}/2"),
+                                "Claude / Codex",
                                 if takeover_count > 0 {
                                     theme::GREEN
                                 } else {
@@ -1233,7 +1229,7 @@ impl Render for ProxyView {
                             .child(Self::metric_tile(
                                 "故障转移",
                                 failover_queue_count.to_string(),
-                                format!("自动 {auto_failover_count}/3 · 触发 {} 次", self.failover_count),
+                                format!("自动 {auto_failover_count}/2 · 触发 {} 次", self.failover_count),
                                 theme::MAUVE,
                             )),
                     )
@@ -1283,7 +1279,7 @@ impl Render for ProxyView {
                         "proxy-network-toggle",
                         "网络设置",
                         format!(
-                            "监听 {endpoint} · 接管 {takeover_count}/3 · 日志{}",
+                            "监听 {endpoint} · 接管 {takeover_count}/2 · 日志{}",
                             if logging_enabled { "开启" } else { "关闭" }
                         ),
                         self.show_network_settings,
@@ -1496,13 +1492,6 @@ impl Render for ProxyView {
                                 "Codex",
                                 self.takeover.codex,
                                 cx,
-                            ))
-                            .child(self.render_takeover_row(
-                                "proxy-takeover-gemini",
-                                "gemini",
-                                "Gemini CLI",
-                                self.takeover.gemini,
-                                cx,
                             )),
                     )
                     })
@@ -1510,7 +1499,7 @@ impl Render for ProxyView {
                         "proxy-failover-toggle",
                         "故障转移队列",
                         format!(
-                            "{} 个队列项 · 自动 {auto_failover_count}/3",
+                            "{} 个队列项 · 自动 {auto_failover_count}/2",
                             failover_queue_count
                         ),
                         self.show_failover,
@@ -1623,14 +1612,6 @@ impl Render for ProxyView {
                                             )),
                                     )
                                     .child(
-                                        Self::action_button("stream-gemini", "检测 Gemini", false)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.run_stream_check(AppType::Gemini, false, cx);
-                                                },
-                                            )),
-                                    )
-                                    .child(
                                         Self::action_button(
                                             "stream-targets-claude",
                                             "Claude 代理目标",
@@ -1651,18 +1632,6 @@ impl Render for ProxyView {
                                         .on_click(
                                             cx.listener(|this, _event, _window, cx| {
                                                 this.run_stream_check(AppType::Codex, true, cx);
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        Self::action_button(
-                                            "stream-targets-gemini",
-                                            "Gemini 代理目标",
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _event, _window, cx| {
-                                                this.run_stream_check(AppType::Gemini, true, cx);
                                             }),
                                         ),
                                     ),
@@ -1719,12 +1688,8 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
         .map_err(|_| format!("{label} 必须是非负数字"))
 }
 
-fn failover_apps() -> [(AppType, &'static str); 3] {
-    [
-        (AppType::Claude, "Claude Code"),
-        (AppType::Codex, "Codex"),
-        (AppType::Gemini, "Gemini CLI"),
-    ]
+fn failover_apps() -> [(AppType, &'static str); 2] {
+    [(AppType::Claude, "Claude Code"), (AppType::Codex, "Codex")]
 }
 
 fn load_failover_groups(app: &Arc<AppState>) -> Vec<FailoverGroup> {

@@ -6,12 +6,10 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::Path as FsPath;
 
 use routedeck_core::db::legacy_json::{McpApps, McpServer, Prompt, SkillRepo};
-use routedeck_core::services::skill::{DiscoverableSkill, ImportSkillSelection};
+use routedeck_core::services::skill::DiscoverableSkill;
 use routedeck_core::services::{ConfigService, McpService, PromptService, SkillService};
-use routedeck_core::settings::SkillStorageLocation;
 use routedeck_core::{AppError, AppType};
 
 use crate::error::{ApiError, ApiResult};
@@ -77,7 +75,6 @@ async fn mcp_import(
     let count = match parse_app(&app)? {
         AppType::Claude | AppType::ClaudeDesktop => McpService::import_from_claude(&s.app)?,
         AppType::Codex => McpService::import_from_codex(&s.app)?,
-        AppType::Gemini => McpService::import_from_gemini(&s.app)?,
         AppType::OpenCode => McpService::import_from_opencode(&s.app)?,
         AppType::Hermes => McpService::import_from_hermes(&s.app)?,
         AppType::OpenClaw => 0,
@@ -141,7 +138,6 @@ async fn mcp_config_upsert(
     if req.sync_other_side.unwrap_or(false) {
         server.apps.claude = true;
         server.apps.codex = true;
-        server.apps.gemini = true;
         server.apps.opencode = true;
         server.apps.hermes = true;
     }
@@ -258,6 +254,23 @@ async fn snippet_set(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[derive(Deserialize)]
+struct SnippetExtractRequest {
+    #[serde(rename = "settingsConfig")]
+    settings_config: Option<Value>,
+}
+
+async fn snippet_extract(
+    State(s): State<ServerState>,
+    Path(app): Path<String>,
+    Json(req): Json<SnippetExtractRequest>,
+) -> ApiResult<Json<Value>> {
+    let app = parse_app(&app)?;
+    let snippet =
+        ConfigService::extract_common_config_snippet(&s.app, app, req.settings_config.as_ref())?;
+    Ok(Json(json!({ "snippet": snippet })))
+}
+
 // ----- Skills -----
 
 async fn skills_list(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
@@ -268,7 +281,7 @@ async fn skills_uninstall(
     State(s): State<ServerState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let result = SkillService::uninstall(&s.app.db, &id)?;
+    let result = SkillService::uninstall(&s.app.db, &id).await?;
     to_value(result)
 }
 
@@ -278,12 +291,8 @@ async fn skills_toggle(
     Json(req): Json<ToggleAppRequest>,
 ) -> ApiResult<Json<Value>> {
     let app = parse_app(&req.app)?;
-    SkillService::toggle_app(&s.app.db, &id, &app, req.enabled)?;
+    SkillService::toggle_app(&s.app.db, &id, &app, req.enabled).await?;
     Ok(Json(json!({ "ok": true })))
-}
-
-async fn skills_scan_unmanaged(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    to_value(SkillService::scan_unmanaged(&s.app.db)?)
 }
 
 #[derive(Deserialize)]
@@ -346,63 +355,6 @@ async fn skills_update(
 }
 
 #[derive(Deserialize)]
-struct SkillBackupRestoreRequest {
-    #[serde(default, rename = "currentApp")]
-    current_app: Option<String>,
-}
-
-async fn skills_backups() -> ApiResult<Json<Value>> {
-    to_value(SkillService::list_backups()?)
-}
-
-async fn skills_delete_backup(Path(backup_id): Path<String>) -> ApiResult<Json<Value>> {
-    SkillService::delete_backup(&backup_id)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn skills_restore_backup(
-    State(s): State<ServerState>,
-    Path(backup_id): Path<String>,
-    Json(req): Json<SkillBackupRestoreRequest>,
-) -> ApiResult<Json<Value>> {
-    let app = parse_app(req.current_app.as_deref().unwrap_or("claude"))?;
-    to_value(SkillService::restore_from_backup(
-        &s.app.db, &backup_id, &app,
-    )?)
-}
-
-#[derive(Deserialize)]
-struct SkillImportRequest {
-    imports: Vec<ImportSkillSelection>,
-}
-
-async fn skills_import_from_apps(
-    State(s): State<ServerState>,
-    Json(req): Json<SkillImportRequest>,
-) -> ApiResult<Json<Value>> {
-    to_value(SkillService::import_from_apps(&s.app.db, req.imports)?)
-}
-
-#[derive(Deserialize)]
-struct SkillZipRequest {
-    path: String,
-    #[serde(default, rename = "currentApp")]
-    current_app: Option<String>,
-}
-
-async fn skills_install_zip(
-    State(s): State<ServerState>,
-    Json(req): Json<SkillZipRequest>,
-) -> ApiResult<Json<Value>> {
-    let app = parse_app(req.current_app.as_deref().unwrap_or("claude"))?;
-    to_value(SkillService::install_from_zip(
-        &s.app.db,
-        FsPath::new(&req.path),
-        &app,
-    )?)
-}
-
-#[derive(Deserialize)]
 struct SkillSearchRequest {
     query: String,
     #[serde(default = "default_skill_limit")]
@@ -417,13 +369,6 @@ fn default_skill_limit() -> usize {
 
 async fn skills_search_sh(Json(req): Json<SkillSearchRequest>) -> ApiResult<Json<Value>> {
     to_value(SkillService::search_skills_sh(&req.query, req.limit, req.offset).await?)
-}
-
-async fn skills_migrate_storage(
-    State(s): State<ServerState>,
-    Json(target): Json<SkillStorageLocation>,
-) -> ApiResult<Json<Value>> {
-    to_value(SkillService::migrate_storage(&s.app.db, target)?)
 }
 
 async fn skill_repos(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
@@ -473,33 +418,21 @@ pub fn router() -> Router<ServerState> {
             "/api/config/:app/common-snippet",
             get(snippet_get).put(snippet_set),
         )
+        .route(
+            "/api/config/:app/common-snippet/extract",
+            post(snippet_extract),
+        )
         .route("/api/skills", get(skills_list))
         .route("/api/skills/install", post(skills_install))
         .route("/api/skills/discover", post(skills_discover))
         .route("/api/skills/catalog", post(skills_catalog))
         .route("/api/skills/updates", get(skills_updates))
-        .route("/api/skills/backups", get(skills_backups))
-        .route(
-            "/api/skills/backups/:backup_id",
-            delete(skills_delete_backup),
-        )
-        .route(
-            "/api/skills/backups/:backup_id/restore",
-            post(skills_restore_backup),
-        )
-        .route(
-            "/api/skills/import-from-apps",
-            post(skills_import_from_apps),
-        )
-        .route("/api/skills/install-zip", post(skills_install_zip))
         .route("/api/skills/search-sh", post(skills_search_sh))
-        .route("/api/skills/migrate-storage", post(skills_migrate_storage))
         .route(
             "/api/skills/repos",
             get(skill_repos).post(skill_repo_upsert),
         )
         .route("/api/skills/repos/:owner/:name", delete(skill_repo_delete))
-        .route("/api/skills/scan-unmanaged", get(skills_scan_unmanaged))
         .route("/api/skills/by-id/:id", delete(skills_uninstall))
         .route("/api/skills/by-id/:id/toggle", post(skills_toggle))
         .route("/api/skills/by-id/:id/update", post(skills_update))

@@ -35,14 +35,14 @@ impl ConfigService {
     // 通用配置片段（common config snippet）
     // ========================================================================
 
-    /// 校验通用配置片段格式（claude/gemini/omo/omo-slim 为 JSON，codex 为 TOML）。
+    /// 校验通用配置片段格式（claude/omo/omo-slim 为 JSON，codex 为 TOML）。
     pub fn validate_common_config_snippet(app_type: &str, snippet: &str) -> Result<(), AppError> {
         if snippet.trim().is_empty() {
             return Ok(());
         }
 
         match app_type {
-            "claude" | "gemini" | "omo" | "omo-slim" => {
+            "claude" | "omo" | "omo-slim" => {
                 serde_json::from_str::<serde_json::Value>(snippet)
                     .map_err(|e| AppError::Config(format!("无效的 JSON 格式: {e}")))?;
             }
@@ -69,7 +69,7 @@ impl ConfigService {
     ///
     /// 与 cc-switch `commands::config::set_common_config_snippet` 行为一致：
     /// - 校验片段格式
-    /// - 对 claude/codex/gemini，先迁移旧 inline snippet 用法，再写库并重新同步
+    /// - 对 claude/codex，先迁移旧 inline snippet 用法，再写库并重新同步
     ///   当前供应商到 live 配置
     /// - 对 omo / omo-slim，若已有当前供应商则重写其 live 配置文件
     pub fn set_common_config_snippet(
@@ -84,7 +84,7 @@ impl ConfigService {
 
         let value = if is_cleared { None } else { Some(snippet) };
 
-        if matches!(app_type, "claude" | "codex" | "gemini") {
+        if matches!(app_type, "claude" | "codex") {
             if let Some(legacy_snippet) = old_snippet
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
@@ -97,7 +97,7 @@ impl ConfigService {
         state.db.set_config_snippet(app_type, value)?;
         state.db.set_config_snippet_cleared(app_type, is_cleared)?;
 
-        if matches!(app_type, "claude" | "codex" | "gemini") {
+        if matches!(app_type, "claude" | "codex") {
             let app = app_type.parse::<AppType>()?;
             ProviderService::sync_current_provider_for_app(state, app)?;
         }

@@ -19,7 +19,6 @@ pub enum AppType {
     )]
     ClaudeDesktop,
     Codex,
-    Gemini,
     OpenCode,
     OpenClaw,
     Hermes,
@@ -31,7 +30,6 @@ impl AppType {
             AppType::Claude => "claude",
             AppType::ClaudeDesktop => "claude-desktop",
             AppType::Codex => "codex",
-            AppType::Gemini => "gemini",
             AppType::OpenCode => "opencode",
             AppType::OpenClaw => "openclaw",
             AppType::Hermes => "hermes",
@@ -41,7 +39,7 @@ impl AppType {
     /// Whether this app uses *additive* mode.
     ///
     /// - Switch mode (`false`): only the current provider is written to the live
-    ///   config (Claude, Claude Desktop, Codex, Gemini).
+    ///   config (Claude, Claude Desktop, Codex).
     /// - Additive mode (`true`): all providers are written to the live config
     ///   (OpenCode, OpenClaw, Hermes).
     pub fn is_additive_mode(&self) -> bool {
@@ -57,7 +55,6 @@ impl AppType {
             AppType::Claude,
             AppType::ClaudeDesktop,
             AppType::Codex,
-            AppType::Gemini,
             AppType::OpenCode,
             AppType::OpenClaw,
             AppType::Hermes,
@@ -74,7 +71,6 @@ impl FromStr for AppType {
             "claude" => Ok(AppType::Claude),
             "claude-desktop" | "claude_desktop" | "claudeDesktop" => Ok(AppType::ClaudeDesktop),
             "codex" => Ok(AppType::Codex),
-            "gemini" => Ok(AppType::Gemini),
             "opencode" => Ok(AppType::OpenCode),
             "openclaw" => Ok(AppType::OpenClaw),
             "hermes" => Ok(AppType::Hermes),
@@ -107,7 +103,6 @@ mod tests {
         assert!(AppType::Hermes.is_additive_mode());
         assert!(!AppType::Claude.is_additive_mode());
         assert!(!AppType::Codex.is_additive_mode());
-        assert!(!AppType::Gemini.is_additive_mode());
         assert!(!AppType::ClaudeDesktop.is_additive_mode());
     }
 
