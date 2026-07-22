@@ -115,12 +115,18 @@ macro_rules! token {
     };
 }
 
+/// Quiet grouped-control panel — part of the token ramp, currently unused.
+#[allow(dead_code)]
+#[inline]
+pub fn panel() -> Rgba {
+    rgb(current().panel)
+}
+
 token!(
     bg,
     mantle,
     surface,
     surface_hover,
-    panel,
     inset,
     border,
     border_strong,
