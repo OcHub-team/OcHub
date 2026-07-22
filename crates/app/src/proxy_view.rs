@@ -7,12 +7,13 @@ use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, Context, Entity, FontWeight, SharedString, Window};
 use ochub_core::db::{HealthStatus, StreamCheckConfig};
 use ochub_core::proxy::{ProxyConfig, ProxyTakeoverStatus};
 use ochub_core::{AppState, AppType};
 
-use crate::components;
+use crate::components::{self, ButtonSize, ButtonTone};
+use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -578,14 +579,6 @@ impl ProxyView {
         cx.notify();
     }
 
-    fn action_button(
-        id: impl Into<gpui::ElementId>,
-        label: impl Into<gpui::SharedString>,
-        primary: bool,
-    ) -> gpui::Stateful<gpui::Div> {
-        components::action_button(id, label, primary).px_4().py_2()
-    }
-
     /// Stream-check buttons for every enabled proxy-capable app.
     fn stream_check_buttons(cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let mut buttons = Vec::new();
@@ -598,10 +591,11 @@ impl ProxyView {
             }
             let label = crate::app_meta::label(app);
             buttons.push(
-                Self::action_button(
+                components::button(
                     SharedString::from(format!("stream-{}", app.as_str())),
                     format!("检测 {label}"),
-                    false,
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
                 )
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.run_stream_check(app, false, cx);
@@ -609,10 +603,11 @@ impl ProxyView {
                 .into_any_element(),
             );
             buttons.push(
-                Self::action_button(
+                components::button(
                     SharedString::from(format!("stream-targets-{}", app.as_str())),
                     format!("{label} 代理目标"),
-                    false,
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
                 )
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.run_stream_check(app, true, cx);
@@ -621,104 +616,6 @@ impl ProxyView {
             );
         }
         buttons
-    }
-
-    fn metric_tile(
-        label: &'static str,
-        value: impl Into<SharedString>,
-        detail: impl Into<SharedString>,
-        tone: gpui::Rgba,
-    ) -> impl IntoElement {
-        let value = value.into();
-        let detail = detail.into();
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_3()
-            .rounded_md()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(tone))
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(label),
-                    ),
-            )
-            .child(
-                div()
-                    .text_color(theme::text())
-                    .text_lg()
-                    .font_weight(FontWeight::BOLD)
-                    .child(value),
-            )
-            .child(div().text_color(theme::subtext()).text_xs().child(detail))
-    }
-
-    fn disclosure_row(
-        id: &'static str,
-        title: &'static str,
-        detail: impl Into<SharedString>,
-        showing: bool,
-        cx: &mut Context<Self>,
-        toggle: fn(&mut Self, &mut Context<Self>),
-    ) -> impl IntoElement {
-        let detail = detail.into();
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .p_4()
-            .rounded_md()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
-                    .child(div().text_color(theme::muted()).text_xs().child(detail)),
-            )
-            .child(
-                Self::action_button(id, if showing { "收起" } else { "展开" }, false)
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        toggle(this, cx);
-                    }))
-                    .aria_label(SharedString::from(format!(
-                        "{} {title}",
-                        if showing { "收起" } else { "展开" }
-                    )))
-                    .aria_expanded(showing),
-            )
-    }
-
-    fn render_input_row(label: &'static str, input: Entity<TextInput>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_color(theme::muted()).text_xs().child(label))
-            .child(input)
     }
 
     /// Takeover toggle rows for every enabled takeover-capable app.
@@ -759,75 +656,28 @@ impl ProxyView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let label = label.into();
-        div()
-            .id(id)
-            .role(gpui::Role::Switch)
-            .aria_label(label.clone())
-            .aria_toggled(if enabled {
-                gpui::Toggled::True
+        components::field_row(
+            label.clone(),
+            if enabled {
+                "工具配置已指向本地代理，供应商切换会热更新。"
             } else {
-                gpui::Toggled::False
-            })
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .w_full()
-            .px_4()
-            .py_3()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(if enabled {
-                theme::green()
-            } else {
-                theme::border()
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(label),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(if enabled {
-                                "工具配置已指向本地代理，供应商切换会热更新。"
-                            } else {
-                                "工具配置保持直连，启用后会先备份再接管。"
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(if enabled {
-                        theme::green()
-                    } else {
-                        theme::surface_hover()
-                    })
-                    .text_color(if enabled {
-                        theme::accent_text()
-                    } else {
-                        theme::subtext()
-                    })
-                    .text_sm()
-                    .child(if enabled { "已接管" } else { "未接管" }),
-            )
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.toggle_takeover(app_type, !enabled, cx);
-            }))
+                "工具配置保持直连，启用后会先备份再接管。"
+            },
+            layout::toggle(enabled),
+        )
+        .id(id)
+        .role(gpui::Role::Switch)
+        .aria_label(label)
+        .aria_toggled(if enabled {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::inset()))
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.toggle_takeover(app_type, !enabled, cx);
+        }))
     }
 }
 
@@ -851,72 +701,60 @@ impl Render for ProxyView {
 
         layout::page()
             .child(
-                layout::page_header(
-                    "本地代理",
-                    Some("代理接管与流式健康检测。".into()),
-                )
-                .child(
-                    div()
-                        .id("proxy-refresh")
-                            .role(gpui::Role::Button)
-                            .aria_label("刷新代理状态")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface())
-                            .text_color(theme::subtext())
-                            .text_sm()
-                            .child("刷新")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.refresh_status(cx);
-                            })),
-                    ),
+                layout::page_header("代理", Some("代理接管与流式健康检测。".into())).child(
+                    components::icon_button_tone(
+                        "proxy-refresh",
+                        "刷新",
+                        IconName::Refresh,
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.refresh_status(cx);
+                    })),
+                ),
             )
-            .child(
-                div()
-                    .id("proxy-body")
-                    .flex()
-                    .flex_col()
+            .child(components::status_footer(self.status.clone()))
+            .child(layout::scroll_body(
+                "proxy-body",
+                layout::wide_column()
                     .gap_4()
-                    .p_6()
-                    .overflow_y_scroll()
                     .child(
                         div()
                             .grid()
                             .grid_cols(4)
                             .gap_3()
-                            .child(Self::metric_tile(
+                            .w_full()
+                            .child(components::stat_tile(
+                                None,
+                                if running {
+                                    theme::green()
+                                } else {
+                                    theme::muted()
+                                },
                                 "代理状态",
                                 if running { "运行中" } else { "已停止" },
                                 endpoint.clone(),
-                                if running { theme::green() } else { theme::muted() },
                             ))
-                            .child(Self::metric_tile(
+                            .child(components::stat_tile(
+                                None,
+                                theme::accent(),
                                 "请求",
                                 self.total_requests.to_string(),
                                 format!("成功率 {:.1}%", self.success_rate),
-                                theme::accent(),
                             ))
-                            .child(Self::metric_tile(
-                                "接管",
-                                format!("{takeover_count}/3"),
-                                "Claude / Codex / Gemini",
+                            .child(components::stat_tile(
+                                None,
                                 if takeover_count > 0 {
                                     theme::green()
                                 } else {
                                     theme::yellow()
                                 },
+                                "接管",
+                                format!("{takeover_count}/3"),
+                                "Claude / Codex / Gemini",
                             )),
                     )
-                    .when_some(self.status.clone(), |s, status| {
-                        s.child(
-                            div()
-                                .text_color(theme::teal())
-                                .text_xs()
-                                .child(status),
-                        )
-                    })
                     .child(
                         div()
                             .flex()
@@ -924,313 +762,301 @@ impl Render for ProxyView {
                             .flex_wrap()
                             .gap_3()
                             .child(
-                                Self::action_button("proxy-start", "启动", true).on_click(
-                                    cx.listener(|this, _event, _window, cx| {
+                                components::button(
+                                    "proxy-start",
+                                    "启动",
+                                    ButtonTone::Primary,
+                                    ButtonSize::Md,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
                                         this.do_start(cx);
-                                    }),
-                                ),
+                                    },
+                                )),
                             )
                             .child(
-                                Self::action_button("proxy-start-takeover", "启动并接管", true)
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                components::button(
+                                    "proxy-start-takeover",
+                                    "启动并接管",
+                                    ButtonTone::Primary,
+                                    ButtonSize::Md,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
                                         this.do_start_takeover(cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Self::action_button("proxy-stop", "停止", false).on_click(
-                                    cx.listener(|this, _event, _window, cx| {
+                                components::button(
+                                    "proxy-stop",
+                                    "停止",
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Md,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
                                         this.do_stop(cx);
-                                    }),
-                                ),
+                                    },
+                                )),
                             )
                             .child(
-                                Self::action_button("proxy-stop-restore", "停止并恢复工具配置", false)
-                                    .text_color(theme::red())
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                components::button(
+                                    "proxy-stop-restore",
+                                    "停止并恢复工具配置",
+                                    ButtonTone::Danger,
+                                    ButtonSize::Md,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
                                         this.do_stop_restore(cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     )
-                    .child(Self::disclosure_row(
-                        "proxy-network-toggle",
-                        "网络设置",
-                        format!(
-                            "监听 {endpoint} · 接管 {takeover_count}/3 · 日志{}",
-                            if logging_enabled { "开启" } else { "关闭" }
-                        ),
-                        self.show_network_settings,
-                        cx,
-                        Self::toggle_network_settings,
-                    ))
+                    .child(
+                        components::disclosure(
+                            "proxy-network-toggle",
+                            "网络设置",
+                            format!(
+                                "监听 {endpoint} · 接管 {takeover_count}/3 · 日志{}",
+                                if logging_enabled { "开启" } else { "关闭" }
+                            ),
+                            self.show_network_settings,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.toggle_network_settings(cx);
+                            },
+                        )),
+                    )
                     .when(self.show_network_settings, |s| {
                         s.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("监听与超时"),
-                            )
-                            .child(
-                                div()
-                                    .grid()
-                                    .grid_cols(3)
-                                    .gap_3()
-                                    .child(Self::render_input_row(
-                                        "监听地址",
-                                        self.listen_address.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "监听端口（0 为随机）",
-                                        self.listen_port.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "最大重试次数",
-                                        self.max_retries.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "流式首字超时（秒）",
-                                        self.streaming_first_byte_timeout.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "流式静默超时（秒）",
-                                        self.streaming_idle_timeout.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "非流式总超时（秒）",
-                                        self.non_streaming_timeout.clone(),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .justify_between()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_color(theme::text())
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .child("请求日志"),
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("监听与超时"),
+                                )
+                                .child(
+                                    div()
+                                        .grid()
+                                        .grid_cols(3)
+                                        .gap_3()
+                                        .child(components::field(
+                                            "监听地址",
+                                            false,
+                                            None,
+                                            self.listen_address.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "监听端口（0 为随机）",
+                                            false,
+                                            None,
+                                            self.listen_port.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "最大重试次数",
+                                            false,
+                                            None,
+                                            self.max_retries.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "流式首字超时（秒）",
+                                            false,
+                                            None,
+                                            self.streaming_first_byte_timeout.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "流式静默超时（秒）",
+                                            false,
+                                            None,
+                                            self.streaming_idle_timeout.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "非流式总超时（秒）",
+                                            false,
+                                            None,
+                                            self.non_streaming_timeout.clone(),
+                                        )),
+                                )
+                                .child(
+                                    div().flex().flex_row().justify_end().child(
+                                        components::button(
+                                            "proxy-save-config",
+                                            "保存配置",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.save_config(cx);
+                                            }),
+                                        ),
+                                    ),
+                                ),
+                        )
+                        .child(layout::group(vec![components::field_row(
+                            "请求日志",
+                            "记录代理请求、错误和故障转移链路。",
+                            layout::toggle(logging_enabled),
+                        )
+                        .id("proxy-logging")
+                        .role(gpui::Role::Switch)
+                        .aria_label("请求日志")
+                        .aria_toggled(if logging_enabled {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::inset()))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.toggle_logging(cx);
+                        }))
+                        .into_any_element()]))
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("上游代理"),
+                                )
+                                .child(div().text_color(theme::muted()).text_xs().child(
+                                    "配置 OCHUB 发起外部 HTTP 请求时使用的上游代理；留空表示直连。",
+                                ))
+                                .child(components::field(
+                                    "代理 URL",
+                                    false,
+                                    None,
+                                    self.upstream_proxy_url.clone(),
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "upstream-save",
+                                                "保存上游代理",
+                                                ButtonTone::Primary,
+                                                ButtonSize::Sm,
                                             )
-                                            .child(
-                                                div()
-                                                    .text_color(theme::muted())
-                                                    .text_xs()
-                                                    .child("记录代理请求、错误和故障转移链路。"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("proxy-logging")
-                                            .role(gpui::Role::Switch)
-                                            .aria_label("请求日志")
-                                            .aria_toggled(if logging_enabled {
-                                                gpui::Toggled::True
-                                            } else {
-                                                gpui::Toggled::False
-                                            })
-                                            .px_3()
-                                            .py_1p5()
-                                            .rounded_md()
-                                            .cursor_pointer()
-                                            .bg(if logging_enabled {
-                                                theme::green()
-                                            } else {
-                                                theme::surface_hover()
-                                            })
-                                            .text_color(if logging_enabled {
-                                                theme::accent_text()
-                                            } else {
-                                                theme::subtext()
-                                            })
-                                            .text_sm()
-                                            .child(if logging_enabled { "已启用" } else { "已关闭" })
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.toggle_logging(cx);
-                                                },
-                                            )),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .justify_end()
-                                    .child(
-                                        Self::action_button("proxy-save-config", "保存配置", true)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.save_config(cx);
-                                                },
-                                            )),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("上游代理"),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child("配置 OCHUB 发起外部 HTTP 请求时使用的上游代理；留空表示直连。"),
-                            )
-                            .child(Self::render_input_row(
-                                "代理 URL",
-                                self.upstream_proxy_url.clone(),
-                            ))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .child(
-                                        Self::action_button("upstream-save", "保存上游代理", true)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
+                                            .on_click(
+                                                cx.listener(|this, _event, _window, cx| {
                                                     this.save_upstream_proxy(cx);
-                                                },
-                                            )),
-                                    )
-                                    .child(
-                                        Self::action_button("upstream-scan", "扫描本机代理", false)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "upstream-scan",
+                                                "扫描本机代理",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _event, _window, cx| {
                                                     this.scan_upstream_proxy(cx);
-                                                },
-                                            )),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("工具配置接管"),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child("接管会先备份当前配置，再把客户端请求导向本地代理。关闭时会恢复备份。"),
-                            )
-                            .children(self.takeover_rows(cx)),
-                    )
+                                                }),
+                                            ),
+                                        ),
+                                ),
+                        )
+                        .child(layout::section_header(
+                            "工具配置接管",
+                            "接管会先备份当前配置，再把客户端请求导向本地代理。关闭时会恢复备份。",
+                        ))
+                        .child(layout::group(self.takeover_rows(cx)))
                     })
-                    .child(Self::disclosure_row(
-                        "proxy-health-toggle",
-                        "流式健康检测",
-                        format!(
-                            "超时 {}s · 重试 {} · 降级 {}ms",
-                            input_value(&self.stream_timeout_secs, cx),
-                            input_value(&self.stream_max_retries, cx),
-                            input_value(&self.stream_degraded_threshold_ms, cx)
-                        ),
-                        self.show_health_checks,
-                        cx,
-                        Self::toggle_health_checks,
-                    ))
+                    .child(
+                        components::disclosure(
+                            "proxy-health-toggle",
+                            "流式健康检测",
+                            format!(
+                                "超时 {}s · 重试 {} · 降级 {}ms",
+                                input_value(&self.stream_timeout_secs, cx),
+                                input_value(&self.stream_max_retries, cx),
+                                input_value(&self.stream_degraded_threshold_ms, cx)
+                            ),
+                            self.show_health_checks,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.toggle_health_checks(cx);
+                            },
+                        )),
+                    )
                     .when(self.show_health_checks, |s| {
                         s.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("流式健康检测"),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child("对供应商进行流式连通性探测，并把结果写入健康检查日志。"),
-                            )
-                            .child(
-                                div()
-                                    .grid()
-                                    .grid_cols(3)
-                                    .gap_3()
-                                    .child(Self::render_input_row(
-                                        "探测超时（秒）",
-                                        self.stream_timeout_secs.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "重试次数",
-                                        self.stream_max_retries.clone(),
-                                    ))
-                                    .child(Self::render_input_row(
-                                        "降级阈值（毫秒）",
-                                        self.stream_degraded_threshold_ms.clone(),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .child(
-                                        Self::action_button("stream-save", "保存检测配置", true)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("流式健康检测"),
+                                )
+                                .child(div().text_color(theme::muted()).text_xs().child(
+                                    "对供应商进行流式连通性探测，并把结果写入健康检查日志。",
+                                ))
+                                .child(
+                                    div()
+                                        .grid()
+                                        .grid_cols(3)
+                                        .gap_3()
+                                        .child(components::field(
+                                            "探测超时（秒）",
+                                            false,
+                                            None,
+                                            self.stream_timeout_secs.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "重试次数",
+                                            false,
+                                            None,
+                                            self.stream_max_retries.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "降级阈值（毫秒）",
+                                            false,
+                                            None,
+                                            self.stream_degraded_threshold_ms.clone(),
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "stream-save",
+                                                "保存检测配置",
+                                                ButtonTone::Primary,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _event, _window, cx| {
                                                     this.save_stream_config(cx);
-                                                },
-                                            )),
-                                    )
-                                    .children(Self::stream_check_buttons(cx)),
-                            ),
-                    )
+                                                }),
+                                            ),
+                                        )
+                                        .children(Self::stream_check_buttons(cx)),
+                                ),
+                        )
                     }),
-            )
+            ))
     }
 }
 
