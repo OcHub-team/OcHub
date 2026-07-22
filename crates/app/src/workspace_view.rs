@@ -6,7 +6,7 @@ use std::process::Command;
 use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
 use ochub_core::services::{DailyMemoryFileInfo, DailyMemorySearchResult, WorkspaceService};
 
-use crate::components;
+use crate::components::{self, ButtonSize, ButtonTone};
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -27,6 +27,8 @@ pub struct WorkspaceView {
     memory_file: Entity<TextInput>,
     memory_content: Entity<TextInput>,
     memory_query: Entity<TextInput>,
+    /// Daily-memory filename pending deletion confirmation; `Some` shows a modal.
+    confirm_delete_memory: Option<String>,
     status: Option<SharedString>,
 }
 
@@ -51,6 +53,7 @@ impl WorkspaceView {
             memory_file,
             memory_content,
             memory_query,
+            confirm_delete_memory: None,
             status: None,
         };
         this.reload();
@@ -190,42 +193,19 @@ impl WorkspaceView {
         }
     }
 
-    fn action_button(
-        id: impl Into<gpui::ElementId>,
-        label: &'static str,
-        primary: bool,
-    ) -> gpui::Stateful<gpui::Div> {
-        components::action_button(id, label, primary)
-    }
-
-    fn header(title: &str) -> impl IntoElement {
-        div()
-            .text_color(theme::text())
-            .text_sm()
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(SharedString::from(title.to_string()))
-    }
-
     fn render_file_card(&self, row: &WorkspaceFileRow, cx: &mut Context<Self>) -> impl IntoElement {
         let filename = row.filename.to_string();
-        div()
+        components::card()
             .id(SharedString::from(format!(
                 "workspace-file-{}",
                 row.filename
             )))
             .role(gpui::Role::Button)
             .aria_label(SharedString::from(format!("打开 {}", row.filename)))
-            .flex()
-            .flex_col()
             .gap_2()
             .w(px(236.))
             .min_h(px(118.))
-            .p_4()
-            .rounded_lg()
             .cursor_pointer()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .hover(|s| s.border_color(theme::border_strong()))
             .child(
                 div()
@@ -241,17 +221,11 @@ impl WorkspaceView {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(row.filename),
                     )
-                    .child(
-                        div()
-                            .w(px(10.))
-                            .h(px(10.))
-                            .rounded_full()
-                            .bg(if row.exists {
-                                theme::green()
-                            } else {
-                                theme::muted()
-                            }),
-                    ),
+                    .child(components::status_dot(if row.exists {
+                        theme::green()
+                    } else {
+                        theme::muted()
+                    })),
             )
             .child(
                 div()
@@ -272,19 +246,12 @@ impl WorkspaceView {
     ) -> impl IntoElement {
         let read_name = file.filename.clone();
         let delete_name = file.filename.clone();
-        div()
-            .flex()
+        components::card()
             .flex_row()
             .items_center()
             .justify_between()
             .gap_3()
-            .w_full()
-            .px_4()
             .py_2()
-            .rounded_md()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -318,10 +285,11 @@ impl WorkspaceView {
                     .gap_2()
                     .flex_shrink_0()
                     .child(
-                        Self::action_button(
+                        components::button(
                             format!("workspace-memory-read-{}", file.filename),
                             "读取",
-                            false,
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -330,15 +298,16 @@ impl WorkspaceView {
                         )),
                     )
                     .child(
-                        Self::action_button(
+                        components::button(
                             format!("workspace-memory-delete-{}", file.filename),
                             "删除",
-                            false,
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
                         )
-                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.delete_memory_file(delete_name.clone(), cx);
+                                this.confirm_delete_memory = Some(delete_name.clone());
+                                cx.notify();
                             },
                         )),
                     ),
@@ -362,13 +331,9 @@ impl Render for WorkspaceView {
             .memory_results
             .iter()
             .map(|result| {
-                div()
-                    .px_4()
+                components::card()
+                    .gap_1()
                     .py_2()
-                    .rounded_md()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::border())
                     .child(
                         div()
                             .text_color(theme::text())
@@ -386,10 +351,12 @@ impl Render for WorkspaceView {
                             .line_clamp(2)
                             .child(SharedString::from(result.snippet.clone())),
                     )
+                    .into_any_element()
             })
             .collect();
 
         layout::page()
+            .relative()
             .child(
                 layout::page_header("工作区", Some("OpenClaw workspace 文件与每日记忆。".into()))
                     .child(
@@ -398,31 +365,35 @@ impl Render for WorkspaceView {
                             .flex_row()
                             .gap_2()
                             .child(
-                                Self::action_button("workspace-refresh", "刷新", false).on_click(
-                                    cx.listener(|this, _event, _window, cx| {
+                                components::button(
+                                    "workspace-refresh",
+                                    "刷新",
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
                                         this.reload();
                                         this.set_status("已刷新", cx);
-                                    }),
-                                ),
+                                    },
+                                )),
                             )
                             .child(
-                                Self::action_button("workspace-open-dir", "打开目录", false)
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                components::button(
+                                    "workspace-open-dir",
+                                    "打开目录",
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
                                         this.open_dir("workspace", cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
+            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body(
                 "workspace-body",
                 layout::content_column()
@@ -432,7 +403,10 @@ impl Render for WorkspaceView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .child(Self::header("工作区文件"))
+                            .child(layout::section_header(
+                                "工作区文件",
+                                "OpenClaw workspace 允许编辑的文件；点击卡片读取。",
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -447,7 +421,10 @@ impl Render for WorkspaceView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .child(Self::header("编辑文件"))
+                            .child(layout::section_header(
+                                "编辑文件",
+                                "读取 workspace 文件后可编辑，保存即写回磁盘。",
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -455,10 +432,11 @@ impl Render for WorkspaceView {
                                     .gap_2()
                                     .child(self.workspace_file.clone())
                                     .child(
-                                        Self::action_button(
+                                        components::button(
                                             "workspace-load-selected",
                                             "读取",
-                                            false,
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
                                         )
                                         .on_click(
                                             cx.listener(|this, _event, _window, cx| {
@@ -467,10 +445,11 @@ impl Render for WorkspaceView {
                                         ),
                                     )
                                     .child(
-                                        Self::action_button(
+                                        components::button(
                                             "workspace-save-selected",
                                             "保存",
-                                            true,
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
                                         )
                                         .on_click(
                                             cx.listener(|this, _event, _window, cx| {
@@ -486,7 +465,10 @@ impl Render for WorkspaceView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .child(Self::header("每日记忆"))
+                            .child(layout::section_header(
+                                "每日记忆",
+                                "按日期归档的记忆文件，可读取、搜索与删除。",
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -494,22 +476,37 @@ impl Render for WorkspaceView {
                                     .gap_2()
                                     .child(self.memory_file.clone())
                                     .child(
-                                        Self::action_button("workspace-memory-load", "读取", false)
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                        components::button(
+                                            "workspace-memory-load",
+                                            "读取",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
                                                 this.load_memory_file(cx);
-                                            })),
+                                            }),
+                                        ),
                                     )
                                     .child(
-                                        Self::action_button("workspace-memory-save", "保存", true)
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                        components::button(
+                                            "workspace-memory-save",
+                                            "保存",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
                                                 this.save_memory_file(cx);
-                                            })),
+                                            }),
+                                        ),
                                     )
                                     .child(
-                                        Self::action_button(
+                                        components::button(
                                             "workspace-memory-open",
                                             "打开目录",
-                                            false,
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
                                         )
                                         .on_click(
                                             cx.listener(|this, _event, _window, cx| {
@@ -526,10 +523,11 @@ impl Render for WorkspaceView {
                                     .gap_2()
                                     .child(self.memory_query.clone())
                                     .child(
-                                        Self::action_button(
+                                        components::button(
                                             "workspace-memory-search",
                                             "搜索",
-                                            false,
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
                                         )
                                         .on_click(
                                             cx.listener(|this, _event, _window, cx| {
@@ -542,6 +540,43 @@ impl Render for WorkspaceView {
                             .children(search_rows),
                     ),
             ))
+            .when_some(self.confirm_delete_memory.clone(), |root, filename| {
+                let message = SharedString::from(format!(
+                    "确定删除每日记忆「{filename}」吗？此操作不可撤销。"
+                ));
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header("删除每日记忆"))
+                        .child(
+                            components::modal_body()
+                                .child(div().text_color(theme::subtext()).text_sm().child(message)),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "workspace-confirm-delete-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_delete_memory = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "workspace-confirm-delete-ok",
+                                "删除",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_delete_memory = None;
+                                this.delete_memory_file(filename.clone(), cx);
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
     }
 }
 

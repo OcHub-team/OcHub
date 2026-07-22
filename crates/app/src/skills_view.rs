@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, Context, FontWeight, SharedString, Window};
 use ochub_core::db::legacy_json::{InstalledSkill, SkillApps, UnmanagedSkill};
 use ochub_core::services::skill::{
     DiscoverableSkill, ImportSkillSelection, SkillBackupEntry, SkillUpdateInfo,
@@ -13,10 +13,18 @@ use ochub_core::services::skill::{
 use ochub_core::services::SkillService;
 use ochub_core::{AppState, AppType};
 
-use crate::components;
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
+
+/// 破坏性操作确认目标（卸载技能 / 删除备份），携带展示名称。
+#[derive(Clone)]
+enum ConfirmAction {
+    Uninstall { id: String, name: String },
+    DeleteBackup { id: String, name: String },
+}
 
 pub struct SkillsView {
     app: Arc<AppState>,
@@ -32,6 +40,8 @@ pub struct SkillsView {
     restoring: HashSet<String>,
     selected_app: AppType,
     zip_path: gpui::Entity<TextInput>,
+    /// 待确认的破坏性操作；`Some` 时展示确认模态。
+    confirm: Option<ConfirmAction>,
     status: Option<SharedString>,
 }
 
@@ -52,6 +62,7 @@ impl SkillsView {
             restoring: HashSet::new(),
             selected_app: AppType::Claude,
             zip_path,
+            confirm: None,
             status: None,
         };
         this.reload();
@@ -371,27 +382,6 @@ impl SkillsView {
         }
     }
 
-    fn render_stat(label: &str, value: String, color: gpui::Rgba) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .min_w(px(120.))
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .text_xs()
-                    .child(SharedString::from(label.to_string())),
-            )
-            .child(
-                div()
-                    .text_color(color)
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(SharedString::from(value)),
-            )
-    }
-
     fn skill_apps() -> Vec<AppType> {
         crate::app_meta::enabled_skill_apps()
     }
@@ -400,23 +390,22 @@ impl SkillsView {
         crate::app_meta::label(app)
     }
 
-    fn header(title: &str) -> impl IntoElement {
-        div()
-            .text_color(theme::text())
-            .text_sm()
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(SharedString::from(title.to_string()))
-    }
-
-    fn action_button(
-        id: impl Into<gpui::ElementId>,
-        label: &'static str,
-        primary: bool,
-    ) -> gpui::Stateful<gpui::Div> {
-        components::action_button(id, label, primary)
-    }
-
     fn render_target_app_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let apps = Self::skill_apps();
+        let labels: Vec<String> = apps
+            .iter()
+            .map(|app| Self::app_label(*app).to_string())
+            .collect();
+        let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let selected = apps
+            .iter()
+            .position(|app| *app == self.selected_app)
+            .unwrap_or(0);
+        let on_select = cx.listener(move |this, ix: &usize, _window, cx| {
+            if let Some(app) = apps.get(*ix) {
+                this.select_app(*app, cx);
+            }
+        });
         div()
             .flex()
             .flex_row()
@@ -429,36 +418,12 @@ impl SkillsView {
                     .text_xs()
                     .child("安装/导入目标"),
             )
-            .children(Self::skill_apps().into_iter().map(|app| {
-                let selected = self.selected_app == app;
-                div()
-                    .id(SharedString::from(format!("skill-target-{}", app.as_str())))
-                    .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(format!(
-                        "选择技能目标 {}",
-                        Self::app_label(app)
-                    )))
-                    .aria_selected(selected)
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(if selected {
-                        theme::accent()
-                    } else {
-                        theme::surface_hover()
-                    })
-                    .text_color(if selected {
-                        theme::accent_text()
-                    } else {
-                        theme::text()
-                    })
-                    .text_sm()
-                    .child(Self::app_label(app))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.select_app(app, cx);
-                    }))
-            }))
+            .child(components::segmented(
+                "skills-app",
+                &label_refs,
+                selected,
+                move |ix, window, cx| on_select(&ix, window, cx),
+            ))
     }
 
     fn render_discoverable_card(
@@ -472,15 +437,8 @@ impl SkillsView {
             .skills
             .iter()
             .any(|installed| installed.directory == skill.directory);
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .gap_2()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -510,7 +468,7 @@ impl SkillsView {
                             )),
                     )
                     .child(
-                        Self::action_button(
+                        components::button(
                             format!("skill-install-{}", skill.key),
                             if already_installed {
                                 "已安装"
@@ -519,7 +477,12 @@ impl SkillsView {
                             } else {
                                 "安装"
                             },
-                            !already_installed && !installing,
+                            if already_installed || installing {
+                                ButtonTone::Neutral
+                            } else {
+                                ButtonTone::Primary
+                            },
+                            ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -545,17 +508,11 @@ impl SkillsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let directory = skill.directory.clone();
-        div()
-            .flex()
+        components::card()
             .flex_row()
             .items_center()
             .justify_between()
             .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -578,10 +535,15 @@ impl SkillsView {
                     )),
             )
             .child(
-                Self::action_button(format!("skill-import-{}", skill.directory), "导入", true)
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.import_unmanaged(directory.clone(), cx);
-                    })),
+                components::button(
+                    format!("skill-import-{}", skill.directory),
+                    "导入",
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.import_unmanaged(directory.clone(), cx);
+                })),
             )
     }
 
@@ -591,18 +553,15 @@ impl SkillsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let restore_id = backup.backup_id.clone();
-        let delete_id = backup.backup_id.clone();
-        div()
-            .flex()
+        let confirm_target = ConfirmAction::DeleteBackup {
+            id: backup.backup_id.clone(),
+            name: backup.skill.name.clone(),
+        };
+        components::card()
             .flex_row()
             .items_center()
             .justify_between()
             .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -631,10 +590,11 @@ impl SkillsView {
                     .gap_2()
                     .flex_shrink_0()
                     .child(
-                        Self::action_button(
+                        components::button(
                             format!("skill-backup-restore-{}", backup.backup_id),
                             "恢复",
-                            true,
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -643,15 +603,16 @@ impl SkillsView {
                         )),
                     )
                     .child(
-                        Self::action_button(
+                        components::button(
                             format!("skill-backup-delete-{}", backup.backup_id),
                             "删除",
-                            false,
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
                         )
-                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.delete_backup(delete_id.clone(), cx);
+                                this.confirm = Some(confirm_target.clone());
+                                cx.notify();
                             },
                         )),
                     ),
@@ -659,7 +620,10 @@ impl SkillsView {
     }
 
     fn render_card(&self, skill: &InstalledSkill, cx: &mut Context<Self>) -> impl IntoElement {
-        let uninstall_id = skill.id.clone();
+        let confirm_target = ConfirmAction::Uninstall {
+            id: skill.id.clone(),
+            name: skill.name.clone(),
+        };
         let update_id = skill.id.clone();
         let name = skill.name.clone();
         let source = Self::source_label(skill);
@@ -669,15 +633,8 @@ impl SkillsView {
         let is_updating = self.updating.contains(&skill.id);
         let is_remote = skill.repo_owner.is_some() && skill.repo_name.is_some();
 
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .gap_3()
-            .w_full()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
             .border_color(if update.is_some() {
                 theme::yellow()
             } else {
@@ -704,17 +661,7 @@ impl SkillsView {
                                     .child(SharedString::from(name)),
                             )
                             .when(update.is_some(), |s| {
-                                s.child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_md()
-                                        .bg(theme::yellow())
-                                        .text_color(theme::accent_text())
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("可更新"),
-                                )
+                                s.child(components::badge(BadgeTone::Warning, "可更新"))
                             }),
                     )
                     .child(
@@ -767,48 +714,36 @@ impl SkillsView {
                     .w_full()
                     .when(self.updates.contains_key(&skill.id), |s| {
                         s.child(
-                            div()
-                                .id(SharedString::from(format!("skill-update-{}", update_id)))
-                                .role(gpui::Role::Button)
-                                .aria_label("更新技能")
-                                .px_3()
-                                .py_1p5()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .bg(if is_updating {
-                                    theme::surface_hover()
+                            components::button(
+                                SharedString::from(format!("skill-update-{}", update_id)),
+                                if is_updating { "更新中" } else { "更新" },
+                                if is_updating {
+                                    ButtonTone::Neutral
                                 } else {
-                                    theme::accent()
-                                })
-                                .text_color(if is_updating {
-                                    theme::subtext()
-                                } else {
-                                    theme::accent_text()
-                                })
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(if is_updating { "更新中" } else { "更新" })
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    ButtonTone::Primary
+                                },
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
                                     this.update_skill(update_id.clone(), cx);
-                                })),
+                                },
+                            )),
                         )
                     })
                     .child(
-                        div()
-                            .id(SharedString::from(format!("skill-uninstall-{}", skill.id)))
-                            .role(gpui::Role::Button)
-                            .aria_label("卸载技能")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface_hover())
-                            .text_color(theme::red())
-                            .text_sm()
-                            .child("卸载")
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.do_uninstall(uninstall_id.clone(), cx);
-                            })),
+                        components::button(
+                            SharedString::from(format!("skill-uninstall-{}", skill.id)),
+                            "卸载",
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.confirm = Some(confirm_target.clone());
+                                cx.notify();
+                            },
+                        )),
                     )
                     .when(!is_remote, |s| {
                         s.child(div().text_color(theme::muted()).text_xs().child("本地技能"))
@@ -852,6 +787,7 @@ impl Render for SkillsView {
             .count();
 
         layout::page()
+            .relative()
             .child(
                 layout::page_header("技能", Some("SSOT 技能库、应用同步与远程更新".into())).child(
                     div()
@@ -859,14 +795,15 @@ impl Render for SkillsView {
                         .flex_row()
                         .gap_2()
                         .child(
-                            Self::action_button(
+                            components::button(
                                 "skill-discover",
                                 if self.discovering {
                                     "发现中"
                                 } else {
                                     "发现技能"
                                 },
-                                true,
+                                ButtonTone::Primary,
+                                ButtonSize::Sm,
                             )
                             .on_click(cx.listener(
                                 |this, _event, _window, cx| {
@@ -875,20 +812,28 @@ impl Render for SkillsView {
                             )),
                         )
                         .child(
-                            Self::action_button("skill-scan-unmanaged", "扫描导入", false)
-                                .on_click(cx.listener(|this, _event, _window, cx| {
+                            components::button(
+                                "skill-scan-unmanaged",
+                                "扫描导入",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
                                     this.scan_unmanaged(cx);
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            Self::action_button(
+                            components::button(
                                 "skill-check-updates",
                                 if self.checking_updates {
                                     "检查中"
                                 } else {
                                     "检查更新"
                                 },
-                                false,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
                             )
                             .on_click(cx.listener(
                                 |this, _event, _window, cx| {
@@ -898,44 +843,46 @@ impl Render for SkillsView {
                         ),
                 ),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
+            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body(
                 "skill-list",
                 layout::content_column()
                     .child(self.render_target_app_picker(cx))
                     .child(
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_6()
-                            .pb_2()
-                            .child(Self::render_stat(
+                            .grid()
+                            .grid_cols(3)
+                            .gap_3()
+                            .w_full()
+                            .child(components::stat_tile(
+                                Some(IconName::Blocks),
+                                theme::accent(),
                                 "已安装",
                                 self.skills.len().to_string(),
-                                theme::text(),
+                                "SSOT 注册表中的技能",
                             ))
-                            .child(Self::render_stat(
+                            .child(components::stat_tile(
+                                Some(IconName::Cloud),
+                                theme::teal(),
                                 "远程来源",
                                 remote_count.to_string(),
-                                theme::teal(),
+                                "来自远程仓库的技能",
                             ))
-                            .child(Self::render_stat(
-                                "更新状态",
-                                self.update_summary(),
+                            .child(components::stat_tile(
+                                Some(IconName::Refresh),
                                 if self.updates.is_empty() {
                                     theme::green()
                                 } else {
                                     theme::yellow()
+                                },
+                                "更新状态",
+                                self.update_summary(),
+                                if self.checking_updates {
+                                    "正在检查远程版本"
+                                } else if self.updates.is_empty() {
+                                    "所有技能均为最新"
+                                } else {
+                                    "有技能可更新"
                                 },
                             )),
                     )
@@ -944,19 +891,27 @@ impl Render for SkillsView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .pt_2()
-                            .child(Self::header("从 ZIP 安装"))
+                            .child(layout::section_header(
+                                "从 ZIP 安装",
+                                "从本地 ZIP 包安装技能到目标应用。",
+                            ))
                             .child(
-                                div()
-                                    .flex()
+                                components::card()
                                     .flex_row()
                                     .gap_2()
                                     .child(self.zip_path.clone())
                                     .child(
-                                        Self::action_button("skill-install-zip", "安装 ZIP", true)
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                        components::button(
+                                            "skill-install-zip",
+                                            "安装 ZIP",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
                                                 this.install_zip(cx);
-                                            })),
+                                            }),
+                                        ),
                                     ),
                             ),
                     )
@@ -965,15 +920,17 @@ impl Render for SkillsView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .pt_2()
-                            .child(Self::header("可安装技能"))
+                            .child(layout::section_header(
+                                "可安装技能",
+                                "从已启用仓库发现、可一键安装的技能。",
+                            ))
                             .when(discoverable_empty, |s| {
-                                s.child(
-                                    div()
-                                        .text_color(theme::muted())
-                                        .text_xs()
-                                        .child("点击“发现技能”从已启用仓库加载可安装技能。"),
-                                )
+                                s.child(components::empty_state(
+                                    IconName::Cloud,
+                                    "暂无可安装技能",
+                                    "点击“发现技能”从已启用仓库加载可安装技能。",
+                                    None,
+                                ))
                             })
                             .children(discoverable_cards),
                     )
@@ -982,15 +939,17 @@ impl Render for SkillsView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .pt_2()
-                            .child(Self::header("未管理技能"))
+                            .child(layout::section_header(
+                                "未管理技能",
+                                "应用目录中尚未纳管的技能，可导入 SSOT。",
+                            ))
                             .when(unmanaged_empty, |s| {
-                                s.child(
-                                    div()
-                                        .text_color(theme::muted())
-                                        .text_xs()
-                                        .child("点击“扫描导入”查找应用目录中尚未纳管的技能。"),
-                                )
+                                s.child(components::empty_state(
+                                    IconName::Search,
+                                    "没有未管理技能",
+                                    "点击“扫描导入”查找应用目录中尚未纳管的技能。",
+                                    None,
+                                ))
                             })
                             .children(unmanaged_rows),
                     )
@@ -999,24 +958,91 @@ impl Render for SkillsView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .pt_2()
-                            .child(Self::header("卸载备份"))
+                            .child(layout::section_header(
+                                "卸载备份",
+                                "卸载技能时自动创建的备份，可恢复或删除。",
+                            ))
                             .when(backup_empty, |s| {
-                                s.child(
-                                    div()
-                                        .text_color(theme::muted())
-                                        .text_xs()
-                                        .child("暂无可恢复的技能备份。"),
-                                )
+                                s.child(components::empty_state(
+                                    IconName::Archive,
+                                    "暂无备份",
+                                    "暂无可恢复的技能备份。",
+                                    None,
+                                ))
                             })
                             .children(backup_rows),
                     )
-                    .child(Self::header("已安装技能"))
+                    .child(layout::section_header(
+                        "已安装技能",
+                        "SSOT 技能库中已安装的技能。",
+                    ))
                     .when(is_empty, |s| {
-                        s.child(div().text_color(theme::muted()).child("还没有安装技能。"))
+                        s.child(components::empty_state(
+                            IconName::Blocks,
+                            "还没有安装技能",
+                            "从 ZIP 安装或点击“发现技能”安装第一个技能。",
+                            None,
+                        ))
                     })
                     .children(cards),
             ))
+            .when_some(self.confirm.clone(), |root, action| {
+                let (title, message, confirm_label) = match &action {
+                    ConfirmAction::Uninstall { name, .. } => (
+                        "卸载技能",
+                        format!("确定卸载技能「{name}」吗？此操作不可撤销。"),
+                        "卸载",
+                    ),
+                    ConfirmAction::DeleteBackup { name, .. } => (
+                        "删除备份",
+                        format!("确定删除技能备份「{name}」吗？此操作不可撤销。"),
+                        "删除",
+                    ),
+                };
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header(title))
+                        .child(
+                            components::modal_body().child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_sm()
+                                    .child(SharedString::from(message)),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "skill-confirm-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "skill-confirm-ok",
+                                confirm_label,
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm = None;
+                                match &action {
+                                    ConfirmAction::Uninstall { id, .. } => {
+                                        this.do_uninstall(id.clone(), cx)
+                                    }
+                                    ConfirmAction::DeleteBackup { id, .. } => {
+                                        this.delete_backup(id.clone(), cx)
+                                    }
+                                }
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
     }
 }
 

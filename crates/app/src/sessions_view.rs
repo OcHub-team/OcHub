@@ -8,6 +8,8 @@ use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
 use ochub_core::session_manager::{self, SessionMessage, SessionMeta};
 use ochub_core::AppState;
 
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::icons::IconName;
 use crate::layout;
 use crate::theme;
 
@@ -30,6 +32,8 @@ pub struct SessionsView {
     page: usize,
     /// When `Some`, the transcript viewer replaces the list.
     detail: Option<SessionDetail>,
+    /// Session index pending deletion confirmation; when `Some`, a modal is shown.
+    confirm_delete: Option<usize>,
 }
 
 impl SessionsView {
@@ -40,6 +44,7 @@ impl SessionsView {
             status: None,
             page: 0,
             detail: None,
+            confirm_delete: None,
         };
         this.reload();
         this
@@ -151,31 +156,16 @@ impl SessionsView {
         } else {
             SharedString::from(message.content.clone())
         };
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .flex_shrink_0()
-            .w_full()
             .gap_2()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .w(px(6.))
-                            .h(px(6.))
-                            .rounded_full()
-                            .flex_shrink_0()
-                            .bg(accent),
-                    )
+                    .child(components::status_dot_sized(accent, 6.))
                     .child(
                         div()
                             .px_2()
@@ -205,87 +195,33 @@ impl SessionsView {
         let count = detail.messages.len();
         let messages: Vec<_> = detail.messages.iter().map(Self::render_message).collect();
         let error = detail.error.clone();
+        let subtitle = SharedString::from(match project {
+            Some(p) => format!("{count} 条消息 · {p}"),
+            None => format!("{count} 条消息"),
+        });
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .bg(theme::bg())
+        layout::page()
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .px_6()
-                    .py_4()
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .bg(theme::header())
-                    .child(
-                        div()
-                            .id("session-back")
-                            .role(gpui::Role::Button)
-                            .aria_label("返回会话列表")
-                            .flex_shrink_0()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .text_color(theme::subtext())
-                            .text_sm()
-                            .hover(|s| s.bg(theme::surface_hover()))
-                            .child("← 返回")
+                layout::page_header(title, Some(subtitle)).child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .flex_shrink_0()
+                        .child(components::badge(BadgeTone::Teal, provider))
+                        .child(
+                            components::button(
+                                "session-back",
+                                "← 返回",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
                             .on_click(
                                 cx.listener(|this, _event, _window, cx| this.close_detail(cx)),
                             ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .rounded_md()
-                                            .flex_shrink_0()
-                                            .bg(theme::surface_hover())
-                                            .text_color(theme::teal())
-                                            .text_xs()
-                                            .child(SharedString::from(provider)),
-                                    )
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .text_color(theme::text())
-                                            .text_lg()
-                                            .font_weight(FontWeight::BOLD)
-                                            .truncate()
-                                            .child(SharedString::from(title)),
-                                    ),
-                            )
-                            .child(div().text_color(theme::muted()).text_xs().truncate().child(
-                                SharedString::from(match project {
-                                    Some(p) => format!("{count} 条消息 · {p}"),
-                                    None => format!("{count} 条消息"),
-                                }),
-                            )),
-                    ),
+                        ),
+                ),
             )
             .child(
                 div()
@@ -302,11 +238,12 @@ impl SessionsView {
                         s.child(div().text_color(theme::red()).text_sm().child(err))
                     })
                     .when(messages.is_empty() && detail.error.is_none(), |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::muted())
-                                .child("这条会话没有可显示的消息。"),
-                        )
+                        s.child(components::empty_state(
+                            IconName::Message,
+                            "没有可显示的消息",
+                            "这条会话没有可显示的消息。",
+                            None,
+                        ))
                     })
                     .children(messages),
             )
@@ -322,18 +259,11 @@ impl SessionsView {
         let provider = session.provider_id.clone();
         let project = session.project_dir.clone();
 
-        div()
-            .flex()
+        components::card()
             .flex_row()
             .items_center()
             .justify_between()
             .gap_4()
-            .w_full()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .id(SharedString::from(format!("session-open-{idx}")))
@@ -355,16 +285,7 @@ impl SessionsView {
                             .items_center()
                             .gap_2()
                             .min_w_0()
-                            .child(
-                                div()
-                                    .px_2()
-                                    .rounded_md()
-                                    .flex_shrink_0()
-                                    .bg(theme::surface_hover())
-                                    .text_color(theme::teal())
-                                    .text_xs()
-                                    .child(SharedString::from(provider)),
-                            )
+                            .child(components::badge(BadgeTone::Teal, provider))
                             .child(
                                 div()
                                     .min_w_0()
@@ -394,131 +315,67 @@ impl SessionsView {
                     .gap_2()
                     .flex_shrink_0()
                     .child(
-                        div()
-                            .id(SharedString::from(format!("session-view-{idx}")))
-                            .role(gpui::Role::Button)
-                            .aria_label("查看完整对话")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::accent_soft())
-                            .text_color(theme::accent())
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .hover(|s| s.bg(theme::surface_hover()))
-                            .child("查看")
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                        components::button(
+                            SharedString::from(format!("session-view-{idx}")),
+                            "查看",
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
                                 this.open_detail(idx, cx);
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(format!("session-delete-{idx}")))
-                            .role(gpui::Role::Button)
-                            .aria_label("删除会话")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface_hover())
-                            .text_color(theme::red())
-                            .text_sm()
-                            .hover(|s| s.bg(theme::red_soft()))
-                            .child("删除")
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.do_delete(idx, cx);
-                            })),
+                        components::button(
+                            SharedString::from(format!("session-delete-{idx}")),
+                            "删除",
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.confirm_delete = Some(idx);
+                                cx.notify();
+                            },
+                        )),
                     ),
             )
     }
 
-    fn page_button(
-        cx: &mut Context<Self>,
-        id: &'static str,
-        label: &'static str,
-        enabled: bool,
-        target: usize,
-    ) -> gpui::Stateful<gpui::Div> {
-        let base = div()
-            .id(id)
-            .role(gpui::Role::Button)
-            .aria_label(label)
-            .px_3()
-            .py_1p5()
-            .rounded_md()
-            .border_1()
-            .border_color(theme::border())
-            .text_sm()
-            .child(label);
-        if enabled {
-            base.cursor_pointer()
-                .bg(theme::surface())
-                .text_color(theme::text())
-                .hover(|s| s.bg(theme::surface_hover()))
-                .on_click(cx.listener(move |this, _event, _window, cx| this.set_page(target, cx)))
-        } else {
-            base.bg(theme::inset()).text_color(theme::muted())
-        }
-    }
-
-    fn render_pagination(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let total = self.sessions.len();
+    fn render_pagination(&self, cx: &mut Context<Self>) -> gpui::Div {
         let total_pages = self.total_pages();
         let page = self.page;
-        let start = page * PAGE_SIZE + 1;
-        let end = ((page + 1) * PAGE_SIZE).min(total);
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .w_full()
-            .px_6()
-            .py_3()
-            .border_t_1()
-            .border_color(theme::border())
-            .bg(theme::header())
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .text_xs()
-                    .child(SharedString::from(format!(
-                        "第 {start}–{end} 条 · 共 {total} 条会话"
-                    ))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(Self::page_button(
-                        cx,
-                        "sessions-prev",
-                        "上一页",
-                        page > 0,
-                        page.saturating_sub(1),
-                    ))
-                    .child(
-                        div()
-                            .text_color(theme::subtext())
-                            .text_xs()
-                            .min_w(gpui::px(60.))
-                            .child(SharedString::from(format!(
-                                "第 {} / {} 页",
-                                page + 1,
-                                total_pages
-                            ))),
-                    )
-                    .child(Self::page_button(
-                        cx,
-                        "sessions-next",
-                        "下一页",
-                        page + 1 < total_pages,
-                        page + 1,
-                    )),
-            )
+        let prev = components::button(
+            "sessions-prev",
+            "上一页",
+            ButtonTone::Neutral,
+            ButtonSize::Sm,
+        );
+        let prev = if page > 0 {
+            let target = page.saturating_sub(1);
+            prev.on_click(cx.listener(move |this, _event, _window, cx| this.set_page(target, cx)))
+        } else {
+            prev.text_color(theme::muted())
+        };
+        let next = components::button(
+            "sessions-next",
+            "下一页",
+            ButtonTone::Neutral,
+            ButtonSize::Sm,
+        );
+        let next = if page + 1 < total_pages {
+            let target = page + 1;
+            next.on_click(cx.listener(move |this, _event, _window, cx| this.set_page(target, cx)))
+        } else {
+            next.text_color(theme::muted())
+        };
+        components::pagination(
+            prev.into_any_element(),
+            format!("第 {} / {} 页", page + 1, total_pages),
+            next.into_any_element(),
+        )
     }
 }
 
@@ -537,47 +394,80 @@ impl Render for SessionsView {
             .collect();
         let is_empty = total == 0;
         let show_pagination = total > PAGE_SIZE;
+        let confirm = self.confirm_delete.and_then(|idx| {
+            self.sessions
+                .get(idx)
+                .map(Self::title_for)
+                .map(|t| (idx, t))
+        });
 
         layout::page()
+            .relative()
             .child(
                 layout::page_header("会话", None).child(
-                    div()
-                        .id("sessions-refresh")
-                        .role(gpui::Role::Button)
-                        .aria_label("刷新会话")
-                        .px_3()
-                        .py_1p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .bg(theme::surface())
-                        .text_color(theme::subtext())
-                        .text_sm()
-                        .child("刷新")
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.reload();
-                            cx.notify();
-                        })),
+                    components::button(
+                        "sessions-refresh",
+                        "刷新",
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.reload();
+                        cx.notify();
+                    })),
                 ),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
+            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body(
                 "session-list",
                 layout::content_column()
                     .when(is_empty, |s| {
-                        s.child(div().text_color(theme::muted()).child("没有找到会话。"))
+                        s.child(components::empty_state(
+                            IconName::Clock,
+                            "没有找到会话",
+                            "扫描到的 CLI 会话会显示在这里。",
+                            None,
+                        ))
                     })
                     .children(cards),
             ))
             .when(show_pagination, |s| s.child(self.render_pagination(cx)))
+            .when_some(confirm, |root, (idx, title)| {
+                let message =
+                    SharedString::from(format!("确定删除会话「{title}」吗？此操作不可撤销。"));
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header("删除会话"))
+                        .child(
+                            components::modal_body()
+                                .child(div().text_color(theme::subtext()).text_sm().child(message)),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "session-confirm-delete-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "session-confirm-delete-ok",
+                                "删除",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                this.do_delete(idx, cx);
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
             .into_any_element()
     }
 }
