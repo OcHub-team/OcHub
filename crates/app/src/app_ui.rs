@@ -13,6 +13,7 @@ use ochub_core::{AppState, AppType, Provider};
 use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
 use crate::auth_view::AuthView;
 use crate::components::{self, ButtonTone};
+use crate::gallery_view::GalleryView;
 use crate::gateway_view::GatewayView;
 use crate::icons::{icon, IconName};
 use crate::mcp_view::McpView;
@@ -69,6 +70,8 @@ enum Section {
     Settings,
     Proxy,
     Gateway,
+    /// Dev-only component gallery (visible with MS_GALLERY=1).
+    Gallery,
 }
 
 impl Section {
@@ -89,6 +92,7 @@ impl Section {
             "settings" | "setting" => Self::Settings,
             "proxy" => Self::Proxy,
             "gateway" => Self::Gateway,
+            "gallery" => Self::Gallery,
             _ => Self::Providers,
         }
     }
@@ -115,6 +119,7 @@ pub struct AppRoot {
     sessions_view: Entity<SessionsView>,
     workspace_view: Entity<WorkspaceView>,
     tools_view: Entity<ToolsView>,
+    gallery_view: Entity<GalleryView>,
     /// Per-app settings panel (app-scoped toggles + config dir), shown over the
     /// provider list when `showing_app_settings` is set.
     app_settings_view: Entity<AppSettingsView>,
@@ -135,6 +140,7 @@ impl AppRoot {
         let sessions_view = cx.new(|cx| SessionsView::new(app.clone(), cx));
         let workspace_view = cx.new(|cx| WorkspaceView::new(cx));
         let tools_view = cx.new(|cx| ToolsView::new(app.clone(), cx));
+        let gallery_view = cx.new(|cx| GalleryView::new(cx));
         let initial_section = Section::from_env();
         let enabled = Self::visible_apps();
         let initial_app = std::env::var("MS_START_APP")
@@ -164,6 +170,7 @@ impl AppRoot {
             sessions_view,
             workspace_view,
             tools_view,
+            gallery_view,
             app_settings_view,
             showing_app_settings: false,
         };
@@ -314,6 +321,7 @@ impl AppRoot {
             Section::Proxy => IconName::Proxy,
             Section::Gateway => IconName::Cloud,
             Section::Providers => IconName::Cloud,
+            Section::Gallery => IconName::Layers,
         }
     }
 
@@ -664,6 +672,7 @@ impl AppRoot {
             Section::Settings => "设置".into(),
             Section::Proxy => "代理".into(),
             Section::Gateway => "中转网关".into(),
+            Section::Gallery => "组件画廊".into(),
         }
     }
 
@@ -769,7 +778,15 @@ impl AppRoot {
                     .px_2()
                     .child(self.render_nav_item("nav-settings", "设置", Section::Settings, cx))
                     .child(self.render_nav_item("nav-proxy", "代理", Section::Proxy, cx))
-                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx)),
+                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx))
+                    .when(std::env::var_os("MS_GALLERY").is_some(), |col| {
+                        col.child(self.render_nav_item(
+                            "nav-gallery",
+                            "组件画廊",
+                            Section::Gallery,
+                            cx,
+                        ))
+                    }),
             )
     }
 
@@ -1334,6 +1351,7 @@ impl AppRoot {
             Section::Sessions => self.sessions_view.clone().into_any_element(),
             Section::Workspace => self.workspace_view.clone().into_any_element(),
             Section::Tools => self.tools_view.clone().into_any_element(),
+            Section::Gallery => self.gallery_view.clone().into_any_element(),
             Section::Providers => {
                 if self.showing_app_settings {
                     self.app_settings_view.clone().into_any_element()

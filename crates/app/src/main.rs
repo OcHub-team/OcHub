@@ -11,6 +11,7 @@ mod chart;
 mod code_editor;
 mod components;
 mod fold;
+mod gallery_view;
 mod gateway_view;
 mod highlight;
 mod icons;
