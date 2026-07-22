@@ -7,14 +7,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, ClipboardItem, Context, Entity, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, ClipboardItem, Context, Entity, FontWeight, SharedString, Window};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
     ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey,
 };
 use ochub_core::{AppState, AppType};
 
-use crate::components;
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -34,6 +35,13 @@ struct ChannelEditor {
     enabled: bool,
 }
 
+/// 删除确认目标（渠道或本地 API key），携带 id 与展示名称。
+#[derive(Clone)]
+enum ConfirmTarget {
+    Channel(String, String),
+    Key(String, String),
+}
+
 pub struct GatewayView {
     app: Arc<AppState>,
     running: bool,
@@ -46,6 +54,8 @@ pub struct GatewayView {
     health_interval_input: Entity<TextInput>,
     new_key_name: Entity<TextInput>,
     editor: Option<ChannelEditor>,
+    /// 待确认的删除目标；`Some` 时展示确认模态。
+    confirm_delete: Option<ConfirmTarget>,
     status: Option<SharedString>,
     busy: bool,
 }
@@ -69,6 +79,7 @@ impl GatewayView {
             health_interval_input,
             new_key_name,
             editor: None,
+            confirm_delete: None,
             status: None,
             busy: false,
         };
@@ -494,96 +505,12 @@ impl GatewayView {
 
     // -- 渲染 ---------------------------------------------------------------
 
-    fn action_button(
-        id: impl Into<gpui::ElementId>,
-        label: impl Into<SharedString>,
-        primary: bool,
-    ) -> gpui::Stateful<gpui::Div> {
-        components::action_button(id, label, primary).px_4().py_2()
-    }
-
     fn dialect_label(dialect: Dialect) -> &'static str {
         match dialect {
             Dialect::Messages => "messages",
             Dialect::Chat => "chat",
             Dialect::Responses => "responses",
         }
-    }
-
-    fn toggle_row(
-        id: &'static str,
-        title: &'static str,
-        detail: &'static str,
-        enabled: bool,
-        cx: &mut Context<Self>,
-        toggle: fn(&mut Self, &mut Context<Self>),
-    ) -> impl IntoElement {
-        div()
-            .id(id)
-            .role(gpui::Role::Switch)
-            .aria_label(title)
-            .aria_toggled(if enabled {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_3()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(if enabled {
-                theme::green()
-            } else {
-                theme::border()
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
-                    .child(div().text_color(theme::muted()).text_xs().child(detail)),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(if enabled {
-                        theme::green()
-                    } else {
-                        theme::surface_hover()
-                    })
-                    .text_color(if enabled {
-                        theme::accent_text()
-                    } else {
-                        theme::subtext()
-                    })
-                    .text_sm()
-                    .child(if enabled { "开启" } else { "关闭" }),
-            )
-            .on_click(cx.listener(move |this, _event, _window, cx| toggle(this, cx)))
-    }
-
-    fn input_row(label: &'static str, input: Entity<TextInput>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_color(theme::muted()).text_xs().child(label))
-            .child(input)
     }
 
     fn health_dot(&self, channel_id: &str) -> (gpui::Rgba, &'static str) {
@@ -602,24 +529,19 @@ impl GatewayView {
         let (dot, health_label) = self.health_dot(&channel.id);
         let id = channel.id.clone();
         let id_for_toggle = id.clone();
-        let id_for_delete = id.clone();
         let channel_for_edit = channel.clone();
+        let delete_target = ConfirmTarget::Channel(channel.id.clone(), channel.name.clone());
         let models_desc = if channel.models.is_empty() {
             "匹配所有模型".to_string()
         } else {
             channel.models.join(", ")
         };
-        div()
-            .flex()
+        components::card()
             .flex_row()
             .items_center()
             .justify_between()
             .gap_3()
             .p_3()
-            .rounded_md()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -632,7 +554,7 @@ impl GatewayView {
                             .flex_row()
                             .items_center()
                             .gap_2()
-                            .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(dot))
+                            .child(components::status_dot(dot))
                             .child(
                                 div()
                                     .text_color(theme::text())
@@ -640,18 +562,12 @@ impl GatewayView {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(SharedString::from(channel.name.clone())),
                             )
-                            .child(
-                                div()
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme::surface_hover())
-                                    .text_color(theme::subtext())
-                                    .text_xs()
-                                    .child(Self::dialect_label(channel.dialect)),
-                            )
+                            .child(components::badge(
+                                BadgeTone::Neutral,
+                                Self::dialect_label(channel.dialect),
+                            ))
                             .when(!channel.enabled, |d| {
-                                d.child(div().text_color(theme::yellow()).text_xs().child("已停用"))
+                                d.child(components::badge(BadgeTone::Warning, "已停用"))
                             }),
                     )
                     .child(
@@ -668,24 +584,29 @@ impl GatewayView {
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap_2()
                     .child(
-                        Self::action_button(
-                            SharedString::from(format!("gw-ch-toggle-{id}")),
-                            if channel.enabled { "停用" } else { "启用" },
-                            false,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
+                        layout::toggle(channel.enabled)
+                            .id(SharedString::from(format!("gw-ch-toggle-{id}")))
+                            .role(gpui::Role::Switch)
+                            .aria_label(SharedString::from(format!("启停渠道 {}", channel.name)))
+                            .aria_toggled(if channel.enabled {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.toggle_channel_enabled(id_for_toggle.clone(), cx);
-                            },
-                        )),
+                            })),
                     )
                     .child(
-                        Self::action_button(
+                        components::button(
                             SharedString::from(format!("gw-ch-edit-{id}")),
                             "编辑",
-                            false,
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -694,15 +615,16 @@ impl GatewayView {
                         )),
                     )
                     .child(
-                        Self::action_button(
+                        components::button(
                             SharedString::from(format!("gw-ch-del-{id}")),
                             "删除",
-                            false,
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
                         )
-                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.delete_channel(id_for_delete.clone(), cx);
+                                this.confirm_delete = Some(delete_target.clone());
+                                cx.notify();
                             },
                         )),
                     ),
@@ -711,36 +633,28 @@ impl GatewayView {
     }
 
     fn render_editor(&self, editor: &ChannelEditor, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let dialect_buttons = [Dialect::Messages, Dialect::Chat, Dialect::Responses]
-            .into_iter()
-            .map(|d| {
-                let selected = editor.dialect == d;
-                Self::action_button(
-                    SharedString::from(format!("gw-ed-dialect-{}", Self::dialect_label(d))),
-                    Self::dialect_label(d),
-                    selected,
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    if let Some(editor) = &mut this.editor {
-                        editor.dialect = d;
-                    }
-                    cx.notify();
-                }))
-                .into_any_element()
-            })
-            .collect::<Vec<_>>();
-        div()
-            .flex()
-            .flex_col()
+        let dialect_ix = match editor.dialect {
+            Dialect::Messages => 0,
+            Dialect::Chat => 1,
+            Dialect::Responses => 2,
+        };
+        let on_select = cx.listener(|this, ix: &usize, _w, cx| {
+            if let Some(editor) = &mut this.editor {
+                editor.dialect = match ix {
+                    1 => Dialect::Chat,
+                    2 => Dialect::Responses,
+                    _ => Dialect::Messages,
+                };
+            }
+            cx.notify();
+        });
+        components::card()
             .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
             .border_color(theme::accent())
             .child(
                 div()
                     .text_color(theme::text())
+                    .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(if editor.id.is_empty() {
                         "新建渠道"
@@ -748,29 +662,50 @@ impl GatewayView {
                         "编辑渠道"
                     }),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(div().text_color(theme::muted()).text_xs().child("上游方言"))
-                    .children(dialect_buttons),
-            )
+            .child(components::field(
+                "上游方言",
+                false,
+                None,
+                components::segmented(
+                    "gw-dialect",
+                    &["messages", "chat", "responses"],
+                    dialect_ix,
+                    move |ix, window, cx| on_select(&ix, window, cx),
+                ),
+            ))
             .child(
                 div()
                     .grid()
                     .grid_cols(2)
                     .gap_3()
-                    .child(Self::input_row("渠道名称", editor.name.clone()))
-                    .child(Self::input_row("Base URL", editor.base_url.clone()))
-                    .child(Self::input_row("API Key", editor.api_key.clone()))
-                    .child(Self::input_row(
+                    .child(components::field(
+                        "渠道名称",
+                        false,
+                        None,
+                        editor.name.clone(),
+                    ))
+                    .child(components::field(
+                        "Base URL",
+                        false,
+                        None,
+                        editor.base_url.clone(),
+                    ))
+                    .child(components::field(
+                        "API Key",
+                        false,
+                        None,
+                        editor.api_key.clone(),
+                    ))
+                    .child(components::field(
                         "模型匹配（逗号分隔，支持 *）",
+                        false,
+                        None,
                         editor.models.clone(),
                     ))
-                    .child(Self::input_row(
+                    .child(components::field(
                         "上游模型重写",
+                        false,
+                        None,
                         editor.model_override.clone(),
                     ))
                     .child(
@@ -778,11 +713,18 @@ impl GatewayView {
                             .grid()
                             .grid_cols(2)
                             .gap_3()
-                            .child(Self::input_row(
+                            .child(components::field(
                                 "优先级（小者优先）",
+                                false,
+                                None,
                                 editor.priority.clone(),
                             ))
-                            .child(Self::input_row("权重", editor.weight.clone())),
+                            .child(components::field(
+                                "权重",
+                                false,
+                                None,
+                                editor.weight.clone(),
+                            )),
                     ),
             )
             .child(
@@ -791,18 +733,32 @@ impl GatewayView {
                     .flex_row()
                     .gap_3()
                     .child(
-                        Self::action_button("gw-ed-save", "保存渠道", true).on_click(cx.listener(
+                        components::button(
+                            "gw-ed-save",
+                            "保存渠道",
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
                             |this, _event, _window, cx| {
                                 this.save_editor(cx);
                             },
                         )),
                     )
-                    .child(Self::action_button("gw-ed-cancel", "取消", false).on_click(
-                        cx.listener(|this, _event, _window, cx| {
-                            this.editor = None;
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        components::button(
+                            "gw-ed-cancel",
+                            "取消",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.editor = None;
+                                cx.notify();
+                            },
+                        )),
+                    ),
             )
             .into_any_element()
     }
@@ -810,27 +766,24 @@ impl GatewayView {
     fn render_key_row(&self, key: &GatewayKey, cx: &mut Context<Self>) -> gpui::AnyElement {
         let id = key.id.clone();
         let secret = key.key.clone();
+        let delete_target = ConfirmTarget::Key(key.id.clone(), key.name.clone());
         let masked = if key.key.len() > 10 {
             format!("{}…{}", &key.key[..7], &key.key[key.key.len() - 4..])
         } else {
             key.key.clone()
         };
-        div()
-            .flex()
+        components::card()
             .flex_row()
             .items_center()
             .justify_between()
             .gap_3()
             .p_3()
-            .rounded_md()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .min_w_0()
                     .child(
                         div()
                             .text_color(theme::text())
@@ -849,12 +802,15 @@ impl GatewayView {
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap_2()
                     .child(
-                        Self::action_button(
+                        components::icon_button_tone(
                             SharedString::from(format!("gw-key-copy-{id}")),
                             "复制",
-                            false,
+                            IconName::Copy,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -863,15 +819,16 @@ impl GatewayView {
                         )),
                     )
                     .child(
-                        Self::action_button(
+                        components::button(
                             SharedString::from(format!("gw-key-del-{id}")),
                             "删除",
-                            false,
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
                         )
-                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.delete_key(id.clone(), cx);
+                                this.confirm_delete = Some(delete_target.clone());
+                                cx.notify();
                             },
                         )),
                     ),
@@ -884,10 +841,11 @@ impl GatewayView {
             .iter()
             .filter(|a| crate::app_meta::enabled_app_types().contains(a))
             .map(|&app_type| {
-                Self::action_button(
+                components::button(
                     SharedString::from(format!("gw-apply-{}", app_type.as_str())),
                     format!("配置 {}", crate::app_meta::label(app_type)),
-                    true,
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
                 )
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.apply_to_app(app_type, cx);
@@ -901,11 +859,6 @@ impl GatewayView {
 impl Render for GatewayView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let running = self.running;
-        let endpoint = if running {
-            self.base_url.clone()
-        } else {
-            "未运行".to_string()
-        };
         let channel_count = self.channels.len();
         let enabled_count = self.channels.iter().filter(|c| c.enabled).count();
         let key_count = self.keys.len();
@@ -928,250 +881,386 @@ impl Render for GatewayView {
         });
 
         layout::page()
+            .relative()
             .child(
                 layout::page_header(
                     "中转网关",
                     Some("本地 relay：多方言端点 + 渠道路由 + 一键配置应用。".into()),
                 )
                 .child(
-                    div()
-                        .id("gw-refresh")
-                        .role(gpui::Role::Button)
-                        .aria_label("刷新网关状态")
-                        .px_3()
-                        .py_1p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .bg(theme::surface())
-                        .text_color(theme::subtext())
-                        .text_sm()
-                        .child("刷新")
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.reload(cx);
-                        })),
+                    components::icon_button_tone(
+                        "gw-refresh",
+                        "刷新",
+                        IconName::Refresh,
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.reload(cx);
+                    })),
                 ),
             )
+            .child(components::status_footer(self.status.clone()))
             .child(
-                div()
-                    .id("gw-body")
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .p_6()
-                    .overflow_y_scroll()
-                    // 状态行 + 启停
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .w(px(10.))
-                                    .h(px(10.))
-                                    .rounded_full()
-                                    .bg(if running { theme::green() } else { theme::muted() }),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(SharedString::from(endpoint.clone())),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(SharedString::from(format!(
-                                        "渠道 {enabled_count}/{channel_count} · key {key_count}"
-                                    ))),
-                            ),
-                    )
-                    .when_some(self.status.clone(), |s, status| {
-                        s.child(div().text_color(theme::teal()).text_xs().child(status))
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap_3()
-                            .child(
-                                Self::action_button("gw-start", "启动网关", true).on_click(
-                                    cx.listener(|this, _event, _window, cx| this.do_start(cx)),
-                                ),
-                            )
-                            .child(
-                                Self::action_button("gw-stop", "停止", false).on_click(
-                                    cx.listener(|this, _event, _window, cx| this.do_stop(cx)),
-                                ),
-                            )
-                            .child(
-                                Self::action_button("gw-probe", "探测渠道健康", false).on_click(
-                                    cx.listener(|this, _event, _window, cx| this.probe_now(cx)),
-                                ),
-                            ),
-                    )
-                    // 基础配置
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("网关设置"),
-                            )
-                            .child(
-                                div()
-                                    .grid()
-                                    .grid_cols(3)
-                                    .gap_3()
-                                    .child(Self::input_row("监听端口", self.port_input.clone()))
-                                    .child(Self::input_row(
-                                        "健康探测间隔（秒，0 关闭）",
-                                        self.health_interval_input.clone(),
-                                    ))
-                                    .child(
-                                        div().flex().flex_col().gap_1().child(
-                                            Self::action_button("gw-save-config", "保存设置", false)
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.save_config(cx);
-                                                    },
-                                                )),
-                                        ),
+                layout::scroll_body(
+                    "gateway-body",
+                    layout::wide_column()
+                        .gap_4()
+                        // 状态仪表盘
+                        .child(
+                            div()
+                                .grid()
+                                .grid_cols(3)
+                                .gap_3()
+                                .w_full()
+                                .child(components::stat_tile(
+                                    None,
+                                    if running { theme::green() } else { theme::muted() },
+                                    "运行状态",
+                                    if running { "运行中" } else { "未运行" },
+                                    if running {
+                                        self.base_url.clone()
+                                    } else {
+                                        "网关未启动".to_string()
+                                    },
+                                ))
+                                .child(components::stat_tile(
+                                    Some(IconName::Cloud),
+                                    theme::accent(),
+                                    "渠道",
+                                    format!("{enabled_count}/{channel_count}"),
+                                    "上游渠道",
+                                ))
+                                .child(components::stat_tile(
+                                    Some(IconName::Key),
+                                    theme::teal(),
+                                    "API keys",
+                                    key_count.to_string(),
+                                    "本地推理密钥",
+                                )),
+                        )
+                        // 启停与探测
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap_3()
+                                .child(
+                                    components::button(
+                                        "gw-start",
+                                        "启动网关",
+                                        ButtonTone::Primary,
+                                        ButtonSize::Md,
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _event, _window, cx| this.do_start(cx)),
                                     ),
-                            )
-                            .child(Self::toggle_row(
-                                "gw-autostart",
+                                )
+                                .child(
+                                    components::button(
+                                        "gw-stop",
+                                        "停止",
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Md,
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _event, _window, cx| this.do_stop(cx)),
+                                    ),
+                                )
+                                .child(
+                                    components::button(
+                                        "gw-probe",
+                                        "探测渠道健康",
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Md,
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _event, _window, cx| this.probe_now(cx)),
+                                    ),
+                                ),
+                        )
+                        // 网关设置
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(card_title(
+                                    "网关设置",
+                                    "本地 relay 的监听端口与上游健康探测间隔；端口变更需重启网关生效。",
+                                ))
+                                .child(
+                                    div()
+                                        .grid()
+                                        .grid_cols(2)
+                                        .gap_3()
+                                        .child(components::field(
+                                            "监听端口",
+                                            false,
+                                            None,
+                                            self.port_input.clone(),
+                                        ))
+                                        .child(components::field(
+                                            "健康探测间隔（秒，0 关闭）",
+                                            false,
+                                            None,
+                                            self.health_interval_input.clone(),
+                                        )),
+                                )
+                                .child(
+                                    div().flex().flex_row().justify_end().child(
+                                        components::button(
+                                            "gw-save-config",
+                                            "保存设置",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.save_config(cx);
+                                        })),
+                                    ),
+                                ),
+                        )
+                        // 开关行
+                        .child(layout::group(vec![
+                            components::field_row(
                                 "随应用自动启动",
                                 "启动 RouteDeck 时自动拉起网关（端点地址保持稳定）。",
-                                self.config.enabled,
-                                cx,
-                                Self::toggle_autostart,
-                            ))
-                            .child(Self::toggle_row(
-                                "gw-require-key",
+                                layout::toggle(self.config.enabled),
+                            )
+                            .id("gw-autostart")
+                            .role(gpui::Role::Switch)
+                            .aria_label("随应用自动启动")
+                            .aria_toggled(if self.config.enabled {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::inset()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.toggle_autostart(cx);
+                            }))
+                            .into_any_element(),
+                            components::field_row(
                                 "要求 API key",
                                 "推理端点要求本地 key（Bearer / x-api-key），用量按 key 归因。",
-                                self.config.require_key,
-                                cx,
-                                Self::toggle_require_key,
-                            )),
-                    )
-                    // 渠道
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("上游渠道"),
+                                layout::toggle(self.config.require_key),
                             )
-                            .child(
-                                Self::action_button("gw-ch-add", "新建渠道", true).on_click(
-                                    cx.listener(|this, _event, _window, cx| {
-                                        this.open_editor(None, cx);
-                                    }),
-                                ),
-                            ),
-                    )
-                    .when_some(editor_el, |s, el| s.child(el))
-                    .child(div().flex().flex_col().gap_2().children(channel_rows))
-                    .when(channel_count == 0, |s| {
-                        s.child(
+                            .id("gw-require-key")
+                            .role(gpui::Role::Switch)
+                            .aria_label("要求 API key")
+                            .aria_toggled(if self.config.require_key {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::inset()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.toggle_require_key(cx);
+                            }))
+                            .into_any_element(),
+                        ]))
+                        // 渠道
+                        .child(
                             div()
-                                .text_color(theme::muted())
-                                .text_sm()
-                                .child("尚无渠道。新建渠道并选择其上游方言（messages / chat / responses）。"),
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .w_full()
+                                .child(card_title(
+                                    "上游渠道",
+                                    "按模型匹配、优先级与权重把请求路由到上游方言端点。",
+                                ))
+                                .child(
+                                    components::button(
+                                        "gw-ch-add",
+                                        "新建渠道",
+                                        ButtonTone::Primary,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.open_editor(None, cx);
+                                    })),
+                                ),
                         )
-                    })
-                    // keys
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("本地 API keys"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap_3()
-                                    .child(div().flex_1().child(self.new_key_name.clone()))
-                                    .child(
-                                        Self::action_button("gw-key-create", "创建 key", true)
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.create_key(cx);
-                                            })),
-                                    ),
-                            )
-                            .child(div().flex().flex_col().gap_2().children(key_rows)),
-                    )
-                    // 一键配置
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(theme::surface())
-                            .border_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("一键配置应用"),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child("为应用写入指向本地网关的供应商条目并切换；每个应用使用独立 key，用量单独归因。"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_3()
-                                    .children(self.one_click_buttons(cx))
-                                    .child(
-                                        Self::action_button("gw-generic-info", "复制通用客户端信息", false)
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.copy_generic_info(cx);
-                                            })),
-                                    ),
-                            ),
-                    ),
+                        .when_some(editor_el, |s, el| s.child(el))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .w_full()
+                                .children(channel_rows),
+                        )
+                        .when(channel_count == 0, |s| {
+                            s.child(components::empty_state(
+                                IconName::Cloud,
+                                "尚无渠道",
+                                "新建渠道并选择其上游方言（messages / chat / responses）。",
+                                Some(
+                                    components::button(
+                                        "gw-ch-add-empty",
+                                        "新建渠道",
+                                        ButtonTone::Primary,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.open_editor(None, cx);
+                                    }))
+                                    .into_any_element(),
+                                ),
+                            ))
+                        })
+                        // keys
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(card_title(
+                                    "本地 API keys",
+                                    "推理端点的本地密钥（Bearer / x-api-key），用量按 key 归因。",
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_3()
+                                        .child(div().flex_1().child(self.new_key_name.clone()))
+                                        .child(
+                                            components::button(
+                                                "gw-key-create",
+                                                "创建 key",
+                                                ButtonTone::Primary,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.create_key(cx);
+                                                },
+                                            )),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .w_full()
+                                        .children(key_rows),
+                                ),
+                        )
+                        // 一键配置
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(card_title(
+                                    "一键配置应用",
+                                    "为应用写入指向本地网关的供应商条目并切换；每个应用使用独立 key，用量单独归因。",
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_3()
+                                        .children(self.one_click_buttons(cx))
+                                        .child(
+                                            components::button(
+                                                "gw-generic-info",
+                                                "复制通用客户端信息",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.copy_generic_info(cx);
+                                                },
+                                            )),
+                                        ),
+                                ),
+                        ),
+                ),
             )
+            .when_some(self.confirm_delete.clone(), |root, target| {
+                let (title, message, delete_id, is_channel) = match &target {
+                    ConfirmTarget::Channel(id, name) => (
+                        "删除渠道",
+                        format!("确定删除渠道「{name}」吗？此操作不可撤销。"),
+                        id.clone(),
+                        true,
+                    ),
+                    ConfirmTarget::Key(id, name) => (
+                        "删除 API key",
+                        format!("确定删除 key「{name}」吗？使用它的应用将无法再通过本地网关推理。"),
+                        id.clone(),
+                        false,
+                    ),
+                };
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header(title))
+                        .child(
+                            components::modal_body().child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_sm()
+                                    .child(SharedString::from(message)),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "gw-confirm-delete-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "gw-confirm-delete-ok",
+                                "删除",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                if is_channel {
+                                    this.delete_channel(delete_id.clone(), cx);
+                                } else {
+                                    this.delete_key(delete_id.clone(), cx);
+                                }
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
     }
+}
+
+/// 卡内/区块标题：`layout::section_header` 风格（SEMIBOLD 标题 + MUTED 说明），
+/// 不带额外上间距，可直接放在卡片内或区块标题行内。
+fn card_title(title: &'static str, description: &'static str) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_color(theme::text())
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(
+            div()
+                .text_color(theme::muted())
+                .text_xs()
+                .child(description),
+        )
 }
 
 fn text_input(cx: &mut Context<TextInput>, placeholder: &str, value: &str) -> TextInput {
