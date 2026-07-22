@@ -12,10 +12,11 @@ use ochub_core::{AppState, AppType, Provider};
 
 use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
 use crate::auth_view::AuthView;
-use crate::components::{self, ButtonTone};
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::gallery_view::GalleryView;
 use crate::gateway_view::GatewayView;
 use crate::icons::{icon, IconName};
+use crate::layout;
 use crate::mcp_view::McpView;
 use crate::notifications::{NotificationHost, NotificationLevel};
 use crate::prompts_view::PromptsView;
@@ -108,6 +109,8 @@ pub struct AppRoot {
     notifications: Entity<NotificationHost>,
     /// Active provider editor (add or edit); when `Some`, replaces the list.
     editor: Option<Entity<ProviderEditor>>,
+    /// Provider pending deletion confirmation; when `Some`, a modal is shown.
+    confirm_delete: Option<Provider>,
     settings_view: Entity<SettingsView>,
     proxy_view: Entity<ProxyView>,
     gateway_view: Entity<GatewayView>,
@@ -159,6 +162,7 @@ impl AppRoot {
             status: None,
             notifications,
             editor: None,
+            confirm_delete: None,
             settings_view,
             proxy_view,
             gateway_view,
@@ -769,6 +773,16 @@ impl AppRoot {
                     .child(self.render_nav_item("nav-workspace", "工作区", Section::Workspace, cx))
                     .child(self.render_nav_item("nav-tools", "高级工具", Section::Tools, cx)),
             )
+            .child(Self::render_sidebar_group("网络"))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_2()
+                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx))
+                    .child(self.render_nav_item("nav-proxy", "代理", Section::Proxy, cx)),
+            )
             .child(Self::render_sidebar_group("系统"))
             .child(
                 div()
@@ -777,8 +791,6 @@ impl AppRoot {
                     .gap_1()
                     .px_2()
                     .child(self.render_nav_item("nav-settings", "设置", Section::Settings, cx))
-                    .child(self.render_nav_item("nav-proxy", "代理", Section::Proxy, cx))
-                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx))
                     .when(std::env::var_os("MS_GALLERY").is_some(), |col| {
                         col.child(self.render_nav_item(
                             "nav-gallery",
@@ -798,7 +810,7 @@ impl AppRoot {
         let is_current = !self.selected_app.is_additive_mode() && provider.id == self.current;
         let id = provider.id.clone();
         let edit_provider = provider.clone();
-        let delete_id = provider.id.clone();
+        let confirm_provider = provider.clone();
         let live_id = provider.id.clone();
         let base_url = self.provider_base_url(provider);
         let is_additive = self.selected_app.is_additive_mode();
@@ -886,28 +898,7 @@ impl AppRoot {
                                             .child(SharedString::from(provider.name.clone())),
                                     )
                                     .when(is_current, |s| {
-                                        s.child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .items_center()
-                                                .gap_1()
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded_full()
-                                                .bg(theme::accent_soft())
-                                                .text_color(theme::accent())
-                                                .text_xs()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(
-                                                    div()
-                                                        .w(px(5.))
-                                                        .h(px(5.))
-                                                        .rounded_full()
-                                                        .bg(theme::accent()),
-                                                )
-                                                .child("当前"),
-                                        )
+                                        s.child(components::badge(BadgeTone::Accent, "当前"))
                                     }),
                             )
                             .child(
@@ -946,7 +937,8 @@ impl AppRoot {
                         .aria_label(SharedString::from(format!("删除 {}", provider.name)))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.do_delete(delete_id.clone(), cx);
+                                this.confirm_delete = Some(confirm_provider.clone());
+                                cx.notify();
                             },
                         )),
                     )
@@ -1033,27 +1025,7 @@ impl AppRoot {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("当前生效"),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_1()
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded_full()
-                                    .bg(theme::green_soft())
-                                    .child(
-                                        div().w(px(5.)).h(px(5.)).rounded_full().bg(theme::green()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(theme::green())
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child("已启用"),
-                                    ),
-                            ),
+                            .child(components::badge(BadgeTone::Success, "已启用")),
                     )
                     .child(
                         div()
@@ -1161,153 +1133,60 @@ impl AppRoot {
         let no_providers = self.providers.is_empty();
         let others_empty = cards.is_empty();
 
-        div()
+        let mode = if app.is_additive_mode() {
+            "累加模式"
+        } else {
+            "切换模式"
+        };
+        let subtitle = SharedString::from(format!("{mode} · {} 个供应商", self.providers.len()));
+
+        let actions = div()
             .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .bg(theme::bg())
+            .flex_row()
+            .gap_2()
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .w_full()
-                    .px_6()
-                    .py_3()
-                    .bg(theme::header().alpha(0.95))
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .shadow_xs()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_color(theme::text())
-                                    .text_lg()
-                                    .font_weight(FontWeight::BOLD)
-                                    .child(icon(
-                                        Self::app_icon(app),
-                                        theme::c(Self::app_accent(app)),
-                                        18.,
-                                    ))
-                                    .child(Self::app_label(app)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded_full()
-                                            .bg(theme::inset())
-                                            .text_color(theme::subtext())
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(if app.is_additive_mode() {
-                                                "累加模式"
-                                            } else {
-                                                "切换模式"
-                                            }),
-                                    )
-                                    .child(div().text_color(theme::muted()).text_xs().child(
-                                        SharedString::from(format!(
-                                            "{} 个供应商",
-                                            self.providers.len()
-                                        )),
-                                    )),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_2()
-                            .child(
-                                components::icon_button(
-                                    "add-provider",
-                                    "新增",
-                                    IconName::Add,
-                                    true,
-                                )
-                                .aria_label("新增供应商")
-                                .on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.open_add_editor(cx);
-                                    },
-                                )),
-                            )
-                            .child(
-                                components::icon_button(
-                                    "import-default",
-                                    "导入工具配置",
-                                    IconName::Archive,
-                                    false,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.do_import_default(cx);
-                                    },
-                                )),
-                            )
-                            .when(can_import_live, |s| {
-                                s.child(
-                                    components::icon_button(
-                                        "import-live",
-                                        "批量导入",
-                                        IconName::Cloud,
-                                        false,
-                                    )
-                                    .aria_label("从工具配置批量导入供应商")
-                                    .on_click(cx.listener(
-                                        |this, _event, _window, cx| {
-                                            this.do_import_live(cx);
-                                        },
-                                    )),
-                                )
-                            })
-                            .when(app_has_settings(app), |s| {
-                                s.child(
-                                    components::icon_button(
-                                        "app-settings-gear",
-                                        "应用设置",
-                                        IconName::Settings,
-                                        false,
-                                    )
-                                    .aria_label("打开应用设置")
-                                    .on_click(cx.listener(
-                                        |this, _event, _window, cx| {
-                                            this.open_app_settings(cx);
-                                        },
-                                    )),
-                                )
-                            }),
-                    ),
+                components::icon_button("add-provider", "新增", IconName::Add, true)
+                    .aria_label("新增供应商")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.open_add_editor(cx);
+                    })),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(div().px_6().py_2().child(components::status_banner(status)))
-            })
             .child(
-                div()
-                    .id("provider-list")
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .p_6()
-                    .w_full()
-                    .overflow_y_scroll()
+                components::icon_button("import-default", "导入工具配置", IconName::Archive, false)
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.do_import_default(cx);
+                    })),
+            )
+            .when(can_import_live, |s| {
+                s.child(
+                    components::icon_button("import-live", "批量导入", IconName::Cloud, false)
+                        .aria_label("从工具配置批量导入供应商")
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.do_import_live(cx);
+                        })),
+                )
+            })
+            .when(app_has_settings(app), |s| {
+                s.child(
+                    components::icon_button(
+                        "app-settings-gear",
+                        "应用设置",
+                        IconName::Settings,
+                        false,
+                    )
+                    .aria_label("打开应用设置")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.open_app_settings(cx);
+                    })),
+                )
+            });
+
+        layout::page()
+            .child(layout::page_header(Self::app_label(app), Some(subtitle)).child(actions))
+            .child(components::status_footer(self.status.clone()))
+            .child(layout::scroll_body(
+                "provider-list",
+                layout::wide_column()
                     .when(is_switch, |s| s.child(self.render_active_hero(cx)))
                     .when(is_switch && !others_empty, |s| {
                         s.child(
@@ -1321,9 +1200,23 @@ impl AppRoot {
                     })
                     .when(no_providers, |s| {
                         s.child(
-                            div()
-                                .text_color(theme::muted())
-                                .child("还没有供应商。点击“新增”或“导入工具配置”创建一个。"),
+                            components::card().p_0().child(components::empty_state(
+                                IconName::Folder,
+                                "还没有供应商",
+                                "点击“新增”或“导入工具配置”创建一个。",
+                                Some(
+                                    components::icon_button(
+                                        "empty-add-provider",
+                                        "新增供应商",
+                                        IconName::Add,
+                                        true,
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.open_add_editor(cx);
+                                    }))
+                                    .into_any_element(),
+                                ),
+                            )),
                         )
                     })
                     .when(is_switch && !no_providers && others_empty, |s| {
@@ -1335,7 +1228,7 @@ impl AppRoot {
                         )
                     })
                     .children(cards),
-            )
+            ))
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -1386,5 +1279,44 @@ impl Render for AppRoot {
                     .child(self.render_content(cx)),
             )
             .child(self.notifications.clone())
+            .when_some(self.confirm_delete.clone(), |root, provider| {
+                let delete_id = provider.id.clone();
+                let message = SharedString::from(format!(
+                    "确定删除供应商「{}」吗？此操作不可撤销。",
+                    provider.name
+                ));
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header("删除供应商"))
+                        .child(
+                            components::modal_body()
+                                .child(div().text_color(theme::subtext()).text_sm().child(message)),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "confirm-delete-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "confirm-delete-ok",
+                                "删除",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                this.do_delete(delete_id.clone(), cx);
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
     }
 }

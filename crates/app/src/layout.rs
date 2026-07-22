@@ -17,6 +17,10 @@ use crate::theme;
 /// Max width of the centered content column, shared by every view so pages align.
 pub const CONTENT_MAX_WIDTH: f32 = 800.;
 
+/// Max width for data-dense pages (provider list, usage, tools, proxy,
+/// gateway): same centered layout, wider column.
+pub const WIDE_MAX_WIDTH: f32 = 1080.;
+
 /// Outermost page container: a full-height flex column on the window background.
 pub fn page() -> gpui::Div {
     div()
@@ -111,6 +115,17 @@ pub fn content_column() -> gpui::Div {
         .gap_3()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
+}
+
+/// The wide centered column for data-dense pages, capped at [`WIDE_MAX_WIDTH`].
+pub fn wide_column() -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap_3()
+        .w_full()
+        .max_w(px(WIDE_MAX_WIDTH))
 }
 
 /// A section header above a [`group`]: small semibold title + muted one-line caption.
