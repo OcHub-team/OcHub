@@ -210,16 +210,18 @@ pub fn field_row(
 
 /// Single-select pill row (the one replacement for every hand-rolled
 /// pill/chip selector): inset track, selected item raised with a hairline
-/// shadow. `on_select(index, window, cx)` fires on click.
+/// shadow. `on_select(index, window, cx)` fires on click. `id` accepts
+/// `&'static str` or an owned `SharedString` for schema-driven ids.
 pub fn segmented(
-    id: &'static str,
+    id: impl Into<SharedString>,
     options: &[&str],
     selected: usize,
     on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
+    let id = id.into();
     let on_select = std::rc::Rc::new(on_select);
     let mut track = div()
-        .id(id)
+        .id(id.clone())
         .flex()
         .flex_row()
         .items_center()

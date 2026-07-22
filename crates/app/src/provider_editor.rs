@@ -24,8 +24,10 @@ use serde_json::{json, Map, Value};
 
 use crate::code_editor::CodeEditor;
 use crate::components;
+use crate::components::{BadgeTone, BannerTone, ButtonSize, ButtonTone};
 use crate::fold::fold_regions;
 use crate::highlight::{self, Lang};
+use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -81,6 +83,9 @@ pub struct ProviderEditor {
     kv_rows: HashMap<String, Vec<KvRow>>,
     grid_rows: HashMap<String, Vec<GridRow>>,
     next_row_id: usize,
+    /// Index of the last applied preset (drives the preset segmented control's
+    /// selection highlight only; applying a preset behaves exactly as before).
+    selected_preset: Option<usize>,
     show_preview: bool,
     /// Collapsed fold regions in the preview pane: (file index, header line).
     preview_collapsed: std::collections::HashSet<(usize, usize)>,
@@ -159,6 +164,7 @@ impl ProviderEditor {
             kv_rows: HashMap::new(),
             grid_rows: HashMap::new(),
             next_row_id: 0,
+            selected_preset: None,
             show_preview: true,
             preview_collapsed: std::collections::HashSet::new(),
             raw_edit: None,
@@ -283,6 +289,7 @@ impl ProviderEditor {
             self.kv_rows.clear();
             self.grid_rows.clear();
             self.build_inputs(cx);
+            self.selected_preset = Some(index);
             cx.notify();
         }
     }
@@ -690,35 +697,6 @@ impl ProviderEditor {
 
     // ---- rendering ----------------------------------------------------------
 
-    fn render_label(label: &str, help: Option<&str>, required: bool) -> impl IntoElement {
-        let mut col = div().flex().flex_col().gap_1().child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_color(theme::subtext())
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(SharedString::from(label.to_string())),
-                )
-                .when(required, |s| {
-                    s.child(div().text_color(theme::red()).text_xs().child("*"))
-                }),
-        );
-        if let Some(help) = help {
-            col = col.child(
-                div()
-                    .text_color(theme::muted())
-                    .text_xs()
-                    .child(SharedString::from(help.to_string())),
-            );
-        }
-        col
-    }
-
     fn render_field(&self, field: &FormField, cx: &mut Context<Self>) -> gpui::AnyElement {
         let body = match &field.kind {
             FieldKind::Text { .. } | FieldKind::Secret { .. } => self
@@ -728,44 +706,38 @@ impl ProviderEditor {
                 .unwrap_or_else(|| div().into_any_element()),
             FieldKind::Select { options } => {
                 let current = str_val(&self.values, &field.id).to_string();
-                let mut row = div().flex().flex_row().flex_wrap().gap_2();
-                for opt in options {
-                    let selected = opt.value == current;
-                    let fid = field.id.clone();
-                    let val = opt.value.clone();
-                    let label = match &opt.hint {
-                        Some(hint) => format!("{} · {hint}", opt.label),
-                        None => opt.label.clone(),
-                    };
-                    row = row.child(
+                let selected = options.iter().position(|o| o.value == current).unwrap_or(0);
+                let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
+                let values: Vec<String> = options.iter().map(|o| o.value.clone()).collect();
+                let fid = field.id.clone();
+                let on_select = cx.listener(move |this, ix: &usize, _w, cx| {
+                    if let Some(value) = values.get(*ix).cloned() {
+                        this.set_select(fid.clone(), value, cx);
+                    }
+                });
+                let mut control =
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap_1()
+                        .child(components::segmented(
+                            SharedString::from(format!("select-{}", field.id)),
+                            &labels,
+                            selected,
+                            move |ix, window, cx| on_select(&ix, window, cx),
+                        ));
+                // The per-option hint (previously baked into each pill label)
+                // is shown for the selected option beneath the control.
+                if let Some(hint) = options.get(selected).and_then(|o| o.hint.as_ref()) {
+                    control = control.child(
                         div()
-                            .id(SharedString::from(format!(
-                                "sel-{}-{}",
-                                field.id, opt.value
-                            )))
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .text_sm()
-                            .bg(if selected {
-                                theme::accent_soft()
-                            } else {
-                                theme::inset()
-                            })
-                            .text_color(if selected {
-                                theme::accent()
-                            } else {
-                                theme::subtext()
-                            })
-                            .when(selected, |s| s.font_weight(FontWeight::MEDIUM))
-                            .child(SharedString::from(label))
-                            .on_click(cx.listener(move |this, _e, _w, cx| {
-                                this.set_select(fid.clone(), val.clone(), cx);
-                            })),
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child(SharedString::from(hint.clone())),
                     );
                 }
-                row.into_any_element()
+                control.into_any_element()
             }
             FieldKind::Toggle => {
                 let on = bool_val(&self.values, &field.id);
@@ -785,18 +757,13 @@ impl ProviderEditor {
             }
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_1p5()
-            .w_full()
-            .child(Self::render_label(
-                &field.label,
-                field.help.as_deref(),
-                field.required,
-            ))
-            .child(body)
-            .into_any_element()
+        components::field(
+            field.label.clone(),
+            field.required,
+            field.help.clone().map(SharedString::from),
+            body,
+        )
+        .into_any_element()
     }
 
     fn render_kv(&self, field_id: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -811,29 +778,34 @@ impl ProviderEditor {
                         .flex_row()
                         .items_center()
                         .gap_2()
-                        .child(div().flex_1().child(row.key.clone()))
-                        .child(div().flex_1().child(row.value.clone()))
+                        .child(div().flex_1().min_w_0().child(row.key.clone()))
+                        .child(div().flex_1().min_w_0().child(row.value.clone()))
                         .child(
-                            components::action_button(
-                                SharedString::from(format!("kv-del-{field_id}-{rid}")),
-                                "删除",
-                                false,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _e, _w, cx| {
-                                    this.kv_remove(fid.clone(), rid, cx);
-                                },
-                            )),
+                            div().flex_none().child(
+                                components::icon_button_tone(
+                                    SharedString::from(format!("kv-del-{field_id}-{rid}")),
+                                    "删除",
+                                    IconName::Trash,
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _e, _w, cx| {
+                                        this.kv_remove(fid.clone(), rid, cx);
+                                    },
+                                )),
+                            ),
                         ),
                 );
             }
         }
         let fid = field_id.to_string();
         col.child(
-            components::action_button(
+            components::button(
                 SharedString::from(format!("kv-add-{field_id}")),
                 "+ 添加",
-                false,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
             )
             .on_click(cx.listener(move |this, _e, _w, cx| {
                 this.kv_add(fid.clone(), cx);
@@ -847,74 +819,106 @@ impl ProviderEditor {
         columns: &[provider_config::GridColumn],
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        // Row-card list (docs/ui-overhaul.md §7.2): one card per mapping row
+        // instead of a truncated table. Column slots: the first text column
+        // (e.g. 角色) is fixed-width, the rest flex, toggles are pinned, and a
+        // ghost icon button deletes the row.
         let mut col = div().flex().flex_col().gap_2().w_full();
-        let mut header = div().flex().flex_row().gap_2().px_1();
+
+        // Caption header aligned with the row cards below.
+        let mut header = div().flex().flex_row().items_center().gap_2().px_3();
+        let mut first_text = true;
         for c in columns {
-            header = header.child(
-                div()
-                    .flex_1()
-                    .text_color(theme::muted())
-                    .text_xs()
-                    .child(SharedString::from(c.label.clone())),
-            );
+            let label = div()
+                .text_color(theme::muted())
+                .text_xs()
+                .child(SharedString::from(c.label.clone()));
+            header = header.child(match &c.kind {
+                GridCellKind::Text { .. } if first_text => {
+                    first_text = false;
+                    div().w(px(96.)).flex_none().child(label)
+                }
+                GridCellKind::Text { .. } => div().flex_1().min_w_0().child(label),
+                GridCellKind::Toggle => div().w(px(64.)).flex_none().child(label),
+            });
         }
-        header = header.child(div().w(px(56.)));
+        header = header.child(div().w(px(72.)).flex_none());
         col = col.child(header);
 
         if let Some(rows) = self.grid_rows.get(field_id) {
             for row in rows {
-                let fid = field_id.to_string();
                 let rid = row.id;
-                let mut r = div().flex().flex_row().items_center().gap_2().w_full();
+                let mut card = components::card()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_2();
+                let mut first_text = true;
                 for c in columns {
-                    let cell = match &c.kind {
-                        GridCellKind::Text { .. } => row
-                            .cells
-                            .get(&c.key)
-                            .map(|i| i.clone().into_any_element())
-                            .unwrap_or_else(|| div().into_any_element()),
+                    match &c.kind {
+                        GridCellKind::Text { .. } => {
+                            let cell = row
+                                .cells
+                                .get(&c.key)
+                                .map(|i| i.clone().into_any_element())
+                                .unwrap_or_else(|| div().into_any_element());
+                            let slot = if first_text {
+                                first_text = false;
+                                div().w(px(96.)).flex_none()
+                            } else {
+                                div().flex_1().min_w_0()
+                            };
+                            card = card.child(slot.child(cell));
+                        }
                         GridCellKind::Toggle => {
                             let on = row.toggles.get(&c.key).copied().unwrap_or(false);
-                            let fid2 = fid.clone();
+                            let fid = field_id.to_string();
                             let key = c.key.clone();
-                            div()
-                                .id(SharedString::from(format!(
-                                    "grid-tog-{field_id}-{rid}-{}",
-                                    c.key
-                                )))
-                                .cursor_pointer()
-                                .child(layout::toggle(on))
-                                .on_click(cx.listener(move |this, _e, _w, cx| {
-                                    this.grid_toggle(fid2.clone(), rid, key.clone(), cx);
-                                }))
-                                .into_any_element()
+                            card = card.child(
+                                div().w(px(64.)).flex_none().flex().justify_center().child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "grid-tog-{field_id}-{rid}-{}",
+                                            c.key
+                                        )))
+                                        .cursor_pointer()
+                                        .child(layout::toggle(on))
+                                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                                            this.grid_toggle(fid.clone(), rid, key.clone(), cx);
+                                        })),
+                                ),
+                            );
                         }
-                    };
-                    r = r.child(div().flex_1().child(cell));
+                    }
                 }
-                let fid_del = fid.clone();
-                r = r.child(
-                    div().w(px(56.)).child(
-                        components::action_button(
+                let fid = field_id.to_string();
+                card = card.child(
+                    div().flex_none().child(
+                        components::icon_button_tone(
                             SharedString::from(format!("grid-del-{field_id}-{rid}")),
                             "删除",
-                            false,
+                            IconName::Trash,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
                         )
                         .on_click(cx.listener(move |this, _e, _w, cx| {
-                            this.grid_remove(fid_del.clone(), rid, cx);
+                            this.grid_remove(fid.clone(), rid, cx);
                         })),
                     ),
                 );
-                col = col.child(r);
+                col = col.child(card);
             }
         }
         let fid = field_id.to_string();
         col.child(
-            components::action_button(
+            components::button(
                 SharedString::from(format!("grid-add-{field_id}")),
                 "+ 添加模型",
-                false,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
             )
+            .w_full()
             .on_click(cx.listener(move |this, _e, _w, cx| {
                 this.grid_add(fid.clone(), cx);
             })),
@@ -925,30 +929,33 @@ impl ProviderEditor {
         let files = self.codec.preview(&self.values, &self.working_base);
         let issues = self.codec.validate(&self.values);
 
-        let mut col = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .w(px(400.))
-            .flex_shrink_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("将写入的文件"),
+        let mut col = components::card().p_0().w(px(420.)).flex_none().child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .px_4()
+                .py_3()
+                .border_b_1()
+                .border_color(theme::border())
+                .child(
+                    div()
+                        .text_color(theme::text())
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("将写入的文件"),
+                )
+                .child(
+                    components::button(
+                        "editor-refresh-preview",
+                        "刷新",
+                        ButtonTone::Ghost,
+                        ButtonSize::Sm,
                     )
-                    .child(
-                        components::action_button("editor-refresh-preview", "刷新", false)
-                            .on_click(cx.listener(|_t, _e, _w, cx| cx.notify())),
-                    ),
-            );
+                    .on_click(cx.listener(|_t, _e, _w, cx| cx.notify())),
+                ),
+        );
 
         for (idx, file) in files.into_iter().enumerate() {
             let filename = file.filename;
@@ -1046,55 +1053,58 @@ impl ProviderEditor {
             }
             col = col.child(
                 div()
-                    .id(SharedString::from(format!("preview-file-{idx}")))
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _e, _w, cx| this.open_raw_edit(idx, cx)))
+                    .when(idx > 0, |s| s.border_t_1().border_color(theme::border()))
                     .child(
                         div()
                             .flex()
                             .flex_row()
                             .items_center()
                             .gap_2()
+                            .px_4()
+                            .py_3()
+                            .border_b_1()
+                            .border_color(theme::border())
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .text_color(theme::subtext())
                                     .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_family("Menlo")
                                     .child(SharedString::from(filename)),
                             )
+                            .child(components::badge(BadgeTone::Neutral, lang))
                             .child(
-                                div()
-                                    .px_1p5()
-                                    .rounded_sm()
-                                    .bg(theme::inset())
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(lang),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .text_color(theme::accent())
-                                    .text_xs()
-                                    .child("点击编辑 ✎"),
+                                components::button(
+                                    SharedString::from(format!("preview-edit-{idx}")),
+                                    "编辑",
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(
+                                    cx.listener(move |this, _e, _w, cx| {
+                                        this.open_raw_edit(idx, cx)
+                                    }),
+                                ),
                             ),
                     )
                     .child(
                         div()
+                            .id(SharedString::from(format!("preview-file-{idx}")))
                             .flex()
                             .flex_col()
                             .w_full()
-                            .p_3()
-                            .rounded_md()
-                            .bg(theme::mantle())
-                            .border_1()
-                            .border_color(theme::border())
+                            .px_4()
+                            .py_3()
+                            .cursor_pointer()
                             .text_xs()
                             .font_family("Menlo")
                             .text_color(theme::text())
+                            .on_click(
+                                cx.listener(move |this, _e, _w, cx| this.open_raw_edit(idx, cx)),
+                            )
                             .children(lines),
                     ),
             );
@@ -1127,6 +1137,10 @@ impl ProviderEditor {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(theme::border())
                     .child(
                         div()
                             .text_color(theme::text())
@@ -1142,116 +1156,65 @@ impl ProviderEditor {
 
     fn render_raw_modal(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let raw = self.raw_edit.as_ref()?;
-        let card = div()
-            .flex()
-            .flex_col()
-            .gap_3()
+        let card = components::modal_card()
             .w(px(760.))
             .max_h(px(640.))
-            .bg(theme::surface())
-            .rounded_lg()
-            .border_1()
-            .border_color(theme::border())
-            .shadow(theme::shadow_popover())
-            .p_5()
-            // Opaque to mouse/scroll events: clicks inside the card must not
-            // reach the scrim's close handler, and wheel events must not chain
-            // to the scrollable editor pane underneath.
-            .occlude()
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(raw.filename.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child("直接编辑文件内容，应用后会同步回上方表单。"),
-                            ),
+                components::modal_header(raw.filename.clone()).child(
+                    components::icon_button_tone(
+                        "raw-close",
+                        "关闭",
+                        IconName::Close,
+                        ButtonTone::Ghost,
+                        ButtonSize::Sm,
                     )
-                    .child(
-                        div()
-                            .id("raw-close")
-                            .flex_none()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .text_color(theme::muted())
-                            .hover(|s| s.bg(theme::surface_hover()).text_color(theme::text()))
-                            .child("✕")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)),
-                            ),
-                    ),
+                    .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx))),
+                ),
             )
-            .when_some(raw.error.clone(), |s, err| {
-                s.child(div().text_color(theme::red()).text_xs().child(err))
-            })
             .child(
-                div()
-                    .id("raw-editor-scroll")
-                    .flex()
+                components::modal_body()
                     .flex_1()
-                    .min_h(px(0.))
-                    .w_full()
-                    .overflow_y_scroll()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(raw.input.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .gap_2()
+                    .min_h_0()
                     .child(
-                        components::action_button("raw-cancel", "取消", false)
-                            .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx))),
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child("直接编辑文件内容，应用后会同步回上方表单。"),
                     )
+                    .when_some(raw.error.clone(), |s, err| {
+                        s.child(div().text_color(theme::red()).text_xs().child(err))
+                    })
                     .child(
-                        components::action_button("raw-apply", "应用", true)
-                            .on_click(cx.listener(|this, _e, _w, cx| this.apply_raw_edit(cx))),
+                        div()
+                            .id("raw-editor-scroll")
+                            .flex()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .w_full()
+                            .overflow_y_scroll()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme::border())
+                            .child(raw.input.clone()),
                     ),
-            );
+            )
+            .child(components::modal_footer(vec![
+                components::button("raw-cancel", "取消", ButtonTone::Neutral, ButtonSize::Sm)
+                    .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)))
+                    .into_any_element(),
+                components::button("raw-apply", "应用", ButtonTone::Primary, ButtonSize::Sm)
+                    .on_click(cx.listener(|this, _e, _w, cx| this.apply_raw_edit(cx)))
+                    .into_any_element(),
+            ]));
         Some(
-            div()
-                .id("raw-modal-scrim")
-                .absolute()
-                .top(px(0.))
-                .left(px(0.))
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme::translucent(0x000000, 0.45))
-                // Swallow all mouse/scroll events so the editor pane behind the
-                // modal neither scrolls nor reacts; clicking the scrim (outside
-                // the occluding card) dismisses the modal.
-                .occlude()
+            // The overlay occludes the page (the card occludes the overlay), so
+            // the editor behind neither scrolls nor reacts; clicking the scrim
+            // dismisses the modal.
+            components::modal_overlay(card)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)),
                 )
-                .child(card)
                 .into_any_element(),
         )
     }
@@ -1262,13 +1225,28 @@ impl ProviderEditor {
             .flex_col()
             .gap_4()
             .w_full()
-            .child(field_block("名称", &self.name))
+            .child(components::field("名称", true, None, self.name.clone()))
             .when(!self.is_editing(), |s| {
-                s.child(field_block("供应商 ID（可选）", &self.provider_id))
+                s.child(components::field(
+                    "供应商 ID（可选）",
+                    false,
+                    None,
+                    self.provider_id.clone(),
+                ))
             })
-            .child(field_block("网站 URL", &self.website_url))
-            .child(field_block("分类", &self.category))
-            .child(field_block("备注", &self.notes))
+            .child(components::field(
+                "网站 URL",
+                false,
+                None,
+                self.website_url.clone(),
+            ))
+            .child(components::field(
+                "分类",
+                false,
+                None,
+                self.category.clone(),
+            ))
+            .child(components::field("备注", false, None, self.notes.clone()))
     }
 }
 
@@ -1283,43 +1261,32 @@ impl Render for ProviderEditor {
         } else {
             "新增供应商"
         };
+        let subtitle = SharedString::from(format!(
+            "目标应用：{}",
+            crate::app_meta::label(self.app_type)
+        ));
 
         let identity = self.render_identity().into_any_element();
         let presets = self.codec.presets();
         let preset_picker = if presets.is_empty() {
             None
         } else {
-            let mut row = div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_color(theme::subtext())
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("从预设开始"),
-                );
-            for (i, p) in presets.iter().enumerate() {
-                let name = p.name.clone();
-                row = row.child(
-                    div()
-                        .id(SharedString::from(format!("preset-{i}")))
-                        .px_3()
-                        .py_1p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .text_sm()
-                        .bg(theme::inset())
-                        .text_color(theme::subtext())
-                        .hover(|s| s.bg(theme::accent_soft()).text_color(theme::accent()))
-                        .child(SharedString::from(name))
-                        .on_click(cx.listener(move |this, _e, _w, cx| this.apply_preset(i, cx))),
-                );
-            }
-            Some(row.into_any_element())
+            let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
+            let on_select = cx.listener(|this, ix: &usize, _w, cx| this.apply_preset(*ix, cx));
+            Some(
+                components::field(
+                    "从预设开始",
+                    false,
+                    None,
+                    components::segmented(
+                        "editor-presets",
+                        &names,
+                        self.selected_preset.unwrap_or(usize::MAX),
+                        move |ix, window, cx| on_select(&ix, window, cx),
+                    ),
+                )
+                .into_any_element(),
+            )
         };
         let sections: Vec<gpui::AnyElement> = self
             .schema
@@ -1350,126 +1317,90 @@ impl Render for ProviderEditor {
         let status = self.status.clone();
         let modal = self.render_raw_modal(cx);
 
+        let actions = div()
+            .flex()
+            .flex_row()
+            .gap_2()
+            .child(
+                components::button("editor-save", "保存", ButtonTone::Primary, ButtonSize::Md)
+                    .on_click(cx.listener(|this, _e, _w, cx| this.do_save(cx))),
+            )
+            .child(
+                components::button("editor-cancel", "取消", ButtonTone::Neutral, ButtonSize::Md)
+                    .on_click(cx.listener(|_t, _e, _w, cx| cx.emit(EditorEvent::Cancelled))),
+            );
+
+        let form_column = div()
+            .flex()
+            .flex_col()
+            .gap_5()
+            .flex_1()
+            .min_w_0()
+            .when_some(preset_picker, |s, picker| s.child(picker))
+            .child(identity)
+            .children(sections)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        components::button(
+                            "editor-fetch-models",
+                            "拉取模型",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _e, _w, cx| this.fetch_models(cx))),
+                    )
+                    .child(
+                        components::button(
+                            "editor-speedtest",
+                            "测试 URL",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _e, _w, cx| this.speedtest_base_url(cx))),
+                    )
+                    .child(
+                        components::button(
+                            "editor-balance",
+                            "查询余额",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _e, _w, cx| this.query_balance(cx))),
+                    ),
+            );
+
+        let body = div()
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap_4()
+            .w_full()
+            .child(form_column)
+            .when_some(preview, |s, preview| s.child(preview));
+
         layout::page()
             .relative()
-            .child(
-                layout::page_header(title, None).child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
-                        .child(
-                            components::action_button("editor-save", "保存", true)
-                                .on_click(cx.listener(|this, _e, _w, cx| this.do_save(cx))),
-                        )
-                        .child(
-                            components::action_button("editor-cancel", "取消", false).on_click(
-                                cx.listener(|_t, _e, _w, cx| cx.emit(EditorEvent::Cancelled)),
-                            ),
-                        ),
-                ),
-            )
+            .child(layout::page_header(title, Some(subtitle)).child(actions))
             .when_some(error, |s, error| {
                 s.child(
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::red())
-                        .text_xs()
-                        .child(error),
+                        .child(components::status_banner_tone(BannerTone::Error, error)),
                 )
             })
-            .when_some(status, |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
-            .child(
-                div()
-                    .id("editor-body")
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .gap_6()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p_6()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_5()
-                            .flex_1()
-                            .min_w_0()
-                            .when_some(preset_picker, |s, picker| s.child(picker))
-                            .child(identity)
-                            .children(sections)
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .child(
-                                        components::action_button(
-                                            "editor-fetch-models",
-                                            "拉取模型",
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _e, _w, cx| this.fetch_models(cx)),
-                                        ),
-                                    )
-                                    .child(
-                                        components::action_button(
-                                            "editor-speedtest",
-                                            "测试 URL",
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _e, _w, cx| {
-                                                this.speedtest_base_url(cx)
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        components::action_button(
-                                            "editor-balance",
-                                            "查询余额",
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _e, _w, cx| this.query_balance(cx)),
-                                        ),
-                                    ),
-                            ),
-                    )
-                    .when_some(preview, |s, preview| s.child(preview)),
-            )
+            .child(components::status_footer(status))
+            .child(layout::scroll_body(
+                "editor-body",
+                layout::wide_column().child(body),
+            ))
             .when_some(modal, |s, modal| s.child(modal))
     }
-}
-
-fn field_block(label: &str, input: &Entity<TextInput>) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1p5()
-        .w_full()
-        .child(
-            div()
-                .text_color(theme::subtext())
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .child(SharedString::from(label.to_string())),
-        )
-        .child(input.clone())
 }
 
 fn chrono_now_millis() -> i64 {
