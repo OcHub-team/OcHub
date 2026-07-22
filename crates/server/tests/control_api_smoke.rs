@@ -7,12 +7,12 @@ async fn spawn_temp_server() -> (String, tempfile::TempDir, tokio::task::JoinHan
     std::env::set_var("HOME", home.path());
     std::env::set_var("XDG_CONFIG_HOME", home.path().join(".config"));
 
-    let state = routedeck_server::ServerState::init().expect("server state");
+    let state = ochub_server::ServerState::init().expect("server state");
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
         .await
         .expect("bind test server");
     let addr = listener.local_addr().expect("local addr");
-    let app = routedeck_server::build_router(state);
+    let app = ochub_server::build_router(state);
     let handle = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve test router");
     });
@@ -31,12 +31,10 @@ async fn control_api_smoke_covers_core_feature_groups() {
         "/api/providers/claude",
         "/api/providers/codex",
         "/api/providers/gemini",
-        "/api/universal-providers",
         "/api/proxy/status",
         "/api/proxy/config",
         "/api/proxy/takeover",
         "/api/proxy/circuit-breaker/config",
-        "/api/proxy/failover/claude/available",
         "/api/upstream-proxy/status",
         "/api/proxy/stream-check/config",
         "/api/mcp",
@@ -91,7 +89,7 @@ async fn control_api_smoke_covers_core_feature_groups() {
     let parse_response = client
         .post(format!("{base}/api/deeplink/parse"))
         .json(&json!({
-            "url": "ccswitch://v1/import?resource=provider&app=claude&name=Test&endpoint=https%3A%2F%2Fapi.example.com&apiKey=test"
+            "url": "ochub://v1/import?resource=provider&app=claude&name=Test&endpoint=https%3A%2F%2Fapi.example.com&apiKey=test"
         }))
         .send()
         .await

@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
-use routedeck_core::session_manager::{self, SessionMessage, SessionMeta};
-use routedeck_core::AppState;
+use ochub_core::session_manager::{self, SessionMessage, SessionMeta};
+use ochub_core::AppState;
 
 use crate::layout;
 use crate::theme;
@@ -124,12 +124,12 @@ impl SessionsView {
     }
 
     /// Per-role accent color + soft background for a transcript bubble.
-    fn role_colors(role: &str) -> (u32, u32) {
+    fn role_colors(role: &str) -> (gpui::Rgba, gpui::Rgba) {
         match role {
-            "user" => (theme::ACCENT, theme::ACCENT_SOFT),
-            "assistant" => (theme::GREEN, theme::GREEN_SOFT),
-            "system" => (theme::MUTED, theme::INSET),
-            _ => (theme::MAUVE, theme::SURFACE_HOVER),
+            "user" => (theme::accent(), theme::accent_soft()),
+            "assistant" => (theme::green(), theme::green_soft()),
+            "system" => (theme::muted(), theme::inset()),
+            _ => (theme::mauve(), theme::surface_hover()),
         }
     }
 
@@ -159,9 +159,9 @@ impl SessionsView {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -174,15 +174,15 @@ impl SessionsView {
                             .h(px(6.))
                             .rounded_full()
                             .flex_shrink_0()
-                            .bg(theme::c(accent)),
+                            .bg(accent),
                     )
                     .child(
                         div()
                             .px_2()
                             .py_0p5()
                             .rounded_md()
-                            .bg(theme::c(soft))
-                            .text_color(theme::c(accent))
+                            .bg(soft)
+                            .text_color(accent)
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(label),
@@ -191,7 +191,7 @@ impl SessionsView {
             .child(
                 div()
                     .w_full()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .text_sm()
                     .line_height(px(20.))
                     .child(content),
@@ -211,7 +211,7 @@ impl SessionsView {
             .flex_col()
             .flex_1()
             .h_full()
-            .bg(theme::c(theme::BG))
+            .bg(theme::bg())
             .child(
                 div()
                     .flex()
@@ -221,8 +221,8 @@ impl SessionsView {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(theme::c(theme::BORDER))
-                    .bg(theme::c(theme::HEADER))
+                    .border_color(theme::border())
+                    .bg(theme::header())
                     .child(
                         div()
                             .id("session-back")
@@ -233,12 +233,12 @@ impl SessionsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE))
+                            .bg(theme::surface())
                             .border_1()
-                            .border_color(theme::c(theme::BORDER))
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .border_color(theme::border())
+                            .text_color(theme::subtext())
                             .text_sm()
-                            .hover(|s| s.bg(theme::c(theme::SURFACE_HOVER)))
+                            .hover(|s| s.bg(theme::surface_hover()))
                             .child("← 返回")
                             .on_click(
                                 cx.listener(|this, _event, _window, cx| this.close_detail(cx)),
@@ -263,8 +263,8 @@ impl SessionsView {
                                             .px_2()
                                             .rounded_md()
                                             .flex_shrink_0()
-                                            .bg(theme::c(theme::SURFACE_HOVER))
-                                            .text_color(theme::c(theme::TEAL))
+                                            .bg(theme::surface_hover())
+                                            .text_color(theme::teal())
                                             .text_xs()
                                             .child(SharedString::from(provider)),
                                     )
@@ -272,23 +272,19 @@ impl SessionsView {
                                         div()
                                             .min_w_0()
                                             .flex_1()
-                                            .text_color(theme::c(theme::TEXT))
+                                            .text_color(theme::text())
                                             .text_lg()
                                             .font_weight(FontWeight::BOLD)
                                             .truncate()
                                             .child(SharedString::from(title)),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .text_color(theme::c(theme::MUTED))
-                                    .text_xs()
-                                    .truncate()
-                                    .child(SharedString::from(match project {
-                                        Some(p) => format!("{count} 条消息 · {p}"),
-                                        None => format!("{count} 条消息"),
-                                    })),
-                            ),
+                            .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                                SharedString::from(match project {
+                                    Some(p) => format!("{count} 条消息 · {p}"),
+                                    None => format!("{count} 条消息"),
+                                }),
+                            )),
                     ),
             )
             .child(
@@ -303,12 +299,12 @@ impl SessionsView {
                     .w_full()
                     .overflow_y_scroll()
                     .when_some(error, |s, err| {
-                        s.child(div().text_color(theme::c(theme::RED)).text_sm().child(err))
+                        s.child(div().text_color(theme::red()).text_sm().child(err))
                     })
                     .when(messages.is_empty() && detail.error.is_none(), |s| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .child("这条会话没有可显示的消息。"),
                         )
                     })
@@ -335,9 +331,9 @@ impl SessionsView {
             .w_full()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .id(SharedString::from(format!("session-open-{idx}")))
@@ -364,8 +360,8 @@ impl SessionsView {
                                     .px_2()
                                     .rounded_md()
                                     .flex_shrink_0()
-                                    .bg(theme::c(theme::SURFACE_HOVER))
-                                    .text_color(theme::c(theme::TEAL))
+                                    .bg(theme::surface_hover())
+                                    .text_color(theme::teal())
                                     .text_xs()
                                     .child(SharedString::from(provider)),
                             )
@@ -373,7 +369,7 @@ impl SessionsView {
                                 div()
                                     .min_w_0()
                                     .flex_1()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .truncate()
                                     .child(SharedString::from(title)),
@@ -383,7 +379,7 @@ impl SessionsView {
                         s.child(
                             div()
                                 .min_w_0()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .text_xs()
                                 .truncate()
                                 .child(SharedString::from(p)),
@@ -406,11 +402,11 @@ impl SessionsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::ACCENT_SOFT))
-                            .text_color(theme::c(theme::ACCENT))
+                            .bg(theme::accent_soft())
+                            .text_color(theme::accent())
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .hover(|s| s.bg(theme::c(theme::SURFACE_HOVER)))
+                            .hover(|s| s.bg(theme::surface_hover()))
                             .child("查看")
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.open_detail(idx, cx);
@@ -425,10 +421,10 @@ impl SessionsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE_HOVER))
-                            .text_color(theme::c(theme::RED))
+                            .bg(theme::surface_hover())
+                            .text_color(theme::red())
                             .text_sm()
-                            .hover(|s| s.bg(theme::c(theme::RED_SOFT)))
+                            .hover(|s| s.bg(theme::red_soft()))
                             .child("删除")
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.do_delete(idx, cx);
@@ -452,18 +448,17 @@ impl SessionsView {
             .py_1p5()
             .rounded_md()
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .text_sm()
             .child(label);
         if enabled {
             base.cursor_pointer()
-                .bg(theme::c(theme::SURFACE))
-                .text_color(theme::c(theme::TEXT))
-                .hover(|s| s.bg(theme::c(theme::SURFACE_HOVER)))
+                .bg(theme::surface())
+                .text_color(theme::text())
+                .hover(|s| s.bg(theme::surface_hover()))
                 .on_click(cx.listener(move |this, _event, _window, cx| this.set_page(target, cx)))
         } else {
-            base.bg(theme::c(theme::INSET))
-                .text_color(theme::c(theme::MUTED))
+            base.bg(theme::inset()).text_color(theme::muted())
         }
     }
 
@@ -482,11 +477,11 @@ impl SessionsView {
             .px_6()
             .py_3()
             .border_t_1()
-            .border_color(theme::c(theme::BORDER))
-            .bg(theme::c(theme::HEADER))
+            .border_color(theme::border())
+            .bg(theme::header())
             .child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child(SharedString::from(format!(
                         "第 {start}–{end} 条 · 共 {total} 条会话"
@@ -507,7 +502,7 @@ impl SessionsView {
                     ))
                     .child(
                         div()
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .text_color(theme::subtext())
                             .text_xs()
                             .min_w(gpui::px(60.))
                             .child(SharedString::from(format!(
@@ -554,8 +549,8 @@ impl Render for SessionsView {
                         .py_1p5()
                         .rounded_md()
                         .cursor_pointer()
-                        .bg(theme::c(theme::SURFACE))
-                        .text_color(theme::c(theme::SUBTEXT))
+                        .bg(theme::surface())
+                        .text_color(theme::subtext())
                         .text_sm()
                         .child("刷新")
                         .on_click(cx.listener(|this, _event, _window, cx| {
@@ -569,7 +564,7 @@ impl Render for SessionsView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -578,11 +573,7 @@ impl Render for SessionsView {
                 "session-list",
                 layout::content_column()
                     .when(is_empty, |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::c(theme::MUTED))
-                                .child("没有找到会话。"),
-                        )
+                        s.child(div().text_color(theme::muted()).child("没有找到会话。"))
                     })
                     .children(cards),
             ))

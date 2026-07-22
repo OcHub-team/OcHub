@@ -36,7 +36,7 @@ impl Database {
                 let website_url: Option<String> = row.get(3)?;
                 let category: Option<String> = row.get(4)?;
                 let created_at: Option<i64> = row.get(5)?;
-                let sort_index: Option<usize> = row.get(6)?;
+                let sort_index = row.get::<_, Option<i64>>(6)?.map(|v| v as usize);
                 let notes: Option<String> = row.get(7)?;
                 let icon: Option<String> = row.get(8)?;
                 let icon_color: Option<String> = row.get(9)?;
@@ -143,7 +143,7 @@ impl Database {
                 let website_url: Option<String> = row.get(2)?;
                 let category: Option<String> = row.get(3)?;
                 let created_at: Option<i64> = row.get(4)?;
-                let sort_index: Option<usize> = row.get(5)?;
+                let sort_index = row.get::<_, Option<i64>>(5)?.map(|v| v as usize);
                 let notes: Option<String> = row.get(6)?;
                 let icon: Option<String> = row.get(7)?;
                 let icon_color: Option<String> = row.get(8)?;
@@ -222,7 +222,7 @@ impl Database {
                     provider.website_url,
                     provider.category,
                     provider.created_at,
-                    provider.sort_index,
+                    provider.sort_index.map(|v| v as i64),
                     provider.notes,
                     provider.icon,
                     provider.icon_color,
@@ -251,7 +251,7 @@ impl Database {
                     provider.website_url,
                     provider.category,
                     provider.created_at,
-                    provider.sort_index,
+                    provider.sort_index.map(|v| v as i64),
                     provider.notes,
                     provider.icon,
                     provider.icon_color,
@@ -457,7 +457,7 @@ impl Database {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
-                    row.get(5)?,
+                    row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
                     row.get(6)?,
                     row.get(7)?,
                 ))

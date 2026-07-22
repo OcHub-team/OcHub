@@ -30,7 +30,7 @@ fn update_cached_override(value: Option<PathBuf>) {
 /// Fixed bootstrap path for the override file. Never subject to the override.
 fn store_path() -> PathBuf {
     crate::paths::get_home_dir()
-        .join(".cc-switch")
+        .join(".ochub")
         .join("app_paths.json")
 }
 

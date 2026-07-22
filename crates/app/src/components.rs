@@ -13,22 +13,27 @@ pub enum ButtonTone {
 }
 
 impl ButtonTone {
-    fn colors(self) -> (u32, u32, u32, u32) {
+    fn colors(self) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba, gpui::Rgba) {
         match self {
             Self::Primary => (
-                theme::ACCENT,
-                theme::ACCENT_HOVER,
-                theme::ACCENT_TEXT,
-                theme::ACCENT,
+                theme::accent(),
+                theme::accent_hover(),
+                theme::accent_text(),
+                theme::accent(),
             ),
             // Subtle filled neutral with a ghost hover (no border, no shadow).
             Self::Neutral => (
-                theme::INSET,
-                theme::SURFACE_HOVER,
-                theme::TEXT,
-                theme::BORDER,
+                theme::inset(),
+                theme::surface_hover(),
+                theme::text(),
+                theme::border(),
             ),
-            Self::Danger => (theme::RED_SOFT, 0xf0d2cc, theme::RED, theme::RED_SOFT),
+            Self::Danger => (
+                theme::red_soft(),
+                theme::c(0xf0d2cc),
+                theme::red(),
+                theme::red_soft(),
+            ),
         }
     }
 
@@ -39,7 +44,7 @@ impl ButtonTone {
 
 pub fn action_button(
     id: impl Into<ElementId>,
-    label: &'static str,
+    label: impl Into<SharedString>,
     primary: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let tone = if primary {
@@ -52,15 +57,16 @@ pub fn action_button(
 
 pub fn action_button_tone(
     id: impl Into<ElementId>,
-    label: &'static str,
+    label: impl Into<SharedString>,
     tone: ButtonTone,
 ) -> gpui::Stateful<gpui::Div> {
-    button_base(id, label, tone).child(label)
+    let label = label.into();
+    button_base(id, label.clone(), tone).child(label)
 }
 
 fn button_base(
     id: impl Into<ElementId>,
-    label: &'static str,
+    label: SharedString,
     tone: ButtonTone,
 ) -> gpui::Stateful<gpui::Div> {
     let (bg, hover_bg, fg, _border) = tone.colors();
@@ -72,20 +78,20 @@ fn button_base(
         .py_1()
         .rounded_md()
         .cursor_pointer()
-        .bg(theme::c(bg))
-        .text_color(theme::c(fg))
+        .bg(bg)
+        .text_color(fg)
         .text_sm()
         .font_weight(if tone.is_emphasis() {
             FontWeight::SEMIBOLD
         } else {
             FontWeight::MEDIUM
         })
-        .hover(|s| s.bg(theme::c(hover_bg)))
+        .hover(|s| s.bg(hover_bg))
 }
 
 pub fn icon_button(
     id: impl Into<ElementId>,
-    label: &'static str,
+    label: impl Into<SharedString>,
     name: IconName,
     primary: bool,
 ) -> gpui::Stateful<gpui::Div> {
@@ -95,7 +101,8 @@ pub fn icon_button(
         ButtonTone::Neutral
     };
     let (_, _, fg, _) = tone.colors();
-    button_base(id, label, tone).child(
+    let label = label.into();
+    button_base(id, label.clone(), tone).child(
         div()
             .flex()
             .flex_row()
@@ -110,8 +117,8 @@ pub fn panel() -> gpui::Div {
     div()
         .rounded_md()
         .border_1()
-        .border_color(theme::c(theme::BORDER))
-        .bg(theme::c(theme::SURFACE))
+        .border_color(theme::border())
+        .bg(theme::surface())
 }
 
 #[derive(Clone, Copy)]
@@ -135,27 +142,32 @@ impl StatusTone {
         }
     }
 
-    fn colors(self) -> (u32, u32, u32, IconName) {
+    fn colors(self) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba, IconName) {
         match self {
             Self::Info => (
-                theme::ACCENT_SOFT,
-                theme::ACCENT,
-                theme::TEXT,
+                theme::accent_soft(),
+                theme::accent(),
+                theme::text(),
                 IconName::Proxy,
             ),
             Self::Success => (
-                theme::GREEN_SOFT,
-                theme::GREEN,
-                theme::TEXT,
+                theme::green_soft(),
+                theme::green(),
+                theme::text(),
                 IconName::Check,
             ),
             Self::Warning => (
-                theme::YELLOW_SOFT,
-                theme::YELLOW,
-                theme::TEXT,
+                theme::yellow_soft(),
+                theme::yellow(),
+                theme::text(),
                 IconName::Settings,
             ),
-            Self::Error => (theme::RED_SOFT, theme::RED, theme::TEXT, IconName::Wrench),
+            Self::Error => (
+                theme::red_soft(),
+                theme::red(),
+                theme::text(),
+                IconName::Wrench,
+            ),
         }
     }
 }
@@ -173,20 +185,20 @@ pub fn status_banner(message: impl Into<SharedString>) -> impl IntoElement {
         .py_2()
         .rounded_md()
         .border_1()
-        .border_color(theme::translucent(accent, 0.32))
-        .bg(theme::translucent(bg, 0.8))
+        .border_color(accent.alpha(0.32))
+        .bg(bg.alpha(0.8))
         .child(
             div()
                 .mt_0p5()
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme::c(accent))
+                .text_color(accent)
                 .child(icon(icon_name, accent, 14.)),
         )
         .child(
             div()
-                .text_color(theme::c(fg))
+                .text_color(fg)
                 .text_sm()
                 .line_height(gpui::px(18.))
                 .child(message),

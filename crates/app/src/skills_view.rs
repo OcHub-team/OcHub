@@ -6,12 +6,12 @@ use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
-use routedeck_core::db::legacy_json::{InstalledSkill, SkillApps, UnmanagedSkill};
-use routedeck_core::services::skill::{
+use ochub_core::db::legacy_json::{InstalledSkill, SkillApps, UnmanagedSkill};
+use ochub_core::services::skill::{
     DiscoverableSkill, ImportSkillSelection, SkillBackupEntry, SkillUpdateInfo,
 };
-use routedeck_core::services::SkillService;
-use routedeck_core::{AppState, AppType};
+use ochub_core::services::SkillService;
+use ochub_core::{AppState, AppType};
 
 use crate::components;
 use crate::layout;
@@ -59,6 +59,12 @@ impl SkillsView {
     }
 
     pub fn reload(&mut self) {
+        let apps = Self::skill_apps();
+        if !apps.contains(&self.selected_app) {
+            if let Some(first) = apps.first() {
+                self.selected_app = *first;
+            }
+        }
         match SkillService::get_all_installed(&self.app.db) {
             Ok(list) => self.skills = list,
             Err(err) => {
@@ -365,7 +371,7 @@ impl SkillsView {
         }
     }
 
-    fn render_stat(label: &str, value: String, color: u32) -> impl IntoElement {
+    fn render_stat(label: &str, value: String, color: gpui::Rgba) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -373,44 +379,30 @@ impl SkillsView {
             .min_w(px(120.))
             .child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child(SharedString::from(label.to_string())),
             )
             .child(
                 div()
-                    .text_color(theme::c(color))
+                    .text_color(color)
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(SharedString::from(value)),
             )
     }
 
-    fn skill_apps() -> [AppType; 5] {
-        [
-            AppType::Claude,
-            AppType::Codex,
-            AppType::Gemini,
-            AppType::OpenCode,
-            AppType::Hermes,
-        ]
+    fn skill_apps() -> Vec<AppType> {
+        crate::app_meta::enabled_skill_apps()
     }
 
-    fn app_label(app: AppType) -> &'static str {
-        match app {
-            AppType::Claude => "Claude",
-            AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini",
-            AppType::OpenCode => "OpenCode",
-            AppType::Hermes => "Hermes",
-            AppType::ClaudeDesktop => "Claude Desktop",
-            AppType::OpenClaw => "OpenClaw",
-        }
+    fn app_label(app: AppType) -> SharedString {
+        crate::app_meta::label(app)
     }
 
     fn header(title: &str) -> impl IntoElement {
         div()
-            .text_color(theme::c(theme::TEXT))
+            .text_color(theme::text())
             .text_sm()
             .font_weight(FontWeight::SEMIBOLD)
             .child(SharedString::from(title.to_string()))
@@ -433,11 +425,11 @@ impl SkillsView {
             .gap_2()
             .child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child("安装/导入目标"),
             )
-            .children(Self::skill_apps().map(|app| {
+            .children(Self::skill_apps().into_iter().map(|app| {
                 let selected = self.selected_app == app;
                 div()
                     .id(SharedString::from(format!("skill-target-{}", app.as_str())))
@@ -451,16 +443,16 @@ impl SkillsView {
                     .py_1p5()
                     .rounded_md()
                     .cursor_pointer()
-                    .bg(theme::c(if selected {
-                        theme::ACCENT
+                    .bg(if selected {
+                        theme::accent()
                     } else {
-                        theme::SURFACE_HOVER
-                    }))
-                    .text_color(theme::c(if selected {
-                        theme::ACCENT_TEXT
+                        theme::surface_hover()
+                    })
+                    .text_color(if selected {
+                        theme::accent_text()
                     } else {
-                        theme::TEXT
-                    }))
+                        theme::text()
+                    })
                     .text_sm()
                     .child(Self::app_label(app))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -486,9 +478,9 @@ impl SkillsView {
             .gap_2()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -502,24 +494,20 @@ impl SkillsView {
                             .flex_1()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .truncate()
                                     .child(SharedString::from(skill.name.clone())),
                             )
-                            .child(
-                                div()
-                                    .text_color(theme::c(theme::MUTED))
-                                    .text_xs()
-                                    .truncate()
-                                    .child(SharedString::from(format!(
-                                        "{}/{}@{} · {}",
-                                        skill.repo_owner,
-                                        skill.repo_name,
-                                        skill.repo_branch,
-                                        skill.directory
-                                    ))),
-                            ),
+                            .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                                SharedString::from(format!(
+                                    "{}/{}@{} · {}",
+                                    skill.repo_owner,
+                                    skill.repo_name,
+                                    skill.repo_branch,
+                                    skill.directory
+                                )),
+                            )),
                     )
                     .child(
                         Self::action_button(
@@ -544,7 +532,7 @@ impl SkillsView {
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::SUBTEXT))
+                    .text_color(theme::subtext())
                     .text_xs()
                     .line_clamp(2)
                     .child(SharedString::from(skill.description.clone())),
@@ -565,9 +553,9 @@ impl SkillsView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -577,21 +565,17 @@ impl SkillsView {
                     .flex_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(SharedString::from(skill.name.clone())),
                     )
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .truncate()
-                            .child(SharedString::from(format!(
-                                "{} · {}",
-                                skill.found_in.join(", "),
-                                skill.path
-                            ))),
-                    ),
+                    .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                        SharedString::from(format!(
+                            "{} · {}",
+                            skill.found_in.join(", "),
+                            skill.path
+                        )),
+                    )),
             )
             .child(
                 Self::action_button(format!("skill-import-{}", skill.directory), "导入", true)
@@ -616,9 +600,9 @@ impl SkillsView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -628,21 +612,17 @@ impl SkillsView {
                     .flex_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .font_weight(FontWeight::SEMIBOLD)
                             .truncate()
                             .child(SharedString::from(backup.skill.name.clone())),
                     )
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .truncate()
-                            .child(SharedString::from(format!(
-                                "{} · {}",
-                                backup.backup_id, backup.backup_path
-                            ))),
-                    ),
+                    .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                        SharedString::from(format!(
+                            "{} · {}",
+                            backup.backup_id, backup.backup_path
+                        )),
+                    )),
             )
             .child(
                 div()
@@ -668,7 +648,7 @@ impl SkillsView {
                             "删除",
                             false,
                         )
-                        .text_color(theme::c(theme::RED))
+                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.delete_backup(delete_id.clone(), cx);
@@ -696,13 +676,13 @@ impl SkillsView {
             .w_full()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(if update.is_some() {
-                theme::YELLOW
+            .border_color(if update.is_some() {
+                theme::yellow()
             } else {
-                theme::BORDER
-            }))
+                theme::border()
+            })
             .child(
                 div()
                     .flex()
@@ -719,7 +699,7 @@ impl SkillsView {
                             .min_w_0()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(SharedString::from(name)),
                             )
@@ -729,8 +709,8 @@ impl SkillsView {
                                         .px_2()
                                         .py_0p5()
                                         .rounded_md()
-                                        .bg(theme::c(theme::YELLOW))
-                                        .text_color(theme::c(theme::ACCENT_TEXT))
+                                        .bg(theme::yellow())
+                                        .text_color(theme::accent_text())
                                         .text_xs()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child("可更新"),
@@ -740,7 +720,7 @@ impl SkillsView {
                     .child(
                         div()
                             .w_full()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .truncate()
                             .child(SharedString::from(source)),
@@ -749,7 +729,7 @@ impl SkillsView {
                         s.child(
                             div()
                                 .w_full()
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .text_color(theme::subtext())
                                 .text_xs()
                                 .line_clamp(2)
                                 .child(SharedString::from(d)),
@@ -758,13 +738,13 @@ impl SkillsView {
                     .child(
                         div()
                             .w_full()
-                            .text_color(theme::c(theme::TEAL))
+                            .text_color(theme::teal())
                             .text_xs()
                             .truncate()
                             .child(SharedString::from(format!("应用：{apps}"))),
                     )
                     .when_some(update, |s, update| {
-                        s.child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
+                        s.child(div().text_color(theme::muted()).text_xs().child(
                             SharedString::from(format!(
                                     "本地 {} → 远程 {}",
                                     update
@@ -795,16 +775,16 @@ impl SkillsView {
                                 .py_1p5()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(theme::c(if is_updating {
-                                    theme::SURFACE_HOVER
+                                .bg(if is_updating {
+                                    theme::surface_hover()
                                 } else {
-                                    theme::ACCENT
-                                }))
-                                .text_color(theme::c(if is_updating {
-                                    theme::SUBTEXT
+                                    theme::accent()
+                                })
+                                .text_color(if is_updating {
+                                    theme::subtext()
                                 } else {
-                                    theme::ACCENT_TEXT
-                                }))
+                                    theme::accent_text()
+                                })
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(if is_updating { "更新中" } else { "更新" })
@@ -822,8 +802,8 @@ impl SkillsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE_HOVER))
-                            .text_color(theme::c(theme::RED))
+                            .bg(theme::surface_hover())
+                            .text_color(theme::red())
                             .text_sm()
                             .child("卸载")
                             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -831,12 +811,7 @@ impl SkillsView {
                             })),
                     )
                     .when(!is_remote, |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::c(theme::MUTED))
-                                .text_xs()
-                                .child("本地技能"),
-                        )
+                        s.child(div().text_color(theme::muted()).text_xs().child("本地技能"))
                     }),
             )
     }
@@ -928,7 +903,7 @@ impl Render for SkillsView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -947,20 +922,20 @@ impl Render for SkillsView {
                             .child(Self::render_stat(
                                 "已安装",
                                 self.skills.len().to_string(),
-                                theme::TEXT,
+                                theme::text(),
                             ))
                             .child(Self::render_stat(
                                 "远程来源",
                                 remote_count.to_string(),
-                                theme::TEAL,
+                                theme::teal(),
                             ))
                             .child(Self::render_stat(
                                 "更新状态",
                                 self.update_summary(),
                                 if self.updates.is_empty() {
-                                    theme::GREEN
+                                    theme::green()
                                 } else {
-                                    theme::YELLOW
+                                    theme::yellow()
                                 },
                             )),
                     )
@@ -995,7 +970,7 @@ impl Render for SkillsView {
                             .when(discoverable_empty, |s| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::MUTED))
+                                        .text_color(theme::muted())
                                         .text_xs()
                                         .child("点击“发现技能”从已启用仓库加载可安装技能。"),
                                 )
@@ -1012,7 +987,7 @@ impl Render for SkillsView {
                             .when(unmanaged_empty, |s| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::MUTED))
+                                        .text_color(theme::muted())
                                         .text_xs()
                                         .child("点击“扫描导入”查找应用目录中尚未纳管的技能。"),
                                 )
@@ -1029,7 +1004,7 @@ impl Render for SkillsView {
                             .when(backup_empty, |s| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::MUTED))
+                                        .text_color(theme::muted())
                                         .text_xs()
                                         .child("暂无可恢复的技能备份。"),
                                 )
@@ -1038,11 +1013,7 @@ impl Render for SkillsView {
                     )
                     .child(Self::header("已安装技能"))
                     .when(is_empty, |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::c(theme::MUTED))
-                                .child("还没有安装技能。"),
-                        )
+                        s.child(div().text_color(theme::muted()).child("还没有安装技能。"))
                     })
                     .children(cards),
             ))

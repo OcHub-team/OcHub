@@ -1,0 +1,17 @@
+[package]
+name = "ochub-convert"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Transport-agnostic dialect conversion between the messages / chat / responses LLM wire formats (requests, bodies, and event streams)"
+
+[lib]
+name = "ochub_convert"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

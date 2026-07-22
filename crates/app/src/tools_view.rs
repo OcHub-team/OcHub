@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 use gpui::{div, prelude::*, Context, Entity, FontWeight, SharedString, Window};
-use routedeck_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
-use routedeck_core::services::{OmoService, WorkspaceService};
-use routedeck_core::{AppError, AppState, AppType};
+use ochub_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
+use ochub_core::services::{OmoService, WorkspaceService};
+use ochub_core::{AppError, AppState, AppType};
 use serde_json::Value;
 
 use crate::components;
@@ -21,7 +21,7 @@ use crate::theme;
 #[derive(Clone)]
 struct ConfigRow {
     app: AppType,
-    label: &'static str,
+    label: gpui::SharedString,
     exists: bool,
     path: String,
 }
@@ -37,16 +37,16 @@ pub struct ToolsView {
     app: Arc<AppState>,
     config_rows: Vec<ConfigRow>,
     auto_launch: Option<bool>,
-    tool_versions: Vec<routedeck_core::session_manager::ToolVersion>,
-    tool_installations: Vec<routedeck_core::session_manager::ToolInstallationReport>,
+    tool_versions: Vec<ochub_core::session_manager::ToolVersion>,
+    tool_installations: Vec<ochub_core::session_manager::ToolInstallationReport>,
     tool_busy: bool,
     env_app: AppType,
-    env_conflicts: Vec<routedeck_core::EnvConflict>,
+    env_conflicts: Vec<ochub_core::EnvConflict>,
     db_backups: Vec<BackupRow>,
     show_all_backups: bool,
     show_advanced_tools: bool,
-    memory_files: Vec<routedeck_core::services::DailyMemoryFileInfo>,
-    memory_results: Vec<routedeck_core::services::DailyMemorySearchResult>,
+    memory_files: Vec<ochub_core::services::DailyMemoryFileInfo>,
+    memory_results: Vec<ochub_core::services::DailyMemorySearchResult>,
     export_sql_path: Entity<TextInput>,
     import_sql_path: Entity<TextInput>,
     env_restore_path: Entity<TextInput>,
@@ -98,11 +98,10 @@ impl ToolsView {
             cx.new(|cx| TextInput::new(cx, "Hermes MEMORY.md").multiline(true));
         let hermes_user_memory_content =
             cx.new(|cx| TextInput::new(cx, "Hermes USER.md").multiline(true));
-        let export_sql_path =
-            cx.new(|cx| TextInput::new(cx, "~/.cc-switch/exports/RouteDeck.sql"));
-        let import_sql_path = cx.new(|cx| TextInput::new(cx, "/path/to/RouteDeck.sql"));
+        let export_sql_path = cx.new(|cx| TextInput::new(cx, "~/.ochub/exports/OCHUB.sql"));
+        let import_sql_path = cx.new(|cx| TextInput::new(cx, "/path/to/OCHUB.sql"));
         let env_restore_path =
-            cx.new(|cx| TextInput::new(cx, "~/.cc-switch/backups/env-backup-YYYYMMDD.json"));
+            cx.new(|cx| TextInput::new(cx, "~/.ochub/backups/env-backup-YYYYMMDD.json"));
         let backup_rename = cx.new(|cx| TextInput::new(cx, "backup-name"));
 
         let mut this = Self {
@@ -211,16 +210,11 @@ impl ToolsView {
         self.hermes_limits = hermes::read_memory_limits().ok();
     }
 
-    fn all_apps() -> [(AppType, &'static str); 7] {
-        [
-            (AppType::Claude, "Claude Code"),
-            (AppType::ClaudeDesktop, "Claude Desktop"),
-            (AppType::Codex, "Codex"),
-            (AppType::Gemini, "Gemini CLI"),
-            (AppType::OpenCode, "OpenCode"),
-            (AppType::OpenClaw, "OpenClaw"),
-            (AppType::Hermes, "Hermes"),
-        ]
+    fn all_apps() -> Vec<(AppType, gpui::SharedString)> {
+        crate::app_meta::enabled_app_types()
+            .into_iter()
+            .map(|app| (app, crate::app_meta::label(app)))
+            .collect()
     }
 
     fn set_status(&mut self, msg: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -259,7 +253,7 @@ impl ToolsView {
                 .build()
                 .map_err(|e| format!("创建异步运行时失败: {e}"))
                 .and_then(|runtime| {
-                    runtime.block_on(routedeck_core::session_manager::get_tool_versions(None, None))
+                    runtime.block_on(ochub_core::session_manager::get_tool_versions(None, None))
                 })
         });
         cx.spawn(async move |this, cx| {
@@ -287,7 +281,7 @@ impl ToolsView {
     }
 
     fn probe_cli_installations(&mut self, cx: &mut Context<Self>) {
-        match routedeck_core::session_manager::probe_tool_installations(cli_tool_ids()) {
+        match ochub_core::session_manager::probe_tool_installations(cli_tool_ids()) {
             Ok(reports) => {
                 let conflicts = reports.iter().filter(|report| report.is_conflict).count();
                 let count = reports.len();
@@ -315,7 +309,7 @@ impl ToolsView {
 
         let tools = cli_tool_ids();
         let task = cx.background_spawn(async move {
-            routedeck_core::session_manager::run_tool_lifecycle_action(tools, action.to_string(), None)
+            ochub_core::session_manager::run_tool_lifecycle_action(tools, action.to_string(), None)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -342,7 +336,7 @@ impl ToolsView {
     }
 
     fn scan_env_conflicts(&mut self, cx: &mut Context<Self>) {
-        match routedeck_core::check_env_conflicts(self.env_app.as_str()) {
+        match ochub_core::check_env_conflicts(self.env_app.as_str()) {
             Ok(conflicts) => {
                 let count = conflicts.len();
                 self.env_conflicts = conflicts;
@@ -360,7 +354,7 @@ impl ToolsView {
             self.set_status("当前没有可删除的环境变量冲突", cx);
             return;
         }
-        match routedeck_core::delete_env_vars(self.env_conflicts.clone()) {
+        match ochub_core::delete_env_vars(self.env_conflicts.clone()) {
             Ok(backup) => {
                 self.env_restore_path.update(cx, |input, cx| {
                     input.set_content(backup.backup_path.clone(), cx)
@@ -385,7 +379,7 @@ impl ToolsView {
             self.set_status("请输入环境变量备份路径", cx);
             return;
         };
-        match routedeck_core::restore_env_backup(path.to_string_lossy().to_string()) {
+        match ochub_core::restore_env_backup(path.to_string_lossy().to_string()) {
             Ok(()) => self.set_status("环境变量备份已恢复", cx),
             Err(err) => self.set_status(format!("恢复环境变量备份失败: {err}"), cx),
         }
@@ -428,7 +422,7 @@ impl ToolsView {
             self.set_status("请输入新的备份名称", cx);
             return;
         }
-        match routedeck_core::Database::rename_backup(&filename, &new_name) {
+        match ochub_core::Database::rename_backup(&filename, &new_name) {
             Ok(renamed) => {
                 self.db_backups = load_db_backup_rows().unwrap_or_default();
                 self.set_status(format!("数据库备份已重命名为 {renamed}"), cx);
@@ -438,7 +432,7 @@ impl ToolsView {
     }
 
     fn delete_db_backup(&mut self, filename: String, cx: &mut Context<Self>) {
-        match routedeck_core::Database::delete_backup(&filename) {
+        match ochub_core::Database::delete_backup(&filename) {
             Ok(()) => {
                 self.db_backups = load_db_backup_rows().unwrap_or_default();
                 self.set_status(format!("数据库备份已删除: {filename}"), cx);
@@ -468,7 +462,7 @@ impl ToolsView {
         match self.app.db.import_sql(&path) {
             Ok(backup_id) => {
                 let sync_warning =
-                    match routedeck_core::services::ProviderService::sync_current_to_live(&self.app) {
+                    match ochub_core::services::ProviderService::sync_current_to_live(&self.app) {
                         Ok(()) => String::new(),
                         Err(err) => format!("；应用当前供应商到工具配置时警告: {err}"),
                     };
@@ -512,9 +506,9 @@ impl ToolsView {
 
     fn read_omo(&mut self, slim: bool, cx: &mut Context<Self>) {
         let result = if slim {
-            OmoService::read_local_file(&routedeck_core::services::omo::SLIM)
+            OmoService::read_local_file(&ochub_core::services::omo::SLIM)
         } else {
-            OmoService::read_local_file(&routedeck_core::services::omo::STANDARD)
+            OmoService::read_local_file(&ochub_core::services::omo::STANDARD)
         };
         match result {
             Ok(data) => self.set_status(
@@ -543,9 +537,9 @@ impl ToolsView {
                     }
                 }
                 let result = if slim {
-                    OmoService::delete_config_file(&routedeck_core::services::omo::SLIM)
+                    OmoService::delete_config_file(&ochub_core::services::omo::SLIM)
                 } else {
-                    OmoService::delete_config_file(&routedeck_core::services::omo::STANDARD)
+                    OmoService::delete_config_file(&ochub_core::services::omo::STANDARD)
                 };
                 match result {
                     Ok(()) => self.set_status("已禁用 OMO 配置", cx),
@@ -645,7 +639,7 @@ impl ToolsView {
 
     fn validate_mcp_command(&mut self, cx: &mut Context<Self>) {
         let cmd = self.mcp_command.read(cx).content().trim().to_string();
-        match routedeck_core::mcp::validate_command_in_path(&cmd) {
+        match ochub_core::mcp::validate_command_in_path(&cmd) {
             Ok(true) => self.set_status(format!("{cmd} 可用"), cx),
             Ok(false) => self.set_status(format!("{cmd} 不在 PATH 中"), cx),
             Err(err) => self.set_status(format!("校验失败: {err}"), cx),
@@ -653,7 +647,7 @@ impl ToolsView {
     }
 
     fn read_claude_mcp(&mut self, cx: &mut Context<Self>) {
-        match routedeck_core::mcp::read_mcp_json() {
+        match ochub_core::mcp::read_mcp_json() {
             Ok(Some(content)) => {
                 self.set_status(format!("Claude MCP 配置 {} 字符", content.len()), cx)
             }
@@ -676,9 +670,9 @@ impl ToolsView {
 
     fn mark_claude_onboarding(&mut self, completed: bool, cx: &mut Context<Self>) {
         let result = if completed {
-            routedeck_core::mcp::set_has_completed_onboarding()
+            ochub_core::mcp::set_has_completed_onboarding()
         } else {
-            routedeck_core::mcp::clear_has_completed_onboarding()
+            ochub_core::mcp::clear_has_completed_onboarding()
         };
         match result {
             Ok(changed) => self.set_status(format!("Claude 引导状态已处理，变更={changed}"), cx),
@@ -688,7 +682,8 @@ impl ToolsView {
 
     fn check_codex_unify_backup(&mut self, cx: &mut Context<Self>) {
         let exists =
-            routedeck_core::services::codex_history_migration::has_codex_official_history_unify_backup();
+            ochub_core::services::codex_history_migration::has_codex_official_history_unify_backup(
+            );
         self.set_status(
             if exists {
                 "当前 Codex 配置目录存在可恢复的统一历史备份"
@@ -700,7 +695,7 @@ impl ToolsView {
     }
 
     fn restore_codex_unified_history(&mut self, cx: &mut Context<Self>) {
-        match routedeck_core::services::codex_history_migration::restore_codex_official_history_from_backups()
+        match ochub_core::services::codex_history_migration::restore_codex_official_history_from_backups()
         {
             Ok(outcome) => {
                 if let Some(reason) = outcome.skipped_reason {
@@ -721,7 +716,7 @@ impl ToolsView {
 
     fn refresh_sync_status(&mut self, s3: bool, cx: &mut Context<Self>) {
         if s3 {
-            match routedeck_core::settings::get_s3_sync_settings() {
+            match ochub_core::settings::get_s3_sync_settings() {
                 Some(settings) => self.set_status(
                     format_sync_status(
                         "S3",
@@ -734,7 +729,7 @@ impl ToolsView {
                 None => self.set_status("S3 同步尚未配置", cx),
             }
         } else {
-            match routedeck_core::settings::get_webdav_sync_settings() {
+            match ochub_core::settings::get_webdav_sync_settings() {
                 Some(settings) => self.set_status(
                     format_sync_status(
                         "WebDAV",
@@ -869,7 +864,7 @@ impl ToolsView {
 
     fn header(title: &str) -> impl IntoElement {
         div()
-            .text_color(theme::c(theme::TEXT))
+            .text_color(theme::text())
             .text_sm()
             .font_weight(FontWeight::SEMIBOLD)
             .child(SharedString::from(title.to_string()))
@@ -886,9 +881,9 @@ impl ToolsView {
             .gap_2()
             .p_4()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -896,14 +891,14 @@ impl ToolsView {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(label),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .child(description),
                     ),
@@ -934,10 +929,10 @@ impl ToolsView {
         div()
             .p_4()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
-            .text_color(theme::c(theme::MUTED))
+            .border_color(theme::border())
+            .text_color(theme::muted())
             .text_xs()
             .child(SharedString::from(text))
     }
@@ -954,7 +949,7 @@ impl ToolsView {
         label: &'static str,
         value: impl Into<SharedString>,
         detail: impl Into<SharedString>,
-        tone: u32,
+        tone: gpui::Rgba,
     ) -> impl IntoElement {
         let value = value.into();
         let detail = detail.into();
@@ -964,9 +959,9 @@ impl ToolsView {
             .gap_1()
             .p_4()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -978,11 +973,11 @@ impl ToolsView {
                             .w(gpui::px(8.))
                             .h(gpui::px(8.))
                             .rounded_full()
-                            .bg(theme::c(tone)),
+                            .bg(tone),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(label),
@@ -990,17 +985,12 @@ impl ToolsView {
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .text_lg()
                     .font_weight(FontWeight::BOLD)
                     .child(value),
             )
-            .child(
-                div()
-                    .text_color(theme::c(theme::SUBTEXT))
-                    .text_xs()
-                    .child(detail),
-            )
+            .child(div().text_color(theme::subtext()).text_xs().child(detail))
     }
 
     fn advanced_preview(showing: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1012,9 +1002,9 @@ impl ToolsView {
             .gap_3()
             .p_4()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -1022,7 +1012,7 @@ impl ToolsView {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(if showing {
@@ -1033,7 +1023,7 @@ impl ToolsView {
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .child("同步、Codex 历史、OMO、工作区、记忆、MCP 与 JSON 配置。"),
                     ),
@@ -1066,9 +1056,9 @@ impl ToolsView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -1076,14 +1066,14 @@ impl ToolsView {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(row.label),
+                            .child(row.label.clone()),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .child(SharedString::from(row.path.clone())),
                     ),
@@ -1098,12 +1088,12 @@ impl ToolsView {
                         div()
                             .px_2()
                             .rounded_md()
-                            .bg(theme::c(if row.exists {
-                                theme::GREEN
+                            .bg(if row.exists {
+                                theme::green()
                             } else {
-                                theme::YELLOW
-                            }))
-                            .text_color(theme::c(theme::ACCENT_TEXT))
+                                theme::yellow()
+                            })
+                            .text_color(theme::accent_text())
                             .text_xs()
                             .child(if row.exists { "存在" } else { "未初始化" }),
                     )
@@ -1124,7 +1114,7 @@ impl ToolsView {
 
     fn render_memory_row(
         &self,
-        file: &routedeck_core::services::DailyMemoryFileInfo,
+        file: &ochub_core::services::DailyMemoryFileInfo,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let read_name = file.filename.clone();
@@ -1138,9 +1128,9 @@ impl ToolsView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -1148,14 +1138,20 @@ impl ToolsView {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(SharedString::from(file.filename.clone())),
                     )
-                    .child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
-                        SharedString::from(format!("{} 字节 · {}", file.size_bytes, file.preview)),
-                    )),
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child(SharedString::from(format!(
+                                "{} 字节 · {}",
+                                file.size_bytes, file.preview
+                            ))),
+                    ),
             )
             .child(
                 div()
@@ -1180,7 +1176,7 @@ impl ToolsView {
                             "删除",
                             false,
                         )
-                        .text_color(theme::c(theme::RED))
+                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.delete_memory_file(delete_name.clone(), cx);
@@ -1191,7 +1187,7 @@ impl ToolsView {
     }
 
     fn render_tool_version_row(
-        version: &routedeck_core::session_manager::ToolVersion,
+        version: &ochub_core::session_manager::ToolVersion,
     ) -> impl IntoElement {
         let local = version
             .version
@@ -1212,26 +1208,26 @@ impl ToolsView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(SharedString::from(version.name.clone())),
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child(SharedString::from(detail)),
             )
     }
 
     fn render_install_report_row(
-        report: &routedeck_core::session_manager::ToolInstallationReport,
+        report: &ochub_core::session_manager::ToolInstallationReport,
     ) -> impl IntoElement {
         let summary = format!(
             "{} 个安装位置 · {} · {} · 命令: {}",
@@ -1259,7 +1255,7 @@ impl ToolsView {
                     .map(|err| format!(" · {err}"))
                     .unwrap_or_default();
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child(SharedString::from(format!(
                         "{} · {version} · {} · {}{}",
@@ -1281,30 +1277,30 @@ impl ToolsView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(SharedString::from(report.tool.clone())),
             )
             .child(
                 div()
-                    .text_color(theme::c(if report.is_conflict {
-                        theme::YELLOW
+                    .text_color(if report.is_conflict {
+                        theme::yellow()
                     } else {
-                        theme::MUTED
-                    }))
+                        theme::muted()
+                    })
                     .text_xs()
                     .child(SharedString::from(summary)),
             )
             .children(installs)
     }
 
-    fn render_env_conflict_row(conflict: &routedeck_core::EnvConflict) -> impl IntoElement {
+    fn render_env_conflict_row(conflict: &ochub_core::EnvConflict) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -1312,19 +1308,19 @@ impl ToolsView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(SharedString::from(conflict.var_name.clone())),
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child(SharedString::from(format!(
                         "{} · {} · {}",
@@ -1347,9 +1343,9 @@ impl ToolsView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -1357,18 +1353,21 @@ impl ToolsView {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(SharedString::from(backup.filename.clone())),
                     )
-                    .child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
-                        SharedString::from(format!(
-                            "{} · {}",
-                            format_bytes(backup.size_bytes),
-                            backup.created_at
-                        )),
-                    )),
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child(SharedString::from(format!(
+                                "{} · {}",
+                                format_bytes(backup.size_bytes),
+                                backup.created_at
+                            ))),
+                    ),
             )
             .child(
                 div()
@@ -1382,7 +1381,7 @@ impl ToolsView {
                             "恢复",
                             false,
                         )
-                        .text_color(theme::c(theme::RED))
+                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.restore_db_backup(restore_name.clone(), cx);
@@ -1407,7 +1406,7 @@ impl ToolsView {
                             "删除",
                             false,
                         )
-                        .text_color(theme::c(theme::RED))
+                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.delete_db_backup(delete_name.clone(), cx);
@@ -1449,12 +1448,12 @@ impl Render for ToolsView {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE))
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(SharedString::from(format!(
@@ -1464,7 +1463,7 @@ impl Render for ToolsView {
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .child(SharedString::from(result.snippet.clone())),
                     )
@@ -1513,7 +1512,7 @@ impl Render for ToolsView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -1536,29 +1535,29 @@ impl Render for ToolsView {
                                 "配置目录",
                                 format!("{configured_count}/{total_configs}"),
                                 "已初始化应用",
-                                theme::ACCENT,
+                                theme::accent(),
                             ))
                             .child(Self::overview_tile(
                                 "数据库备份",
                                 backup_count.to_string(),
                                 "可恢复快照",
-                                theme::GREEN,
+                                theme::green(),
                             ))
                             .child(Self::overview_tile(
                                 "环境冲突",
                                 env_conflict_count.to_string(),
                                 env_app_label(self.env_app),
                                 if env_conflict_count == 0 {
-                                    theme::TEAL
+                                    theme::teal()
                                 } else {
-                                    theme::YELLOW
+                                    theme::yellow()
                                 },
                             ))
                             .child(Self::overview_tile(
                                 "每日记忆",
                                 memory_count.to_string(),
                                 "工作区文件",
-                                theme::MAUVE,
+                                theme::mauve(),
                             )),
                     )
                     .child(
@@ -1600,13 +1599,13 @@ impl Render for ToolsView {
                                     .child(
                                         Self::action_button(
                                             "open-app-config",
-                                            "打开 RouteDeck 数据目录",
+                                            "打开 OCHUB 数据目录",
                                             false,
                                         )
                                         .on_click(
                                             cx.listener(|this, _event, _window, cx| {
                                                 this.open_path_action(
-                                                    routedeck_core::paths::get_app_config_dir(),
+                                                    ochub_core::paths::get_app_config_dir(),
                                                     cx,
                                                 );
                                             }),
@@ -1682,7 +1681,7 @@ impl Render for ToolsView {
                             .when(self.tool_versions.is_empty(), |s| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::MUTED))
+                                        .text_color(theme::muted())
                                         .text_xs()
                                         .child("尚未刷新 CLI 版本"),
                                 )
@@ -1691,7 +1690,7 @@ impl Render for ToolsView {
                             .when(self.tool_installations.is_empty(), |s| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::MUTED))
+                                        .text_color(theme::muted())
                                         .text_xs()
                                         .child("尚未扫描安装位置"),
                                 )
@@ -1766,7 +1765,7 @@ impl Render for ToolsView {
                                     )
                                     .child(
                                         Self::action_button("env-delete", "删除并备份", false)
-                                            .text_color(theme::c(theme::RED))
+                                            .text_color(theme::red())
                                             .on_click(cx.listener(|this, _event, _window, cx| {
                                                 this.delete_env_conflicts(cx);
                                             })),
@@ -1775,7 +1774,7 @@ impl Render for ToolsView {
                             .when(self.env_conflicts.is_empty(), |s| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::MUTED))
+                                        .text_color(theme::muted())
                                         .text_xs()
                                         .child("当前没有已扫描出的冲突"),
                                 )
@@ -1822,7 +1821,7 @@ impl Render for ToolsView {
                                     .child(self.import_sql_path.clone())
                                     .child(
                                         Self::action_button("config-import-sql", "导入 SQL", false)
-                                            .text_color(theme::c(theme::RED))
+                                            .text_color(theme::red())
                                             .on_click(cx.listener(|this, _event, _window, cx| {
                                                 this.import_sql(cx);
                                             })),
@@ -1851,7 +1850,7 @@ impl Render for ToolsView {
                             .when(self.db_backups.is_empty(), |s| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::MUTED))
+                                        .text_color(theme::muted())
                                         .text_xs()
                                         .child("暂无数据库备份"),
                                 )
@@ -1865,14 +1864,11 @@ impl Render for ToolsView {
                                         .items_center()
                                         .justify_between()
                                         .gap_3()
-                                        .child(
-                                            div()
-                                                .text_color(theme::c(theme::MUTED))
-                                                .text_xs()
-                                                .child(SharedString::from(format!(
-                                                    "还有 {hidden_backup_count} 个历史备份已收起。"
-                                                ))),
-                                        )
+                                        .child(div().text_color(theme::muted()).text_xs().child(
+                                            SharedString::from(format!(
+                                                "还有 {hidden_backup_count} 个历史备份已收起。"
+                                            )),
+                                        ))
                                         .child(
                                             Self::action_button(
                                                 "db-backup-show-all",
@@ -1974,7 +1970,7 @@ impl Render for ToolsView {
                                                 "恢复官方历史备份",
                                                 false,
                                             )
-                                            .text_color(theme::c(theme::RED))
+                                            .text_color(theme::red())
                                             .on_click(
                                                 cx.listener(|this, _event, _window, cx| {
                                                     this.restore_codex_unified_history(cx);
@@ -2005,7 +2001,7 @@ impl Render for ToolsView {
                                         )
                                         .child(
                                             Self::action_button("omo-disable", "禁用 OMO", false)
-                                                .text_color(theme::c(theme::RED))
+                                                .text_color(theme::red())
                                                 .on_click(cx.listener(
                                                     |this, _event, _window, cx| {
                                                         this.disable_omo(false, cx);
@@ -2030,7 +2026,7 @@ impl Render for ToolsView {
                                                 "禁用 OMO Slim",
                                                 false,
                                             )
-                                            .text_color(theme::c(theme::RED))
+                                            .text_color(theme::red())
                                             .on_click(
                                                 cx.listener(|this, _event, _window, cx| {
                                                     this.disable_omo(true, cx);
@@ -2176,7 +2172,7 @@ impl Render for ToolsView {
                                         .child(
                                             Self::action_button(
                                                 "claude-plugin-apply",
-                                                "应用 RouteDeck 插件",
+                                                "应用 OCHUB 插件",
                                                 false,
                                             )
                                             .on_click(
@@ -2430,21 +2426,15 @@ impl Render for ToolsView {
 }
 
 fn config_dir(app: AppType) -> Result<PathBuf, AppError> {
-    Ok(match app {
-        AppType::Claude => routedeck_core::paths::get_claude_config_dir(),
-        AppType::ClaudeDesktop => claude_desktop::get_config_library_path()?,
-        AppType::Codex => codex::get_codex_config_dir(),
-        AppType::Gemini => gemini::get_gemini_dir(),
-        AppType::OpenCode => opencode::get_opencode_dir(),
-        AppType::OpenClaw => openclaw::get_openclaw_dir(),
-        AppType::Hermes => hermes::get_hermes_dir(),
-    })
+    ochub_core::plugin::get_plugin(&app.app_id())
+        .ok_or_else(|| AppError::InvalidInput(format!("未知的应用类型: {app}")))?
+        .config_dir()
 }
 
 fn config_status(app: &Arc<AppState>, app_type: AppType) -> Result<(bool, String), AppError> {
     let (exists, path) = match app_type {
         AppType::Claude => {
-            let status = routedeck_core::paths::get_claude_config_status();
+            let status = ochub_core::paths::get_claude_config_status();
             (status.exists, status.path)
         }
         AppType::ClaudeDesktop => {
@@ -2498,7 +2488,7 @@ fn format_sync_status(
     label: &str,
     enabled: bool,
     auto_sync: bool,
-    status: &routedeck_core::settings::WebDavSyncStatus,
+    status: &ochub_core::settings::WebDavSyncStatus,
 ) -> String {
     let last_sync = status
         .last_sync_at
@@ -2573,7 +2563,7 @@ fn expand_user_path(raw: &str) -> Option<PathBuf> {
 }
 
 fn load_db_backup_rows() -> Result<Vec<BackupRow>, AppError> {
-    let value = serde_json::to_value(routedeck_core::Database::list_backups()?)
+    let value = serde_json::to_value(ochub_core::Database::list_backups()?)
         .map_err(|e| AppError::Message(format!("序列化数据库备份失败: {e}")))?;
     let Some(array) = value.as_array() else {
         return Ok(Vec::new());
@@ -2662,7 +2652,7 @@ fn auto_launch_handle() -> Result<AutoLaunch, AppError> {
     let app_path = exe_path;
 
     AutoLaunchBuilder::new()
-        .set_app_name("RouteDeck")
+        .set_app_name("OCHUB")
         .set_app_path(&app_path.to_string_lossy())
         .build()
         .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))

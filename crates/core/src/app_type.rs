@@ -1,4 +1,4 @@
-//! The set of AI coding tools RouteDeck can manage, and their switching
+//! The set of AI coding tools OCHUB can manage, and their switching
 //! semantics. Ported from cc-switch `app_config.rs` `AppType`.
 
 use std::str::FromStr;
@@ -49,6 +49,16 @@ impl AppType {
             self,
             AppType::OpenCode | AppType::OpenClaw | AppType::Hermes
         )
+    }
+
+    /// The open [`AppId`](crate::app_id::AppId) of this builtin app.
+    pub fn app_id(&self) -> crate::app_id::AppId {
+        crate::app_id::AppId::from_static(self.as_str())
+    }
+
+    /// Resolve a builtin from an open id. `None` = user-defined manifest app.
+    pub fn from_app_id(id: &crate::app_id::AppId) -> Option<AppType> {
+        id.as_str().parse().ok()
     }
 
     /// Iterate over every app type.

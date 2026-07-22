@@ -1,11 +1,11 @@
-# RouteDeck — architecture & integration contract
+# OCHUB — architecture & integration contract
 
 Living notes that anchor the port. Source of truth is `cc-switch/src-tauri/src`.
 
 ## Crates
-- `routedeck-core` (`crates/core`): domain + config + SQLite store + services. No Tauri/GPUI.
-- `routedeck-server` (`crates/server`): axum control API + local proxy. Depends on `routedeck-core`.
-- `routedeck-app` (`crates/app`): GPUI UI. Depends on `routedeck-core` (+ hosts `routedeck-server`).
+- `ochub-core` (`crates/core`): domain + config + SQLite store + services. No Tauri/GPUI.
+- `ochub-server` (`crates/server`): axum control API + local proxy. Depends on `ochub-core`.
+- `ochub-app` (`crates/app`): GPUI UI. Depends on `ochub-core` (+ hosts `ochub-server`).
 
 ## Central state — `AppState` (from `store.rs`)
 ```rust
@@ -16,7 +16,7 @@ pub struct AppState {
 }
 impl AppState { pub fn new(db: Arc<Database>) -> Self }
 ```
-`routedeck-server::ServerState` and the GPUI app both hold an `Arc<AppState>`.
+`ochub-server::ServerState` and the GPUI app both hold an `Arc<AppState>`.
 
 ## Provider switching contract (from `commands/provider.rs` → `ProviderService`)
 `ProviderService` lives in `services/provider/mod.rs` (2822 lines) + `live.rs` (1799).
@@ -59,7 +59,7 @@ failover/circuit-breaker), usage stats + pricing, sessions, sync (webdav/s3),
 auth (managed accounts + copilot + codex oauth), OMO, OpenClaw, Hermes, workspace
 files, env management, deeplink, settings, update/restart, lightweight mode.
 
-## Port phases (each ends with `cargo check -p routedeck-core` green)
+## Port phases (each ends with `cargo check -p ochub-core` green)
 1. ✅ Foundation: error, app_type, model, settings, app_store, paths.
 2. ⏳ DB store: database/* → `crates/core/src/db/` (delegated).
 3. Per-app writers + ProviderService + AppState (+ minimal ProxyService/UsageCache).

@@ -1,11 +1,11 @@
-//! Headless RouteDeck server entrypoint.
+//! Headless OCHUB server entrypoint.
 //!
 //! Initializes the SQLite store and serves the control API on loopback. The
 //! GPUI app uses the library entrypoints instead (it owns `AppState`).
 
 use std::net::SocketAddr;
 
-use routedeck_server::ServerState;
+use ochub_server::ServerState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,5 +22,5 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
     let state = ServerState::init().map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    routedeck_server::serve(state, addr).await
+    ochub_server::serve(state, addr).await
 }

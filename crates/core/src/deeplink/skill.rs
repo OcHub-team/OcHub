@@ -1,6 +1,6 @@
 //! Skill import from deep link
 //!
-//! Handles importing skill repository configurations via ccswitch:// URLs.
+//! Handles importing skill repository configurations via ochub:// URLs.
 
 use super::DeepLinkImportRequest;
 use crate::app_state::AppState;

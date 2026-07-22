@@ -1,6 +1,6 @@
 //! Deep link import functionality (ported from cc-switch `deeplink/`).
 //!
-//! This module implements the `ccswitch://` protocol for importing
+//! This module implements the `ochub://` protocol for importing
 //! configurations via deep links. Supports importing:
 //! - Provider configurations (Claude/Codex/Gemini/...)
 //! - MCP server configurations
@@ -32,7 +32,7 @@ pub use utils::{decode_base64_param, infer_homepage_from_endpoint, validate_url}
 
 /// Deep link import request model
 ///
-/// Represents a parsed ccswitch:// URL ready for processing.
+/// Represents a parsed ochub:// URL ready for processing.
 /// This struct contains all possible fields for all resource types.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,12 +1,12 @@
 //! HTTP error envelope.
 //!
-//! `routedeck-core` returns `AppError`; we map it to a JSON body the UI/clients can
+//! `ochub-core` returns `AppError`; we map it to a JSON body the UI/clients can
 //! parse, preserving the localized-error shape where present.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use routedeck_core::AppError;
+use ochub_core::AppError;
 use serde_json::json;
 
 /// Wraps an `AppError` for use as an axum handler error type.
@@ -34,6 +34,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
             AppError::InvalidInput(_) | AppError::McpValidation(_) => StatusCode::BAD_REQUEST,
+            AppError::AppDisabled(_) => StatusCode::FORBIDDEN,
             AppError::Config(_) => StatusCode::BAD_REQUEST,
             AppError::HttpStatus { status, .. } => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)

@@ -84,8 +84,8 @@ const ROLE_SLOTS: &[RoleSlot] = &[
 pub struct ClaudeDesktopConfig;
 
 impl AppConfig for ClaudeDesktopConfig {
-    fn app(&self) -> AppType {
-        AppType::ClaudeDesktop
+    fn app_id(&self) -> crate::app_id::AppId {
+        AppType::ClaudeDesktop.app_id()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -313,7 +313,7 @@ impl AppConfig for ClaudeDesktopConfig {
         }
     }
 
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile> {
+    fn preview(&self, values: &FormValues, _prior: &Value) -> Vec<PreviewFile> {
         let base_url = str_val(values, "base_url").trim().to_string();
         let api_key = str_val(values, "api_key").trim().to_string();
 
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn preview_emits_single_profile_with_gateway_keys() {
-        let files = ClaudeDesktopConfig.preview(&proxy_values());
+        let files = ClaudeDesktopConfig.preview(&proxy_values(), &Value::Null);
         assert_eq!(files.len(), 1);
         let file = &files[0];
         assert!(file.filename.ends_with(&format!("{PROFILE_ID}.json")));

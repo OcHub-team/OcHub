@@ -278,7 +278,12 @@ pub struct Preset {
 
 /// A per-app structured config codec backing the provider editor.
 pub trait AppConfig {
-    fn app(&self) -> AppType;
+    /// The open [`AppId`](crate::app_id::AppId) of the app this codec serves.
+    ///
+    /// Built-in codecs return their `AppType`'s id; the manifest codec returns
+    /// its manifest id. This replaced the old `app() -> AppType` accessor so
+    /// user-defined manifest apps (which have no `AppType`) can implement it.
+    fn app_id(&self) -> crate::app_id::AppId;
 
     /// The structured fields, grouped into sections.
     fn schema(&self) -> Vec<FormSection>;
@@ -297,7 +302,13 @@ pub trait AppConfig {
     ) -> EncodeResult;
 
     /// The exact file(s) the app will receive, for live preview.
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile>;
+    ///
+    /// `prior` is the authoritative working document (the stored
+    /// `settingsConfig`, or the result of a direct file edit): the preview must
+    /// merge form values ONTO it, exactly like [`encode`](AppConfig::encode),
+    /// so sibling/unknown keys the form doesn't manage still show up. Pass
+    /// `Value::Null` for a from-scratch preview.
+    fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile>;
 
     /// Validate edited values.
     fn validate(&self, values: &FormValues) -> Vec<ConfigIssue>;

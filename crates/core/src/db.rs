@@ -1,14 +1,15 @@
 //! SQLite 数据持久化层。
 //!
-//! Ported from cc-switch `src-tauri/src/database/`. The on-disk database stays
-//! byte-compatible with existing `~/.cc-switch/cc-switch.db` files (schema
-//! version 11).
+//! OCHUB 拥有独立的数据库（`~/.ochub/ochub.db`）与独立的 schema
+//! 版本线（从 v1 开始）。旧 cc-switch 数据（`~/.cc-switch/cc-switch.db`）在
+//! 首次启动时通过 `import_ccswitch` 一次性只读导入，之后两者互不影响。
 //!
 //! ```text
 //! db/
 //! ├── db.rs            - Database 结构体 + 初始化（本文件）
 //! ├── schema.rs        - 表结构定义 + Schema 迁移
 //! ├── backup.rs        - SQL 导入导出 + 快照备份
+//! ├── import_ccswitch.rs - cc-switch 数据库一次性导入
 //! ├── migration.rs     - JSON → SQLite 数据迁移
 //! ├── legacy_json.rs   - 旧版 config.json (MultiAppConfig) + 域结构
 //! ├── proxy_types.rs   - 代理相关配置/状态类型
@@ -18,6 +19,7 @@
 
 pub(crate) mod backup;
 pub mod dao;
+pub mod import_ccswitch;
 pub mod legacy_json;
 pub mod migration;
 pub mod proxy_types;
@@ -32,7 +34,6 @@ pub(crate) use dao::proxy::{
     validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
     PRICING_SOURCE_RESPONSE,
 };
-pub use dao::FailoverQueueItem;
 
 pub use legacy_json::{
     CommonConfigSnippets, InstalledSkill, McpApps, McpConfig, McpRoot, McpServer, MultiAppConfig,
@@ -46,14 +47,13 @@ pub use proxy_types::{
 pub use stream_check_types::{HealthStatus, StreamCheckConfig, StreamCheckResult};
 
 use crate::error::AppError;
-use crate::paths::get_app_config_dir;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
 use std::sync::Mutex;
 
-/// 当前 Schema 版本号
+/// 当前 Schema 版本号（OCHUB 自有版本线，与 cc-switch 的版本序列无关）
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 11;
+pub(crate) const SCHEMA_VERSION: i32 = 2;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -94,7 +94,8 @@ pub struct Database {
 }
 
 fn register_db_change_hook(conn: &Connection) {
-    conn.update_hook(Some(
+    // 注册失败仅意味着丢失变更通知，不影响数据库功能本身。
+    let _ = conn.update_hook(Some(
         |action: Action, _database: &str, table: &str, _row_id: i64| match action {
             Action::SQLITE_INSERT | Action::SQLITE_UPDATE | Action::SQLITE_DELETE => {
                 notify_db_changed(table);
@@ -107,9 +108,10 @@ fn register_db_change_hook(conn: &Connection) {
 impl Database {
     /// 初始化数据库连接并创建表
     ///
-    /// 数据库文件位于 `~/.cc-switch/cc-switch.db`
+    /// 数据库文件位于 `~/.ochub/ochub.db`。全新数据库若检测到旧的
+    /// `~/.cc-switch/cc-switch.db`，会自动执行一次性只读导入。
     pub fn init() -> Result<Self, AppError> {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let db_path = crate::paths::get_database_path();
         let db_exists = db_path.exists();
 
         // 确保父目录存在
@@ -124,10 +126,17 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         if !db_exists {
             // For a brand-new database, configure incremental auto-vacuum
-            // before creating any tables so no rebuild is needed later.
+            // before anything initializes the database file (switching to WAL
+            // writes the header, after which auto_vacuum can no longer change
+            // without a VACUUM rebuild).
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
+        // WAL：代理高频写日志 + UI 并发读；busy_timeout 避免瞬时锁冲突直接报错
+        conn.query_row("PRAGMA journal_mode = WAL;", [], |_| Ok(()))
+            .map_err(|e| AppError::Database(format!("启用 WAL 失败: {e}")))?;
+        conn.execute_batch("PRAGMA busy_timeout = 5000;")
+            .map_err(|e| AppError::Database(format!("设置 busy_timeout 失败: {e}")))?;
         register_db_change_hook(&conn);
 
         let db = Self {
@@ -155,6 +164,22 @@ impl Database {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
         db.ensure_model_pricing_seeded()?;
+
+        // 全新数据库：尝试从旧 cc-switch 数据一次性导入（只读，失败不阻塞启动）
+        if !db_exists {
+            match db.import_from_ccswitch() {
+                Ok(Some(report)) => log::info!(
+                    "imported cc-switch data (source schema v{}): {} rows across {} tables",
+                    report.source_schema_version,
+                    report.total_rows(),
+                    report.tables.len()
+                ),
+                Ok(None) => {}
+                Err(e) => {
+                    log::warn!("cc-switch import failed, starting with a fresh database: {e}")
+                }
+            }
+        }
 
         // Startup cleanup: prune old logs and reclaim space
         if let Err(e) = db.cleanup_old_stream_check_logs(7) {

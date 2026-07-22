@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use routedeck_core::services::usage_stats::LogFilters;
-use routedeck_core::AppError;
+use ochub_core::services::usage_stats::LogFilters;
+use ochub_core::AppError;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::ServerState;
@@ -197,19 +197,19 @@ async fn usage_provider_limits(
 }
 
 async fn usage_session_sync(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    let mut result = routedeck_core::services::session_usage::sync_claude_session_logs(&s.app.db)?;
+    let mut result = ochub_core::services::session_usage::sync_claude_session_logs(&s.app.db)?;
     for (label, sync_result) in [
         (
             "Codex",
-            routedeck_core::services::session_usage_codex::sync_codex_usage(&s.app.db),
+            ochub_core::services::session_usage_codex::sync_codex_usage(&s.app.db),
         ),
         (
             "Gemini",
-            routedeck_core::services::session_usage_gemini::sync_gemini_usage(&s.app.db),
+            ochub_core::services::session_usage_gemini::sync_gemini_usage(&s.app.db),
         ),
         (
             "OpenCode",
-            routedeck_core::services::session_usage_opencode::sync_opencode_usage(&s.app.db),
+            ochub_core::services::session_usage_opencode::sync_opencode_usage(&s.app.db),
         ),
     ] {
         match sync_result {
@@ -226,15 +226,13 @@ async fn usage_session_sync(State(s): State<ServerState>) -> ApiResult<Json<Valu
 }
 
 async fn usage_data_sources(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::session_usage::get_data_source_breakdown(
-        &s.app.db,
-    )?)
+    to_value(ochub_core::services::session_usage::get_data_source_breakdown(&s.app.db)?)
 }
 
 // ----- Sessions -----
 
 async fn sessions_list() -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::session_manager::scan_sessions())
+    to_value(ochub_core::session_manager::scan_sessions())
 }
 
 #[derive(Deserialize)]
@@ -244,7 +242,7 @@ struct SessionMessagesRequest {
 }
 
 async fn session_messages(Json(req): Json<SessionMessagesRequest>) -> ApiResult<Json<Value>> {
-    let messages = routedeck_core::session_manager::load_messages(&req.provider_id, &req.source_path)?;
+    let messages = ochub_core::session_manager::load_messages(&req.provider_id, &req.source_path)?;
     to_value(messages)
 }
 
@@ -256,7 +254,7 @@ struct DeleteSessionBody {
 }
 
 async fn session_delete(Json(req): Json<DeleteSessionBody>) -> ApiResult<Json<Value>> {
-    let deleted = routedeck_core::session_manager::delete_session(
+    let deleted = ochub_core::session_manager::delete_session(
         &req.provider_id,
         &req.session_id,
         &req.source_path,
@@ -266,11 +264,11 @@ async fn session_delete(Json(req): Json<DeleteSessionBody>) -> ApiResult<Json<Va
 
 #[derive(Deserialize)]
 struct DeleteSessionsBody {
-    items: Vec<routedeck_core::session_manager::DeleteSessionRequest>,
+    items: Vec<ochub_core::session_manager::DeleteSessionRequest>,
 }
 
 async fn sessions_delete_batch(Json(req): Json<DeleteSessionsBody>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::session_manager::delete_sessions(&req.items))
+    to_value(ochub_core::session_manager::delete_sessions(&req.items))
 }
 
 #[derive(Deserialize)]
@@ -285,7 +283,7 @@ struct LaunchTerminalBody {
 }
 
 async fn session_launch_terminal(Json(req): Json<LaunchTerminalBody>) -> ApiResult<Json<Value>> {
-    let preferred = routedeck_core::settings::get_settings().preferred_terminal;
+    let preferred = ochub_core::settings::get_settings().preferred_terminal;
     let target = req
         .target
         .or(preferred)
@@ -298,7 +296,7 @@ async fn session_launch_terminal(Json(req): Json<LaunchTerminalBody>) -> ApiResu
         })
         .unwrap_or_else(|| "terminal".to_string());
     tokio::task::spawn_blocking(move || {
-        routedeck_core::session_manager::terminal::launch_terminal(
+        ochub_core::session_manager::terminal::launch_terminal(
             &target,
             &req.command,
             req.cwd.as_deref(),
@@ -325,7 +323,12 @@ async fn provider_terminal(
 ) -> ApiResult<Json<Value>> {
     let app = s.app.clone();
     let opened = tokio::task::spawn_blocking(move || {
-        routedeck_core::session_manager::open_provider_terminal(&app, &req.app, &req.provider_id, req.cwd)
+        ochub_core::session_manager::open_provider_terminal(
+            &app,
+            &req.app,
+            &req.provider_id,
+            req.cwd,
+        )
     })
     .await
     .map_err(|e| {
@@ -344,11 +347,13 @@ struct ToolVersionsRequest {
     tools: Option<Vec<String>>,
     #[serde(default, rename = "wslShellByTool")]
     wsl_shell_by_tool:
-        Option<HashMap<String, routedeck_core::session_manager::tools::WslShellPreferenceInput>>,
+        Option<HashMap<String, ochub_core::session_manager::tools::WslShellPreferenceInput>>,
 }
 
 async fn tool_versions(Json(req): Json<ToolVersionsRequest>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::session_manager::get_tool_versions(req.tools, req.wsl_shell_by_tool).await?)
+    to_value(
+        ochub_core::session_manager::get_tool_versions(req.tools, req.wsl_shell_by_tool).await?,
+    )
 }
 
 #[derive(Deserialize)]
@@ -357,12 +362,12 @@ struct ToolLifecycleRequest {
     action: String,
     #[serde(default, rename = "wslShellByTool")]
     wsl_shell_by_tool:
-        Option<HashMap<String, routedeck_core::session_manager::tools::WslShellPreferenceInput>>,
+        Option<HashMap<String, ochub_core::session_manager::tools::WslShellPreferenceInput>>,
 }
 
 async fn tool_lifecycle(Json(req): Json<ToolLifecycleRequest>) -> ApiResult<Json<Value>> {
     tokio::task::spawn_blocking(move || {
-        routedeck_core::session_manager::run_tool_lifecycle_action(
+        ochub_core::session_manager::run_tool_lifecycle_action(
             req.tools,
             req.action,
             req.wsl_shell_by_tool,
@@ -383,7 +388,7 @@ struct ToolProbeRequest {
 }
 
 async fn tool_probe(Json(req): Json<ToolProbeRequest>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::session_manager::probe_tool_installations(
+    to_value(ochub_core::session_manager::probe_tool_installations(
         req.tools,
     )?)
 }
@@ -391,16 +396,16 @@ async fn tool_probe(Json(req): Json<ToolProbeRequest>) -> ApiResult<Json<Value>>
 // ----- Environment conflicts -----
 
 async fn env_conflicts(Path(app): Path<String>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::env::check_env_conflicts(&app)?)
+    to_value(ochub_core::services::env::check_env_conflicts(&app)?)
 }
 
 #[derive(Deserialize)]
 struct DeleteEnvRequest {
-    conflicts: Vec<routedeck_core::services::env::EnvConflict>,
+    conflicts: Vec<ochub_core::services::env::EnvConflict>,
 }
 
 async fn env_delete(Json(req): Json<DeleteEnvRequest>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::env::delete_env_vars(req.conflicts)?)
+    to_value(ochub_core::services::env::delete_env_vars(req.conflicts)?)
 }
 
 #[derive(Deserialize)]
@@ -410,7 +415,7 @@ struct RestoreEnvRequest {
 }
 
 async fn env_restore(Json(req): Json<RestoreEnvRequest>) -> ApiResult<Json<Value>> {
-    routedeck_core::services::env::restore_env_backup(req.backup_path)?;
+    ochub_core::services::env::restore_env_backup(req.backup_path)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -447,7 +452,7 @@ async fn import_config(
     let backup_id = tokio::task::spawn_blocking(move || db.import_sql(&PathBuf::from(file_path)))
         .await
         .map_err(|e| ApiError(AppError::Message(format!("Import task failed: {e}"))))??;
-    let warning = match routedeck_core::services::ProviderService::sync_current_to_live(&s.app) {
+    let warning = match ochub_core::services::ProviderService::sync_current_to_live(&s.app) {
         Ok(()) => None,
         Err(err) => {
             log::warn!("[Import] post-import live sync warning: {err}");
@@ -462,7 +467,7 @@ async fn import_config(
 }
 
 async fn sync_current_providers_live(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    routedeck_core::services::ProviderService::sync_current_to_live(&s.app)?;
+    ochub_core::services::ProviderService::sync_current_to_live(&s.app)?;
     Ok(Json(json!({
         "success": true,
         "message": "Live configuration synchronized"
@@ -470,7 +475,7 @@ async fn sync_current_providers_live(State(s): State<ServerState>) -> ApiResult<
 }
 
 async fn db_backups_list() -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::db::Database::list_backups()?)
+    to_value(ochub_core::db::Database::list_backups()?)
 }
 
 async fn db_backup_create(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
@@ -502,12 +507,12 @@ async fn db_backup_rename(
     Path(filename): Path<String>,
     Json(req): Json<RenameBackupRequest>,
 ) -> ApiResult<Json<Value>> {
-    let renamed = routedeck_core::db::Database::rename_backup(&filename, &req.new_name)?;
+    let renamed = ochub_core::db::Database::rename_backup(&filename, &req.new_name)?;
     Ok(Json(json!({ "filename": renamed })))
 }
 
 async fn db_backup_delete(Path(filename): Path<String>) -> ApiResult<Json<Value>> {
-    routedeck_core::db::Database::delete_backup(&filename)?;
+    ochub_core::db::Database::delete_backup(&filename)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -519,29 +524,29 @@ struct DeeplinkBody {
 }
 
 async fn deeplink_parse(Json(body): Json<DeeplinkBody>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::deeplink::parse_deeplink_url(&body.url)?)
+    to_value(ochub_core::deeplink::parse_deeplink_url(&body.url)?)
 }
 
 async fn deeplink_import(
     State(s): State<ServerState>,
     Json(body): Json<DeeplinkBody>,
 ) -> ApiResult<Json<Value>> {
-    let request = routedeck_core::deeplink::parse_deeplink_url(&body.url)?;
+    let request = ochub_core::deeplink::parse_deeplink_url(&body.url)?;
     match request.resource.as_str() {
         "provider" => {
-            let id = routedeck_core::deeplink::import_provider_from_deeplink(&s.app, request)?;
+            let id = ochub_core::deeplink::import_provider_from_deeplink(&s.app, request)?;
             Ok(Json(json!({ "resource": "provider", "id": id })))
         }
         "mcp" => {
-            let result = routedeck_core::deeplink::import_mcp_from_deeplink(&s.app, request)?;
+            let result = ochub_core::deeplink::import_mcp_from_deeplink(&s.app, request)?;
             to_value(json!({ "resource": "mcp", "result": serde_json::to_value(result).ok() }))
         }
         "prompt" => {
-            let id = routedeck_core::deeplink::import_prompt_from_deeplink(&s.app, request)?;
+            let id = ochub_core::deeplink::import_prompt_from_deeplink(&s.app, request)?;
             to_value(json!({ "resource": "prompt", "result": serde_json::to_value(id).ok() }))
         }
         "skill" => {
-            let id = routedeck_core::deeplink::import_skill_from_deeplink(&s.app, request)?;
+            let id = ochub_core::deeplink::import_skill_from_deeplink(&s.app, request)?;
             to_value(json!({ "resource": "skill", "result": serde_json::to_value(id).ok() }))
         }
         other => Err(ApiError(AppError::InvalidInput(format!(
@@ -558,10 +563,10 @@ pub fn router() -> Router<ServerState> {
         .route("/api/usage/providers", get(usage_provider_stats))
         .route("/api/usage/models", get(usage_model_stats))
         .route("/api/usage/logs", post(usage_logs))
-        .route("/api/usage/request/:id", get(usage_request_detail))
+        .route("/api/usage/request/{id}", get(usage_request_detail))
         .route("/api/usage/pricing", get(usage_model_pricing))
         .route(
-            "/api/usage/pricing/:model_id",
+            "/api/usage/pricing/{model_id}",
             put(usage_model_pricing_update).delete(usage_model_pricing_delete),
         )
         .route("/api/usage/provider-limits", get(usage_provider_limits))
@@ -579,7 +584,7 @@ pub fn router() -> Router<ServerState> {
         .route("/api/tools/versions", post(tool_versions))
         .route("/api/tools/lifecycle", post(tool_lifecycle))
         .route("/api/tools/probe", post(tool_probe))
-        .route("/api/env/conflicts/:app", get(env_conflicts))
+        .route("/api/env/conflicts/{app}", get(env_conflicts))
         .route("/api/env/delete", post(env_delete))
         .route("/api/env/restore", post(env_restore))
         .route("/api/config/export", post(export_config))
@@ -592,10 +597,13 @@ pub fn router() -> Router<ServerState> {
             "/api/backups/db",
             get(db_backups_list).post(db_backup_create),
         )
-        .route("/api/backups/db/:filename/restore", post(db_backup_restore))
-        .route("/api/backups/db/:filename/rename", put(db_backup_rename))
         .route(
-            "/api/backups/db/:filename",
+            "/api/backups/db/{filename}/restore",
+            post(db_backup_restore),
+        )
+        .route("/api/backups/db/{filename}/rename", put(db_backup_rename))
+        .route(
+            "/api/backups/db/{filename}",
             axum::routing::delete(db_backup_delete),
         )
         .route("/api/deeplink/parse", post(deeplink_parse))

@@ -1,4 +1,4 @@
-//! RouteDeck axum server.
+//! OCHUB axum server.
 //!
 //! Exposes the cc-switch command surface as an HTTP/JSON control API and (later)
 //! hosts the local provider proxy. The GPUI app hosts this in-process; it can
@@ -7,6 +7,7 @@
 pub mod api;
 pub mod api_apps;
 pub mod api_data;
+pub mod api_gateway;
 pub mod api_more;
 pub mod api_proxy;
 pub mod error;
@@ -26,6 +27,7 @@ pub fn build_router(state: ServerState) -> Router {
         .merge(api_apps::router())
         .merge(api_proxy::router())
         .merge(api_data::router())
+        .merge(api_gateway::router())
         .merge(api_more::router())
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -34,14 +36,16 @@ pub fn build_router(state: ServerState) -> Router {
 /// Serve the control API on the given loopback address until the process exits.
 pub async fn serve(state: ServerState, addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("RouteDeck control API listening on http://{addr}");
+    tracing::info!("OCHUB control API listening on http://{addr}");
+    // Bring the local relay gateway up if it is configured for autostart.
+    state.app.gateway.maybe_autostart().await;
     axum::serve(listener, build_router(state)).await?;
     Ok(())
 }
 
 /// Build state from an existing in-process `AppState` and serve.
 pub async fn serve_with_app(
-    app: Arc<routedeck_core::app_state::AppState>,
+    app: Arc<ochub_core::app_state::AppState>,
     addr: std::net::SocketAddr,
 ) -> anyhow::Result<()> {
     serve(ServerState::from_app(app), addr).await

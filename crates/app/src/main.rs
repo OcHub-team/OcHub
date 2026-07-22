@@ -1,13 +1,18 @@
-//! RouteDeck desktop application (GPUI).
+//! OCHUB desktop application (GPUI).
 //!
-//! Initializes the `routedeck-core` `AppState` (SQLite store + services), hosts the
-//! `routedeck-server` axum control API in-process on loopback, and renders the GPUI UI.
+//! Initializes the `ochub-core` `AppState` (SQLite store + services), hosts the
+//! `ochub-server` axum control API in-process on loopback, and renders the GPUI UI.
 
+mod app_meta;
 mod app_settings_view;
 mod app_ui;
 mod auth_view;
 mod chart;
+mod code_editor;
 mod components;
+mod fold;
+mod gateway_view;
+mod highlight;
 mod icons;
 mod layout;
 mod mcp_view;
@@ -22,7 +27,6 @@ mod skills_view;
 mod text_input;
 mod theme;
 mod tools_view;
-mod universal_view;
 mod usage_view;
 mod workspace_view;
 
@@ -38,8 +42,8 @@ use gpui::{
     WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
-use routedeck_core::db::Database;
-use routedeck_core::AppState;
+use ochub_core::db::Database;
+use ochub_core::AppState;
 
 use app_ui::AppRoot;
 
@@ -74,7 +78,7 @@ impl AssetSource for Assets {
 /// sharing the same `AppState` as the UI.
 fn spawn_control_api(app: Arc<AppState>) {
     std::thread::Builder::new()
-        .name("routedeck-server".into())
+        .name("ochub-server".into())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -91,7 +95,7 @@ fn spawn_control_api(app: Arc<AppState>) {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8787);
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            if let Err(err) = runtime.block_on(routedeck_server::serve_with_app(app, addr)) {
+            if let Err(err) = runtime.block_on(ochub_server::serve_with_app(app, addr)) {
                 log::error!("control API server error: {err}");
             }
         })
@@ -119,6 +123,7 @@ fn main() {
         })
         .run(move |cx: &mut App| {
             text_input::bind_keys(cx);
+            code_editor::bind_keys(cx);
             shell_menu::install(app_state.clone(), cx);
             // Pin to the primary display (avoids landing on a secondary monitor)
             // and use a roomier default size for the denser, redesigned UI.
@@ -128,7 +133,7 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     titlebar: Some(TitlebarOptions {
-                        title: Some("RouteDeck".into()),
+                        title: Some("OCHUB".into()),
                         // Blend the titlebar into our own chrome (Surge-style unified
                         // toolbar). We draw a custom draggable top bar in `app_ui`.
                         appears_transparent: true,
@@ -149,11 +154,37 @@ fn main() {
         });
 }
 
-fn env_logger_init() {
-    // GPUI brings its own logging expectations; keep this minimal and resilient.
-    let _ = std::panic::catch_unwind(|| {
-        if std::env::var("RUST_LOG").is_err() {
-            std::env::set_var("RUST_LOG", "info");
+/// Minimal stderr logger so init failures are never silent.
+/// Level via `RUST_LOG` (error/warn/info/debug/trace), default info.
+struct StderrLogger;
+
+static LOGGER: StderrLogger = StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!(
+                "[{}] {}: {}",
+                record.level(),
+                record.target(),
+                record.args()
+            );
         }
-    });
+    }
+
+    fn flush(&self) {}
+}
+
+fn env_logger_init() {
+    let level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|v| v.parse::<log::LevelFilter>().ok())
+        .unwrap_or(log::LevelFilter::Info);
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(level);
+    }
 }

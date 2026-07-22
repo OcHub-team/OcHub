@@ -5,8 +5,8 @@ use std::process::Command;
 use std::sync::Arc;
 
 use gpui::{div, prelude::*, Context, FontWeight, SharedString, Window};
-use routedeck_core::services::auth;
-use routedeck_core::{AppState, ManagedAuthAccount, ManagedAuthDeviceCodeResponse, ManagedAuthStatus};
+use ochub_core::services::auth;
+use ochub_core::{AppState, ManagedAuthAccount, ManagedAuthDeviceCodeResponse, ManagedAuthStatus};
 
 use crate::components;
 use crate::layout;
@@ -270,7 +270,7 @@ impl AuthView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE_HOVER))
+            .bg(theme::surface_hover())
             .child(
                 div()
                     .flex()
@@ -279,21 +279,14 @@ impl AuthView {
                     .min_w_0()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(SharedString::from(account.login.clone())),
                     )
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .truncate()
-                            .child(SharedString::from(format!(
-                                "{} · {}",
-                                account.github_domain, account.id
-                            ))),
-                    ),
+                    .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                        SharedString::from(format!("{} · {}", account.github_domain, account.id)),
+                    )),
             )
             .child(
                 div()
@@ -307,8 +300,8 @@ impl AuthView {
                                 .px_2()
                                 .py_1()
                                 .rounded_md()
-                                .bg(theme::c(theme::GREEN))
-                                .text_color(theme::c(theme::ACCENT_TEXT))
+                                .bg(theme::green())
+                                .text_color(theme::accent_text())
                                 .text_xs()
                                 .child("默认"),
                         )
@@ -333,7 +326,7 @@ impl AuthView {
                             "移除",
                             false,
                         )
-                        .text_color(theme::c(theme::RED))
+                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.remove_account(provider, remove_id.clone(), cx);
@@ -365,9 +358,9 @@ impl AuthView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -382,13 +375,13 @@ impl AuthView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(title),
                             )
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .child(description),
                             ),
@@ -398,16 +391,16 @@ impl AuthView {
                             .px_2()
                             .py_1()
                             .rounded_md()
-                            .bg(theme::c(if authenticated {
-                                theme::GREEN
+                            .bg(if authenticated {
+                                theme::green()
                             } else {
-                                theme::SURFACE_HOVER
-                            }))
-                            .text_color(theme::c(if authenticated {
-                                theme::ACCENT_TEXT
+                                theme::surface_hover()
+                            })
+                            .text_color(if authenticated {
+                                theme::accent_text()
                             } else {
-                                theme::SUBTEXT
-                            }))
+                                theme::subtext()
+                            })
                             .text_xs()
                             .child(SharedString::from(if authenticated {
                                 format!("{count} 个账号")
@@ -437,7 +430,7 @@ impl AuthView {
             .when(accounts.is_empty(), |s| {
                 s.child(
                     div()
-                        .text_color(theme::c(theme::MUTED))
+                        .text_color(theme::muted())
                         .text_xs()
                         .child("暂无账号。点击“开始登录”生成设备码。"),
                 )
@@ -468,7 +461,7 @@ impl Render for AuthView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -485,16 +478,16 @@ impl Render for AuthView {
                                 .gap_3()
                                 .p_4()
                                 .rounded_lg()
-                                .bg(theme::c(theme::SURFACE))
+                                .bg(theme::surface())
                                 .border_1()
-                                .border_color(theme::c(theme::YELLOW))
+                                .border_color(theme::yellow())
                                 .child(
                                     div()
-                                        .text_color(theme::c(theme::TEXT))
+                                        .text_color(theme::text())
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child("等待浏览器授权"),
                                 )
-                                .child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
+                                .child(div().text_color(theme::muted()).text_xs().child(
                                     SharedString::from(format!(
                                         "用户码：{} · 验证页：{}",
                                         flow.user_code, flow.verification_uri

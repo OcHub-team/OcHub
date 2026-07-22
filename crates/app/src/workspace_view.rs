@@ -4,7 +4,7 @@
 use std::process::Command;
 
 use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
-use routedeck_core::services::{DailyMemoryFileInfo, DailyMemorySearchResult, WorkspaceService};
+use ochub_core::services::{DailyMemoryFileInfo, DailyMemorySearchResult, WorkspaceService};
 
 use crate::components;
 use crate::layout;
@@ -200,7 +200,7 @@ impl WorkspaceView {
 
     fn header(title: &str) -> impl IntoElement {
         div()
-            .text_color(theme::c(theme::TEXT))
+            .text_color(theme::text())
             .text_sm()
             .font_weight(FontWeight::SEMIBOLD)
             .child(SharedString::from(title.to_string()))
@@ -223,10 +223,10 @@ impl WorkspaceView {
             .p_4()
             .rounded_lg()
             .cursor_pointer()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
-            .hover(|s| s.border_color(theme::c(theme::BORDER_STRONG)))
+            .border_color(theme::border())
+            .hover(|s| s.border_color(theme::border_strong()))
             .child(
                 div()
                     .flex()
@@ -236,22 +236,26 @@ impl WorkspaceView {
                     .gap_2()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(row.filename),
                     )
-                    .child(div().w(px(10.)).h(px(10.)).rounded_full().bg(theme::c(
-                        if row.exists {
-                            theme::GREEN
-                        } else {
-                            theme::MUTED
-                        },
-                    ))),
+                    .child(
+                        div()
+                            .w(px(10.))
+                            .h(px(10.))
+                            .rounded_full()
+                            .bg(if row.exists {
+                                theme::green()
+                            } else {
+                                theme::muted()
+                            }),
+                    ),
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .line_clamp(3)
                     .child(row.description),
@@ -278,9 +282,9 @@ impl WorkspaceView {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -290,7 +294,7 @@ impl WorkspaceView {
                     .flex_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(SharedString::from(file.filename.clone())),
@@ -298,7 +302,7 @@ impl WorkspaceView {
                     .child(
                         div()
                             .min_w_0()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .truncate()
                             .child(SharedString::from(format!(
@@ -331,7 +335,7 @@ impl WorkspaceView {
                             "删除",
                             false,
                         )
-                        .text_color(theme::c(theme::RED))
+                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.delete_memory_file(delete_name.clone(), cx);
@@ -362,12 +366,12 @@ impl Render for WorkspaceView {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE))
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(SharedString::from(format!(
@@ -377,7 +381,7 @@ impl Render for WorkspaceView {
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .line_clamp(2)
                             .child(SharedString::from(result.snippet.clone())),
@@ -414,7 +418,7 @@ impl Render for WorkspaceView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -559,8 +563,8 @@ fn workspace_file_description(filename: &str) -> &'static str {
 struct AppErrorString(String);
 
 impl AppErrorString {
-    fn into_app_error(self) -> routedeck_core::AppError {
-        routedeck_core::AppError::Message(self.0)
+    fn into_app_error(self) -> ochub_core::AppError {
+        ochub_core::AppError::Message(self.0)
     }
 }
 

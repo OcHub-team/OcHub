@@ -1,21 +1,22 @@
 [package]
-name = "routedeck-app"
+name = "ochub-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "RouteDeck desktop UI (GPUI)"
+description = "OCHUB desktop UI (GPUI)"
 
 [[bin]]
-name = "routedeck"
+name = "ochub"
 path = "src/main.rs"
 
 [dependencies]
-routedeck-core = { workspace = true }
-routedeck-server = { workspace = true }
+ochub-core = { workspace = true }
+ochub-server = { workspace = true }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
+zed-text = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

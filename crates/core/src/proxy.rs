@@ -18,7 +18,6 @@ pub mod circuit_breaker;
 pub mod copilot_optimizer;
 pub mod error;
 pub mod error_mapper;
-pub mod failover_switch;
 pub mod forward;
 pub mod forward_transform;
 pub mod gemini_url;

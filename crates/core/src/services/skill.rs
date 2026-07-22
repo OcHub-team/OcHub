@@ -716,8 +716,8 @@ impl SkillService {
         let backup_path =
             Self::create_uninstall_backup(&skill)?.map(|path| path.to_string_lossy().to_string());
 
-        // 从所有应用目录删除
-        for app in AppType::all() {
+        // 从所有启用应用的目录删除（停用应用的文件不再触碰）
+        for app in AppType::all().filter(crate::plugin::registry::is_app_type_enabled) {
             let _ = Self::remove_from_app(&skill.directory, &app);
         }
 
@@ -768,7 +768,11 @@ impl SkillService {
             hasher.update(b"\0");
         }
 
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect())
     }
 
     /// 递归收集目录下所有非隐藏文件
@@ -1134,8 +1138,8 @@ impl SkillService {
         // 3. 文件移动完成后才持久化设置
         crate::settings::set_skill_storage_location(target)?;
 
-        // 4. 刷新所有应用目录的 symlink（指向新 SSOT）
-        for app in AppType::all() {
+        // 4. 刷新所有启用应用目录的 symlink（指向新 SSOT）
+        for app in AppType::all().filter(crate::plugin::registry::is_app_type_enabled) {
             let _ = Self::sync_to_app(db, &app);
         }
 
@@ -1962,7 +1966,7 @@ impl SkillService {
         }
 
         let front_matter = parts[1].trim();
-        let meta: SkillMetadata = serde_yaml::from_str(front_matter).unwrap_or(SkillMetadata {
+        let meta: SkillMetadata = serde_norway::from_str(front_matter).unwrap_or(SkillMetadata {
             name: None,
             description: None,
         });

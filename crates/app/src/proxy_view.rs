@@ -8,24 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
-use routedeck_core::db::{FailoverQueueItem, HealthStatus, StreamCheckConfig};
-use routedeck_core::proxy::{ProxyConfig, ProxyTakeoverStatus};
-use routedeck_core::{AppState, AppType, Provider};
+use ochub_core::db::{HealthStatus, StreamCheckConfig};
+use ochub_core::proxy::{ProxyConfig, ProxyTakeoverStatus};
+use ochub_core::{AppState, AppType};
 
 use crate::components;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
-
-#[derive(Clone)]
-struct FailoverGroup {
-    app_type: AppType,
-    label: &'static str,
-    proxy_enabled: bool,
-    auto_enabled: bool,
-    queue: Vec<FailoverQueueItem>,
-    available: Vec<Provider>,
-}
 
 pub struct ProxyView {
     app: Arc<AppState>,
@@ -34,7 +24,6 @@ pub struct ProxyView {
     port: u16,
     total_requests: u64,
     success_rate: f32,
-    failover_count: u64,
     config: ProxyConfig,
     takeover: ProxyTakeoverStatus,
     listen_address: Entity<TextInput>,
@@ -47,11 +36,9 @@ pub struct ProxyView {
     stream_timeout_secs: Entity<TextInput>,
     stream_max_retries: Entity<TextInput>,
     stream_degraded_threshold_ms: Entity<TextInput>,
-    failover_groups: Vec<FailoverGroup>,
     status: Option<SharedString>,
     busy: bool,
     show_network_settings: bool,
-    show_failover: bool,
     show_health_checks: bool,
 }
 
@@ -82,7 +69,6 @@ impl ProxyView {
             port: 0,
             total_requests: 0,
             success_rate: 0.0,
-            failover_count: 0,
             config,
             takeover: ProxyTakeoverStatus::default(),
             listen_address,
@@ -95,11 +81,9 @@ impl ProxyView {
             stream_timeout_secs,
             stream_max_retries,
             stream_degraded_threshold_ms,
-            failover_groups: Vec::new(),
             status: None,
             busy: false,
             show_network_settings: false,
-            show_failover: false,
             show_health_checks: false,
         };
         this.refresh_status(cx);
@@ -115,7 +99,6 @@ impl ProxyView {
             let takeover = app.proxy_service.get_takeover_status().await;
             let upstream = app.db.get_global_proxy_url();
             let stream_config = app.db.get_stream_check_config();
-            let failover_groups = load_failover_groups(&app);
             this.update(cx, |this, cx| {
                 match status {
                     Ok(status) => {
@@ -124,7 +107,6 @@ impl ProxyView {
                         this.port = status.port;
                         this.total_requests = status.total_requests;
                         this.success_rate = status.success_rate;
-                        this.failover_count = status.failover_count;
                         if let Some(err) = status.last_error {
                             this.status = Some(SharedString::from(err));
                         }
@@ -168,7 +150,6 @@ impl ProxyView {
                         cx,
                     );
                 }
-                this.failover_groups = failover_groups;
                 cx.notify();
             })
             .ok();
@@ -257,7 +238,6 @@ impl ProxyView {
                     this.port = status.port;
                     this.total_requests = status.total_requests;
                     this.success_rate = status.success_rate;
-                    this.failover_count = status.failover_count;
                 }
                 if let Ok(config) = saved_config {
                     this.config = config;
@@ -343,7 +323,6 @@ impl ProxyView {
                     this.port = status.port;
                     this.total_requests = status.total_requests;
                     this.success_rate = status.success_rate;
-                    this.failover_count = status.failover_count;
                 }
                 if let Ok(takeover) = takeover {
                     this.takeover = takeover;
@@ -407,7 +386,6 @@ impl ProxyView {
                     this.port = status.port;
                     this.total_requests = status.total_requests;
                     this.success_rate = status.success_rate;
-                    this.failover_count = status.failover_count;
                 } else {
                     this.running = false;
                 }
@@ -468,7 +446,6 @@ impl ProxyView {
                     this.port = status.port;
                     this.total_requests = status.total_requests;
                     this.success_rate = status.success_rate;
-                    this.failover_count = status.failover_count;
                 }
                 if let Ok(takeover) = takeover {
                     this.takeover = takeover;
@@ -487,7 +464,7 @@ impl ProxyView {
         } else {
             Some(raw.trim())
         };
-        if let Err(err) = routedeck_core::proxy::http_client::validate_proxy(url) {
+        if let Err(err) = ochub_core::proxy::http_client::validate_proxy(url) {
             self.status = Some(SharedString::from(format!("上游代理 URL 无效: {err}")));
             cx.notify();
             return;
@@ -497,7 +474,7 @@ impl ProxyView {
             .db
             .set_global_proxy_url(url)
             .map_err(|err| err.to_string())
-            .and_then(|_| routedeck_core::proxy::http_client::apply_proxy(url))
+            .and_then(|_| ochub_core::proxy::http_client::apply_proxy(url))
         {
             Ok(()) => self.status = Some(SharedString::from("上游代理设置已保存")),
             Err(err) => self.status = Some(SharedString::from(format!("保存上游代理失败: {err}"))),
@@ -591,104 +568,8 @@ impl ProxyView {
         .detach();
     }
 
-    fn refresh_failover_groups(&mut self, cx: &mut Context<Self>) {
-        self.failover_groups = load_failover_groups(&self.app);
-        cx.notify();
-    }
-
-    fn toggle_auto_failover(&mut self, app_type: AppType, target: bool, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        self.busy = true;
-        self.status = Some(SharedString::from(if target {
-            "正在启用自动故障转移..."
-        } else {
-            "正在关闭自动故障转移..."
-        }));
-        cx.notify();
-        let app = self.app.clone();
-        cx.spawn(async move |this, cx| {
-            let result = toggle_auto_failover_for_app(app.clone(), app_type, target).await;
-            let groups = load_failover_groups(&app);
-            this.update(cx, |this, cx| {
-                this.busy = false;
-                this.failover_groups = groups;
-                this.status = Some(SharedString::from(match result {
-                    Ok(msg) => msg,
-                    Err(err) => format!("切换自动故障转移失败: {err}"),
-                }));
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn add_failover_provider(
-        &mut self,
-        app_type: AppType,
-        provider_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        match self
-            .app
-            .db
-            .add_to_failover_queue(app_type.as_str(), &provider_id)
-        {
-            Ok(()) => {
-                self.status = Some(SharedString::from("已加入故障转移队列"));
-                self.refresh_failover_groups(cx);
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("加入故障转移队列失败: {err}")));
-                cx.notify();
-            }
-        }
-    }
-
-    fn remove_failover_provider(
-        &mut self,
-        app_type: AppType,
-        provider_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        match self
-            .app
-            .db
-            .remove_from_failover_queue(app_type.as_str(), &provider_id)
-        {
-            Ok(()) => {
-                self.status = Some(SharedString::from("已移出故障转移队列"));
-                self.refresh_failover_groups(cx);
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("移出故障转移队列失败: {err}")));
-                cx.notify();
-            }
-        }
-    }
-
-    fn clear_failover_queue(&mut self, app_type: AppType, cx: &mut Context<Self>) {
-        match self.app.db.clear_failover_queue(app_type.as_str()) {
-            Ok(()) => {
-                self.status = Some(SharedString::from("已清空故障转移队列"));
-                self.refresh_failover_groups(cx);
-            }
-            Err(err) => {
-                self.status = Some(SharedString::from(format!("清空故障转移队列失败: {err}")));
-                cx.notify();
-            }
-        }
-    }
-
     fn toggle_network_settings(&mut self, cx: &mut Context<Self>) {
         self.show_network_settings = !self.show_network_settings;
-        cx.notify();
-    }
-
-    fn toggle_failover_panel(&mut self, cx: &mut Context<Self>) {
-        self.show_failover = !self.show_failover;
         cx.notify();
     }
 
@@ -699,17 +580,54 @@ impl ProxyView {
 
     fn action_button(
         id: impl Into<gpui::ElementId>,
-        label: &'static str,
+        label: impl Into<gpui::SharedString>,
         primary: bool,
     ) -> gpui::Stateful<gpui::Div> {
         components::action_button(id, label, primary).px_4().py_2()
+    }
+
+    /// Stream-check buttons for every enabled proxy-capable app.
+    fn stream_check_buttons(cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let mut buttons = Vec::new();
+        for app in crate::app_meta::enabled_app_types() {
+            let Some(plugin) = ochub_core::plugin::get_plugin(&app.app_id()) else {
+                continue;
+            };
+            if plugin.proxy().is_none() {
+                continue;
+            }
+            let label = crate::app_meta::label(app);
+            buttons.push(
+                Self::action_button(
+                    SharedString::from(format!("stream-{}", app.as_str())),
+                    format!("检测 {label}"),
+                    false,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.run_stream_check(app, false, cx);
+                }))
+                .into_any_element(),
+            );
+            buttons.push(
+                Self::action_button(
+                    SharedString::from(format!("stream-targets-{}", app.as_str())),
+                    format!("{label} 代理目标"),
+                    false,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.run_stream_check(app, true, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        buttons
     }
 
     fn metric_tile(
         label: &'static str,
         value: impl Into<SharedString>,
         detail: impl Into<SharedString>,
-        tone: u32,
+        tone: gpui::Rgba,
     ) -> impl IntoElement {
         let value = value.into();
         let detail = detail.into();
@@ -719,19 +637,19 @@ impl ProxyView {
             .gap_1()
             .p_3()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap_2()
-                    .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(theme::c(tone)))
+                    .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(tone))
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(label),
@@ -739,17 +657,12 @@ impl ProxyView {
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .text_lg()
                     .font_weight(FontWeight::BOLD)
                     .child(value),
             )
-            .child(
-                div()
-                    .text_color(theme::c(theme::SUBTEXT))
-                    .text_xs()
-                    .child(detail),
-            )
+            .child(div().text_color(theme::subtext()).text_xs().child(detail))
     }
 
     fn disclosure_row(
@@ -769,9 +682,9 @@ impl ProxyView {
             .gap_3()
             .p_4()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -779,17 +692,12 @@ impl ProxyView {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(title),
                     )
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .child(detail),
-                    ),
+                    .child(div().text_color(theme::muted()).text_xs().child(detail)),
             )
             .child(
                 Self::action_button(id, if showing { "收起" } else { "展开" }, false)
@@ -809,27 +717,52 @@ impl ProxyView {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_color(theme::c(theme::MUTED))
-                    .text_xs()
-                    .child(label),
-            )
+            .child(div().text_color(theme::muted()).text_xs().child(label))
             .child(input)
+    }
+
+    /// Takeover toggle rows for every enabled takeover-capable app.
+    fn takeover_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        crate::app_meta::enabled_app_types()
+            .into_iter()
+            .filter_map(|app| {
+                let plugin = ochub_core::plugin::get_plugin(&app.app_id())?;
+                if !plugin.proxy()?.supports_takeover {
+                    return None;
+                }
+                let enabled = match app {
+                    AppType::Claude => self.takeover.claude,
+                    AppType::Codex => self.takeover.codex,
+                    AppType::Gemini => self.takeover.gemini,
+                    _ => return None,
+                };
+                Some(
+                    self.render_takeover_row(
+                        SharedString::from(format!("proxy-takeover-{}", app.as_str())),
+                        app.as_str(),
+                        crate::app_meta::label(app),
+                        enabled,
+                        cx,
+                    )
+                    .into_any_element(),
+                )
+            })
+            .collect()
     }
 
     fn render_takeover_row(
         &self,
-        id: &'static str,
+        id: impl Into<gpui::ElementId>,
         app_type: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let label = label.into();
         div()
             .id(id)
             .role(gpui::Role::Switch)
-            .aria_label(label)
+            .aria_label(label.clone())
             .aria_toggled(if enabled {
                 gpui::Toggled::True
             } else {
@@ -844,9 +777,13 @@ impl ProxyView {
             .py_3()
             .rounded_md()
             .cursor_pointer()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(if enabled { theme::GREEN } else { theme::BORDER }))
+            .border_color(if enabled {
+                theme::green()
+            } else {
+                theme::border()
+            })
             .child(
                 div()
                     .flex()
@@ -854,14 +791,14 @@ impl ProxyView {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(label),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .child(if enabled {
                                 "工具配置已指向本地代理，供应商切换会热更新。"
@@ -875,270 +812,22 @@ impl ProxyView {
                     .px_3()
                     .py_1p5()
                     .rounded_md()
-                    .bg(theme::c(if enabled {
-                        theme::GREEN
+                    .bg(if enabled {
+                        theme::green()
                     } else {
-                        theme::SURFACE_HOVER
-                    }))
-                    .text_color(theme::c(if enabled {
-                        theme::ACCENT_TEXT
+                        theme::surface_hover()
+                    })
+                    .text_color(if enabled {
+                        theme::accent_text()
                     } else {
-                        theme::SUBTEXT
-                    }))
+                        theme::subtext()
+                    })
                     .text_sm()
                     .child(if enabled { "已接管" } else { "未接管" }),
             )
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.toggle_takeover(app_type, !enabled, cx);
             }))
-    }
-
-    fn render_failover_queue_row(
-        &self,
-        app_type: AppType,
-        item: &FailoverQueueItem,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let provider_id = item.provider_id.clone();
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(theme::c(theme::SURFACE_HOVER))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::TEXT))
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(item.provider_name.clone())),
-                    )
-                    .child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
-                        SharedString::from(format!(
-                                "{} · 排序 {}",
-                                item.provider_id,
-                                item.sort_index
-                                    .map(|v| v.to_string())
-                                    .unwrap_or_else(|| "默认".to_string())
-                            )),
-                    )),
-            )
-            .child(
-                Self::action_button(
-                    format!("failover-remove-{}-{}", app_type.as_str(), provider_id),
-                    "移除",
-                    false,
-                )
-                .text_color(theme::c(theme::RED))
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.remove_failover_provider(app_type, provider_id.clone(), cx);
-                })),
-            )
-    }
-
-    fn render_failover_available_row(
-        &self,
-        app_type: AppType,
-        provider: &Provider,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let provider_id = provider.id.clone();
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .border_1()
-            .border_color(theme::c(theme::BORDER))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::TEXT))
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(provider.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .child(SharedString::from(provider.id.clone())),
-                    ),
-            )
-            .child(
-                Self::action_button(
-                    format!("failover-add-{}-{}", app_type.as_str(), provider_id),
-                    "加入",
-                    false,
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.add_failover_provider(app_type, provider_id.clone(), cx);
-                })),
-            )
-    }
-
-    fn render_failover_group(
-        &self,
-        group: &FailoverGroup,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let app_type = group.app_type;
-        let target_auto = !group.auto_enabled;
-        let queue_rows: Vec<_> = group
-            .queue
-            .iter()
-            .map(|item| self.render_failover_queue_row(app_type, item, cx))
-            .collect();
-        let available_rows: Vec<_> = group
-            .available
-            .iter()
-            .map(|provider| self.render_failover_available_row(app_type, provider, cx))
-            .collect();
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
-            .border_1()
-            .border_color(theme::c(theme::BORDER))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_color(theme::c(theme::TEXT))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(group.label),
-                            )
-                            .child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
-                                SharedString::from(format!(
-                                    "接管 {} · 自动故障转移 {} · 队列 {} 个",
-                                    if group.proxy_enabled {
-                                        "已启用"
-                                    } else {
-                                        "未启用"
-                                    },
-                                    if group.auto_enabled {
-                                        "已开启"
-                                    } else {
-                                        "已关闭"
-                                    },
-                                    group.queue.len()
-                                )),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                Self::action_button(
-                                    format!("failover-auto-{}", app_type.as_str()),
-                                    if group.auto_enabled {
-                                        "关闭自动"
-                                    } else {
-                                        "开启自动"
-                                    },
-                                    group.auto_enabled,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        this.toggle_auto_failover(app_type, target_auto, cx);
-                                    },
-                                )),
-                            )
-                            .child(
-                                Self::action_button(
-                                    format!("failover-clear-{}", app_type.as_str()),
-                                    "清空队列",
-                                    false,
-                                )
-                                .text_color(theme::c(theme::RED))
-                                .on_click(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        this.clear_failover_queue(app_type, cx);
-                                    },
-                                )),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::SUBTEXT))
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("故障转移队列"),
-                    )
-                    .when(group.queue.is_empty(), |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::c(theme::MUTED))
-                                .text_xs()
-                                .child("队列为空。开启自动时会尝试加入当前供应商作为 P1。"),
-                        )
-                    })
-                    .children(queue_rows),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_color(theme::c(theme::SUBTEXT))
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("可加入供应商"),
-                    )
-                    .when(group.available.is_empty(), |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::c(theme::MUTED))
-                                .text_xs()
-                                .child("没有更多可加入的供应商。"),
-                        )
-                    })
-                    .children(available_rows),
-            )
     }
 }
 
@@ -1159,23 +848,12 @@ impl Render for ProxyView {
         .into_iter()
         .filter(|enabled| *enabled)
         .count();
-        let failover_groups = self.failover_groups.clone();
-        let failover_queue_count: usize =
-            failover_groups.iter().map(|group| group.queue.len()).sum();
-        let auto_failover_count = failover_groups
-            .iter()
-            .filter(|group| group.auto_enabled)
-            .count();
-        let failover_cards: Vec<_> = failover_groups
-            .iter()
-            .map(|group| self.render_failover_group(group, cx))
-            .collect();
 
         layout::page()
             .child(
                 layout::page_header(
                     "本地代理",
-                    Some("代理接管、故障转移与流式健康检测。".into()),
+                    Some("代理接管与流式健康检测。".into()),
                 )
                 .child(
                     div()
@@ -1186,8 +864,8 @@ impl Render for ProxyView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE))
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .bg(theme::surface())
+                            .text_color(theme::subtext())
                             .text_sm()
                             .child("刷新")
                             .on_click(cx.listener(|this, _event, _window, cx| {
@@ -1212,35 +890,29 @@ impl Render for ProxyView {
                                 "代理状态",
                                 if running { "运行中" } else { "已停止" },
                                 endpoint.clone(),
-                                if running { theme::GREEN } else { theme::MUTED },
+                                if running { theme::green() } else { theme::muted() },
                             ))
                             .child(Self::metric_tile(
                                 "请求",
                                 self.total_requests.to_string(),
                                 format!("成功率 {:.1}%", self.success_rate),
-                                theme::ACCENT,
+                                theme::accent(),
                             ))
                             .child(Self::metric_tile(
                                 "接管",
                                 format!("{takeover_count}/3"),
                                 "Claude / Codex / Gemini",
                                 if takeover_count > 0 {
-                                    theme::GREEN
+                                    theme::green()
                                 } else {
-                                    theme::YELLOW
+                                    theme::yellow()
                                 },
-                            ))
-                            .child(Self::metric_tile(
-                                "故障转移",
-                                failover_queue_count.to_string(),
-                                format!("自动 {auto_failover_count}/3 · 触发 {} 次", self.failover_count),
-                                theme::MAUVE,
                             )),
                     )
                     .when_some(self.status.clone(), |s, status| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::TEAL))
+                                .text_color(theme::teal())
                                 .text_xs()
                                 .child(status),
                         )
@@ -1273,7 +945,7 @@ impl Render for ProxyView {
                             )
                             .child(
                                 Self::action_button("proxy-stop-restore", "停止并恢复工具配置", false)
-                                    .text_color(theme::c(theme::RED))
+                                    .text_color(theme::red())
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.do_stop_restore(cx);
                                     })),
@@ -1298,12 +970,12 @@ impl Render for ProxyView {
                             .gap_3()
                             .p_4()
                             .rounded_lg()
-                            .bg(theme::c(theme::SURFACE))
+                            .bg(theme::surface())
                             .border_1()
-                            .border_color(theme::c(theme::BORDER))
+                            .border_color(theme::border())
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("监听与超时"),
                             )
@@ -1351,14 +1023,14 @@ impl Render for ProxyView {
                                             .gap_1()
                                             .child(
                                                 div()
-                                                    .text_color(theme::c(theme::TEXT))
+                                                    .text_color(theme::text())
                                                     .text_sm()
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .child("请求日志"),
                                             )
                                             .child(
                                                 div()
-                                                    .text_color(theme::c(theme::MUTED))
+                                                    .text_color(theme::muted())
                                                     .text_xs()
                                                     .child("记录代理请求、错误和故障转移链路。"),
                                             ),
@@ -1377,16 +1049,16 @@ impl Render for ProxyView {
                                             .py_1p5()
                                             .rounded_md()
                                             .cursor_pointer()
-                                            .bg(theme::c(if logging_enabled {
-                                                theme::GREEN
+                                            .bg(if logging_enabled {
+                                                theme::green()
                                             } else {
-                                                theme::SURFACE_HOVER
-                                            }))
-                                            .text_color(theme::c(if logging_enabled {
-                                                theme::ACCENT_TEXT
+                                                theme::surface_hover()
+                                            })
+                                            .text_color(if logging_enabled {
+                                                theme::accent_text()
                                             } else {
-                                                theme::SUBTEXT
-                                            }))
+                                                theme::subtext()
+                                            })
                                             .text_sm()
                                             .child(if logging_enabled { "已启用" } else { "已关闭" })
                                             .on_click(cx.listener(
@@ -1418,20 +1090,20 @@ impl Render for ProxyView {
                             .gap_3()
                             .p_4()
                             .rounded_lg()
-                            .bg(theme::c(theme::SURFACE))
+                            .bg(theme::surface())
                             .border_1()
-                            .border_color(theme::c(theme::BORDER))
+                            .border_color(theme::border())
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("上游代理"),
                             )
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
-                                    .child("配置 RouteDeck 发起外部 HTTP 请求时使用的上游代理；留空表示直连。"),
+                                    .child("配置 OCHUB 发起外部 HTTP 请求时使用的上游代理；留空表示直连。"),
                             )
                             .child(Self::render_input_row(
                                 "代理 URL",
@@ -1468,74 +1140,22 @@ impl Render for ProxyView {
                             .gap_3()
                             .p_4()
                             .rounded_lg()
-                            .bg(theme::c(theme::SURFACE))
+                            .bg(theme::surface())
                             .border_1()
-                            .border_color(theme::c(theme::BORDER))
+                            .border_color(theme::border())
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("工具配置接管"),
                             )
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .child("接管会先备份当前配置，再把客户端请求导向本地代理。关闭时会恢复备份。"),
                             )
-                            .child(self.render_takeover_row(
-                                "proxy-takeover-claude",
-                                "claude",
-                                "Claude Code",
-                                self.takeover.claude,
-                                cx,
-                            ))
-                            .child(self.render_takeover_row(
-                                "proxy-takeover-codex",
-                                "codex",
-                                "Codex",
-                                self.takeover.codex,
-                                cx,
-                            ))
-                            .child(self.render_takeover_row(
-                                "proxy-takeover-gemini",
-                                "gemini",
-                                "Gemini CLI",
-                                self.takeover.gemini,
-                                cx,
-                            )),
-                    )
-                    })
-                    .child(Self::disclosure_row(
-                        "proxy-failover-toggle",
-                        "故障转移队列",
-                        format!(
-                            "{} 个队列项 · 自动 {auto_failover_count}/3",
-                            failover_queue_count
-                        ),
-                        self.show_failover,
-                        cx,
-                        Self::toggle_failover_panel,
-                    ))
-                    .when(self.show_failover, |s| {
-                        s.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .text_color(theme::c(theme::TEXT))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("故障转移队列"),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::c(theme::MUTED))
-                                    .text_xs()
-                                    .child("代理模式下按队列顺序重试供应商；自动故障转移会把目标切到队列 P1。"),
-                            )
-                            .children(failover_cards),
+                            .children(self.takeover_rows(cx)),
                     )
                     })
                     .child(Self::disclosure_row(
@@ -1559,18 +1179,18 @@ impl Render for ProxyView {
                             .gap_3()
                             .p_4()
                             .rounded_lg()
-                            .bg(theme::c(theme::SURFACE))
+                            .bg(theme::surface())
                             .border_1()
-                            .border_color(theme::c(theme::BORDER))
+                            .border_color(theme::border())
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("流式健康检测"),
                             )
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .child("对供应商进行流式连通性探测，并把结果写入健康检查日志。"),
                             )
@@ -1606,66 +1226,7 @@ impl Render for ProxyView {
                                                 },
                                             )),
                                     )
-                                    .child(
-                                        Self::action_button("stream-claude", "检测 Claude", false)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.run_stream_check(AppType::Claude, false, cx);
-                                                },
-                                            )),
-                                    )
-                                    .child(
-                                        Self::action_button("stream-codex", "检测 Codex", false)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.run_stream_check(AppType::Codex, false, cx);
-                                                },
-                                            )),
-                                    )
-                                    .child(
-                                        Self::action_button("stream-gemini", "检测 Gemini", false)
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.run_stream_check(AppType::Gemini, false, cx);
-                                                },
-                                            )),
-                                    )
-                                    .child(
-                                        Self::action_button(
-                                            "stream-targets-claude",
-                                            "Claude 代理目标",
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _event, _window, cx| {
-                                                this.run_stream_check(AppType::Claude, true, cx);
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        Self::action_button(
-                                            "stream-targets-codex",
-                                            "Codex 代理目标",
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _event, _window, cx| {
-                                                this.run_stream_check(AppType::Codex, true, cx);
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        Self::action_button(
-                                            "stream-targets-gemini",
-                                            "Gemini 代理目标",
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _event, _window, cx| {
-                                                this.run_stream_check(AppType::Gemini, true, cx);
-                                            }),
-                                        ),
-                                    ),
+                                    .children(Self::stream_check_buttons(cx)),
                             ),
                     )
                     }),
@@ -1719,114 +1280,6 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
         .map_err(|_| format!("{label} 必须是非负数字"))
 }
 
-fn failover_apps() -> [(AppType, &'static str); 3] {
-    [
-        (AppType::Claude, "Claude Code"),
-        (AppType::Codex, "Codex"),
-        (AppType::Gemini, "Gemini CLI"),
-    ]
-}
-
-fn load_failover_groups(app: &Arc<AppState>) -> Vec<FailoverGroup> {
-    failover_apps()
-        .into_iter()
-        .map(|(app_type, label)| {
-            let (proxy_enabled, auto_enabled) = app.db.get_proxy_flags_sync(app_type.as_str());
-            let queue = app
-                .db
-                .get_failover_queue(app_type.as_str())
-                .unwrap_or_default();
-            let mut available = app
-                .db
-                .get_available_providers_for_failover(app_type.as_str())
-                .unwrap_or_default();
-            available.sort_by(|a, b| {
-                a.sort_index
-                    .unwrap_or(usize::MAX)
-                    .cmp(&b.sort_index.unwrap_or(usize::MAX))
-                    .then_with(|| a.name.cmp(&b.name))
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            FailoverGroup {
-                app_type,
-                label,
-                proxy_enabled,
-                auto_enabled,
-                queue,
-                available,
-            }
-        })
-        .collect()
-}
-
-async fn toggle_auto_failover_for_app(
-    app: Arc<AppState>,
-    app_type: AppType,
-    target: bool,
-) -> Result<String, String> {
-    let app_key = app_type.as_str();
-    let mut config = app
-        .db
-        .get_proxy_config_for_app(app_key)
-        .await
-        .map_err(|err| err.to_string())?;
-    if target && !config.enabled {
-        return Err("请先启用该应用的工具配置接管".to_string());
-    }
-
-    let mut auto_added_provider_id = None;
-    let p1_provider_id = if target {
-        let mut queue = app
-            .db
-            .get_failover_queue(app_key)
-            .map_err(|err| err.to_string())?;
-        if queue.is_empty() {
-            let current_id = routedeck_core::settings::get_effective_current_provider(&app.db, &app_type)
-                .map_err(|err| err.to_string())?
-                .ok_or_else(|| "队列为空，且当前没有选中的供应商".to_string())?;
-            app.db
-                .add_to_failover_queue(app_key, &current_id)
-                .map_err(|err| err.to_string())?;
-            auto_added_provider_id = Some(current_id);
-            queue = app
-                .db
-                .get_failover_queue(app_key)
-                .map_err(|err| err.to_string())?;
-        }
-        queue
-            .first()
-            .map(|item| item.provider_id.clone())
-            .ok_or_else(|| "故障转移队列为空".to_string())?
-    } else {
-        String::new()
-    };
-
-    if target {
-        if let Err(err) = app
-            .proxy_service
-            .switch_proxy_target(app_key, &p1_provider_id)
-            .await
-        {
-            if let Some(provider_id) = auto_added_provider_id {
-                let _ = app.db.remove_from_failover_queue(app_key, &provider_id);
-            }
-            return Err(err);
-        }
-    }
-
-    config.auto_failover_enabled = target;
-    app.db
-        .update_proxy_config_for_app(config)
-        .await
-        .map_err(|err| err.to_string())?;
-
-    Ok(if target {
-        format!("已启用自动故障转移，P1 为 {p1_provider_id}")
-    } else {
-        "已关闭自动故障转移".to_string()
-    })
-}
-
 fn scan_local_proxy_ports() -> Vec<String> {
     const PROXY_PORTS: &[(u16, &str, bool)] = &[
         (7890, "http", true),
@@ -1872,9 +1325,6 @@ async fn run_stream_check_for_app(
         if let Ok(Some(current_id)) = app.db.get_current_provider(app_type.as_str()) {
             ids.insert(current_id);
         }
-        if let Ok(queue) = app.db.get_failover_queue(app_type.as_str()) {
-            ids.extend(queue.into_iter().map(|item| item.provider_id));
-        }
         Some(ids)
     } else {
         None
@@ -1894,11 +1344,11 @@ async fn run_stream_check_for_app(
             continue;
         }
         total += 1;
-        let result = routedeck_core::services::StreamCheckService::check_with_retry(
+        let result = ochub_core::services::StreamCheckService::check_with_retry(
             &app_type, &provider, &config, None,
         )
         .await
-        .unwrap_or_else(|err| routedeck_core::db::StreamCheckResult {
+        .unwrap_or_else(|err| ochub_core::db::StreamCheckResult {
             status: HealthStatus::Failed,
             success: false,
             message: err.to_string(),

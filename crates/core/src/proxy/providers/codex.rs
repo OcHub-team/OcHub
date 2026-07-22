@@ -12,7 +12,6 @@ use regex::Regex;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::sync::LazyLock;
-use toml::Value as TomlValue;
 
 /// 官方 Codex 客户端 User-Agent 正则
 #[allow(dead_code)]
@@ -363,7 +362,7 @@ pub fn is_origin_only_url(value: &str) -> bool {
 }
 
 fn extract_codex_wire_api_from_toml(config_text: &str) -> Option<String> {
-    let doc = config_text.parse::<TomlValue>().ok()?;
+    let doc = config_text.parse::<toml::Table>().ok()?;
 
     if let Some(active_provider) = doc.get("model_provider").and_then(|v| v.as_str()) {
         if let Some(wire_api) = doc
@@ -382,7 +381,7 @@ fn extract_codex_wire_api_from_toml(config_text: &str) -> Option<String> {
 }
 
 fn extract_codex_model_from_toml(config_text: &str) -> Option<String> {
-    let doc = config_text.parse::<TomlValue>().ok()?;
+    let doc = config_text.parse::<toml::Table>().ok()?;
 
     doc.get("model")
         .and_then(|v| v.as_str())

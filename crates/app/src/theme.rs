@@ -1,70 +1,160 @@
-//! Visual design tokens for the RouteDeck UI.
+//! Visual design tokens for the OCHUB UI.
 //!
 //! Modeled on Zed's light theme: a warm "sand" neutral ramp, hairline borders,
 //! near-flat surfaces (shadows reserved for popovers/modals), a restrained blue
-//! accent, and muted secondary text. Colors are exposed as `gpui::Rgba` via small
-//! const helpers so call sites read like `theme::ACCENT`.
+//! accent, and muted secondary text.
+//!
+//! The palette lives in a runtime [`Theme`] behind a global lock so a dark
+//! palette can be installed later without touching call sites; only the light
+//! palette exists today. Colors are exposed as `gpui::Rgba` via small accessor
+//! functions so call sites read like `theme::accent()` did before — `theme::accent()`.
+
+use std::sync::RwLock;
 
 use gpui::{hsla, px, rgb, BoxShadow, Hsla, Rgba};
 
-/// Window background (the canvas behind cards).
-pub const BG: u32 = 0xfcfcfb;
-/// Sidebar / secondary panel background.
-pub const MANTLE: u32 = 0xf4f4f2;
-/// Card / raised surface.
-pub const SURFACE: u32 = 0xffffff;
-/// Hovered / active surface (ghost overlay).
-pub const SURFACE_HOVER: u32 = 0xeeeeea;
-/// Quiet grouped-control panel.
+/// A complete color palette. Values are `0xRRGGBB` hex, converted to `Rgba`
+/// by the accessor functions below.
+#[derive(Clone, Copy, Debug)]
+pub struct Theme {
+    /// Window background (the canvas behind cards).
+    pub bg: u32,
+    /// Sidebar / secondary panel background.
+    pub mantle: u32,
+    /// Card / raised surface.
+    pub surface: u32,
+    /// Hovered / active surface (ghost overlay).
+    pub surface_hover: u32,
+    /// Quiet grouped-control panel.
+    pub panel: u32,
+    /// Subtle filled element background (buttons, insets).
+    pub inset: u32,
+    /// Hairline separators.
+    pub border: u32,
+    pub border_strong: u32,
+    /// Primary text (warm near-black).
+    pub text: u32,
+    /// Secondary / muted text.
+    pub subtext: u32,
+    pub muted: u32,
+    /// Accent (interactive / selected).
+    pub accent: u32,
+    pub accent_hover: u32,
+    pub accent_soft: u32,
+    pub accent_text: u32,
+    pub green: u32,
+    pub green_soft: u32,
+    pub red: u32,
+    pub red_soft: u32,
+    pub yellow: u32,
+    pub yellow_soft: u32,
+    pub mauve: u32,
+    pub teal: u32,
+    pub peach: u32,
+    pub sidebar_selected: u32,
+    pub sidebar_text: u32,
+    pub sidebar_muted: u32,
+    pub header: u32,
+}
+
+/// The Zed-style light palette — the only one installed today.
+pub const LIGHT: Theme = Theme {
+    bg: 0xfcfcfb,
+    mantle: 0xf4f4f2,
+    surface: 0xffffff,
+    surface_hover: 0xeeeeea,
+    panel: 0xf8f8f6,
+    inset: 0xf1f1ed,
+    border: 0xe7e6e2,
+    border_strong: 0xd6d5d0,
+    text: 0x222019,
+    subtext: 0x6b6a64,
+    muted: 0x91908a,
+    accent: 0x2563dd,
+    accent_hover: 0x1c54c2,
+    accent_soft: 0xe1ebfc,
+    accent_text: 0xfbfcff,
+    green: 0x2e9d5f,
+    green_soft: 0xdef3e7,
+    red: 0xcf493f,
+    red_soft: 0xf6e1dd,
+    yellow: 0xc98a1e,
+    yellow_soft: 0xf5ecd4,
+    mauve: 0x7a62c9,
+    teal: 0x119a8f,
+    peach: 0xcf6a3a,
+    sidebar_selected: 0xe1ebfc,
+    sidebar_text: 0x2c2a23,
+    sidebar_muted: 0x84837d,
+    header: 0xfbfbf9,
+};
+
+static CURRENT: RwLock<Theme> = RwLock::new(LIGHT);
+
+/// The active palette. Reads through a lock so [`install`] can swap palettes
+/// at runtime (reserved for dark mode).
+pub fn current() -> Theme {
+    *CURRENT.read().expect("theme lock poisoned")
+}
+
+/// Install a new palette. Reserved for dark mode; the caller is responsible
+/// for triggering a full repaint afterwards.
 #[allow(dead_code)]
-pub const PANEL: u32 = 0xf8f8f6;
-/// Subtle filled element background (buttons, insets).
-pub const INSET: u32 = 0xf1f1ed;
-/// Hairline separators.
-pub const BORDER: u32 = 0xe7e6e2;
-pub const BORDER_STRONG: u32 = 0xd6d5d0;
+pub fn install(theme: Theme) {
+    *CURRENT.write().expect("theme lock poisoned") = theme;
+}
 
-/// Primary text (warm near-black).
-pub const TEXT: u32 = 0x222019;
-/// Secondary / muted text.
-pub const SUBTEXT: u32 = 0x6b6a64;
-pub const MUTED: u32 = 0x91908a;
+macro_rules! token {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[inline]
+            pub fn $name() -> Rgba {
+                rgb(current().$name)
+            }
+        )*
+    };
+}
 
-/// Accent (interactive / selected).
-pub const ACCENT: u32 = 0x2563dd;
-pub const ACCENT_HOVER: u32 = 0x1c54c2;
-pub const ACCENT_SOFT: u32 = 0xe1ebfc;
-pub const ACCENT_TEXT: u32 = 0xfbfcff;
-pub const GREEN: u32 = 0x2e9d5f;
-pub const GREEN_SOFT: u32 = 0xdef3e7;
-pub const RED: u32 = 0xcf493f;
-pub const RED_SOFT: u32 = 0xf6e1dd;
-pub const YELLOW: u32 = 0xc98a1e;
-pub const YELLOW_SOFT: u32 = 0xf5ecd4;
-pub const MAUVE: u32 = 0x7a62c9;
-pub const TEAL: u32 = 0x119a8f;
-pub const PEACH: u32 = 0xcf6a3a;
-pub const SIDEBAR_SELECTED: u32 = 0xe1ebfc;
-pub const SIDEBAR_TEXT: u32 = 0x2c2a23;
-pub const SIDEBAR_MUTED: u32 = 0x84837d;
-pub const HEADER: u32 = 0xfbfbf9;
+token!(
+    bg,
+    mantle,
+    surface,
+    surface_hover,
+    panel,
+    inset,
+    border,
+    border_strong,
+    text,
+    subtext,
+    muted,
+    accent,
+    accent_hover,
+    accent_soft,
+    accent_text,
+    green,
+    green_soft,
+    red,
+    red_soft,
+    yellow,
+    yellow_soft,
+    mauve,
+    teal,
+    peach,
+    sidebar_selected,
+    sidebar_text,
+    sidebar_muted,
+    header,
+);
 
-/// Authentic per-app brand colors for the sidebar app-switcher icons.
-/// Each is the managed tool's official identity color (a white glyph sits on top),
-/// sourced from the upstream brand assets rather than the generic accent palette.
-pub const BRAND_CLAUDE: u32 = 0xd97757; // Anthropic coral
-pub const BRAND_CLAUDE_DESKTOP: u32 = 0xbd5d3a; // deeper Anthropic terracotta (distinct from the CLI)
-pub const BRAND_CODEX: u32 = 0x0d0d0d; // OpenAI near-black
-pub const BRAND_GEMINI: u32 = 0x4285f4; // Google blue
-pub const BRAND_OPENCODE: u32 = 0x211e1e; // OpenCode charcoal
-pub const BRAND_OPENCLAW: u32 = 0xe23b3b; // OpenClaw red
-pub const BRAND_HERMES: u32 = 0x2b2b33; // Hermes slate (monochrome brand, kept apart from the other darks)
-
+/// Convert a raw `0xRRGGBB` hex to `Rgba` — for non-token colors (brand
+/// accents, one-off literals). Theme tokens should go through the accessors.
 #[inline]
 pub fn c(hex: u32) -> Rgba {
     rgb(hex)
 }
 
+/// Alpha-adjusted variant of a raw hex color (non-token).
+#[allow(dead_code)]
 #[inline]
 pub fn translucent(hex: u32, alpha: f32) -> Rgba {
     rgb(hex).alpha(alpha)

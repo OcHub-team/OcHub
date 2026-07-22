@@ -1,7 +1,7 @@
 //! Codex provider config codec.
 //!
 //! Codex reads two files: `~/.codex/auth.json` (the API key / OpenAI-login
-//! material) and `~/.codex/config.toml` (model + provider table). RouteDeck
+//! material) and `~/.codex/config.toml` (model + provider table). OCHUB
 //! stores both inside one `settingsConfig` object shaped
 //! `{ "auth": { "OPENAI_API_KEY": … }, "config": "<config.toml text>" }`.
 //!
@@ -26,8 +26,8 @@ const DEFAULT_ENV_KEY: &str = "OPENAI_API_KEY";
 pub struct CodexConfig;
 
 impl AppConfig for CodexConfig {
-    fn app(&self) -> AppType {
-        AppType::Codex
+    fn app_id(&self) -> crate::app_id::AppId {
+        AppType::Codex.app_id()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -86,7 +86,7 @@ impl AppConfig for CodexConfig {
                         },
                     )
                     .visible_when("auth_mode", AUTH_API_KEY)
-                    .help("Codex 从该环境变量读取密钥；RouteDeck 启动时会注入。"),
+                    .help("Codex 从该环境变量读取密钥；OCHUB 启动时会注入。"),
                     FormField::new(
                         "api_key",
                         "API Key",
@@ -313,12 +313,18 @@ impl AppConfig for CodexConfig {
         Ok(json!({ "auth": auth, "config": config }))
     }
 
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile> {
+    fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
+        // The stored `config` TOML text is the merge base, so hand-edited /
+        // native keys show up in the preview exactly as they will be written.
+        let prior_config = prior
+            .get("config")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         vec![
             PreviewFile {
                 filename: "~/.codex/config.toml".into(),
                 language: Language::Toml,
-                content: build_config_text(values, ""),
+                content: build_config_text(values, prior_config),
             },
             PreviewFile {
                 filename: "~/.codex/auth.json".into(),
@@ -707,7 +713,7 @@ mod tests {
 
     #[test]
     fn preview_emits_config_and_auth_files() {
-        let files = CodexConfig.preview(&deepseek_values());
+        let files = CodexConfig.preview(&deepseek_values(), &Value::Null);
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| f.filename.ends_with("config.toml")));
         assert!(files.iter().any(|f| f.filename.ends_with("auth.json")));
@@ -734,14 +740,25 @@ mod tests {
         let original = deepseek_values();
         // preview -> edit (verbatim) -> parse_files -> decode should preserve fields.
         let files: Vec<String> = CodexConfig
-            .preview(&original)
+            .preview(&original, &Value::Null)
             .into_iter()
             .map(|f| f.content)
             .collect();
         let settings = CodexConfig.parse_files(&files).unwrap();
         let decoded = CodexConfig.decode(&settings, None);
-        for key in ["provider_id", "name", "base_url", "model", "env_key", "api_key"] {
-            assert_eq!(str_val(&decoded, key), str_val(&original, key), "field {key}");
+        for key in [
+            "provider_id",
+            "name",
+            "base_url",
+            "model",
+            "env_key",
+            "api_key",
+        ] {
+            assert_eq!(
+                str_val(&decoded, key),
+                str_val(&original, key),
+                "field {key}"
+            );
         }
     }
 }

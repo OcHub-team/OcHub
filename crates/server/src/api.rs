@@ -11,16 +11,25 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-use routedeck_core::apps::claude_desktop;
-use routedeck_core::model::{ClaudeDesktopMode, ClaudeDesktopModelRoute, ProviderMeta, UniversalProvider};
-use routedeck_core::services::provider::{self, ProviderService, ProviderSortUpdate};
-use routedeck_core::settings::AppSettings;
-use routedeck_core::{AppError, AppType, Provider};
+use ochub_core::apps::claude_desktop;
+use ochub_core::model::{ClaudeDesktopMode, ClaudeDesktopModelRoute, ProviderMeta};
+use ochub_core::services::provider::{self, ProviderService, ProviderSortUpdate};
+use ochub_core::settings::AppSettings;
+use ochub_core::{AppError, AppType, Provider};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::ServerState;
 
+/// Resolve an `:app` path param to a builtin app, rejecting disabled apps
+/// (403 `app_disabled`). App-management endpoints that must see disabled apps
+/// use [`parse_app_any`] instead.
 fn parse_app(app: &str) -> Result<AppType, ApiError> {
+    let app_type = parse_app_any(app)?;
+    ochub_core::plugin::ensure_app_type_enabled(&app_type).map_err(ApiError::from)?;
+    Ok(app_type)
+}
+
+fn parse_app_any(app: &str) -> Result<AppType, ApiError> {
     app.parse::<AppType>().map_err(ApiError::from)
 }
 
@@ -52,6 +61,44 @@ struct SortRequest {
 #[derive(Deserialize)]
 struct EndpointUrlRequest {
     url: String,
+}
+
+/// All registered app plugins with their metadata and enabled state.
+/// Disabled apps are included — this is the app-management surface.
+async fn list_apps(State(_state): State<ServerState>) -> ApiResult<Json<Value>> {
+    let apps: Vec<Value> = ochub_core::plugin::all_plugins()
+        .iter()
+        .map(|p| {
+            json!({
+                "id": p.id().as_str(),
+                "name": p.display_name(),
+                "icon": p.icon_id(),
+                "accent": format!("#{:06x}", p.accent_color()),
+                "mode": match p.mode() {
+                    ochub_core::plugin::AppMode::Switch => "switch",
+                    ochub_core::plugin::AppMode::Additive => "additive",
+                },
+                "enabled": ochub_core::plugin::is_app_enabled(p.as_ref()),
+                "userPlugin": p.is_user_manifest(),
+            })
+        })
+        .collect();
+    to_value(apps)
+}
+
+#[derive(Deserialize)]
+struct SetAppEnabledRequest {
+    enabled: bool,
+}
+
+async fn set_app_enabled(
+    State(state): State<ServerState>,
+    Path(app): Path<String>,
+    Json(req): Json<SetAppEnabledRequest>,
+) -> ApiResult<Json<Value>> {
+    let id = ochub_core::AppId::parse(&app).map_err(ApiError::from)?;
+    ochub_core::services::apps::set_app_enabled(&state.app, &id, req.enabled).await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn list_providers(
@@ -213,41 +260,6 @@ async fn endpoint_last_used(
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn universal_list(State(state): State<ServerState>) -> ApiResult<Json<Value>> {
-    to_value(ProviderService::list_universal(&state.app)?)
-}
-
-async fn universal_get(
-    State(state): State<ServerState>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    to_value(ProviderService::get_universal(&state.app, &id)?)
-}
-
-async fn universal_upsert(
-    State(state): State<ServerState>,
-    Json(provider): Json<UniversalProvider>,
-) -> ApiResult<Json<Value>> {
-    let ok = ProviderService::upsert_universal(&state.app, provider)?;
-    Ok(Json(json!({ "ok": ok })))
-}
-
-async fn universal_delete(
-    State(state): State<ServerState>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let ok = ProviderService::delete_universal(&state.app, &id)?;
-    Ok(Json(json!({ "ok": ok })))
-}
-
-async fn universal_sync(
-    State(state): State<ServerState>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let ok = ProviderService::sync_universal_to_apps(&state.app, &id)?;
-    Ok(Json(json!({ "ok": ok })))
-}
-
 async fn claude_desktop_status(State(state): State<ServerState>) -> ApiResult<Json<Value>> {
     let proxy_running = state.app.proxy_service.is_running().await;
     to_value(claude_desktop::get_status(&state.app.db, proxy_running)?)
@@ -328,7 +340,7 @@ async fn update_sort_order(
 }
 
 async fn get_settings() -> ApiResult<Json<AppSettings>> {
-    Ok(Json(routedeck_core::settings::get_settings_for_frontend()))
+    Ok(Json(ochub_core::settings::get_settings_for_frontend()))
 }
 
 fn merge_settings_for_save(mut incoming: AppSettings, existing: &AppSettings) -> AppSettings {
@@ -361,20 +373,20 @@ async fn save_settings(
     State(state): State<ServerState>,
     Json(settings): Json<AppSettings>,
 ) -> ApiResult<Json<Value>> {
-    let existing = routedeck_core::settings::get_settings();
+    let existing = ochub_core::settings::get_settings();
     let merged = merge_settings_for_save(settings, &existing);
     let unify_codex_changed =
         merged.unify_codex_session_history != existing.unify_codex_session_history;
     let unify_codex_enabled = merged.unify_codex_session_history;
 
-    routedeck_core::settings::update_settings(merged)?;
+    ochub_core::settings::update_settings(merged)?;
 
     if unify_codex_changed {
         if let Err(err) = provider::reapply_current_codex_official_live(&state.app) {
             log::warn!(
                 "failed to reapply Codex official live config after unify-history change; rolling back: {err}"
             );
-            if let Err(rollback_err) = routedeck_core::settings::update_settings(existing) {
+            if let Err(rollback_err) = ochub_core::settings::update_settings(existing) {
                 log::error!(
                     "failed to roll back settings after Codex live rewrite failure: {rollback_err}"
                 );
@@ -386,7 +398,7 @@ async fn save_settings(
 
         if unify_codex_enabled {
             tokio::task::spawn_blocking(|| {
-                match routedeck_core::services::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
+                match ochub_core::services::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
                     Ok(outcome) => {
                         if let Some(reason) = outcome.skipped_reason {
                             log::debug!(
@@ -406,10 +418,10 @@ async fn save_settings(
                 }
             });
         } else {
-            if let Err(err) = routedeck_core::settings::clear_codex_official_history_unify_migration() {
+            if let Err(err) = ochub_core::settings::clear_codex_official_history_unify_migration() {
                 log::warn!("failed to clear Codex official history unify migration marker: {err}");
             }
-            if let Err(err) = routedeck_core::settings::clear_codex_unify_migrate_existing() {
+            if let Err(err) = ochub_core::settings::clear_codex_unify_migrate_existing() {
                 log::warn!("failed to clear Codex unify migrate-existing flag: {err}");
             }
         }
@@ -419,7 +431,7 @@ async fn save_settings(
 }
 
 async fn claude_config_status() -> Json<Value> {
-    let status = routedeck_core::paths::get_claude_config_status();
+    let status = ochub_core::paths::get_claude_config_status();
     Json(json!({ "exists": status.exists, "path": status.path }))
 }
 
@@ -562,7 +574,7 @@ fn suggested_claude_desktop_routes(
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "service": "RouteDeck" }))
+    Json(json!({ "status": "ok", "service": "OCHUB" }))
 }
 
 /// Build the provider + settings + status routes. State is applied by the caller.
@@ -573,6 +585,8 @@ async fn health() -> Json<Value> {
 pub fn router() -> Router<ServerState> {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/apps", get(list_apps))
+        .route("/api/apps/{app}/enabled", put(set_app_enabled))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/config/claude-status", get(claude_config_status))
         .route("/api/claude-desktop/status", get(claude_desktop_status))
@@ -589,49 +603,41 @@ pub fn router() -> Router<ServerState> {
             post(claude_desktop_ensure_official),
         )
         .route(
-            "/api/universal-providers",
-            get(universal_list)
-                .post(universal_upsert)
-                .put(universal_upsert),
-        )
-        .route(
-            "/api/universal-providers/:id",
-            get(universal_get).delete(universal_delete),
-        )
-        .route("/api/universal-providers/:id/sync", post(universal_sync))
-        .route(
-            "/api/providers/:app",
+            "/api/providers/{app}",
             get(list_providers).post(add_provider).put(update_provider),
         )
-        .route("/api/providers/:app/current", get(current_provider))
-        .route("/api/providers/:app/import-default", post(import_default))
-        .route("/api/providers/:app/import-live", post(import_live))
-        .route("/api/providers/:app/live-settings", get(read_live_settings))
+        .route("/api/providers/{app}/current", get(current_provider))
+        .route("/api/providers/{app}/import-default", post(import_default))
+        .route("/api/providers/{app}/import-live", post(import_live))
         .route(
-            "/api/providers/:app/sync-current-live",
+            "/api/providers/{app}/live-settings",
+            get(read_live_settings),
+        )
+        .route(
+            "/api/providers/{app}/sync-current-live",
             post(sync_current_live),
         )
-        .route("/api/providers/:app/sort", put(update_sort_order))
+        .route("/api/providers/{app}/sort", put(update_sort_order))
         .route(
-            "/api/providers/:app/by-id/:id",
+            "/api/providers/{app}/by-id/{id}",
             axum::routing::delete(delete_provider),
         )
         .route(
-            "/api/providers/:app/by-id/:id/switch",
+            "/api/providers/{app}/by-id/{id}/switch",
             post(switch_provider),
         )
         .route(
-            "/api/providers/:app/by-id/:id/remove-from-live",
+            "/api/providers/{app}/by-id/{id}/remove-from-live",
             post(remove_from_live),
         )
         .route(
-            "/api/providers/:app/by-id/:id/custom-endpoints",
+            "/api/providers/{app}/by-id/{id}/custom-endpoints",
             get(get_custom_endpoints)
                 .post(add_custom_endpoint)
                 .delete(remove_custom_endpoint),
         )
         .route(
-            "/api/providers/:app/by-id/:id/custom-endpoints/last-used",
+            "/api/providers/{app}/by-id/{id}/custom-endpoints/last-used",
             post(endpoint_last_used),
         )
 }

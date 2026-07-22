@@ -198,12 +198,6 @@ pub async fn forward(
                             should_hot_switch(&current_provider_id_at_start, &provider),
                         )
                         .await;
-                        trigger_failover_switch_if_needed(
-                            &state,
-                            app_type,
-                            &provider,
-                            &current_provider_id_at_start,
-                        );
                     } else {
                         let message = format!("upstream status {status}");
                         record_request_failed(&state, &message).await;
@@ -319,12 +313,6 @@ pub async fn forward(
                         should_hot_switch(&current_provider_id_at_start, &provider),
                     )
                     .await;
-                    trigger_failover_switch_if_needed(
-                        &state,
-                        app_type,
-                        &provider,
-                        &current_provider_id_at_start,
-                    );
                     if let Some(conversion) = codex_chat_conversion {
                         return stream_back_codex_chat_converted_with_usage(
                             state.clone(),
@@ -643,27 +631,6 @@ fn refresh_success_rate(status: &mut crate::proxy::ProxyStatus) {
 
 fn should_hot_switch(current_provider_id_at_start: &Option<String>, provider: &Provider) -> bool {
     current_provider_id_at_start.as_deref() != Some(provider.id.as_str())
-}
-
-fn trigger_failover_switch_if_needed(
-    state: &ProxyState,
-    app_type: AppType,
-    provider: &Provider,
-    current_provider_id_at_start: &Option<String>,
-) {
-    if !should_hot_switch(current_provider_id_at_start, provider) {
-        return;
-    }
-
-    let manager = state.failover_manager.clone();
-    let app = app_type.as_str().to_string();
-    let provider_id = provider.id.clone();
-    let provider_name = provider.name.clone();
-    tokio::spawn(async move {
-        if let Err(e) = manager.try_switch(&app, &provider_id, &provider_name).await {
-            log::warn!("[Failover] hot-switch update failed: {e}");
-        }
-    });
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {

@@ -1,21 +1,21 @@
 [package]
-name = "routedeck-server"
+name = "ochub-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "RouteDeck axum server: control API + local provider proxy"
+description = "OCHUB axum server: control API + local provider proxy"
 
 [lib]
-name = "routedeck_server"
+name = "ochub_server"
 
 [[bin]]
-name = "routedeck-server"
+name = "ochub-server"
 path = "src/main.rs"
 
 [dependencies]
-routedeck-core = { workspace = true }
+ochub-core = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -30,6 +30,8 @@ http.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
 log.workspace = true
 arboard.workspace = true
 auto-launch.workspace = true

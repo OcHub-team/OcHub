@@ -4,24 +4,25 @@ members = [
     "crates/core",
     "crates/server",
     "crates/app",
+    "crates/convert",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-authors = ["RouteDeck contributors"]
-repository = "https://github.com/sleepstars/RouteDeck"
-rust-version = "1.95.0"
+authors = ["OCHUB contributors"]
+repository = "https://github.com/sleepstars/OCHUB"
+rust-version = "1.97.0"
 
 [workspace.dependencies]
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
-serde_yaml = "0.9"
-toml = "0.8"
-toml_edit = "0.22"
-json5 = "0.4"
+serde_norway = "0.9"
+toml = "1.1"
+toml_edit = "0.25"
+json5 = "1.3"
 json-five = "0.3.1"
 indexmap = { version = "2", features = ["serde"] }
 
@@ -34,42 +35,49 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 futures = "0.3"
 async-stream = "0.3"
 bytes = "1.5"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "socks", "blocking"] }
-axum = "0.7"
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "stream", "socks", "blocking"] }
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 http = "1"
 
 # Storage
-rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup", "hooks"] }
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
-dirs = "5.0"
+dirs = "6.0"
 regex = "1.10"
 url = "2.5"
 uuid = { version = "1.11", features = ["v4"] }
 unicode-segmentation = "1"
 base64 = "0.22"
-sha2 = "0.10"
-hmac = "0.12"
+sha2 = "0.11"
+hmac = "0.13"
 flate2 = "1"
-zip = "2.2"
+zip = "8.6"
 tempfile = "3"
 once_cell = "1.21"
-rquickjs = { version = "0.8", features = ["array-buffer", "classes"] }
+rquickjs = { version = "0.12", features = ["array-buffer", "classes"] }
 log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rust_decimal = "1.33"
 arboard = "3.6"
-auto-launch = "0.5"
+auto-launch = "0.6"
 
 # Internal crates
-routedeck-core = { path = "crates/core" }
-routedeck-server = { path = "crates/server" }
+ochub-core = { path = "crates/core" }
+ochub-server = { path = "crates/server" }
+ochub-convert = { path = "crates/convert" }
 
 # GPUI is pinned to a Zed commit instead of crates.io because the published
-# crate lags the APIs used by RouteDeck.
-gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "195760c6173e6a133192e497cff02c052890f8b1" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "195760c6173e6a133192e497cff02c052890f8b1", features = ["font-kit", "runtime_shaders"] }
+# crate lags the APIs used by OCHUB.
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52" }
+zed-text = { git = "https://github.com/zed-industries/zed", package = "text", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52", features = ["font-kit", "runtime_shaders"] }
+
+# Mirror Zed's own [patch.crates-io]: the `util` crate (pulled in via
+# `zed-text`) needs Zed's async-process fork (`Child::adopt_raw_pid`).
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }

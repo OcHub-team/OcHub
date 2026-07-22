@@ -3,7 +3,7 @@
 //! The Gemini CLI reads two files: `~/.gemini/.env` (plain `KEY=VALUE` lines —
 //! the API key, base URL, model and any arbitrary env the user wants exported)
 //! and `~/.gemini/settings.json` (the CLI's own settings object, e.g.
-//! `mcpServers`, `security.auth.selectedType`, …). RouteDeck stores both
+//! `mcpServers`, `security.auth.selectedType`, …). OCHUB stores both
 //! inside one `settingsConfig` object shaped
 //! `{ "env": { GOOGLE_GEMINI_BASE_URL?, GEMINI_API_KEY?, GEMINI_MODEL?, … },
 //!    "config": { …settings.json object… } }`.
@@ -44,8 +44,8 @@ const RESERVED_ENV_KEYS: [&str; 3] = [ENV_BASE_URL, ENV_API_KEY, ENV_MODEL];
 pub struct GeminiConfig;
 
 impl AppConfig for GeminiConfig {
-    fn app(&self) -> AppType {
-        AppType::Gemini
+    fn app_id(&self) -> crate::app_id::AppId {
+        AppType::Gemini.app_id()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -220,13 +220,16 @@ impl AppConfig for GeminiConfig {
         Ok(Value::Object(settings))
     }
 
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile> {
+    fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
         let env = build_env(values);
 
         // settings.json preview: the config object as the CLI will see it.
-        // The codec preserves it verbatim, so preview an empty object placeholder
-        // (the on-disk file merges with whatever already exists).
-        let config_obj = Value::Object(Map::new());
+        // The codec preserves the stored `config` verbatim, so show that; fall
+        // back to an empty object for a from-scratch provider.
+        let config_obj = prior
+            .get("config")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
 
         vec![
             PreviewFile {
@@ -405,7 +408,7 @@ mod tests {
         );
         assert_eq!(env[ENV_MODEL], json!("gemini-2.5-flash"));
         // And not as empty strings in the .env preview.
-        let files = GeminiConfig.preview(&v);
+        let files = GeminiConfig.preview(&v, &Value::Null);
         let env_file = files.iter().find(|f| f.filename.ends_with(".env")).unwrap();
         assert!(
             !env_file.content.contains(ENV_BASE_URL),
@@ -488,7 +491,7 @@ mod tests {
 
     #[test]
     fn preview_emits_env_and_settings_files() {
-        let files = GeminiConfig.preview(&api_key_values());
+        let files = GeminiConfig.preview(&api_key_values(), &Value::Null);
         assert_eq!(files.len(), 2);
         let env_file = files.iter().find(|f| f.filename.ends_with(".env")).unwrap();
         assert_eq!(env_file.language, Language::Env);

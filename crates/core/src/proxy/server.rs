@@ -28,7 +28,6 @@ use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
 
 use super::circuit_breaker::CircuitBreakerConfig;
-use super::failover_switch::FailoverSwitchManager;
 use super::forward;
 use super::log_codes::srv as log_srv;
 use super::provider_router::ProviderRouter;
@@ -62,7 +61,6 @@ pub struct ProxyState {
     /// Shared ProviderRouter (holds cross-request circuit-breaker state).
     pub provider_router: Arc<ProviderRouter>,
     /// Failover-switch dedup manager.
-    pub failover_manager: Arc<FailoverSwitchManager>,
     /// Gemini Native assistant-turn shadow state for tool/thought replay.
     pub gemini_shadow: Arc<GeminiShadowStore>,
     /// Codex Responses -> Chat bridge history for restoring tool-call context.
@@ -87,7 +85,6 @@ impl ProxyServer {
         codex_oauth: Arc<RwLock<CodexOAuthManager>>,
     ) -> Self {
         let provider_router = Arc::new(ProviderRouter::new(db.clone()));
-        let failover_manager = Arc::new(FailoverSwitchManager::new(db.clone()));
         let gemini_shadow = Arc::new(GeminiShadowStore::default());
         let codex_chat_history = Arc::new(CodexChatHistoryStore::default());
 
@@ -105,7 +102,6 @@ impl ProxyServer {
             status: Arc::new(RwLock::new(ProxyStatus::default())),
             start_time: Arc::new(RwLock::new(None)),
             provider_router,
-            failover_manager,
             gemini_shadow,
             codex_chat_history,
             http_client,
@@ -272,9 +268,9 @@ impl ProxyServer {
             .route("/models", get(handle_codex))
             .route("/v1/models", get(handle_codex))
             // Gemini API (any method: SDK/CLI sends GET /models too)
-            .route("/v1beta/*path", any(handle_gemini))
-            .route("/gemini/v1beta/*path", any(handle_gemini))
-            .route("/gemini/v1/*path", any(handle_gemini))
+            .route("/v1beta/{*path}", any(handle_gemini))
+            .route("/gemini/v1beta/{*path}", any(handle_gemini))
+            .route("/gemini/v1/{*path}", any(handle_gemini))
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
             .with_state(self.state.clone())
     }

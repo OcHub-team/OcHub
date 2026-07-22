@@ -187,6 +187,9 @@ impl McpService {
             if matches!(app, AppType::OpenClaw | AppType::ClaudeDesktop) {
                 continue;
             }
+            if !crate::plugin::registry::is_app_type_enabled(&app) {
+                continue;
+            }
 
             for server in servers.values() {
                 if server.apps.is_enabled_for(&app) {

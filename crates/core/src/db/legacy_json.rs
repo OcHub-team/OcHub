@@ -2,7 +2,7 @@
 //! and the domain structs the DB layer reads/writes.
 //!
 //! cc-switch kept these in `app_config.rs`, `prompt.rs`, and `services/skill.rs`.
-//! Those modules pull in a lot of Tauri/service machinery that routedeck-core does not
+//! Those modules pull in a lot of Tauri/service machinery that ochub-core does not
 //! need yet, so we re-define only the data structures required to:
 //!   * migrate a legacy `config.json` into SQLite (`db::migration`)
 //!   * back the MCP / Prompt / Skill DAOs

@@ -7,20 +7,20 @@
 use std::sync::Arc;
 
 use gpui::{actions, App, Menu, MenuItem, SharedString, SystemMenuType};
-use routedeck_core::services::provider::ProviderService;
-use routedeck_core::services::subscription::{
+use ochub_core::services::provider::ProviderService;
+use ochub_core::services::subscription::{
     SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH, TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO,
     TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET, TIER_WEEKLY_LIMIT,
 };
-use routedeck_core::{settings, AppState, AppType, Provider, UsageResult};
+use ochub_core::{settings, AppState, AppType, Provider, UsageResult};
 
 use crate::app_ui::notify_open_roots;
 use crate::notifications::NotificationLevel;
 
-actions!(routedeck, [OpenMainWindow, QuitApp, RefreshShellMenus]);
+actions!(ochub, [OpenMainWindow, QuitApp, RefreshShellMenus]);
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
-#[action(namespace = routedeck, no_json)]
+#[action(namespace = ochub, no_json)]
 pub struct SwitchProviderFromMenu {
     app: String,
     provider_id: String,
@@ -54,12 +54,12 @@ pub fn refresh(app: &Arc<AppState>, cx: &mut App) {
 fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
     let settings = settings::get_settings();
     let quick_switch_enabled = settings.show_in_tray;
-    let mut menus = vec![Menu::new("RouteDeck").items([
+    let mut menus = vec![Menu::new("OCHUB").items([
         MenuItem::action("打开主窗口", OpenMainWindow),
         MenuItem::separator(),
         MenuItem::os_submenu("服务", SystemMenuType::Services),
         MenuItem::separator(),
-        MenuItem::action("退出 RouteDeck", QuitApp),
+        MenuItem::action("退出 OCHUB", QuitApp),
     ])];
 
     if quick_switch_enabled {
@@ -78,18 +78,23 @@ fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
             dock_items.extend(provider_submenus(app));
             dock_items.push(MenuItem::separator());
         }
-        dock_items.push(MenuItem::action("退出 RouteDeck", QuitApp));
+        dock_items.push(MenuItem::action("退出 OCHUB", QuitApp));
         dock_items
     };
     cx.set_dock_menu(dock_items);
 }
 
 fn provider_submenus(app: &Arc<AppState>) -> Vec<MenuItem> {
-    let visible = settings::get_settings().visible_apps.unwrap_or_default();
-
-    AppType::all()
-        .filter(|app_type| visible.is_visible(app_type))
+    enabled_app_types()
+        .into_iter()
         .map(|app_type| provider_submenu(app, app_type))
+        .collect()
+}
+
+fn enabled_app_types() -> Vec<AppType> {
+    ochub_core::plugin::enabled_plugins()
+        .iter()
+        .filter_map(|plugin| AppType::from_app_id(plugin.id()))
         .collect()
 }
 
@@ -141,15 +146,14 @@ fn windows_taskbar_items(app: &Arc<AppState>, quick_switch_enabled: bool) -> Vec
     if quick_switch_enabled {
         items.extend(windows_provider_items(app));
     }
-    items.push(MenuItem::action("退出 RouteDeck", QuitApp));
+    items.push(MenuItem::action("退出 OCHUB", QuitApp));
     items
 }
 
 fn windows_provider_items(app: &Arc<AppState>) -> Vec<MenuItem> {
-    let visible = settings::get_settings().visible_apps.unwrap_or_default();
     let mut items = Vec::new();
 
-    for app_type in AppType::all().filter(|app_type| visible.is_visible(app_type)) {
+    for app_type in enabled_app_types() {
         let Ok(providers) = ProviderService::list(app, app_type) else {
             continue;
         };
@@ -481,16 +485,8 @@ fn activate_first_window(cx: &mut App) {
     cx.activate(true);
 }
 
-fn app_label(app: AppType) -> &'static str {
-    match app {
-        AppType::Claude => "Claude Code",
-        AppType::ClaudeDesktop => "Claude Desktop",
-        AppType::Codex => "Codex",
-        AppType::Gemini => "Gemini CLI",
-        AppType::OpenCode => "OpenCode",
-        AppType::OpenClaw => "OpenClaw",
-        AppType::Hermes => "Hermes",
-    }
+fn app_label(app: AppType) -> gpui::SharedString {
+    crate::app_meta::label(app)
 }
 
 #[allow(dead_code)]

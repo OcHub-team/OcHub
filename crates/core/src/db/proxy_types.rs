@@ -2,7 +2,7 @@
 //!
 //! Ported from cc-switch `proxy/types.rs` and `proxy/circuit_breaker.rs`
 //! (only the data structures the persistence layer needs — the runtime proxy
-//! server, adapters, and circuit-breaker *behaviour* are not part of routedeck-core).
+//! server, adapters, and circuit-breaker *behaviour* are not part of ochub-core).
 //! Field names and serde renames match the reference 1:1 so settings-table JSON
 //! payloads stay byte-compatible.
 

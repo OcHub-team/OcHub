@@ -50,57 +50,28 @@ fn default_true() -> bool {
     true
 }
 
-/// Apps shown on the main page.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VisibleApps {
-    #[serde(default = "default_true")]
-    pub claude: bool,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claudeDesktop",
-        alias = "claude_desktop",
-        default = "default_true"
-    )]
-    pub claude_desktop: bool,
-    #[serde(default = "default_true")]
-    pub codex: bool,
-    #[serde(default = "default_true")]
-    pub gemini: bool,
-    #[serde(default = "default_true")]
-    pub opencode: bool,
-    #[serde(default = "default_true")]
-    pub openclaw: bool,
-    #[serde(default)]
-    pub hermes: bool,
-}
-
-impl Default for VisibleApps {
-    fn default() -> Self {
-        Self {
-            claude: true,
-            claude_desktop: true,
-            codex: true,
-            gemini: true,
-            opencode: true,
-            openclaw: true,
-            hermes: false,
-        }
-    }
-}
-
-impl VisibleApps {
-    pub fn is_visible(&self, app: &AppType) -> bool {
-        match app {
-            AppType::Claude => self.claude,
-            AppType::ClaudeDesktop => self.claude_desktop,
-            AppType::Codex => self.codex,
-            AppType::Gemini => self.gemini,
-            AppType::OpenCode => self.opencode,
-            AppType::OpenClaw => self.openclaw,
-            AppType::Hermes => self.hermes,
-        }
-    }
+/// Deserialize the per-app enabled map, normalizing legacy id spellings
+/// (`claudeDesktop` / `claude_desktop` → `claude-desktop`). Accepts the legacy
+/// `visibleApps` object unchanged — its keys are already app-id strings.
+fn deserialize_enabled_apps<'de, D>(
+    deserializer: D,
+) -> Result<Option<std::collections::BTreeMap<String, bool>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<std::collections::BTreeMap<String, bool>>::deserialize(deserializer)?;
+    Ok(raw.map(|map| {
+        map.into_iter()
+            .map(|(key, value)| {
+                let key = match crate::app_id::AppId::parse(&key) {
+                    Ok(id) => id.as_str().to_string(),
+                    // Preserve unknown/invalid keys rather than dropping user data.
+                    Err(_) => key,
+                };
+                (key, value)
+            })
+            .collect()
+    }))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -391,8 +362,15 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visible_apps: Option<VisibleApps>,
+    /// Per-app enabled map keyed by app id. Missing key → the plugin's
+    /// `enabled_by_default()`. Reads the legacy `visibleApps` object via alias.
+    #[serde(
+        default,
+        alias = "visibleApps",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_enabled_apps"
+    )]
+    pub enabled_apps: Option<std::collections::BTreeMap<String, bool>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
@@ -406,6 +384,12 @@ pub struct AppSettings {
     pub openclaw_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermes_config_dir: Option<String>,
+
+    /// Config-dir overrides for manifest apps, keyed by app id. Built-in apps
+    /// keep their dedicated `*_config_dir` fields above; manifest-driven plugins
+    /// (which have no static field) read their override from this map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_config_dirs: Option<std::collections::BTreeMap<String, String>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_claude: Option<String>,
@@ -469,13 +453,14 @@ impl Default for AppSettings {
             common_config_confirmed: None,
             auto_sync_confirmed: None,
             language: None,
-            visible_apps: None,
+            enabled_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
             gemini_config_dir: None,
             opencode_config_dir: None,
             openclaw_config_dir: None,
             hermes_config_dir: None,
+            app_config_dirs: None,
             current_provider_claude: None,
             current_provider_claude_desktop: None,
             current_provider_codex: None,
@@ -497,10 +482,42 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// Explicit enabled state for an app id, if the user ever toggled it.
+    /// `None` means "use the plugin's default".
+    pub fn app_enabled(&self, id: &str) -> Option<bool> {
+        self.enabled_apps.as_ref()?.get(id).copied()
+    }
+
+    pub fn set_app_enabled(&mut self, id: &str, enabled: bool) {
+        self.enabled_apps
+            .get_or_insert_with(Default::default)
+            .insert(id.to_string(), enabled);
+    }
+
+    /// Config-dir override for a manifest app id, if the user set one.
+    ///
+    /// Trims the value, treats empty as unset, and expands a leading `~/`
+    /// (or a bare `~`) via [`crate::paths::get_home_dir`] so tests honoring
+    /// `OCHUB_TEST_HOME` resolve correctly.
+    pub fn app_config_dir_override(&self, id: &str) -> Option<PathBuf> {
+        let raw = self.app_config_dirs.as_ref()?.get(id)?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed == "~" {
+            return Some(crate::paths::get_home_dir());
+        }
+        if let Some(stripped) = trimmed.strip_prefix("~/") {
+            return Some(crate::paths::get_home_dir().join(stripped));
+        }
+        Some(PathBuf::from(trimmed))
+    }
+
     fn settings_path() -> Option<PathBuf> {
         Some(
             crate::paths::get_home_dir()
-                .join(".cc-switch")
+                .join(".ochub")
                 .join("settings.json"),
         )
     }
@@ -933,4 +950,55 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
             s3.status = status;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_visible_apps_deserializes_into_enabled_map() {
+        let json = r#"{"visibleApps":{"claude":true,"claude-desktop":false,"codex":true,"gemini":false,"opencode":true,"openclaw":true,"hermes":true}}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        let map = settings.enabled_apps.as_ref().expect("map populated");
+        assert_eq!(map.get("claude-desktop"), Some(&false));
+        assert_eq!(map.get("gemini"), Some(&false));
+        assert_eq!(map.get("hermes"), Some(&true));
+        assert_eq!(map.len(), 7);
+
+        // Values carry over under the new key on the next write.
+        let out = serde_json::to_string(&settings).unwrap();
+        assert!(out.contains("enabledApps"));
+        assert!(!out.contains("visibleApps"));
+    }
+
+    #[test]
+    fn legacy_claude_desktop_key_variants_normalize() {
+        for key in ["claudeDesktop", "claude_desktop"] {
+            let json = format!(r#"{{"visibleApps":{{"{key}":false}}}}"#);
+            let settings: AppSettings = serde_json::from_str(&json).unwrap();
+            let map = settings.enabled_apps.as_ref().unwrap();
+            assert_eq!(map.get("claude-desktop"), Some(&false), "key {key}");
+        }
+    }
+
+    #[test]
+    fn app_enabled_missing_is_none() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.app_enabled("hermes"), None);
+        assert_eq!(settings.app_enabled("claude"), None);
+
+        let mut settings = settings;
+        settings.set_app_enabled("hermes", true);
+        assert_eq!(settings.app_enabled("hermes"), Some(true));
+        assert_eq!(settings.app_enabled("claude"), None);
+    }
+
+    #[test]
+    fn enabled_apps_new_key_round_trips() {
+        let json = r#"{"enabledApps":{"claude":false,"my-app":true}}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.app_enabled("claude"), Some(false));
+        assert_eq!(settings.app_enabled("my-app"), Some(true));
+    }
 }

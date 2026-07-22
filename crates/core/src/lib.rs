@@ -1,13 +1,14 @@
-//! RouteDeck core library.
+//! OCHUB core library.
 //!
 //! A faithful Rust port of the cc-switch backend (`src-tauri/src`), restructured
-//! to be UI- and transport-agnostic: no Tauri, no GPUI. The axum `routedeck-server`
-//! crate and the GPUI `routedeck-app` crate both build on this.
+//! to be UI- and transport-agnostic: no Tauri, no GPUI. The axum `ochub-server`
+//! crate and the GPUI `ochub-app` crate both build on this.
 //!
 //! Persistence and live-config paths are kept byte-compatible with cc-switch
-//! (`~/.cc-switch/`, `~/.claude`, `~/.codex`, `~/.gemini`, …) so RouteDeck is
+//! (`~/.cc-switch/`, `~/.claude`, `~/.codex`, `~/.gemini`, …) so OCHUB is
 //! a drop-in backend replacement.
 
+pub mod app_id;
 pub mod app_state;
 pub mod app_store;
 pub mod app_type;
@@ -15,9 +16,11 @@ pub mod apps;
 pub mod db;
 pub mod deeplink;
 pub mod error;
+pub mod gateway;
 pub mod mcp;
 pub mod model;
 pub mod paths;
+pub mod plugin;
 pub mod prompt;
 pub mod provider_config;
 pub mod proxy;
@@ -28,9 +31,10 @@ pub mod settings;
 pub(crate) mod test_support;
 pub mod usage_script;
 
+pub use app_id::AppId;
 pub use app_state::AppState;
 pub use app_type::AppType;
-pub use db::{Database, FailoverQueueItem};
+pub use db::Database;
 pub use deeplink::{
     import_mcp_from_deeplink, import_prompt_from_deeplink, import_provider_from_deeplink,
     import_skill_from_deeplink, parse_deeplink_url, DeepLinkImportRequest, McpImportError,
@@ -40,7 +44,7 @@ pub use error::{AppError, Result};
 pub use model::{
     parse_custom_user_agent, AuthBinding, AuthBindingSource, ClaudeDesktopMode,
     ClaudeDesktopModelRoute, CodexChatReasoningConfig, Provider, ProviderManager, ProviderMeta,
-    ProviderTestConfig, UniversalProvider, UsageData, UsageResult, UsageScript,
+    ProviderTestConfig, UsageData, UsageResult, UsageScript,
 };
 pub use services::{
     build_models_url_candidates, check_env_conflicts, delete_env_vars, fetch_models,

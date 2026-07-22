@@ -25,27 +25,32 @@ pub enum NotificationLevel {
 }
 
 impl NotificationLevel {
-    fn colors(self) -> (u32, u32, u32, IconName) {
+    fn colors(self) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba, IconName) {
         match self {
             Self::Info => (
-                theme::ACCENT_SOFT,
-                theme::ACCENT,
-                theme::TEXT,
+                theme::accent_soft(),
+                theme::accent(),
+                theme::text(),
                 IconName::Proxy,
             ),
             Self::Success => (
-                theme::GREEN_SOFT,
-                theme::GREEN,
-                theme::TEXT,
+                theme::green_soft(),
+                theme::green(),
+                theme::text(),
                 IconName::Check,
             ),
             Self::Warning => (
-                theme::YELLOW_SOFT,
-                theme::YELLOW,
-                theme::TEXT,
+                theme::yellow_soft(),
+                theme::yellow(),
+                theme::text(),
                 IconName::Settings,
             ),
-            Self::Error => (theme::RED_SOFT, theme::RED, theme::TEXT, IconName::Wrench),
+            Self::Error => (
+                theme::red_soft(),
+                theme::red(),
+                theme::text(),
+                IconName::Wrench,
+            ),
         }
     }
 
@@ -236,8 +241,8 @@ impl NotificationHost {
             .py_3()
             .rounded_lg()
             .border_1()
-            .border_color(theme::translucent(accent, 0.32))
-            .bg(theme::translucent(bg, 0.96))
+            .border_color(accent.alpha(0.32))
+            .bg(bg.alpha(0.96))
             .shadow(theme::shadow_popover())
             .child(
                 div()
@@ -248,7 +253,7 @@ impl NotificationHost {
                     .w(px(24.))
                     .h(px(24.))
                     .rounded_md()
-                    .bg(theme::translucent(accent, 0.12))
+                    .bg(accent.alpha(0.12))
                     .child(icon(icon_name, accent, 15.)),
             )
             .child(
@@ -260,7 +265,7 @@ impl NotificationHost {
                     .min_w(px(0.))
                     .child(
                         div()
-                            .text_color(theme::c(fg))
+                            .text_color(fg)
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .line_height(px(18.))
@@ -269,7 +274,7 @@ impl NotificationHost {
                     .when_some(notification.message, |s, message| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .text_color(theme::subtext())
                                 .text_xs()
                                 .line_height(px(17.))
                                 .child(message),
@@ -278,7 +283,7 @@ impl NotificationHost {
                     .when_some(notification.source, |s, source| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(source),
@@ -297,12 +302,9 @@ impl NotificationHost {
                     .h(px(22.))
                     .rounded_md()
                     .cursor_pointer()
-                    .text_color(theme::c(theme::MUTED))
-                    .hover(|s| {
-                        s.bg(theme::translucent(accent, 0.12))
-                            .text_color(theme::c(theme::TEXT))
-                    })
-                    .child(icon(IconName::Close, theme::MUTED, 13.))
+                    .text_color(theme::muted())
+                    .hover(|s| s.bg(accent.alpha(0.12)).text_color(theme::text()))
+                    .child(icon(IconName::Close, theme::muted(), 13.))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.dismiss(id);
                         cx.notify();

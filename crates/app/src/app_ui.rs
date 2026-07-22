@@ -1,19 +1,19 @@
-//! The RouteDeck root view: an app switcher sidebar plus a main panel that
+//! The OCHUB root view: an app switcher sidebar plus a main panel that
 //! can show the provider list, a provider editor, the settings panel, or the
-//! proxy panel, all wired to live `routedeck-core` data via an in-process `AppState`.
+//! proxy panel, all wired to live `ochub-core` data via an in-process `AppState`.
 
 use std::sync::Arc;
 
 use gpui::{
     div, prelude::*, px, App, Context, Entity, FontWeight, MouseButton, SharedString, Window,
 };
-use routedeck_core::services::provider::{self, ProviderService};
-use routedeck_core::settings;
-use routedeck_core::{AppState, AppType, Provider};
+use ochub_core::services::provider::{self, ProviderService};
+use ochub_core::{AppState, AppType, Provider};
 
 use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
 use crate::auth_view::AuthView;
 use crate::components::{self, ButtonTone};
+use crate::gateway_view::GatewayView;
 use crate::icons::{icon, IconName};
 use crate::mcp_view::McpView;
 use crate::notifications::{NotificationHost, NotificationLevel};
@@ -26,7 +26,6 @@ use crate::shell_menu;
 use crate::skills_view::SkillsView;
 use crate::theme;
 use crate::tools_view::ToolsView;
-use crate::universal_view::UniversalView;
 use crate::usage_view::UsageView;
 use crate::workspace_view::WorkspaceView;
 
@@ -62,7 +61,6 @@ enum Section {
     Mcp,
     Prompts,
     Skills,
-    Universal,
     Auth,
     Usage,
     Sessions,
@@ -70,6 +68,7 @@ enum Section {
     Tools,
     Settings,
     Proxy,
+    Gateway,
 }
 
 impl Section {
@@ -82,7 +81,6 @@ impl Section {
             "mcp" => Self::Mcp,
             "prompts" | "prompt" => Self::Prompts,
             "skills" | "skill" => Self::Skills,
-            "universal" | "universal-provider" | "universal-providers" => Self::Universal,
             "auth" | "oauth" | "accounts" => Self::Auth,
             "usage" => Self::Usage,
             "sessions" | "session" => Self::Sessions,
@@ -90,6 +88,7 @@ impl Section {
             "tools" | "tool" => Self::Tools,
             "settings" | "setting" => Self::Settings,
             "proxy" => Self::Proxy,
+            "gateway" => Self::Gateway,
             _ => Self::Providers,
         }
     }
@@ -107,10 +106,10 @@ pub struct AppRoot {
     editor: Option<Entity<ProviderEditor>>,
     settings_view: Entity<SettingsView>,
     proxy_view: Entity<ProxyView>,
+    gateway_view: Entity<GatewayView>,
     mcp_view: Entity<McpView>,
     prompts_view: Entity<PromptsView>,
     skills_view: Entity<SkillsView>,
-    universal_view: Entity<UniversalView>,
     auth_view: Entity<AuthView>,
     usage_view: Entity<UsageView>,
     sessions_view: Entity<SessionsView>,
@@ -126,20 +125,23 @@ impl AppRoot {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
         let proxy_view = cx.new(|cx| ProxyView::new(app.clone(), cx));
+        let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
         let mcp_view = cx.new(|cx| McpView::new(app.clone(), cx));
         let notifications = cx.new(|_| NotificationHost::new());
         let prompts_view = cx.new(|cx| PromptsView::new(app.clone(), cx));
         let skills_view = cx.new(|cx| SkillsView::new(app.clone(), cx));
-        let universal_view = cx.new(|cx| UniversalView::new(app.clone(), cx));
         let auth_view = cx.new(|cx| AuthView::new(app.clone(), cx));
         let usage_view = cx.new(|cx| UsageView::new(app.clone(), cx));
         let sessions_view = cx.new(|cx| SessionsView::new(app.clone(), cx));
         let workspace_view = cx.new(|cx| WorkspaceView::new(cx));
         let tools_view = cx.new(|cx| ToolsView::new(app.clone(), cx));
         let initial_section = Section::from_env();
+        let enabled = Self::visible_apps();
         let initial_app = std::env::var("MS_START_APP")
             .ok()
             .and_then(|value| value.parse::<AppType>().ok())
+            .filter(|app| enabled.contains(app))
+            .or_else(|| enabled.first().copied())
             .unwrap_or(AppType::Claude);
         let app_settings_view = cx.new(|cx| AppSettingsView::new(initial_app, cx));
         let mut this = Self {
@@ -153,10 +155,10 @@ impl AppRoot {
             editor: None,
             settings_view,
             proxy_view,
+            gateway_view,
             mcp_view,
             prompts_view,
             skills_view,
-            universal_view,
             auth_view,
             usage_view,
             sessions_view,
@@ -174,6 +176,13 @@ impl AppRoot {
                 }
             },
         )
+        .detach();
+        cx.subscribe(&this.settings_view, |this, _view, event, cx| match event {
+            crate::settings_view::SettingsEvent::AppsChanged => {
+                this.ensure_valid_selection(cx);
+                cx.notify();
+            }
+        })
         .detach();
         this.reload();
         if initial_section == Section::Providers
@@ -194,8 +203,8 @@ impl AppRoot {
             Section::Mcp => this.mcp_view.update(cx, |v, _| v.reload()),
             Section::Prompts => this.prompts_view.update(cx, |v, _| v.reload()),
             Section::Skills => this.skills_view.update(cx, |v, _| v.reload()),
-            Section::Universal => this.universal_view.update(cx, |v, _| v.reload()),
             Section::Auth => this.auth_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Gateway => this.gateway_view.update(cx, |v, cx| v.reload(cx)),
             Section::Usage => this.usage_view.update(cx, |v, _| v.reload()),
             Section::Sessions => this.sessions_view.update(cx, |v, _| v.reload()),
             Section::Workspace => this.workspace_view.update(cx, |v, _| v.reload()),
@@ -205,60 +214,23 @@ impl AppRoot {
         this
     }
 
-    fn all_apps() -> [AppType; 7] {
-        [
-            AppType::Claude,
-            AppType::ClaudeDesktop,
-            AppType::Codex,
-            AppType::Gemini,
-            AppType::OpenCode,
-            AppType::OpenClaw,
-            AppType::Hermes,
-        ]
-    }
-
     fn visible_apps() -> Vec<AppType> {
-        let visible = settings::get_settings().visible_apps.unwrap_or_default();
-        Self::all_apps()
-            .into_iter()
-            .filter(|app| visible.is_visible(app))
+        ochub_core::plugin::enabled_plugins()
+            .iter()
+            .filter_map(|plugin| AppType::from_app_id(plugin.id()))
             .collect()
     }
 
-    fn app_label(app: AppType) -> &'static str {
-        match app {
-            AppType::Claude => "Claude Code",
-            AppType::ClaudeDesktop => "Claude Desktop",
-            AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini CLI",
-            AppType::OpenCode => "OpenCode",
-            AppType::OpenClaw => "OpenClaw",
-            AppType::Hermes => "Hermes",
-        }
+    fn app_label(app: AppType) -> SharedString {
+        crate::app_meta::label(app)
     }
 
     fn app_accent(app: AppType) -> u32 {
-        match app {
-            AppType::Claude => theme::BRAND_CLAUDE,
-            AppType::ClaudeDesktop => theme::BRAND_CLAUDE_DESKTOP,
-            AppType::Codex => theme::BRAND_CODEX,
-            AppType::Gemini => theme::BRAND_GEMINI,
-            AppType::OpenCode => theme::BRAND_OPENCODE,
-            AppType::OpenClaw => theme::BRAND_OPENCLAW,
-            AppType::Hermes => theme::BRAND_HERMES,
-        }
+        crate::app_meta::accent(app)
     }
 
     fn app_icon(app: AppType) -> IconName {
-        match app {
-            AppType::Claude => IconName::AgentClaudeCode,
-            AppType::ClaudeDesktop => IconName::AgentClaude,
-            AppType::Codex => IconName::AgentCodex,
-            AppType::Gemini => IconName::AgentGemini,
-            AppType::OpenCode => IconName::AgentOpenCode,
-            AppType::OpenClaw => IconName::AgentOpenClaw,
-            AppType::Hermes => IconName::AgentHermes,
-        }
+        crate::app_meta::icon(app).unwrap_or(IconName::AgentClaudeCode)
     }
 
     fn notify_success(&self, title: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -333,7 +305,6 @@ impl AppRoot {
             Section::Mcp => IconName::Blocks,
             Section::Prompts => IconName::Message,
             Section::Skills => IconName::Wrench,
-            Section::Universal => IconName::Layers,
             Section::Auth => IconName::Key,
             Section::Usage => IconName::Chart,
             Section::Sessions => IconName::Clock,
@@ -341,6 +312,7 @@ impl AppRoot {
             Section::Tools => IconName::Tools,
             Section::Settings => IconName::Settings,
             Section::Proxy => IconName::Proxy,
+            Section::Gateway => IconName::Cloud,
             Section::Providers => IconName::Cloud,
         }
     }
@@ -357,7 +329,28 @@ impl AppRoot {
         self.current = ProviderService::current(&self.app, self.selected_app).unwrap_or_default();
     }
 
+    /// If the currently selected app got disabled (or unregistered), move the
+    /// selection to the first enabled app and close any per-app panels.
+    fn ensure_valid_selection(&mut self, cx: &mut Context<Self>) {
+        let enabled = Self::visible_apps();
+        if enabled.contains(&self.selected_app) {
+            return;
+        }
+        let Some(first) = enabled.first().copied() else {
+            return;
+        };
+        self.selected_app = first;
+        self.editor = None;
+        self.showing_app_settings = false;
+        self.status = None;
+        self.reload();
+        cx.notify();
+    }
+
     fn select_app(&mut self, app: AppType, cx: &mut Context<Self>) {
+        if !Self::visible_apps().contains(&app) {
+            return;
+        }
         let changed = self.selected_app != app || self.section != Section::Providers;
         if changed || self.showing_app_settings {
             self.selected_app = app;
@@ -389,8 +382,8 @@ impl AppRoot {
                 Section::Mcp => self.mcp_view.update(cx, |v, _| v.reload()),
                 Section::Prompts => self.prompts_view.update(cx, |v, _| v.reload()),
                 Section::Skills => self.skills_view.update(cx, |v, _| v.reload()),
-                Section::Universal => self.universal_view.update(cx, |v, _| v.reload()),
                 Section::Auth => self.auth_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Gateway => self.gateway_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Usage => self.usage_view.update(cx, |v, _| v.reload()),
                 Section::Sessions => self.sessions_view.update(cx, |v, _| v.reload()),
                 Section::Workspace => self.workspace_view.update(cx, |v, _| v.reload()),
@@ -560,19 +553,18 @@ impl AppRoot {
             .py_1()
             .rounded_lg()
             .cursor_pointer()
-            .text_color(theme::c(if selected {
-                theme::SIDEBAR_TEXT
+            .text_color(if selected {
+                theme::sidebar_text()
             } else {
-                theme::SIDEBAR_MUTED
-            }))
+                theme::sidebar_muted()
+            })
             .when(selected, |s| {
-                s.bg(theme::c(theme::ACCENT_SOFT))
-                    .font_weight(FontWeight::MEDIUM)
+                s.bg(theme::accent_soft()).font_weight(FontWeight::MEDIUM)
             })
             .when(!selected, |s| {
                 s.hover(|h| {
-                    h.bg(theme::c(theme::SURFACE_HOVER))
-                        .text_color(theme::c(theme::SIDEBAR_TEXT))
+                    h.bg(theme::surface_hover())
+                        .text_color(theme::sidebar_text())
                 })
             })
             .child(
@@ -585,7 +577,7 @@ impl AppRoot {
                     .rounded_md()
                     .bg(theme::c(accent))
                     .shadow_xs()
-                    .child(icon(Self::app_icon(app), theme::ACCENT_TEXT, 15.)),
+                    .child(icon(Self::app_icon(app), theme::accent_text(), 15.)),
             )
             .child(div().text_sm().child(Self::app_label(app)))
             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -602,9 +594,9 @@ impl AppRoot {
     ) -> impl IntoElement {
         let selected = self.section == section;
         let fg = if selected {
-            theme::ACCENT
+            theme::accent()
         } else {
-            theme::SIDEBAR_MUTED
+            theme::sidebar_muted()
         };
         div()
             .id(id)
@@ -622,15 +614,14 @@ impl AppRoot {
             .rounded_lg()
             .cursor_pointer()
             .text_sm()
-            .text_color(theme::c(fg))
+            .text_color(fg)
             .when(selected, |s| {
-                s.bg(theme::c(theme::ACCENT_SOFT))
-                    .font_weight(FontWeight::MEDIUM)
+                s.bg(theme::accent_soft()).font_weight(FontWeight::MEDIUM)
             })
             .when(!selected, |s| {
                 s.hover(|h| {
-                    h.bg(theme::c(theme::SURFACE_HOVER))
-                        .text_color(theme::c(theme::SIDEBAR_TEXT))
+                    h.bg(theme::surface_hover())
+                        .text_color(theme::sidebar_text())
                 })
             })
             .child(
@@ -653,26 +644,26 @@ impl AppRoot {
             .mt_4()
             .mb_1()
             .px_3()
-            .text_color(theme::c(theme::SIDEBAR_MUTED))
+            .text_color(theme::sidebar_muted())
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
             .child(label)
     }
 
-    fn section_title(&self) -> &'static str {
+    fn section_title(&self) -> SharedString {
         match self.section {
             Section::Providers => Self::app_label(self.selected_app),
-            Section::Mcp => "MCP 服务器",
-            Section::Prompts => "提示词",
-            Section::Skills => "技能",
-            Section::Universal => "统一供应商",
-            Section::Auth => "认证中心",
-            Section::Usage => "用量",
-            Section::Sessions => "会话",
-            Section::Workspace => "工作区",
-            Section::Tools => "高级工具",
-            Section::Settings => "设置",
-            Section::Proxy => "代理",
+            Section::Mcp => "MCP 服务器".into(),
+            Section::Prompts => "提示词".into(),
+            Section::Skills => "技能".into(),
+            Section::Auth => "认证中心".into(),
+            Section::Usage => "用量".into(),
+            Section::Sessions => "会话".into(),
+            Section::Workspace => "工作区".into(),
+            Section::Tools => "高级工具".into(),
+            Section::Settings => "设置".into(),
+            Section::Proxy => "代理".into(),
+            Section::Gateway => "中转网关".into(),
         }
     }
 
@@ -689,9 +680,9 @@ impl AppRoot {
             .pl(px(88.))
             .pr_4()
             .gap_3()
-            .bg(theme::c(theme::HEADER))
+            .bg(theme::header())
             .border_b_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _event, window, _cx| window.start_window_move()),
@@ -710,21 +701,21 @@ impl AppRoot {
                             .w(px(20.))
                             .h(px(20.))
                             .rounded_md()
-                            .bg(theme::c(theme::ACCENT))
-                            .child(icon(IconName::Cloud, theme::ACCENT_TEXT, 13.)),
+                            .bg(theme::accent())
+                            .child(icon(IconName::Cloud, theme::accent_text(), 13.)),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .font_weight(FontWeight::BOLD)
                             .text_sm()
-                            .child("RouteDeck"),
+                            .child("OCHUB"),
                     ),
             )
-            .child(div().w(px(1.)).h(px(14.)).bg(theme::c(theme::BORDER)))
+            .child(div().w(px(1.)).h(px(14.)).bg(theme::border()))
             .child(
                 div()
-                    .text_color(theme::c(theme::SUBTEXT))
+                    .text_color(theme::subtext())
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .child(SharedString::from(self.section_title())),
@@ -739,9 +730,9 @@ impl AppRoot {
             .h_full()
             .w(px(252.))
             .flex_shrink_0()
-            .bg(theme::translucent(theme::MANTLE, 0.96))
+            .bg(theme::mantle().alpha(0.96))
             .border_r_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .shadow_xs()
             .overflow_y_scroll()
             .child(div().h(px(10.)))
@@ -763,12 +754,6 @@ impl AppRoot {
                     .child(self.render_nav_item("nav-mcp", "MCP 服务器", Section::Mcp, cx))
                     .child(self.render_nav_item("nav-prompts", "提示词", Section::Prompts, cx))
                     .child(self.render_nav_item("nav-skills", "技能", Section::Skills, cx))
-                    .child(self.render_nav_item(
-                        "nav-universal",
-                        "统一供应商",
-                        Section::Universal,
-                        cx,
-                    ))
                     .child(self.render_nav_item("nav-auth", "认证中心", Section::Auth, cx))
                     .child(self.render_nav_item("nav-usage", "用量", Section::Usage, cx))
                     .child(self.render_nav_item("nav-sessions", "会话", Section::Sessions, cx))
@@ -783,7 +768,8 @@ impl AppRoot {
                     .gap_1()
                     .px_2()
                     .child(self.render_nav_item("nav-settings", "设置", Section::Settings, cx))
-                    .child(self.render_nav_item("nav-proxy", "代理", Section::Proxy, cx)),
+                    .child(self.render_nav_item("nav-proxy", "代理", Section::Proxy, cx))
+                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx)),
             )
     }
 
@@ -823,13 +809,13 @@ impl AppRoot {
             .w_full()
             .px_4()
             .py_3()
-            .border_color(theme::c(if is_current {
-                theme::ACCENT
+            .border_color(if is_current {
+                theme::accent()
             } else {
-                theme::BORDER
-            }))
+                theme::border()
+            })
             .hover(|s| {
-                s.border_color(theme::c(theme::BORDER_STRONG))
+                s.border_color(theme::border_strong())
                     .shadow(theme::shadow_hover())
             })
             .child(
@@ -846,11 +832,11 @@ impl AppRoot {
                             .w(px(30.))
                             .h(px(30.))
                             .rounded_md()
-                            .bg(theme::c(if is_current {
-                                theme::SIDEBAR_SELECTED
+                            .bg(if is_current {
+                                theme::sidebar_selected()
                             } else {
-                                theme::SURFACE_HOVER
-                            }))
+                                theme::surface_hover()
+                            })
                             .child(icon(
                                 if is_current {
                                     IconName::Check
@@ -858,9 +844,9 @@ impl AppRoot {
                                     Self::app_icon(self.selected_app)
                                 },
                                 if is_current {
-                                    theme::ACCENT
+                                    theme::accent()
                                 } else {
-                                    theme::SUBTEXT
+                                    theme::subtext()
                                 },
                                 16.,
                             )),
@@ -878,7 +864,7 @@ impl AppRoot {
                                     .gap_2()
                                     .child(
                                         div()
-                                            .text_color(theme::c(theme::TEXT))
+                                            .text_color(theme::text())
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(SharedString::from(provider.name.clone())),
                                     )
@@ -892,8 +878,8 @@ impl AppRoot {
                                                 .px_2()
                                                 .py_0p5()
                                                 .rounded_full()
-                                                .bg(theme::c(theme::ACCENT_SOFT))
-                                                .text_color(theme::c(theme::ACCENT))
+                                                .bg(theme::accent_soft())
+                                                .text_color(theme::accent())
                                                 .text_xs()
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .child(
@@ -901,7 +887,7 @@ impl AppRoot {
                                                         .w(px(5.))
                                                         .h(px(5.))
                                                         .rounded_full()
-                                                        .bg(theme::c(theme::ACCENT)),
+                                                        .bg(theme::accent()),
                                                 )
                                                 .child("当前"),
                                         )
@@ -909,7 +895,7 @@ impl AppRoot {
                             )
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .child(SharedString::from(base_url)),
                             ),
@@ -977,7 +963,11 @@ impl AppRoot {
     fn render_active_hero(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.selected_app;
         let accent = Self::app_accent(app);
-        let current = self.providers.iter().find(|p| p.id == self.current).cloned();
+        let current = self
+            .providers
+            .iter()
+            .find(|p| p.id == self.current)
+            .cloned();
         let has_current = current.is_some();
 
         let icon_tile = div()
@@ -988,18 +978,18 @@ impl AppRoot {
             .w(px(46.))
             .h(px(46.))
             .rounded_lg()
-            .bg(theme::c(if has_current {
-                accent
+            .bg(if has_current {
+                theme::c(accent)
             } else {
-                theme::SURFACE_HOVER
-            }))
+                theme::surface_hover()
+            })
             .when(has_current, |s| s.shadow_xs())
             .child(icon(
                 Self::app_icon(app),
                 if has_current {
-                    theme::ACCENT_TEXT
+                    theme::accent_text()
                 } else {
-                    theme::MUTED
+                    theme::muted()
                 },
                 23.,
             ));
@@ -1021,7 +1011,7 @@ impl AppRoot {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::ACCENT))
+                                    .text_color(theme::accent())
                                     .text_xs()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("当前生效"),
@@ -1035,17 +1025,13 @@ impl AppRoot {
                                     .px_2()
                                     .py_0p5()
                                     .rounded_full()
-                                    .bg(theme::c(theme::GREEN_SOFT))
+                                    .bg(theme::green_soft())
                                     .child(
-                                        div()
-                                            .w(px(5.))
-                                            .h(px(5.))
-                                            .rounded_full()
-                                            .bg(theme::c(theme::GREEN)),
+                                        div().w(px(5.)).h(px(5.)).rounded_full().bg(theme::green()),
                                     )
                                     .child(
                                         div()
-                                            .text_color(theme::c(theme::GREEN))
+                                            .text_color(theme::green())
                                             .text_xs()
                                             .font_weight(FontWeight::MEDIUM)
                                             .child("已启用"),
@@ -1054,7 +1040,7 @@ impl AppRoot {
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_lg()
                             .font_weight(FontWeight::BOLD)
                             .truncate()
@@ -1066,10 +1052,10 @@ impl AppRoot {
                             .flex_row()
                             .items_center()
                             .gap_1()
-                            .child(icon(IconName::Cloud, theme::MUTED, 12.))
+                            .child(icon(IconName::Cloud, theme::muted(), 12.))
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .truncate()
                                     .child(SharedString::from(base_url)),
@@ -1084,21 +1070,21 @@ impl AppRoot {
                 .min_w_0()
                 .child(
                     div()
-                        .text_color(theme::c(theme::MUTED))
+                        .text_color(theme::muted())
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("当前生效"),
                 )
                 .child(
                     div()
-                        .text_color(theme::c(theme::TEXT))
+                        .text_color(theme::text())
                         .text_lg()
                         .font_weight(FontWeight::BOLD)
                         .child("未选择供应商"),
                 )
                 .child(
                     div()
-                        .text_color(theme::c(theme::MUTED))
+                        .text_color(theme::muted())
                         .text_xs()
                         .child("从下方列表选择一个供应商以启用。"),
                 ),
@@ -1127,11 +1113,11 @@ impl AppRoot {
             .w_full()
             .px_5()
             .py_4()
-            .border_color(theme::c(if has_current {
-                theme::ACCENT
+            .border_color(if has_current {
+                theme::accent()
             } else {
-                theme::BORDER
-            }))
+                theme::border()
+            })
             .when(has_current, |s| s.shadow(theme::shadow_panel()))
             .child(icon_tile)
             .child(info);
@@ -1163,7 +1149,7 @@ impl AppRoot {
             .flex_col()
             .flex_1()
             .h_full()
-            .bg(theme::c(theme::BG))
+            .bg(theme::bg())
             .child(
                 div()
                     .flex()
@@ -1173,9 +1159,9 @@ impl AppRoot {
                     .w_full()
                     .px_6()
                     .py_3()
-                    .bg(theme::translucent(theme::HEADER, 0.95))
+                    .bg(theme::header().alpha(0.95))
                     .border_b_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .shadow_xs()
                     .child(
                         div()
@@ -1188,10 +1174,14 @@ impl AppRoot {
                                     .flex_row()
                                     .items_center()
                                     .gap_2()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
-                                    .child(icon(Self::app_icon(app), Self::app_accent(app), 18.))
+                                    .child(icon(
+                                        Self::app_icon(app),
+                                        theme::c(Self::app_accent(app)),
+                                        18.,
+                                    ))
                                     .child(Self::app_label(app)),
                             )
                             .child(
@@ -1205,8 +1195,8 @@ impl AppRoot {
                                             .px_2()
                                             .py_0p5()
                                             .rounded_full()
-                                            .bg(theme::c(theme::INSET))
-                                            .text_color(theme::c(theme::SUBTEXT))
+                                            .bg(theme::inset())
+                                            .text_color(theme::subtext())
                                             .text_xs()
                                             .font_weight(FontWeight::MEDIUM)
                                             .child(if app.is_additive_mode() {
@@ -1215,14 +1205,12 @@ impl AppRoot {
                                                 "切换模式"
                                             }),
                                     )
-                                    .child(
-                                        div().text_color(theme::c(theme::MUTED)).text_xs().child(
-                                            SharedString::from(format!(
-                                                "{} 个供应商",
-                                                self.providers.len()
-                                            )),
-                                        ),
-                                    ),
+                                    .child(div().text_color(theme::muted()).text_xs().child(
+                                        SharedString::from(format!(
+                                            "{} 个供应商",
+                                            self.providers.len()
+                                        )),
+                                    )),
                             ),
                     )
                     .child(
@@ -1308,7 +1296,7 @@ impl AppRoot {
                         s.child(
                             div()
                                 .pt_1()
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .text_color(theme::subtext())
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("切换到其他供应商"),
@@ -1317,14 +1305,14 @@ impl AppRoot {
                     .when(no_providers, |s| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .child("还没有供应商。点击“新增”或“导入工具配置”创建一个。"),
                         )
                     })
                     .when(is_switch && !no_providers && others_empty, |s| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .text_xs()
                                 .child("暂无其他供应商，点击“新增”可添加更多。"),
                         )
@@ -1337,10 +1325,10 @@ impl AppRoot {
         match self.section {
             Section::Settings => self.settings_view.clone().into_any_element(),
             Section::Proxy => self.proxy_view.clone().into_any_element(),
+            Section::Gateway => self.gateway_view.clone().into_any_element(),
             Section::Mcp => self.mcp_view.clone().into_any_element(),
             Section::Prompts => self.prompts_view.clone().into_any_element(),
             Section::Skills => self.skills_view.clone().into_any_element(),
-            Section::Universal => self.universal_view.clone().into_any_element(),
             Section::Auth => self.auth_view.clone().into_any_element(),
             Section::Usage => self.usage_view.clone().into_any_element(),
             Section::Sessions => self.sessions_view.clone().into_any_element(),
@@ -1365,8 +1353,8 @@ impl Render for AppRoot {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme::c(theme::BG))
-            .text_color(theme::c(theme::TEXT))
+            .bg(theme::bg())
+            .text_color(theme::text())
             .font_family("Helvetica Neue")
             .relative()
             .child(self.render_titlebar(cx))

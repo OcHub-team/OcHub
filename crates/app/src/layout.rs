@@ -25,7 +25,7 @@ pub fn page() -> gpui::Div {
         .flex_1()
         .min_w_0()
         .h_full()
-        .bg(theme::c(theme::BG))
+        .bg(theme::bg())
 }
 
 /// A page header bar: bold title, optional muted subtitle, and a trailing slot for
@@ -34,18 +34,13 @@ pub fn page() -> gpui::Div {
 pub fn page_header(title: impl Into<SharedString>, subtitle: Option<SharedString>) -> gpui::Div {
     let mut title_col = div().flex().flex_col().gap_1().child(
         div()
-            .text_color(theme::c(theme::TEXT))
+            .text_color(theme::text())
             .text_xl()
             .font_weight(FontWeight::BOLD)
             .child(title.into()),
     );
     if let Some(subtitle) = subtitle {
-        title_col = title_col.child(
-            div()
-                .text_color(theme::c(theme::MUTED))
-                .text_xs()
-                .child(subtitle),
-        );
+        title_col = title_col.child(div().text_color(theme::muted()).text_xs().child(subtitle));
     }
     div()
         .flex()
@@ -56,7 +51,7 @@ pub fn page_header(title: impl Into<SharedString>, subtitle: Option<SharedString
         .px_6()
         .py_4()
         .border_b_1()
-        .border_color(theme::c(theme::BORDER))
+        .border_color(theme::border())
         .child(title_col)
 }
 
@@ -130,14 +125,14 @@ pub fn section_header(
         .pt_4()
         .child(
             div()
-                .text_color(theme::c(theme::TEXT))
+                .text_color(theme::text())
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title.into()),
         )
         .child(
             div()
-                .text_color(theme::c(theme::MUTED))
+                .text_color(theme::muted())
                 .text_xs()
                 .child(description.into()),
         )
@@ -151,16 +146,16 @@ pub fn group(rows: Vec<AnyElement>) -> gpui::Div {
         .flex_col()
         .w_full()
         .rounded_lg()
-        .bg(theme::c(theme::SURFACE))
+        .bg(theme::surface())
         .border_1()
-        .border_color(theme::c(theme::BORDER));
+        .border_color(theme::border());
     for (index, row) in rows.into_iter().enumerate() {
         if index != 0 {
             card = card.child(
                 div()
                     .w_full()
                     .pl_4()
-                    .child(div().h(px(1.)).w_full().bg(theme::c(theme::BORDER))),
+                    .child(div().h(px(1.)).w_full().bg(theme::border())),
             );
         }
         card = card.child(row);
@@ -197,13 +192,13 @@ pub fn row_label(
         .gap_1()
         .child(
             div()
-                .text_color(theme::c(theme::TEXT))
+                .text_color(theme::text())
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(label.into()),
         )
         .child(
             div()
-                .text_color(theme::c(theme::MUTED))
+                .text_color(theme::muted())
                 .text_xs()
                 .line_clamp(2)
                 .child(description.into()),
@@ -221,16 +216,16 @@ pub fn toggle(on: bool) -> gpui::Div {
         .p(px(2.))
         .flex()
         .when(on, |s| s.justify_end())
-        .bg(theme::c(if on {
-            theme::ACCENT
+        .bg(if on {
+            theme::accent()
         } else {
-            theme::SURFACE_HOVER
-        }))
+            theme::surface_hover()
+        })
         .child(
             div()
                 .w(px(20.))
                 .h(px(20.))
                 .rounded_full()
-                .bg(theme::c(theme::SURFACE)),
+                .bg(theme::surface()),
         )
 }

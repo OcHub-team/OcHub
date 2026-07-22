@@ -25,7 +25,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// 根据提供商配置的环境变量启动一个带有该提供商特定设置的终端。
 /// 无需检查是否为当前激活的提供商，任何提供商都可以打开终端。
 ///
-/// cc-switch ran this inside a Tauri async command. routedeck-core exposes it as a
+/// cc-switch ran this inside a Tauri async command. ochub-core exposes it as a
 /// synchronous call; callers that need it off the main thread should wrap it in
 /// their own blocking task.
 pub fn open_provider_terminal(

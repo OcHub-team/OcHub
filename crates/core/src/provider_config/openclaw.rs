@@ -1,7 +1,7 @@
 //! OpenClaw provider config codec.
 //!
 //! OpenClaw is *additive*: every provider lives together inside one on-disk file
-//! `~/.openclaw/openclaw.json` (JSON5) under `models.providers.<id>`. RouteDeck
+//! `~/.openclaw/openclaw.json` (JSON5) under `models.providers.<id>`. OCHUB
 //! stores a single provider's slice as `settingsConfig`, shaped exactly like an
 //! [`OpenClawProviderConfig`]:
 //!
@@ -42,8 +42,8 @@ const DEFAULT_API: &str = "openai-completions";
 pub struct OpenClawConfig;
 
 impl AppConfig for OpenClawConfig {
-    fn app(&self) -> AppType {
-        AppType::OpenClaw
+    fn app_id(&self) -> crate::app_id::AppId {
+        AppType::OpenClaw.app_id()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -278,8 +278,8 @@ impl AppConfig for OpenClawConfig {
             .ok_or_else(|| "缺少 models.providers.<id> 配置".to_string())
     }
 
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile> {
-        let provider = self.encode(values, &Value::Null, None).settings_config;
+    fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
+        let provider = self.encode(values, prior, None).settings_config;
         let id = provider_preview_id(values);
 
         let on_disk = json!({
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn preview_emits_single_nested_openclaw_file() {
-        let files = OpenClawConfig.preview(&sample_values());
+        let files = OpenClawConfig.preview(&sample_values(), &Value::Null);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].filename, "~/.openclaw/openclaw.json");
         assert_eq!(files[0].language, Language::Json);

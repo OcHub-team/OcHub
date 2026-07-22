@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
-use routedeck_core::db::legacy_json::Prompt;
-use routedeck_core::services::PromptService;
-use routedeck_core::{AppState, AppType};
+use ochub_core::db::legacy_json::Prompt;
+use ochub_core::services::PromptService;
+use ochub_core::{AppState, AppType};
 
 use crate::layout;
 use crate::text_input::TextInput;
@@ -57,31 +57,21 @@ impl PromptsView {
         this
     }
 
-    fn apps() -> [AppType; 7] {
-        [
-            AppType::Claude,
-            AppType::ClaudeDesktop,
-            AppType::Codex,
-            AppType::Gemini,
-            AppType::OpenCode,
-            AppType::OpenClaw,
-            AppType::Hermes,
-        ]
+    fn apps() -> Vec<AppType> {
+        crate::app_meta::enabled_prompt_apps()
     }
 
-    fn app_label(app: AppType) -> &'static str {
-        match app {
-            AppType::Claude => "Claude",
-            AppType::ClaudeDesktop => "Claude Desktop",
-            AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini",
-            AppType::OpenCode => "OpenCode",
-            AppType::OpenClaw => "OpenClaw",
-            AppType::Hermes => "Hermes",
-        }
+    fn app_label(app: AppType) -> SharedString {
+        crate::app_meta::label(app)
     }
 
     pub fn reload(&mut self) {
+        let apps = Self::apps();
+        if !apps.contains(&self.selected_app) {
+            if let Some(first) = apps.first() {
+                self.selected_app = *first;
+            }
+        }
         match PromptService::get_prompts(&self.app, self.selected_app) {
             Ok(map) => self.prompts = map.into_values().collect(),
             Err(err) => {
@@ -255,16 +245,16 @@ impl PromptsView {
             .rounded_md()
             .cursor_pointer()
             .text_sm()
-            .bg(theme::c(if selected {
-                theme::ACCENT
+            .bg(if selected {
+                theme::accent()
             } else {
-                theme::SURFACE
-            }))
-            .text_color(theme::c(if selected {
-                theme::ACCENT_TEXT
+                theme::surface()
+            })
+            .text_color(if selected {
+                theme::accent_text()
             } else {
-                theme::SUBTEXT
-            }))
+                theme::subtext()
+            })
             .child(Self::app_label(app))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.select_app(app, cx);
@@ -288,9 +278,13 @@ impl PromptsView {
             .w_full()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(if enabled { theme::GREEN } else { theme::BORDER }))
+            .border_color(if enabled {
+                theme::green()
+            } else {
+                theme::border()
+            })
             .child(
                 div()
                     .flex()
@@ -304,7 +298,7 @@ impl PromptsView {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(SharedString::from(name)),
                             )
@@ -313,8 +307,8 @@ impl PromptsView {
                                     div()
                                         .px_2()
                                         .rounded_md()
-                                        .bg(theme::c(theme::GREEN))
-                                        .text_color(theme::c(theme::ACCENT_TEXT))
+                                        .bg(theme::green())
+                                        .text_color(theme::accent_text())
                                         .text_xs()
                                         .child("已启用"),
                                 )
@@ -323,7 +317,7 @@ impl PromptsView {
                     .when_some(desc, |s, d| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .text_xs()
                                 .child(SharedString::from(d)),
                         )
@@ -331,7 +325,7 @@ impl PromptsView {
                     .child(
                         div()
                             .max_w(px(680.))
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .text_color(theme::subtext())
                             .text_xs()
                             .line_height(px(18.))
                             .child(SharedString::from(preview)),
@@ -357,16 +351,16 @@ impl PromptsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(if enabled {
-                                theme::SURFACE_HOVER
+                            .bg(if enabled {
+                                theme::surface_hover()
                             } else {
-                                theme::ACCENT
-                            }))
-                            .text_color(theme::c(if enabled {
-                                theme::SUBTEXT
+                                theme::accent()
+                            })
+                            .text_color(if enabled {
+                                theme::subtext()
                             } else {
-                                theme::ACCENT_TEXT
-                            }))
+                                theme::accent_text()
+                            })
                             .text_sm()
                             .child(if enabled { "已启用" } else { "启用" })
                             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -382,8 +376,8 @@ impl PromptsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE_HOVER))
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .bg(theme::surface_hover())
+                            .text_color(theme::subtext())
                             .text_sm()
                             .child("编辑")
                             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -399,8 +393,8 @@ impl PromptsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE_HOVER))
-                            .text_color(theme::c(theme::RED))
+                            .bg(theme::surface_hover())
+                            .text_color(theme::red())
                             .text_sm()
                             .child("删除")
                             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -417,7 +411,7 @@ impl PromptsView {
             .gap_1p5()
             .child(
                 div()
-                    .text_color(theme::c(theme::SUBTEXT))
+                    .text_color(theme::subtext())
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .child(SharedString::from(label.to_string())),
@@ -437,7 +431,7 @@ impl PromptsView {
             .flex_col()
             .flex_1()
             .h_full()
-            .bg(theme::c(theme::BG))
+            .bg(theme::bg())
             .child(
                 div()
                     .flex()
@@ -447,10 +441,10 @@ impl PromptsView {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_xl()
                             .font_weight(FontWeight::BOLD)
                             .child(title),
@@ -464,8 +458,8 @@ impl PromptsView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE))
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .bg(theme::surface())
+                            .text_color(theme::subtext())
                             .text_sm()
                             .child("返回列表")
                             .on_click(cx.listener(|this, _event, _window, cx| {
@@ -478,7 +472,7 @@ impl PromptsView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -495,7 +489,7 @@ impl PromptsView {
                     .child(self.render_field("正文", &self.content))
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .line_height(px(18.))
                             .child("保存已启用的提示词时，会同步写回对应应用的提示词文件。"),
@@ -514,8 +508,8 @@ impl PromptsView {
                                     .py_2()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::ACCENT))
-                                    .text_color(theme::c(theme::ACCENT_TEXT))
+                                    .bg(theme::accent())
+                                    .text_color(theme::accent_text())
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("保存")
@@ -532,8 +526,8 @@ impl PromptsView {
                                     .py_2()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::SURFACE))
-                                    .text_color(theme::c(theme::SUBTEXT))
+                                    .bg(theme::surface())
+                                    .text_color(theme::subtext())
                                     .text_sm()
                                     .child("取消")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -564,10 +558,10 @@ impl Render for PromptsView {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_xl()
                             .font_weight(FontWeight::BOLD)
                             .child("提示词"),
@@ -587,8 +581,8 @@ impl Render for PromptsView {
                                     .py_1p5()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::ACCENT))
-                                    .text_color(theme::c(theme::ACCENT_TEXT))
+                                    .bg(theme::accent())
+                                    .text_color(theme::accent_text())
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("新增")
@@ -605,8 +599,8 @@ impl Render for PromptsView {
                                     .py_1p5()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::SURFACE))
-                                    .text_color(theme::c(theme::SUBTEXT))
+                                    .bg(theme::surface())
+                                    .text_color(theme::subtext())
                                     .text_sm()
                                     .child("从当前文件导入")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -615,13 +609,11 @@ impl Render for PromptsView {
                             ),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap_2()
-                            .mt_3()
-                            .children(Self::apps().map(|a| self.render_app_pill(a, cx))),
+                        div().flex().flex_row().flex_wrap().gap_2().mt_3().children(
+                            Self::apps()
+                                .into_iter()
+                                .map(|a| self.render_app_pill(a, cx)),
+                        ),
                     ),
             )
             .when_some(self.status.clone(), |s, status| {
@@ -629,7 +621,7 @@ impl Render for PromptsView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -640,7 +632,7 @@ impl Render for PromptsView {
                     .when(is_empty, |s| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .child("这个应用还没有提示词。"),
                         )
                     })

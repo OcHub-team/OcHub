@@ -108,7 +108,7 @@ impl<'a> UsageLogger<'a> {
         )
         .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
 
-        // cc-switch fanned a debounced Tauri event here. RouteDeck persists
+        // cc-switch fanned a debounced Tauri event here. OCHUB persists
         // the row and lets GPUI/API callers refresh usage views explicitly.
         log::trace!("[Usage] request log recorded");
 

@@ -60,6 +60,8 @@ pub enum AppError {
     },
     #[error("数据库错误: {0}")]
     Database(String),
+    #[error("应用已停用: {0}")]
+    AppDisabled(String),
     #[error("OMO 配置文件不存在")]
     OmoConfigNotFound,
     #[error("所有供应商已熔断，无可用渠道")]

@@ -4,8 +4,8 @@
 //! Ported from cc-switch `services/provider/mod.rs`.
 
 mod endpoints;
-mod gemini_auth;
-mod live;
+pub(crate) mod gemini_auth;
+pub(crate) mod live;
 mod usage;
 
 use indexmap::IndexMap;
@@ -28,7 +28,7 @@ pub use live::{
 };
 
 // Internal re-exports (pub(crate)). These mirror the cc-switch re-export seams;
-// some are not yet called inside routedeck-core but are kept as the public-within-crate
+// some are not yet called inside ochub-core but are kept as the public-within-crate
 // surface for callers ported in later phases.
 #[allow(unused_imports)]
 pub(crate) use live::sanitize_claude_settings_for_live;
@@ -36,7 +36,7 @@ pub(crate) use live::sanitize_claude_settings_for_live;
 pub(crate) use live::{
     build_effective_settings_with_common_config, normalize_provider_common_config_for_storage,
     provider_exists_in_live_config, strip_common_config_from_live_settings,
-    write_live_with_common_config,
+    write_live_with_common_config, write_live_with_common_config_ungated,
 };
 
 // Internal re-exports
@@ -506,6 +506,8 @@ impl ProviderService {
 
     /// Switch to a provider
     pub fn switch(state: &AppState, app_type: AppType, id: &str) -> Result<SwitchResult, AppError> {
+        crate::plugin::registry::ensure_app_type_enabled(&app_type)?;
+
         // Check if provider exists
         let providers = state.db.get_all_providers(app_type.as_str())?;
         let _provider = providers
@@ -1506,131 +1508,4 @@ pub struct ProviderSortUpdate {
     pub id: String,
     #[serde(rename = "sortIndex")]
     pub sort_index: usize,
-}
-
-// ============================================================================
-// 统一供应商（Universal Provider）服务方法
-// ============================================================================
-
-use crate::model::UniversalProvider;
-use std::collections::HashMap;
-
-impl ProviderService {
-    /// 获取所有统一供应商
-    pub fn list_universal(
-        state: &AppState,
-    ) -> Result<HashMap<String, UniversalProvider>, AppError> {
-        state.db.get_all_universal_providers()
-    }
-
-    /// 获取单个统一供应商
-    pub fn get_universal(
-        state: &AppState,
-        id: &str,
-    ) -> Result<Option<UniversalProvider>, AppError> {
-        state.db.get_universal_provider(id)
-    }
-
-    /// 添加或更新统一供应商
-    pub fn upsert_universal(
-        state: &AppState,
-        provider: UniversalProvider,
-    ) -> Result<bool, AppError> {
-        state.db.save_universal_provider(&provider)?;
-        Ok(true)
-    }
-
-    /// 删除统一供应商
-    pub fn delete_universal(state: &AppState, id: &str) -> Result<bool, AppError> {
-        let provider = state.db.get_universal_provider(id)?;
-
-        state.db.delete_universal_provider(id)?;
-
-        if let Some(p) = provider {
-            if p.apps.claude {
-                let claude_id = format!("universal-claude-{id}");
-                let _ = state.db.delete_provider("claude", &claude_id);
-            }
-            if p.apps.codex {
-                let codex_id = format!("universal-codex-{id}");
-                let _ = state.db.delete_provider("codex", &codex_id);
-            }
-            if p.apps.gemini {
-                let gemini_id = format!("universal-gemini-{id}");
-                let _ = state.db.delete_provider("gemini", &gemini_id);
-            }
-        }
-
-        Ok(true)
-    }
-
-    /// 同步统一供应商到各应用
-    pub fn sync_universal_to_apps(state: &AppState, id: &str) -> Result<bool, AppError> {
-        let provider = state
-            .db
-            .get_universal_provider(id)?
-            .ok_or_else(|| AppError::Message(format!("统一供应商 {id} 不存在")))?;
-
-        // 同步到 Claude
-        if let Some(mut claude_provider) = provider.to_claude_provider() {
-            if let Some(existing) = state.db.get_provider_by_id(&claude_provider.id, "claude")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &claude_provider.settings_config);
-                claude_provider.settings_config = merged;
-            }
-            state.db.save_provider("claude", &claude_provider)?;
-        } else {
-            let claude_id = format!("universal-claude-{id}");
-            let _ = state.db.delete_provider("claude", &claude_id);
-        }
-
-        // 同步到 Codex
-        if let Some(mut codex_provider) = provider.to_codex_provider() {
-            if let Some(existing) = state.db.get_provider_by_id(&codex_provider.id, "codex")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &codex_provider.settings_config);
-                codex_provider.settings_config = merged;
-            }
-            state.db.save_provider("codex", &codex_provider)?;
-        } else {
-            let codex_id = format!("universal-codex-{id}");
-            let _ = state.db.delete_provider("codex", &codex_id);
-        }
-
-        // 同步到 Gemini
-        if let Some(mut gemini_provider) = provider.to_gemini_provider() {
-            if let Some(existing) = state.db.get_provider_by_id(&gemini_provider.id, "gemini")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &gemini_provider.settings_config);
-                gemini_provider.settings_config = merged;
-            }
-            state.db.save_provider("gemini", &gemini_provider)?;
-        } else {
-            let gemini_id = format!("universal-gemini-{id}");
-            let _ = state.db.delete_provider("gemini", &gemini_id);
-        }
-
-        Ok(true)
-    }
-
-    /// 递归合并 JSON：base 为底，patch 覆盖同名字段
-    fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
-        use serde_json::Value;
-
-        match (base, patch) {
-            (Value::Object(base_map), Value::Object(patch_map)) => {
-                for (k, v_patch) in patch_map {
-                    match base_map.get_mut(k) {
-                        Some(v_base) => Self::merge_json(v_base, v_patch),
-                        None => {
-                            base_map.insert(k.clone(), v_patch.clone());
-                        }
-                    }
-                }
-            }
-            (base_val, patch_val) => {
-                *base_val = patch_val.clone();
-            }
-        }
-    }
 }

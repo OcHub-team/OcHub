@@ -29,26 +29,26 @@ impl AreaChart {
     pub fn new(values: Vec<f32>) -> Self {
         let mut chart = Self {
             values,
-            line: theme::c(theme::ACCENT).into(),
-            fill_top: theme::c(theme::ACCENT).into(),
-            fill_bottom: theme::c(theme::ACCENT).into(),
+            line: theme::accent().into(),
+            fill_top: theme::accent().into(),
+            fill_bottom: theme::accent().into(),
             height: 180.,
             progress: 1.,
         };
-        chart.set_palette(theme::ACCENT);
+        chart.set_palette(theme::accent());
         chart
     }
 
-    fn set_palette(&mut self, hex: u32) {
-        self.line = theme::c(hex).into();
-        self.fill_top = theme::translucent(hex, 0.26).into();
-        self.fill_bottom = theme::translucent(hex, 0.02).into();
+    fn set_palette(&mut self, color: gpui::Rgba) {
+        self.line = color.into();
+        self.fill_top = color.alpha(0.26).into();
+        self.fill_bottom = color.alpha(0.02).into();
     }
 
     /// Recolor the line + gradient fill to a brand/semantic hue.
     #[allow(dead_code)]
-    pub fn color(mut self, hex: u32) -> Self {
-        self.set_palette(hex);
+    pub fn color(mut self, color: gpui::Rgba) -> Self {
+        self.set_palette(color);
         self
     }
 
@@ -78,7 +78,15 @@ impl RenderOnce for AreaChart {
         canvas(
             move |_bounds, _window, _cx| (),
             move |bounds, _prepaint, window, _cx| {
-                paint_area(bounds, &values, line, fill_top, fill_bottom, progress, window);
+                paint_area(
+                    bounds,
+                    &values,
+                    line,
+                    fill_top,
+                    fill_bottom,
+                    progress,
+                    window,
+                );
             },
         )
         .w_full()

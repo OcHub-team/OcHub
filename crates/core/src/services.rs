@@ -5,6 +5,7 @@
 //! Session usage sync services are also ported; Tauri event fan-out points are
 //! replaced with log output or explicit API calls.
 
+pub mod apps;
 pub mod auth;
 pub mod balance;
 pub mod codex_history_migration;

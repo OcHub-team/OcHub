@@ -10,8 +10,8 @@
 //! only their *placement* is app-scoped.
 
 use gpui::{div, prelude::*, Context, Entity, SharedString, Window};
-use routedeck_core::settings::{self, AppSettings};
-use routedeck_core::AppType;
+use ochub_core::settings::{self, AppSettings};
+use ochub_core::AppType;
 
 use crate::components;
 use crate::layout;
@@ -105,7 +105,7 @@ impl AppSettingsView {
         layout::row()
             .id(toggle.id)
             .cursor_pointer()
-            .hover(|s| s.bg(theme::c(theme::SURFACE_HOVER)))
+            .hover(|s| s.bg(theme::surface_hover()))
             .child(layout::row_label(toggle.label, toggle.description))
             .child(layout::toggle(on))
             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -127,9 +127,9 @@ impl AppSettingsView {
                     div()
                         .w_full()
                         .rounded_lg()
-                        .bg(theme::c(theme::SURFACE))
+                        .bg(theme::surface())
                         .border_1()
-                        .border_color(theme::c(theme::BORDER))
+                        .border_color(theme::border())
                         .p_4()
                         .flex()
                         .flex_col()
@@ -188,12 +188,7 @@ impl Render for AppSettingsView {
             column = column.child(dir);
         }
         if let Some(status) = self.status.clone() {
-            column = column.child(
-                div()
-                    .text_color(theme::c(theme::TEAL))
-                    .text_xs()
-                    .child(status),
-            );
+            column = column.child(div().text_color(theme::teal()).text_xs().child(status));
         }
 
         layout::page()
@@ -310,14 +305,6 @@ fn write_config_dir(settings: &mut AppSettings, app: AppType, value: Option<Stri
     }
 }
 
-fn app_label(app: AppType) -> &'static str {
-    match app {
-        AppType::Claude => "Claude Code",
-        AppType::ClaudeDesktop => "Claude Desktop",
-        AppType::Codex => "Codex",
-        AppType::Gemini => "Gemini CLI",
-        AppType::OpenCode => "OpenCode",
-        AppType::OpenClaw => "OpenClaw",
-        AppType::Hermes => "Hermes",
-    }
+fn app_label(app: AppType) -> gpui::SharedString {
+    crate::app_meta::label(app)
 }

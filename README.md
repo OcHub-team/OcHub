@@ -1,4 +1,4 @@
-# RouteDeck
+# OCHUB
 
 A native desktop manager for switching API providers across AI coding tools —
 **Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw, and Hermes**.
@@ -9,10 +9,15 @@ This is a from-scratch rewrite of [`cc-switch`](https://github.com/farion1231/cc
 - **[axum](https://github.com/tokio-rs/axum)** as the service backbone (control API + the local provider proxy), replacing Tauri's IPC/command layer.
 - **[GPUI](https://www.gpui.rs/)** (Zed's GPU-accelerated UI framework) as the native UI, replacing the Tauri webview + React frontend.
 
-RouteDeck is a **drop-in backend replacement**: it reads and writes the same
-data directory (`~/.cc-switch/`, including `cc-switch.db`) and the same live
-config locations (`~/.claude`, `~/.codex`, `~/.gemini`, …), so existing cc-switch
-data keeps working.
+OCHUB owns its own data directory (`~/.ochub/`, with `ochub.db` on
+an independent schema line starting at v1). On first launch it performs a
+**one-time, read-only import** of existing cc-switch data
+(`~/.cc-switch/cc-switch.db`, tolerant of schema v11–v16+): providers, MCP
+servers, skills, prompts, usage history, settings, and managed OAuth accounts
+all carry over, and `~/.cc-switch/` is never written to. It manages the same
+live config locations (`~/.claude`, `~/.codex`, `~/.gemini`, …) — quit the
+original cc-switch app before switching providers from OCHUB, or the two
+will overwrite each other's live configs.
 
 ## Architecture
 
@@ -20,9 +25,9 @@ A Cargo workspace with three crates:
 
 | Crate | Path | Role |
 |-------|------|------|
-| `routedeck-core` | `crates/core` | UI/transport-agnostic core: domain model, config/paths, SQLite store, per-app live-config writers, provider switching, MCP/prompts/skills/sessions/sync/usage services. A faithful port of cc-switch's `src-tauri/src` minus Tauri. |
-| `routedeck-server` | `crates/server` | axum HTTP/JSON control API exposing the command surface, plus the local streaming provider proxy (forwarding, failover, circuit breaker, transforms, usage accounting). |
-| `routedeck-app` | `crates/app` | GPUI desktop application. Embeds `routedeck-core` and hosts `routedeck-server` in-process. |
+| `ochub-core` | `crates/core` | UI/transport-agnostic core: domain model, config/paths, SQLite store, per-app live-config writers, provider switching, MCP/prompts/skills/sessions/sync/usage services. A faithful port of cc-switch's `src-tauri/src` minus Tauri. |
+| `ochub-server` | `crates/server` | axum HTTP/JSON control API exposing the command surface, plus the local streaming provider proxy (forwarding, failover, circuit breaker, transforms, usage accounting). |
+| `ochub-app` | `crates/app` | GPUI desktop application. Embeds `ochub-core` and hosts `ochub-server` in-process. |
 
 The reference source (`cc-switch/`) and the GPUI source (`zed/`) live alongside
 the workspace and are excluded from it (`Cargo.toml` `[workspace] exclude`).
@@ -48,16 +53,16 @@ requirements:
 
 ```sh
 # Core library and headless server (no Metal/Xcode needed):
-cargo check -p routedeck-core
-cargo build -p routedeck-server
+cargo check -p ochub-core
+cargo build -p ochub-server
 
 # The GPUI desktop app (needs DEVELOPER_DIR + Metal toolchain, see above):
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -p routedeck-app
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -p ochub-app
 ```
 
 ## Status
 
-A faithful, near-complete port. `routedeck-core` compiles green (hundreds of tests
+A faithful, near-complete port. `ochub-core` compiles green (hundreds of tests
 passing) and contains the full cc-switch backend:
 
 - Domain model, config/paths, device settings
@@ -71,7 +76,7 @@ passing) and contains the full cc-switch backend:
 - Model-fetch / speedtest / subscription / balance / coding-plan
 - Auth — Copilot OAuth device flow, Codex OAuth, managed multi-account stores
 
-`routedeck-server` exposes ~47 control-API routes. `routedeck-app` is a working GPUI desktop UI
+`ochub-server` exposes ~47 control-API routes. `ochub-app` is a working GPUI desktop UI
 (sidebar app-switcher, provider list with switch/import/add/edit/delete, a
 text-input component, settings panel, and an async proxy panel).
 
@@ -85,5 +90,5 @@ deeplink registration, a code-signed `.app` for distribution).
 
 ## License
 
-RouteDeck is licensed under the **GNU General Public License v3.0 (or later)** —
+OCHUB is licensed under the **GNU General Public License v3.0 (or later)** —
 see [LICENSE](LICENSE).

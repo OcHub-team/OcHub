@@ -1,6 +1,4 @@
-use gpui::{prelude::*, px, svg};
-
-use crate::theme;
+use gpui::{prelude::*, px, svg, Rgba};
 
 #[derive(Clone, Copy)]
 pub enum IconName {
@@ -69,10 +67,10 @@ impl IconName {
     }
 }
 
-pub fn icon(name: IconName, color: u32, size: f32) -> impl IntoElement {
+pub fn icon(name: IconName, color: Rgba, size: f32) -> impl IntoElement {
     svg()
         .path(name.path())
         .w(px(size))
         .h(px(size))
-        .text_color(theme::c(color))
+        .text_color(color)
 }

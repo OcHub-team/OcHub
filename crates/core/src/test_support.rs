@@ -1,9 +1,9 @@
 //! Shared test-only helpers.
 //!
 //! A process-wide mutex used to serialize tests that mutate global environment
-//! variables (`HOME`, `USERPROFILE`, `CC_SWITCH_TEST_HOME`). cc-switch used the
+//! variables (`HOME`, `USERPROFILE`, `OCHUB_TEST_HOME`). cc-switch used the
 //! `serial_test` crate for this; that crate is not a workspace dependency in
-//! routedeck-core, so this lock provides the same guarantee without a new dependency.
+//! ochub-core, so this lock provides the same guarantee without a new dependency.
 //!
 //! All HOME-mutating tests across the crate should acquire this single lock so
 //! they never run concurrently with one another.

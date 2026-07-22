@@ -4,7 +4,7 @@
 
 // Some sync-only helpers (`import_sql_string_for_sync`, `periodic_backup_if_needed`,
 // `SYNC_PRESERVE_TABLES`) are the seam for the not-yet-ported WebDAV/S3 auto-sync
-// services and are not called within routedeck-core yet.
+// services and are not called within ochub-core yet.
 #![allow(dead_code)]
 
 use super::{lock_conn, Database};
@@ -301,7 +301,7 @@ impl Database {
 
     /// 生成一致性快照备份，返回备份文件路径（不存在主库时返回 None）
     pub(crate) fn backup_database_file(&self) -> Result<Option<PathBuf>, AppError> {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let db_path = crate::paths::get_database_path();
         if !db_path.exists() {
             return Ok(None);
         }

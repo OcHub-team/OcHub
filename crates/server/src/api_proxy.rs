@@ -11,14 +11,14 @@ use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use routedeck_core::db::proxy_types::{
+use ochub_core::db::proxy_types::{
     AppProxyConfig, CircuitBreakerConfig, CopilotOptimizerConfig, GlobalProxyConfig, LogConfig,
     OptimizerConfig, ProxyConfig, RectifierConfig,
 };
-use routedeck_core::db::stream_check_types::{HealthStatus, StreamCheckConfig, StreamCheckResult};
-use routedeck_core::proxy::http_client;
-use routedeck_core::services::StreamCheckService;
-use routedeck_core::{AppError, AppType, Provider};
+use ochub_core::db::stream_check_types::{HealthStatus, StreamCheckConfig, StreamCheckResult};
+use ochub_core::proxy::http_client;
+use ochub_core::services::StreamCheckService;
+use ochub_core::{AppError, AppType, Provider};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::ServerState;
@@ -311,127 +311,6 @@ async fn pricing_model_source_set(
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn failover_queue(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-) -> ApiResult<Json<Value>> {
-    to_value(s.app.db.get_failover_queue(&app)?)
-}
-
-async fn failover_available(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-) -> ApiResult<Json<Value>> {
-    to_value(s.app.db.get_available_providers_for_failover(&app)?)
-}
-
-#[derive(Deserialize)]
-struct FailoverProviderRequest {
-    #[serde(rename = "providerId")]
-    provider_id: String,
-}
-
-async fn failover_add(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-    Json(req): Json<FailoverProviderRequest>,
-) -> ApiResult<Json<Value>> {
-    s.app.db.add_to_failover_queue(&app, &req.provider_id)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn failover_remove(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-    Json(req): Json<FailoverProviderRequest>,
-) -> ApiResult<Json<Value>> {
-    s.app
-        .db
-        .remove_from_failover_queue(&app, &req.provider_id)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn failover_clear(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-) -> ApiResult<Json<Value>> {
-    s.app.db.clear_failover_queue(&app)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn auto_failover_get(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let config = s.app.db.get_proxy_config_for_app(&app).await?;
-    Ok(Json(json!({ "enabled": config.auto_failover_enabled })))
-}
-
-#[derive(Deserialize)]
-struct AutoFailoverRequest {
-    enabled: bool,
-}
-
-async fn auto_failover_set(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-    Json(req): Json<AutoFailoverRequest>,
-) -> ApiResult<Json<Value>> {
-    let mut config = s.app.db.get_proxy_config_for_app(&app).await?;
-    if req.enabled && !config.enabled {
-        return Err(ApiError(AppError::InvalidInput(
-            "Enable proxy takeover before enabling auto failover".to_string(),
-        )));
-    }
-
-    let mut auto_added_provider_id: Option<String> = None;
-    let p1_provider_id = if req.enabled {
-        let mut queue = s.app.db.get_failover_queue(&app)?;
-        if queue.is_empty() {
-            let app_type = app.parse::<AppType>()?;
-            let current_id =
-                routedeck_core::settings::get_effective_current_provider(&s.app.db, &app_type)?
-                    .ok_or_else(|| {
-                        ApiError(AppError::InvalidInput(
-                            "Failover queue is empty and no current provider is selected"
-                                .to_string(),
-                        ))
-                    })?;
-            s.app.db.add_to_failover_queue(&app, &current_id)?;
-            auto_added_provider_id = Some(current_id);
-            queue = s.app.db.get_failover_queue(&app)?;
-        }
-        queue
-            .first()
-            .map(|item| item.provider_id.clone())
-            .ok_or_else(|| {
-                ApiError(AppError::InvalidInput(
-                    "Failover queue is empty".to_string(),
-                ))
-            })?
-    } else {
-        String::new()
-    };
-
-    if req.enabled {
-        if let Err(err) = s
-            .app
-            .proxy_service
-            .switch_proxy_target(&app, &p1_provider_id)
-            .await
-        {
-            if let Some(provider_id) = auto_added_provider_id {
-                let _ = s.app.db.remove_from_failover_queue(&app, &provider_id);
-            }
-            return Err(ApiError(AppError::Message(err)));
-        }
-    }
-
-    config.auto_failover_enabled = req.enabled;
-    s.app.db.update_proxy_config_for_app(config).await?;
-    Ok(Json(json!({ "ok": true, "providerId": p1_provider_id })))
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpstreamProxyStatus {
@@ -687,9 +566,6 @@ async fn stream_check_all(
         if let Ok(Some(current_id)) = s.app.db.get_current_provider(req.app_type.as_str()) {
             ids.insert(current_id);
         }
-        if let Ok(queue) = s.app.db.get_failover_queue(req.app_type.as_str()) {
-            ids.extend(queue.into_iter().map(|item| item.provider_id));
-        }
         Some(ids)
     } else {
         None
@@ -779,26 +655,26 @@ pub fn router() -> Router<ServerState> {
             get(proxy_get_global_config).put(proxy_update_global_config),
         )
         .route(
-            "/api/proxy/app-config/:app",
+            "/api/proxy/app-config/{app}",
             get(proxy_get_app_config).put(proxy_update_app_config),
         )
         .route(
-            "/api/proxy/app-config/:app/default-cost-multiplier",
+            "/api/proxy/app-config/{app}/default-cost-multiplier",
             get(default_cost_multiplier_get).put(default_cost_multiplier_set),
         )
         .route(
-            "/api/proxy/app-config/:app/pricing-model-source",
+            "/api/proxy/app-config/{app}/pricing-model-source",
             get(pricing_model_source_get).put(pricing_model_source_set),
         )
         .route("/api/proxy/takeover", get(proxy_takeover_status))
-        .route("/api/proxy/takeover/:app", post(proxy_set_takeover))
+        .route("/api/proxy/takeover/{app}", post(proxy_set_takeover))
         .route(
             "/api/proxy/live-takeover-active",
             get(proxy_live_takeover_active),
         )
         .route("/api/proxy/switch-provider", post(proxy_switch_provider))
         .route(
-            "/api/proxy/provider-health/:app/:provider_id",
+            "/api/proxy/provider-health/{app}/{provider_id}",
             get(provider_health),
         )
         .route(
@@ -810,23 +686,8 @@ pub fn router() -> Router<ServerState> {
             post(reset_circuit_breaker),
         )
         .route(
-            "/api/proxy/circuit-breaker/stats/:app/:provider_id",
+            "/api/proxy/circuit-breaker/stats/{app}/{provider_id}",
             get(circuit_breaker_stats),
-        )
-        .route(
-            "/api/proxy/failover/:app/queue",
-            get(failover_queue)
-                .post(failover_add)
-                .delete(failover_remove),
-        )
-        .route("/api/proxy/failover/:app/clear", post(failover_clear))
-        .route(
-            "/api/proxy/failover/:app/available",
-            get(failover_available),
-        )
-        .route(
-            "/api/proxy/failover/:app/auto",
-            get(auto_failover_get).put(auto_failover_set),
         )
         .route("/api/upstream-proxy/status", get(upstream_proxy_status))
         .route(

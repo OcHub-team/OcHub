@@ -1,7 +1,7 @@
 //! OpenCode provider config codec.
 //!
 //! OpenCode is *additive*: it keeps one shared `~/.config/opencode/opencode.json`
-//! and RouteDeck writes each provider under `provider.<id>`. The
+//! and OCHUB writes each provider under `provider.<id>`. The
 //! `settingsConfig` we store **is** that per-provider object, shaped like an
 //! [`OpenCodeProviderConfig`](crate::model::OpenCodeProviderConfig):
 //!
@@ -43,8 +43,8 @@ const KNOWN_OPTION_KEYS: [&str; 3] = ["baseURL", "apiKey", "headers"];
 pub struct OpenCodeConfig;
 
 impl AppConfig for OpenCodeConfig {
-    fn app(&self) -> AppType {
-        AppType::OpenCode
+    fn app_id(&self) -> crate::app_id::AppId {
+        AppType::OpenCode.app_id()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -415,7 +415,7 @@ impl AppConfig for OpenCodeConfig {
             .ok_or_else(|| "缺少 provider.<id> 配置".to_string())
     }
 
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile> {
+    fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
         let provider_id = {
             let id = str_val(values, "provider_id").trim();
             if id.is_empty() {
@@ -425,8 +425,8 @@ impl AppConfig for OpenCodeConfig {
             }
         };
 
-        // Encode against an empty prior to get the exact provider object.
-        let encoded = self.encode(values, &Value::Null, None);
+        // Encode against the working document so unmanaged keys survive.
+        let encoded = self.encode(values, prior, None);
         let mut providers = Map::new();
         providers.insert(provider_id, encoded.settings_config);
         let wrapper = json!({
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn preview_emits_single_wrapped_json_file() {
-        let files = OpenCodeConfig.preview(&sample_values());
+        let files = OpenCodeConfig.preview(&sample_values(), &Value::Null);
         assert_eq!(files.len(), 1);
         let f = &files[0];
         assert_eq!(f.filename, "~/.config/opencode/opencode.json");

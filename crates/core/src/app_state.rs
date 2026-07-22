@@ -15,6 +15,8 @@ use crate::services::{ProxyService, UsageCache};
 pub struct AppState {
     pub db: Arc<Database>,
     pub proxy_service: ProxyService,
+    /// Local relay gateway (standing multi-dialect server + channel routing).
+    pub gateway: Arc<crate::gateway::GatewayService>,
     pub usage_cache: Arc<UsageCache>,
     /// GitHub Copilot OAuth manager (managed-account device flow + token cache).
     /// Mirrors cc-switch's Tauri-managed `CopilotAuthState`.
@@ -36,9 +38,12 @@ impl AppState {
         let proxy_service =
             ProxyService::new(db.clone(), copilot_auth.clone(), codex_oauth.clone());
 
+        let gateway = Arc::new(crate::gateway::GatewayService::new(db.clone()));
+
         Self {
             db,
             proxy_service,
+            gateway,
             usage_cache: Arc::new(UsageCache::new()),
             copilot_auth,
             codex_oauth,
@@ -60,7 +65,16 @@ impl AppState {
             Err(e) => log::warn!("failed to seed default skill repos: {e}"),
         }
 
-        for app_type in AppType::all().filter(|t| !t.is_additive_mode()) {
+        // Register user manifest plugins before the provider import loop so any
+        // manifest app participates in startup import like the built-ins.
+        for err in crate::plugin::load_and_register_user_plugins() {
+            log::warn!("failed to load user plugin {}: {}", err.path, err.message);
+        }
+
+        for app_type in AppType::all()
+            .filter(|t| !t.is_additive_mode())
+            .filter(crate::plugin::registry::is_app_type_enabled)
+        {
             if ProviderService::should_import_default_config_on_startup(self, &app_type)
                 .unwrap_or(false)
             {

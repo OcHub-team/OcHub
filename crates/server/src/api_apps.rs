@@ -8,16 +8,22 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path as FsPath;
 
-use routedeck_core::db::legacy_json::{McpApps, McpServer, Prompt, SkillRepo};
-use routedeck_core::services::skill::{DiscoverableSkill, ImportSkillSelection};
-use routedeck_core::services::{ConfigService, McpService, PromptService, SkillService};
-use routedeck_core::settings::SkillStorageLocation;
-use routedeck_core::{AppError, AppType};
+use ochub_core::db::legacy_json::{McpApps, McpServer, Prompt, SkillRepo};
+use ochub_core::services::skill::{DiscoverableSkill, ImportSkillSelection};
+use ochub_core::services::{ConfigService, McpService, PromptService, SkillService};
+use ochub_core::settings::SkillStorageLocation;
+use ochub_core::{AppError, AppType};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::ServerState;
 
 fn parse_app(app: &str) -> Result<AppType, ApiError> {
+    let app_type = parse_app_inner(app)?;
+    ochub_core::plugin::ensure_app_type_enabled(&app_type).map_err(ApiError::from)?;
+    Ok(app_type)
+}
+
+fn parse_app_inner(app: &str) -> Result<AppType, ApiError> {
     app.parse::<AppType>().map_err(ApiError::from)
 }
 
@@ -93,7 +99,7 @@ async fn mcp_config_get(
     #[allow(deprecated)]
     let servers = McpService::get_servers(&s.app, app_ty)?;
     Ok(Json(json!({
-        "configPath": routedeck_core::paths::get_app_config_path().to_string_lossy().to_string(),
+        "configPath": ochub_core::paths::get_app_config_path().to_string_lossy().to_string(),
         "servers": servers,
     })))
 }
@@ -452,25 +458,25 @@ pub fn router() -> Router<ServerState> {
     Router::new()
         .route("/api/mcp", get(mcp_list).post(mcp_upsert))
         .route("/api/mcp/sync", post(mcp_sync))
-        .route("/api/mcp/import/:app", post(mcp_import))
-        .route("/api/mcp/config/:app", get(mcp_config_get))
+        .route("/api/mcp/import/{app}", post(mcp_import))
+        .route("/api/mcp/config/{app}", get(mcp_config_get))
         .route(
-            "/api/mcp/config/:app/by-id/:id",
+            "/api/mcp/config/{app}/by-id/{id}",
             post(mcp_config_upsert).delete(mcp_config_delete),
         )
         .route(
-            "/api/mcp/config/:app/by-id/:id/enabled",
+            "/api/mcp/config/{app}/by-id/{id}/enabled",
             put(mcp_config_enabled),
         )
-        .route("/api/mcp/by-id/:id", delete(mcp_delete))
-        .route("/api/mcp/by-id/:id/toggle", post(mcp_toggle))
-        .route("/api/prompts/:app", get(prompts_list).post(prompts_upsert))
-        .route("/api/prompts/:app/current-file", get(prompts_current_file))
-        .route("/api/prompts/:app/import-file", post(prompts_import_file))
-        .route("/api/prompts/:app/by-id/:id", delete(prompts_delete))
-        .route("/api/prompts/:app/by-id/:id/enable", post(prompts_enable))
+        .route("/api/mcp/by-id/{id}", delete(mcp_delete))
+        .route("/api/mcp/by-id/{id}/toggle", post(mcp_toggle))
+        .route("/api/prompts/{app}", get(prompts_list).post(prompts_upsert))
+        .route("/api/prompts/{app}/current-file", get(prompts_current_file))
+        .route("/api/prompts/{app}/import-file", post(prompts_import_file))
+        .route("/api/prompts/{app}/by-id/{id}", delete(prompts_delete))
+        .route("/api/prompts/{app}/by-id/{id}/enable", post(prompts_enable))
         .route(
-            "/api/config/:app/common-snippet",
+            "/api/config/{app}/common-snippet",
             get(snippet_get).put(snippet_set),
         )
         .route("/api/skills", get(skills_list))
@@ -480,11 +486,11 @@ pub fn router() -> Router<ServerState> {
         .route("/api/skills/updates", get(skills_updates))
         .route("/api/skills/backups", get(skills_backups))
         .route(
-            "/api/skills/backups/:backup_id",
+            "/api/skills/backups/{backup_id}",
             delete(skills_delete_backup),
         )
         .route(
-            "/api/skills/backups/:backup_id/restore",
+            "/api/skills/backups/{backup_id}/restore",
             post(skills_restore_backup),
         )
         .route(
@@ -498,9 +504,12 @@ pub fn router() -> Router<ServerState> {
             "/api/skills/repos",
             get(skill_repos).post(skill_repo_upsert),
         )
-        .route("/api/skills/repos/:owner/:name", delete(skill_repo_delete))
+        .route(
+            "/api/skills/repos/{owner}/{name}",
+            delete(skill_repo_delete),
+        )
         .route("/api/skills/scan-unmanaged", get(skills_scan_unmanaged))
-        .route("/api/skills/by-id/:id", delete(skills_uninstall))
-        .route("/api/skills/by-id/:id/toggle", post(skills_toggle))
-        .route("/api/skills/by-id/:id/update", post(skills_update))
+        .route("/api/skills/by-id/{id}", delete(skills_uninstall))
+        .route("/api/skills/by-id/{id}/toggle", post(skills_toggle))
+        .route("/api/skills/by-id/{id}/update", post(skills_update))
 }

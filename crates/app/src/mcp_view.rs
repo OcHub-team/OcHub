@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
-use routedeck_core::db::legacy_json::{McpApps, McpServer};
-use routedeck_core::services::McpService;
-use routedeck_core::{AppState, AppType};
+use ochub_core::db::legacy_json::{McpApps, McpServer};
+use ochub_core::services::McpService;
+use ochub_core::{AppState, AppType};
 
 use crate::layout;
 use crate::text_input::TextInput;
@@ -62,26 +62,12 @@ impl McpView {
         }
     }
 
-    fn mcp_apps() -> [AppType; 5] {
-        [
-            AppType::Claude,
-            AppType::Codex,
-            AppType::Gemini,
-            AppType::OpenCode,
-            AppType::Hermes,
-        ]
+    fn mcp_apps() -> Vec<AppType> {
+        crate::app_meta::enabled_mcp_apps()
     }
 
-    fn app_label(app: AppType) -> &'static str {
-        match app {
-            AppType::Claude => "Claude",
-            AppType::Codex => "Codex",
-            AppType::Gemini => "Gemini",
-            AppType::OpenCode => "OpenCode",
-            AppType::Hermes => "Hermes",
-            AppType::ClaudeDesktop => "Claude Desktop",
-            AppType::OpenClaw => "OpenClaw",
-        }
+    fn app_label(app: AppType) -> SharedString {
+        crate::app_meta::label(app)
     }
 
     fn default_spec() -> &'static str {
@@ -317,16 +303,16 @@ impl McpView {
             .py_1()
             .rounded_md()
             .cursor_pointer()
-            .bg(theme::c(if enabled {
-                theme::GREEN
+            .bg(if enabled {
+                theme::green()
             } else {
-                theme::SURFACE_HOVER
-            }))
-            .text_color(theme::c(if enabled {
-                theme::ACCENT_TEXT
+                theme::surface_hover()
+            })
+            .text_color(if enabled {
+                theme::accent_text()
             } else {
-                theme::SUBTEXT
-            }))
+                theme::subtext()
+            })
             .text_xs()
             .child(Self::app_label(app))
             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -349,9 +335,9 @@ impl McpView {
             .w_full()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -366,27 +352,27 @@ impl McpView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(SharedString::from(name)),
                             )
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .child(SharedString::from(endpoint)),
                             )
                             .when_some(desc, |s, d| {
                                 s.child(
                                     div()
-                                        .text_color(theme::c(theme::SUBTEXT))
+                                        .text_color(theme::subtext())
                                         .text_xs()
                                         .child(SharedString::from(d)),
                                 )
                             })
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEAL))
+                                    .text_color(theme::teal())
                                     .text_xs()
                                     .child(SharedString::from(format!("应用：{apps}"))),
                             ),
@@ -405,8 +391,8 @@ impl McpView {
                                     .py_1p5()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::SURFACE_HOVER))
-                                    .text_color(theme::c(theme::SUBTEXT))
+                                    .bg(theme::surface_hover())
+                                    .text_color(theme::subtext())
                                     .text_sm()
                                     .child("编辑")
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -422,8 +408,8 @@ impl McpView {
                                     .py_1p5()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::SURFACE_HOVER))
-                                    .text_color(theme::c(theme::RED))
+                                    .bg(theme::surface_hover())
+                                    .text_color(theme::red())
                                     .text_sm()
                                     .child("删除")
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -433,12 +419,11 @@ impl McpView {
                     ),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(Self::mcp_apps().map(|app| self.render_app_toggle(server, app, cx))),
+                div().flex().flex_row().flex_wrap().gap_2().children(
+                    Self::mcp_apps()
+                        .into_iter()
+                        .map(|app| self.render_app_toggle(server, app, cx)),
+                ),
             )
     }
 
@@ -449,7 +434,7 @@ impl McpView {
             .gap_1p5()
             .child(
                 div()
-                    .text_color(theme::c(theme::SUBTEXT))
+                    .text_color(theme::subtext())
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .child(SharedString::from(label.to_string())),
@@ -475,16 +460,16 @@ impl McpView {
             .py_1p5()
             .rounded_md()
             .cursor_pointer()
-            .bg(theme::c(if enabled {
-                theme::ACCENT
+            .bg(if enabled {
+                theme::accent()
             } else {
-                theme::SURFACE
-            }))
-            .text_color(theme::c(if enabled {
-                theme::ACCENT_TEXT
+                theme::surface()
+            })
+            .text_color(if enabled {
+                theme::accent_text()
             } else {
-                theme::SUBTEXT
-            }))
+                theme::subtext()
+            })
             .text_sm()
             .child(Self::app_label(app))
             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -504,7 +489,7 @@ impl McpView {
             .flex_col()
             .flex_1()
             .h_full()
-            .bg(theme::c(theme::BG))
+            .bg(theme::bg())
             .child(
                 div()
                     .flex()
@@ -514,10 +499,10 @@ impl McpView {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_xl()
                             .font_weight(FontWeight::BOLD)
                             .child(title),
@@ -531,8 +516,8 @@ impl McpView {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(theme::c(theme::SURFACE))
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .bg(theme::surface())
+                            .text_color(theme::subtext())
                             .text_sm()
                             .child("返回列表")
                             .on_click(cx.listener(|this, _event, _window, cx| {
@@ -545,7 +530,7 @@ impl McpView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -566,7 +551,7 @@ impl McpView {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::SUBTEXT))
+                                    .text_color(theme::subtext())
                                     .text_xs()
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("启用到应用"),
@@ -579,6 +564,7 @@ impl McpView {
                                     .gap_2()
                                     .children(
                                         Self::mcp_apps()
+                                            .into_iter()
                                             .map(|app| self.render_form_app_pill(app, cx)),
                                     ),
                             ),
@@ -586,7 +572,7 @@ impl McpView {
                     .child(self.render_field("服务器 JSON", &self.spec_json))
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .line_height(px(18.))
                             .child(
@@ -607,8 +593,8 @@ impl McpView {
                                     .py_2()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::ACCENT))
-                                    .text_color(theme::c(theme::ACCENT_TEXT))
+                                    .bg(theme::accent())
+                                    .text_color(theme::accent_text())
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("保存")
@@ -625,8 +611,8 @@ impl McpView {
                                     .py_2()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(theme::c(theme::SURFACE))
-                                    .text_color(theme::c(theme::SUBTEXT))
+                                    .bg(theme::surface())
+                                    .text_color(theme::subtext())
                                     .text_sm()
                                     .child("取消")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -673,8 +659,8 @@ impl Render for McpView {
                                 .py_2()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(theme::c(theme::ACCENT))
-                                .text_color(theme::c(theme::ACCENT_TEXT))
+                                .bg(theme::accent())
+                                .text_color(theme::accent_text())
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("新增")
@@ -691,8 +677,8 @@ impl Render for McpView {
                                 .py_2()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(theme::c(theme::SURFACE))
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .bg(theme::surface())
+                                .text_color(theme::subtext())
                                 .text_sm()
                                 .child("从应用导入")
                                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -708,8 +694,8 @@ impl Render for McpView {
                                 .py_2()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(theme::c(theme::SURFACE))
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .bg(theme::surface())
+                                .text_color(theme::subtext())
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("同步到应用")
@@ -724,7 +710,7 @@ impl Render for McpView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -735,7 +721,7 @@ impl Render for McpView {
                     .when(is_empty, |s| {
                         s.child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .child("还没有配置 MCP 服务器。"),
                         )
                     })

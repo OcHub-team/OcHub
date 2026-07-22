@@ -10,12 +10,12 @@ use serde_json::{Map, Value};
 
 use crate::error::AppError;
 
-/// Resolve the user home directory, honoring `CC_SWITCH_TEST_HOME` for tests.
+/// Resolve the user home directory, honoring `OCHUB_TEST_HOME` for tests.
 ///
 /// On Windows we deliberately use `dirs::home_dir()` (real profile) rather than
 /// `$HOME`, which third-party tools (Git/Cygwin/MSYS) may inject.
 pub fn get_home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("CC_SWITCH_TEST_HOME") {
+    if let Ok(home) = std::env::var("OCHUB_TEST_HOME") {
         let trimmed = home.trim();
         if !trimmed.is_empty() {
             return PathBuf::from(trimmed);
@@ -78,46 +78,34 @@ pub fn get_claude_settings_path() -> PathBuf {
     settings
 }
 
-/// App config directory (`~/.cc-switch`, or the store override).
+/// App config directory (`~/.ochub`, or the store override).
 pub fn get_app_config_dir() -> PathBuf {
     if let Some(custom) = crate::app_store::get_app_config_dir_override() {
         return custom;
     }
 
-    let default_dir = get_home_dir().join(".cc-switch");
-
-    #[cfg(windows)]
-    {
-        let default_db = default_dir.join("cc-switch.db");
-        if !default_db.exists() {
-            if let Ok(home_env) = std::env::var("HOME") {
-                let trimmed = home_env.trim();
-                if !trimmed.is_empty() {
-                    let legacy_dir = PathBuf::from(trimmed).join(".cc-switch");
-                    if legacy_dir.join("cc-switch.db").exists() {
-                        log::info!(
-                            "Detected legacy database at {}, using it instead of {}",
-                            legacy_dir.display(),
-                            default_dir.display()
-                        );
-                        return legacy_dir;
-                    }
-                }
-            }
-        }
-    }
-
-    default_dir
+    get_home_dir().join(".ochub")
 }
 
-/// App config file path (`~/.cc-switch/config.json`, legacy import source).
+/// App config file path (`~/.ochub/config.json`, legacy import source).
 pub fn get_app_config_path() -> PathBuf {
     get_app_config_dir().join("config.json")
 }
 
-/// SQLite database path (`~/.cc-switch/cc-switch.db`).
+/// SQLite database path (`~/.ochub/ochub.db`).
 pub fn get_database_path() -> PathBuf {
-    get_app_config_dir().join("cc-switch.db")
+    get_app_config_dir().join("ochub.db")
+}
+
+/// Legacy cc-switch data directory (`~/.cc-switch`) — one-time import source.
+/// OCHUB never writes here.
+pub fn get_legacy_ccswitch_dir() -> PathBuf {
+    get_home_dir().join(".cc-switch")
+}
+
+/// Legacy cc-switch SQLite database path (`~/.cc-switch/cc-switch.db`).
+pub fn get_legacy_ccswitch_database_path() -> PathBuf {
+    get_legacy_ccswitch_dir().join("cc-switch.db")
 }
 
 /// Sanitize a provider name into a filesystem-safe lowercase string.

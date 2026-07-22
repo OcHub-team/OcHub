@@ -510,6 +510,17 @@ pub(crate) fn write_live_with_common_config(
     app_type: &AppType,
     provider: &Provider,
 ) -> Result<(), AppError> {
+    crate::plugin::registry::ensure_app_type_enabled(app_type)?;
+    write_live_with_common_config_ungated(db, app_type, provider)
+}
+
+/// Restore paths (proxy takeover restore / SSOT rebuild) bypass the enabled
+/// gate: restoring a disabled app's original config must always succeed.
+pub(crate) fn write_live_with_common_config_ungated(
+    db: &Database,
+    app_type: &AppType,
+    provider: &Provider,
+) -> Result<(), AppError> {
     let mut effective_provider = provider.clone();
     effective_provider.settings_config =
         build_effective_settings_with_common_config(db, app_type, provider)?;
@@ -737,163 +748,173 @@ impl LiveSnapshot {
 /// Write live configuration snapshot for a provider
 pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
     match app_type {
-        AppType::Claude => {
-            let path = get_claude_settings_path();
-            let settings = sanitize_claude_settings_for_live(&provider.settings_config);
-            write_json_file(&path, &settings)?;
-        }
-        AppType::ClaudeDesktop => {
-            return Err(AppError::localized(
-                "claude_desktop.live.requires_db_context",
-                "Claude Desktop 配置写入需要通过供应商切换流程执行",
-                "Claude Desktop configuration must be written through the provider switch flow",
-            ));
-        }
-        AppType::Codex => {
-            let obj = provider
-                .settings_config
-                .as_object()
-                .ok_or_else(|| AppError::Config("Codex 供应商配置必须是 JSON 对象".to_string()))?;
-            let auth = obj
-                .get("auth")
-                .ok_or_else(|| AppError::Config("Codex 供应商配置缺少 'auth' 字段".to_string()))?;
-            let config_str = obj.get("config").and_then(|v| v.as_str());
+        AppType::Claude => write_claude_live_snapshot(provider),
+        AppType::ClaudeDesktop => Err(AppError::localized(
+            "claude_desktop.live.requires_db_context",
+            "Claude Desktop 配置写入需要通过供应商切换流程执行",
+            "Claude Desktop configuration must be written through the provider switch flow",
+        )),
+        AppType::Codex => write_codex_live_snapshot(provider),
+        AppType::Gemini => write_gemini_live(provider),
+        AppType::OpenCode => write_opencode_live_snapshot(provider),
+        AppType::OpenClaw => write_openclaw_live_snapshot(provider),
+        AppType::Hermes => write_hermes_live_snapshot(provider),
+    }
+}
 
-            crate::apps::codex::write_codex_provider_live_with_catalog(
-                &provider.settings_config,
-                provider.category.as_deref(),
-                auth,
-                config_str,
-            )?;
-        }
-        AppType::Gemini => {
-            // Delegate to write_gemini_live which handles env file writing correctly
-            write_gemini_live(provider)?;
-        }
-        AppType::OpenCode => {
-            // OpenCode uses additive mode - write provider to config
-            use crate::apps::opencode;
-            use crate::model::OpenCodeProviderConfig;
+pub(crate) fn write_claude_live_snapshot(provider: &Provider) -> Result<(), AppError> {
+    let path = get_claude_settings_path();
+    let settings = sanitize_claude_settings_for_live(&provider.settings_config);
+    write_json_file(&path, &settings)
+}
 
-            // Defensive check: if settings_config is a full config structure, extract provider fragment
-            let config_to_write = if let Some(obj) = provider.settings_config.as_object() {
-                // Detect full config structure (has $schema or top-level provider field)
-                if obj.contains_key("$schema") || obj.contains_key("provider") {
-                    log::warn!(
+pub(crate) fn write_codex_live_snapshot(provider: &Provider) -> Result<(), AppError> {
+    let obj = provider
+        .settings_config
+        .as_object()
+        .ok_or_else(|| AppError::Config("Codex 供应商配置必须是 JSON 对象".to_string()))?;
+    let auth = obj
+        .get("auth")
+        .ok_or_else(|| AppError::Config("Codex 供应商配置缺少 'auth' 字段".to_string()))?;
+    let config_str = obj.get("config").and_then(|v| v.as_str());
+
+    crate::apps::codex::write_codex_provider_live_with_catalog(
+        &provider.settings_config,
+        provider.category.as_deref(),
+        auth,
+        config_str,
+    )
+}
+
+pub(crate) fn write_opencode_live_snapshot(provider: &Provider) -> Result<(), AppError> {
+    {
+        // OpenCode uses additive mode - write provider to config
+        use crate::apps::opencode;
+        use crate::model::OpenCodeProviderConfig;
+
+        // Defensive check: if settings_config is a full config structure, extract provider fragment
+        let config_to_write = if let Some(obj) = provider.settings_config.as_object() {
+            // Detect full config structure (has $schema or top-level provider field)
+            if obj.contains_key("$schema") || obj.contains_key("provider") {
+                log::warn!(
                         "OpenCode provider '{}' has full config structure in settings_config, attempting to extract fragment",
                         provider.id
                     );
-                    // Try to extract from provider.{id}
-                    obj.get("provider")
-                        .and_then(|p| p.get(&provider.id))
-                        .cloned()
-                        .unwrap_or_else(|| provider.settings_config.clone())
-                } else {
-                    provider.settings_config.clone()
-                }
+                // Try to extract from provider.{id}
+                obj.get("provider")
+                    .and_then(|p| p.get(&provider.id))
+                    .cloned()
+                    .unwrap_or_else(|| provider.settings_config.clone())
             } else {
                 provider.settings_config.clone()
-            };
+            }
+        } else {
+            provider.settings_config.clone()
+        };
 
-            // Convert settings_config to OpenCodeProviderConfig
-            let opencode_config_result =
-                serde_json::from_value::<OpenCodeProviderConfig>(config_to_write.clone());
+        // Convert settings_config to OpenCodeProviderConfig
+        let opencode_config_result =
+            serde_json::from_value::<OpenCodeProviderConfig>(config_to_write.clone());
 
-            match opencode_config_result {
-                Ok(config) => {
-                    opencode::set_typed_provider(&provider.id, &config)?;
-                    log::info!("OpenCode provider '{}' written to live config", provider.id);
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to parse OpenCode provider config for '{}': {}",
-                        provider.id,
-                        e
+        match opencode_config_result {
+            Ok(config) => {
+                opencode::set_typed_provider(&provider.id, &config)?;
+                log::info!("OpenCode provider '{}' written to live config", provider.id);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to parse OpenCode provider config for '{}': {}",
+                    provider.id,
+                    e
+                );
+                // Only write if config looks like a valid provider fragment
+                if config_to_write.get("npm").is_some() || config_to_write.get("options").is_some()
+                {
+                    opencode::set_provider(&provider.id, config_to_write)?;
+                    log::info!(
+                        "OpenCode provider '{}' written as raw JSON to live config",
+                        provider.id
                     );
-                    // Only write if config looks like a valid provider fragment
-                    if config_to_write.get("npm").is_some()
-                        || config_to_write.get("options").is_some()
-                    {
-                        opencode::set_provider(&provider.id, config_to_write)?;
-                        log::info!(
-                            "OpenCode provider '{}' written as raw JSON to live config",
-                            provider.id
-                        );
-                    } else {
-                        return Err(AppError::Message(format!(
+                } else {
+                    return Err(AppError::Message(format!(
                             "OpenCode provider '{}' has invalid config structure for live config (must contain 'npm' or 'options')",
                             provider.id
                         )));
-                    }
                 }
             }
         }
-        AppType::OpenClaw => {
-            // OpenClaw uses additive mode - write provider to config
-            use crate::apps::openclaw;
-            use crate::apps::openclaw::OpenClawProviderConfig;
+    }
+    Ok(())
+}
 
-            // Convert settings_config to OpenClawProviderConfig
-            let openclaw_config_result =
-                serde_json::from_value::<OpenClawProviderConfig>(provider.settings_config.clone());
+pub(crate) fn write_openclaw_live_snapshot(provider: &Provider) -> Result<(), AppError> {
+    {
+        // OpenClaw uses additive mode - write provider to config
+        use crate::apps::openclaw;
+        use crate::apps::openclaw::OpenClawProviderConfig;
 
-            match openclaw_config_result {
-                Ok(config) => {
-                    openclaw::set_typed_provider(&provider.id, &config)?;
-                    // Ensure a usable default model exists, so an added provider is
-                    // actually selected. Only set it when none is configured yet, to
-                    // avoid clobbering a user's existing choice.
-                    if let Some(first) = config.models.first() {
-                        let has_default = openclaw::get_default_model()
-                            .ok()
-                            .flatten()
-                            .map(|d| !d.primary.trim().is_empty())
-                            .unwrap_or(false);
-                        if !has_default {
-                            let primary = format!("{}/{}", provider.id, first.id);
-                            if let Err(e) =
-                                openclaw::set_default_model(&openclaw::OpenClawDefaultModel {
-                                    primary,
-                                    fallbacks: Vec::new(),
-                                    extra: std::collections::HashMap::new(),
-                                })
-                            {
-                                log::warn!("OpenClaw: failed to set default model: {e}");
-                            }
+        // Convert settings_config to OpenClawProviderConfig
+        let openclaw_config_result =
+            serde_json::from_value::<OpenClawProviderConfig>(provider.settings_config.clone());
+
+        match openclaw_config_result {
+            Ok(config) => {
+                openclaw::set_typed_provider(&provider.id, &config)?;
+                // Ensure a usable default model exists, so an added provider is
+                // actually selected. Only set it when none is configured yet, to
+                // avoid clobbering a user's existing choice.
+                if let Some(first) = config.models.first() {
+                    let has_default = openclaw::get_default_model()
+                        .ok()
+                        .flatten()
+                        .map(|d| !d.primary.trim().is_empty())
+                        .unwrap_or(false);
+                    if !has_default {
+                        let primary = format!("{}/{}", provider.id, first.id);
+                        if let Err(e) =
+                            openclaw::set_default_model(&openclaw::OpenClawDefaultModel {
+                                primary,
+                                fallbacks: Vec::new(),
+                                extra: std::collections::HashMap::new(),
+                            })
+                        {
+                            log::warn!("OpenClaw: failed to set default model: {e}");
                         }
                     }
-                    log::info!("OpenClaw provider '{}' written to live config", provider.id);
                 }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to parse OpenClaw provider config for '{}': {}",
-                        provider.id,
-                        e
+                log::info!("OpenClaw provider '{}' written to live config", provider.id);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to parse OpenClaw provider config for '{}': {}",
+                    provider.id,
+                    e
+                );
+                // Try to write as raw JSON if it looks valid
+                if provider.settings_config.get("baseUrl").is_some()
+                    || provider.settings_config.get("api").is_some()
+                    || provider.settings_config.get("models").is_some()
+                {
+                    openclaw::set_provider(&provider.id, provider.settings_config.clone())?;
+                    log::info!(
+                        "OpenClaw provider '{}' written as raw JSON to live config",
+                        provider.id
                     );
-                    // Try to write as raw JSON if it looks valid
-                    if provider.settings_config.get("baseUrl").is_some()
-                        || provider.settings_config.get("api").is_some()
-                        || provider.settings_config.get("models").is_some()
-                    {
-                        openclaw::set_provider(&provider.id, provider.settings_config.clone())?;
-                        log::info!(
-                            "OpenClaw provider '{}' written as raw JSON to live config",
-                            provider.id
-                        );
-                    } else {
-                        return Err(AppError::Message(format!(
+                } else {
+                    return Err(AppError::Message(format!(
                             "OpenClaw provider '{}' has invalid config structure for live config (must contain 'baseUrl', 'api', or 'models')",
                             provider.id
                         )));
-                    }
                 }
             }
         }
-        AppType::Hermes => {
-            crate::apps::hermes::set_provider(&provider.id, provider.settings_config.clone())?;
-            log::debug!("Hermes provider '{}' written to live config", provider.id);
-        }
     }
+    Ok(())
+}
+
+pub(crate) fn write_hermes_live_snapshot(provider: &Provider) -> Result<(), AppError> {
+    crate::apps::hermes::set_provider(&provider.id, provider.settings_config.clone())?;
+    log::debug!("Hermes provider '{}' written to live config", provider.id);
     Ok(())
 }
 
@@ -1004,8 +1025,11 @@ fn sync_current_provider_for_app_respecting_takeover(
 ///
 /// For additive mode apps (OpenCode), all providers are synced instead of just the current one.
 pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
-    // Sync providers based on mode
+    // Sync providers based on mode; disabled apps are skipped entirely.
     for app_type in AppType::all() {
+        if !crate::plugin::registry::is_app_type_enabled(&app_type) {
+            continue;
+        }
         if app_type.is_additive_mode() {
             // Additive mode: sync ALL providers
             sync_all_providers_to_live(state, &app_type)?;
@@ -1022,6 +1046,9 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
 
     // Skill sync
     for app_type in AppType::all() {
+        if !crate::plugin::registry::is_app_type_enabled(&app_type) {
+            continue;
+        }
         if let Err(e) = crate::services::skill::SkillService::sync_to_app(&state.db, &app_type) {
             log::warn!("同步 Skill 到 {app_type:?} 失败: {e}");
             // Continue syncing other apps, don't abort

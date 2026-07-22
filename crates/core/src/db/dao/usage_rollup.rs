@@ -151,7 +151,7 @@ impl Database {
                     // 归档触发了表结构变化，前端 30 天前的统计可能跟着变，
                     // 通知一次让 UsageDashboard 重拉数据
                     // PORT TODO: cc-switch emitted a `usage_events::notify_log_recorded()`
-                    // Tauri event here. routedeck-core has no event bus yet; using the DB-change
+                    // Tauri event here. ochub-core has no event bus yet; using the DB-change
                     // seam as a placeholder until usage events are ported.
                     crate::db::notify_db_changed("usage_daily_rollups");
                 }

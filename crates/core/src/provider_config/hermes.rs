@@ -1,7 +1,7 @@
 //! Hermes provider config codec.
 //!
 //! Hermes (additive) stores every custom provider as one entry in the
-//! `custom_providers:` sequence of `~/.hermes/config.yaml`. RouteDeck keeps
+//! `custom_providers:` sequence of `~/.hermes/config.yaml`. OCHUB keeps
 //! each entry's `settingsConfig` in the *UI-friendly* shape that
 //! `apps::hermes::get_providers` denormalizes to:
 //!
@@ -55,8 +55,8 @@ const API_MODES: &[&str] = &[
 pub struct HermesConfig;
 
 impl AppConfig for HermesConfig {
-    fn app(&self) -> AppType {
-        AppType::Hermes
+    fn app_id(&self) -> crate::app_id::AppId {
+        AppType::Hermes.app_id()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -240,7 +240,7 @@ impl AppConfig for HermesConfig {
 
     fn parse_files(&self, contents: &[String]) -> Result<Value, String> {
         let text = contents.first().map(String::as_str).unwrap_or("");
-        let parsed = serde_yaml::from_str::<Value>(text)
+        let parsed = serde_norway::from_str::<Value>(text)
             .map_err(|e| format!("config.yaml 解析失败: {e}"))?;
         parsed
             .get("custom_providers")
@@ -249,20 +249,21 @@ impl AppConfig for HermesConfig {
             .ok_or_else(|| "缺少 custom_providers 条目".to_string())
     }
 
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile> {
+    fn preview(&self, values: &FormValues, _prior: &Value) -> Vec<PreviewFile> {
         // Render the actual on-disk YAML: one entry under custom_providers
         // (a sequence), with `name`, snake_case fields, and models as the
         // dict-keyed-by-id shape Hermes reads.
         let name = preview_provider_name(values);
         let entry = build_yaml_entry(values, &name);
 
-        let mut root = serde_yaml::Mapping::new();
+        let mut root = serde_norway::Mapping::new();
         root.insert(
             yaml_str("custom_providers"),
-            serde_yaml::Value::Sequence(vec![entry]),
+            serde_norway::Value::Sequence(vec![entry]),
         );
 
-        let content = serde_yaml::to_string(&serde_yaml::Value::Mapping(root)).unwrap_or_default();
+        let content =
+            serde_norway::to_string(&serde_norway::Value::Mapping(root)).unwrap_or_default();
 
         vec![PreviewFile {
             filename: "~/.hermes/config.yaml".into(),
@@ -452,8 +453,8 @@ fn preview_provider_name(_values: &FormValues) -> String {
 /// Build the on-disk YAML mapping for one custom_providers entry, mirroring
 /// what `apps::hermes::set_provider` writes: snake_case fields, `models` as a
 /// dict keyed by model id, and the singular `model:` = first model id.
-fn build_yaml_entry(values: &FormValues, name: &str) -> serde_yaml::Value {
-    let mut m = serde_yaml::Mapping::new();
+fn build_yaml_entry(values: &FormValues, name: &str) -> serde_norway::Value {
+    let mut m = serde_norway::Mapping::new();
 
     m.insert(yaml_str("name"), yaml_str(name));
 
@@ -474,7 +475,7 @@ fn build_yaml_entry(values: &FormValues, name: &str) -> serde_yaml::Value {
 
     // models as the dict shape Hermes reads on disk.
     let models = encode_models(values);
-    let mut models_map = serde_yaml::Mapping::new();
+    let mut models_map = serde_norway::Mapping::new();
     let mut first_id: Option<String> = None;
     if let Some(arr) = models.as_array() {
         for row in arr {
@@ -485,17 +486,17 @@ fn build_yaml_entry(values: &FormValues, name: &str) -> serde_yaml::Value {
             if first_id.is_none() {
                 first_id = Some(id.to_string());
             }
-            let mut entry = serde_yaml::Mapping::new();
+            let mut entry = serde_norway::Mapping::new();
             if let Some(n) = obj.get("name").and_then(Value::as_str) {
                 entry.insert(yaml_str("name"), yaml_str(n));
             }
             if let Some(ctx) = obj.get("context_length").and_then(Value::as_u64) {
                 entry.insert(
                     yaml_str("context_length"),
-                    serde_yaml::Value::Number(serde_yaml::Number::from(ctx)),
+                    serde_norway::Value::Number(serde_norway::Number::from(ctx)),
                 );
             }
-            models_map.insert(yaml_str(id), serde_yaml::Value::Mapping(entry));
+            models_map.insert(yaml_str(id), serde_norway::Value::Mapping(entry));
         }
     }
 
@@ -503,23 +504,23 @@ fn build_yaml_entry(values: &FormValues, name: &str) -> serde_yaml::Value {
         m.insert(yaml_str("model"), yaml_str(&id));
     }
     if !models_map.is_empty() {
-        m.insert(yaml_str("models"), serde_yaml::Value::Mapping(models_map));
+        m.insert(yaml_str("models"), serde_norway::Value::Mapping(models_map));
     }
 
     if let Some(delay) = parse_delay(str_val(values, "rate_limit_delay")) {
         if let Some(f) = delay.as_f64() {
             m.insert(
                 yaml_str("rate_limit_delay"),
-                serde_yaml::Value::Number(serde_yaml::Number::from(f)),
+                serde_norway::Value::Number(serde_norway::Number::from(f)),
             );
         }
     }
 
-    serde_yaml::Value::Mapping(m)
+    serde_norway::Value::Mapping(m)
 }
 
-fn yaml_str(s: &str) -> serde_yaml::Value {
-    serde_yaml::Value::String(s.to_string())
+fn yaml_str(s: &str) -> serde_norway::Value {
+    serde_norway::Value::String(s.to_string())
 }
 
 /// Render a JSON number (or numeric string) as a plain string for a text cell.
@@ -701,7 +702,7 @@ mod tests {
 
     #[test]
     fn preview_renders_single_yaml_file_with_models_dict() {
-        let files = HermesConfig.preview(&openrouter_values());
+        let files = HermesConfig.preview(&openrouter_values(), &Value::Null);
         assert_eq!(files.len(), 1);
         let f = &files[0];
         assert_eq!(f.filename, "~/.hermes/config.yaml");

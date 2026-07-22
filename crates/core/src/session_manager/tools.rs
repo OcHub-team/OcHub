@@ -858,7 +858,7 @@ async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Op
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     match client
         .get(&url)
-        .header("User-Agent", "RouteDeck")
+        .header("User-Agent", "OCHUB")
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
@@ -1558,8 +1558,7 @@ fn run_tool_lifecycle_silently(command_line: &str, _label: &str) -> Result<(), S
 
 #[cfg(target_os = "windows")]
 fn run_tool_lifecycle_silently(command_line: &str, label: &str) -> Result<(), String> {
-    let bat_file =
-        std::env::temp_dir().join(format!("routedeck_{label}_{}.bat", std::process::id()));
+    let bat_file = std::env::temp_dir().join(format!("ochub_{label}_{}.bat", std::process::id()));
     std::fs::write(&bat_file, command_line).map_err(|e| format!("写入批处理文件失败: {e}"))?;
 
     let output = std::process::Command::new("cmd")

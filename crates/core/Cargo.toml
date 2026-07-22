@@ -1,19 +1,20 @@
 [package]
-name = "routedeck-core"
+name = "ochub-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "RouteDeck core: domain model, config, SQLite store, and per-app live config writers"
+description = "OCHUB core: domain model, config, SQLite store, and per-app live config writers"
 
 [lib]
-name = "routedeck_core"
+name = "ochub_core"
 
 [dependencies]
+ochub-convert.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
+serde_norway.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 json5.workspace = true

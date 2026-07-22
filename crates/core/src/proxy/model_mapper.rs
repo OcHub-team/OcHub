@@ -147,7 +147,7 @@ pub fn codex_provider_upstream_model(provider: &Provider) -> Option<String> {
 }
 
 fn extract_codex_model_from_toml(config_text: &str) -> Option<String> {
-    let doc = config_text.parse::<toml::Value>().ok()?;
+    let doc = config_text.parse::<toml::Table>().ok()?;
     doc.get("model")
         .and_then(|v| v.as_str())
         .map(str::trim)

@@ -102,25 +102,25 @@ pub struct HermesModelConfig {
 // Core YAML Read Functions
 // ============================================================================
 
-/// 读取 Hermes 配置文件为 serde_yaml::Value
+/// 读取 Hermes 配置文件为 serde_norway::Value
 ///
 /// 如果文件不存在，返回空 Mapping
-pub fn read_hermes_config() -> Result<serde_yaml::Value, AppError> {
+pub fn read_hermes_config() -> Result<serde_norway::Value, AppError> {
     let path = get_hermes_config_path();
     if !path.exists() {
-        return Ok(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        return Ok(serde_norway::Value::Mapping(serde_norway::Mapping::new()));
     }
 
     let content = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
     if content.trim().is_empty() {
-        return Ok(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        return Ok(serde_norway::Value::Mapping(serde_norway::Mapping::new()));
     }
 
     // Heal duplicate top-level keys left behind by the pre-CRLF-fix append
-    // bug (#3633); serde_yaml rejects them outright, which bricked the panel.
+    // bug (#3633); serde_norway rejects them outright, which bricked the panel.
     let deduped = deduplicate_top_level_keys(&content);
 
-    serde_yaml::from_str(&deduped)
+    serde_norway::from_str(&deduped)
         .map_err(|e| AppError::Config(format!("Failed to parse Hermes config as YAML: {e}")))
 }
 
@@ -259,10 +259,10 @@ fn find_yaml_section_range(raw: &str, section_key: &str) -> Option<(usize, usize
 ///   default: "anthropic/claude-opus-4-8"
 ///   provider: "openrouter"
 /// ```
-fn serialize_yaml_section(key: &str, value: &serde_yaml::Value) -> Result<String, AppError> {
-    let mut section = serde_yaml::Mapping::new();
-    section.insert(serde_yaml::Value::String(key.to_string()), value.clone());
-    let yaml_str = serde_yaml::to_string(&serde_yaml::Value::Mapping(section))
+fn serialize_yaml_section(key: &str, value: &serde_norway::Value) -> Result<String, AppError> {
+    let mut section = serde_norway::Mapping::new();
+    section.insert(serde_norway::Value::String(key.to_string()), value.clone());
+    let yaml_str = serde_norway::to_string(&serde_norway::Value::Mapping(section))
         .map_err(|e| AppError::Config(format!("Failed to serialize YAML section '{key}': {e}")))?;
     Ok(yaml_str)
 }
@@ -286,7 +286,7 @@ fn remove_all_sections(raw: &str, section_key: &str) -> String {
 fn replace_yaml_section(
     raw: &str,
     section_key: &str,
-    value: &serde_yaml::Value,
+    value: &serde_norway::Value,
 ) -> Result<String, AppError> {
     let serialized = serialize_yaml_section(section_key, value)?;
 
@@ -383,7 +383,7 @@ fn cleanup_hermes_backups(dir: &Path) -> Result<(), AppError> {
 /// target section.
 fn write_yaml_section_to_config(
     section_key: &str,
-    value: &serde_yaml::Value,
+    value: &serde_norway::Value,
 ) -> Result<HermesWriteOutcome, AppError> {
     let _guard = hermes_write_lock().lock()?;
     write_yaml_section_to_config_locked(section_key, value)
@@ -392,7 +392,7 @@ fn write_yaml_section_to_config(
 /// Inner write helper — caller must already hold the write lock.
 fn write_yaml_section_to_config_locked(
     section_key: &str,
-    value: &serde_yaml::Value,
+    value: &serde_norway::Value,
 ) -> Result<HermesWriteOutcome, AppError> {
     let config_path = get_hermes_config_path();
     let raw = if config_path.exists() {
@@ -573,7 +573,7 @@ pub const PROVIDER_SOURCE_DICT: &str = "providers_dict";
 /// Returns `None` when the entry is not a mapping or lacks any usable name.
 fn normalize_providers_dict_entry(
     key: &str,
-    entry: &serde_yaml::Value,
+    entry: &serde_norway::Value,
 ) -> Result<Option<serde_json::Value>, AppError> {
     if !entry.is_mapping() {
         return Ok(None);
@@ -604,7 +604,7 @@ fn normalize_providers_dict_entry(
 }
 
 /// Collect provider entries living under the v12+ `providers:` dict.
-fn read_providers_dict_entries(config: &serde_yaml::Value) -> Vec<(String, serde_json::Value)> {
+fn read_providers_dict_entries(config: &serde_norway::Value) -> Vec<(String, serde_json::Value)> {
     let Some(mapping) = config.get("providers").and_then(|v| v.as_mapping()) else {
         return Vec::new();
     };
@@ -689,7 +689,7 @@ pub fn get_providers() -> Result<serde_json::Map<String, serde_json::Value>, App
 /// `verb` is inlined into the user-facing error so both "edit" and "remove"
 /// callers can share one implementation.
 fn ensure_provider_writable(
-    config: &serde_yaml::Value,
+    config: &serde_norway::Value,
     name: &str,
     verb: &str,
 ) -> Result<(), AppError> {
@@ -703,7 +703,7 @@ fn ensure_provider_writable(
 
 /// True when `name` appears in `providers:` dict but not in `custom_providers:`
 /// list — i.e. it is a read-only overlay CC Switch must not touch.
-fn is_dict_only_provider(config: &serde_yaml::Value, name: &str) -> bool {
+fn is_dict_only_provider(config: &serde_norway::Value, name: &str) -> bool {
     let list_has = config
         .get("custom_providers")
         .and_then(|v| v.as_sequence())
@@ -758,7 +758,7 @@ pub fn set_provider(
 
     let config = read_hermes_config()?;
     ensure_provider_writable(&config, name, "edit")?;
-    let mut providers: Vec<serde_yaml::Value> = config
+    let mut providers: Vec<serde_norway::Value> = config
         .get("custom_providers")
         .and_then(|v| v.as_sequence())
         .cloned()
@@ -780,19 +780,19 @@ pub fn set_provider(
         .and_then(|obj| obj.keys().next())
         .cloned();
 
-    let mut yaml_val: serde_yaml::Value = json_to_yaml(&normalized)?;
-    if let serde_yaml::Value::Mapping(ref mut m) = yaml_val {
+    let mut yaml_val: serde_norway::Value = json_to_yaml(&normalized)?;
+    if let serde_norway::Value::Mapping(ref mut m) = yaml_val {
         m.insert(
-            serde_yaml::Value::String("name".to_string()),
-            serde_yaml::Value::String(name.to_string()),
+            serde_norway::Value::String("name".to_string()),
+            serde_norway::Value::String(name.to_string()),
         );
         if let Some(model_id) = first_model_id {
             m.insert(
-                serde_yaml::Value::String("model".to_string()),
-                serde_yaml::Value::String(model_id),
+                serde_norway::Value::String("model".to_string()),
+                serde_norway::Value::String(model_id),
             );
         } else {
-            m.remove(serde_yaml::Value::String("model".to_string()));
+            m.remove(serde_norway::Value::String("model".to_string()));
         }
     }
 
@@ -805,7 +805,7 @@ pub fn set_provider(
         // `key_env`), and users may set those via Hermes Web UI — without
         // this merge, a CC Switch edit to an unrelated field would silently
         // strip them on write-back.
-        if let (Some(existing_map), serde_yaml::Value::Mapping(new_map)) =
+        if let (Some(existing_map), serde_norway::Value::Mapping(new_map)) =
             (existing.as_mapping(), &mut yaml_val)
         {
             for (k, v) in existing_map {
@@ -817,7 +817,7 @@ pub fn set_provider(
         providers.push(yaml_val);
     }
 
-    let providers_value = serde_yaml::Value::Sequence(providers);
+    let providers_value = serde_norway::Value::Sequence(providers);
     write_yaml_section_to_config_locked("custom_providers", &providers_value)
 }
 
@@ -832,7 +832,7 @@ pub fn remove_provider(name: &str) -> Result<HermesWriteOutcome, AppError> {
 
     ensure_provider_writable(&config, name, "remove")?;
 
-    let mut providers: Vec<serde_yaml::Value> = config
+    let mut providers: Vec<serde_norway::Value> = config
         .get("custom_providers")
         .and_then(|v| v.as_sequence())
         .cloned()
@@ -844,7 +844,7 @@ pub fn remove_provider(name: &str) -> Result<HermesWriteOutcome, AppError> {
         return Ok(HermesWriteOutcome::default());
     }
 
-    let providers_value = serde_yaml::Value::Sequence(providers);
+    let providers_value = serde_norway::Value::Sequence(providers);
     write_yaml_section_to_config_locked("custom_providers", &providers_value)
 }
 
@@ -912,7 +912,7 @@ pub fn apply_switch_defaults(
 // ============================================================================
 
 /// Get the `mcp_servers` section as a YAML Mapping.
-pub fn get_mcp_servers_yaml() -> Result<serde_yaml::Mapping, AppError> {
+pub fn get_mcp_servers_yaml() -> Result<serde_norway::Mapping, AppError> {
     let config = read_hermes_config()?;
     Ok(config
         .get("mcp_servers")
@@ -926,7 +926,7 @@ pub fn get_mcp_servers_yaml() -> Result<serde_yaml::Mapping, AppError> {
 /// Prevents TOCTOU races when multiple sync operations run concurrently.
 pub fn update_mcp_servers_yaml<F>(updater: F) -> Result<(), AppError>
 where
-    F: FnOnce(&mut serde_yaml::Mapping) -> Result<(), AppError>,
+    F: FnOnce(&mut serde_norway::Mapping) -> Result<(), AppError>,
 {
     let _guard = hermes_write_lock().lock()?;
     let config = read_hermes_config()?;
@@ -936,7 +936,7 @@ where
         .cloned()
         .unwrap_or_default();
     updater(&mut servers)?;
-    let value = serde_yaml::Value::Mapping(servers);
+    let value = serde_norway::Value::Mapping(servers);
     write_yaml_section_to_config_locked("mcp_servers", &value)?;
     Ok(())
 }
@@ -945,21 +945,21 @@ where
 // YAML ↔ JSON Conversion Helpers
 // ============================================================================
 
-/// Convert a `serde_yaml::Value` to a `serde_json::Value`.
-pub(crate) fn yaml_to_json(yaml: &serde_yaml::Value) -> Result<serde_json::Value, AppError> {
+/// Convert a `serde_norway::Value` to a `serde_json::Value`.
+pub(crate) fn yaml_to_json(yaml: &serde_norway::Value) -> Result<serde_json::Value, AppError> {
     // Serialize YAML value to string, then parse as JSON value.
     // This handles all type mappings correctly.
-    let yaml_str = serde_yaml::to_string(yaml)
+    let yaml_str = serde_norway::to_string(yaml)
         .map_err(|e| AppError::Config(format!("Failed to serialize YAML value: {e}")))?;
-    serde_yaml::from_str::<serde_json::Value>(&yaml_str)
+    serde_norway::from_str::<serde_json::Value>(&yaml_str)
         .map_err(|e| AppError::Config(format!("Failed to convert YAML to JSON: {e}")))
 }
 
-/// Convert a `serde_json::Value` to a `serde_yaml::Value`.
-pub(crate) fn json_to_yaml(json: &serde_json::Value) -> Result<serde_yaml::Value, AppError> {
+/// Convert a `serde_json::Value` to a `serde_norway::Value`.
+pub(crate) fn json_to_yaml(json: &serde_json::Value) -> Result<serde_norway::Value, AppError> {
     let json_str = serde_json::to_string(json)
         .map_err(|e| AppError::Config(format!("Failed to serialize JSON value: {e}")))?;
-    serde_yaml::from_str(&json_str)
+    serde_norway::from_str(&json_str)
         .map_err(|e| AppError::Config(format!("Failed to convert JSON to YAML: {e}")))
 }
 
@@ -1052,8 +1052,8 @@ pub fn set_memory_enabled(kind: MemoryKind, enabled: bool) -> Result<HermesWrite
     let config = read_hermes_config()?;
 
     let mut memory = match config.get("memory") {
-        Some(serde_yaml::Value::Mapping(m)) => m.clone(),
-        _ => serde_yaml::Mapping::new(),
+        Some(serde_norway::Value::Mapping(m)) => m.clone(),
+        _ => serde_norway::Mapping::new(),
     };
 
     let key = match kind {
@@ -1061,11 +1061,11 @@ pub fn set_memory_enabled(kind: MemoryKind, enabled: bool) -> Result<HermesWrite
         MemoryKind::User => "user_profile_enabled",
     };
     memory.insert(
-        serde_yaml::Value::String(key.to_string()),
-        serde_yaml::Value::Bool(enabled),
+        serde_norway::Value::String(key.to_string()),
+        serde_norway::Value::Bool(enabled),
     );
 
-    write_yaml_section_to_config_locked("memory", &serde_yaml::Value::Mapping(memory))
+    write_yaml_section_to_config_locked("memory", &serde_norway::Value::Mapping(memory))
 }
 
 /// Read memory budgets + toggles from `config.yaml`. Missing/unparsable
@@ -1110,17 +1110,17 @@ mod tests {
 
     /// Run a test with an isolated temp home directory.
     ///
-    /// Saves and restores `CC_SWITCH_TEST_HOME` to avoid interfering with
+    /// Saves and restores `OCHUB_TEST_HOME` to avoid interfering with
     /// parallel tests in other modules.
     fn with_test_home<T>(test_fn: impl FnOnce() -> T) -> T {
         let _guard = test_guard();
         let tmp = tempfile::tempdir().unwrap();
-        let old_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
-        std::env::set_var("CC_SWITCH_TEST_HOME", tmp.path());
+        let old_test_home = std::env::var_os("OCHUB_TEST_HOME");
+        std::env::set_var("OCHUB_TEST_HOME", tmp.path());
         let result = test_fn();
         match old_test_home {
-            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
-            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            Some(value) => std::env::set_var("OCHUB_TEST_HOME", value),
+            None => std::env::remove_var("OCHUB_TEST_HOME"),
         }
         result
     }
@@ -1349,7 +1349,7 @@ agent:
 
     #[test]
     fn dedup_result_parses_with_last_value() {
-        // End-to-end: a config that serde_yaml rejects today must parse after
+        // End-to-end: a config that serde_norway rejects today must parse after
         // healing, and expose the newest (last) value.
         let yaml = "\
 custom_providers:
@@ -1361,7 +1361,7 @@ custom_providers:
   - name: new-provider
 ";
         let healed = deduplicate_top_level_keys(yaml);
-        let value: serde_yaml::Value = serde_yaml::from_str(&healed).unwrap();
+        let value: serde_norway::Value = serde_norway::from_str(&healed).unwrap();
         let providers = value
             .get("custom_providers")
             .unwrap()
@@ -1405,15 +1405,15 @@ model:
 agent:
   max_turns: 10
 ";
-        let new_model = serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
+        let new_model = serde_norway::Value::Mapping({
+            let mut m = serde_norway::Mapping::new();
             m.insert(
-                serde_yaml::Value::String("default".to_string()),
-                serde_yaml::Value::String("claude-opus-4-8".to_string()),
+                serde_norway::Value::String("default".to_string()),
+                serde_norway::Value::String("claude-opus-4-8".to_string()),
             );
             m.insert(
-                serde_yaml::Value::String("provider".to_string()),
-                serde_yaml::Value::String("anthropic".to_string()),
+                serde_norway::Value::String("provider".to_string()),
+                serde_norway::Value::String("anthropic".to_string()),
             );
             m
         });
@@ -1434,11 +1434,11 @@ agent:
         // Regression for #3633: on CRLF configs every "replace" used to
         // degrade into an append, piling up duplicate sections.
         let yaml = "model:\r\n  default: gpt-4\r\nagent:\r\n  max_turns: 10\r\n";
-        let new_model = serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
+        let new_model = serde_norway::Value::Mapping({
+            let mut m = serde_norway::Mapping::new();
             m.insert(
-                serde_yaml::Value::String("default".to_string()),
-                serde_yaml::Value::String("claude-opus-4-8".to_string()),
+                serde_norway::Value::String("default".to_string()),
+                serde_norway::Value::String("claude-opus-4-8".to_string()),
             );
             m
         });
@@ -1466,11 +1466,11 @@ agent:
 model:
   default: stale-copy
 ";
-        let new_model = serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
+        let new_model = serde_norway::Value::Mapping({
+            let mut m = serde_norway::Mapping::new();
             m.insert(
-                serde_yaml::Value::String("default".to_string()),
-                serde_yaml::Value::String("claude-opus-4-8".to_string()),
+                serde_norway::Value::String("default".to_string()),
+                serde_norway::Value::String("claude-opus-4-8".to_string()),
             );
             m
         });
@@ -1481,7 +1481,7 @@ model:
         assert!(!result.contains("stale-copy"));
         assert!(result.contains("agent:"));
         // The healed output must be valid YAML again
-        let parsed: Result<serde_yaml::Value, _> = serde_yaml::from_str(&result);
+        let parsed: Result<serde_norway::Value, _> = serde_norway::from_str(&result);
         assert!(parsed.is_ok());
     }
 
@@ -1491,11 +1491,11 @@ model:
 model:
   default: gpt-4
 ";
-        let new_agent = serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
+        let new_agent = serde_norway::Value::Mapping({
+            let mut m = serde_norway::Mapping::new();
             m.insert(
-                serde_yaml::Value::String("max_turns".to_string()),
-                serde_yaml::Value::Number(serde_yaml::Number::from(50)),
+                serde_norway::Value::String("max_turns".to_string()),
+                serde_norway::Value::Number(serde_norway::Number::from(50)),
             );
             m
         });
@@ -1510,11 +1510,11 @@ model:
     #[test]
     fn replace_section_in_empty_file() {
         let yaml = "";
-        let new_model = serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
+        let new_model = serde_norway::Value::Mapping({
+            let mut m = serde_norway::Mapping::new();
             m.insert(
-                serde_yaml::Value::String("default".to_string()),
-                serde_yaml::Value::String("gpt-4".to_string()),
+                serde_norway::Value::String("default".to_string()),
+                serde_norway::Value::String("gpt-4".to_string()),
             );
             m
         });
@@ -1858,7 +1858,7 @@ custom_providers:
 
             // Read raw YAML to verify the on-disk shape is a sequence under `custom_providers:`.
             let raw = fs::read_to_string(get_hermes_config_path()).unwrap();
-            let yaml: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
+            let yaml: serde_norway::Value = serde_norway::from_str(&raw).unwrap();
             let providers = yaml
                 .get("custom_providers")
                 .and_then(|v| v.as_sequence())
@@ -1877,10 +1877,10 @@ custom_providers:
             );
             let models = provider.get("models").and_then(|v| v.as_mapping()).unwrap();
             assert_eq!(models.len(), 2);
-            assert!(models.contains_key(serde_yaml::Value::String("model-a".into())));
-            assert!(models.contains_key(serde_yaml::Value::String("model-b".into())));
+            assert!(models.contains_key(serde_norway::Value::String("model-a".into())));
+            assert!(models.contains_key(serde_norway::Value::String("model-b".into())));
             let model_a = models
-                .get(serde_yaml::Value::String("model-a".into()))
+                .get(serde_norway::Value::String("model-a".into()))
                 .unwrap();
             assert_eq!(
                 model_a

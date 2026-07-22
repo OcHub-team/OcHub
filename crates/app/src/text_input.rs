@@ -688,7 +688,7 @@ impl Element for TextElement {
         let (display_text, text_color) = if display_content.is_empty() {
             (
                 input.placeholder.clone(),
-                theme::c(theme::MUTED).opacity(0.78).into(),
+                theme::muted().opacity(0.78).into(),
             )
         } else {
             (display_content, style.color)
@@ -743,7 +743,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_pos, bounds.top()),
                         size(px(2.), bounds.bottom() - bounds.top()),
                     ),
-                    theme::c(theme::ACCENT),
+                    theme::accent(),
                 )),
             )
         } else {
@@ -853,14 +853,14 @@ impl Render for TextInput {
             .px_3()
             .py_2()
             .rounded_md()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(if focused {
-                theme::ACCENT
+            .border_color(if focused {
+                theme::accent()
             } else {
-                theme::BORDER
-            }))
-            .text_color(theme::c(theme::TEXT))
+                theme::border()
+            })
+            .text_color(theme::text())
             .text_sm()
             .line_height(px(20.));
         if self.code {
@@ -951,7 +951,7 @@ impl Element for CodeElement {
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
         let text_color = style.color;
-        let muted: gpui::Hsla = theme::c(theme::MUTED).opacity(0.85).into();
+        let muted: gpui::Hsla = theme::muted().opacity(0.85).into();
 
         let empty = input.content.is_empty();
         let line_texts: Vec<SharedString> = if empty {
@@ -990,7 +990,7 @@ impl Element for CodeElement {
             let num_run = TextRun {
                 len: num_text.len(),
                 font: style.font(),
-                color: theme::c(theme::MUTED).opacity(0.7).into(),
+                color: theme::muted().opacity(0.7).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -1041,7 +1041,7 @@ impl Element for CodeElement {
                     point(text_origin.x, bounds.top()),
                     size(px(2.), line_height),
                 ),
-                theme::c(theme::ACCENT),
+                theme::accent(),
             ))
         } else {
             let (line, col) = input.line_index_for_offset(input.cursor_offset());
@@ -1055,7 +1055,7 @@ impl Element for CodeElement {
                     point(text_origin.x + cursor_x, y),
                     size(px(2.), line_height),
                 ),
-                theme::c(theme::ACCENT),
+                theme::accent(),
             ))
         };
 
@@ -1093,7 +1093,7 @@ impl Element for CodeElement {
                 point(bounds.left(), bounds.top()),
                 size(prepaint.gutter, bounds.size.height),
             ),
-            theme::c(theme::INSET),
+            theme::inset(),
         ));
 
         for selection in prepaint.selections.drain(..) {

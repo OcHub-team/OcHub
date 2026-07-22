@@ -1,6 +1,6 @@
 //! Provider import from deep link
 //!
-//! Handles importing provider configurations via ccswitch:// URLs.
+//! Handles importing provider configurations via ochub:// URLs.
 
 use super::utils::{decode_base64_param, infer_homepage_from_endpoint};
 use super::DeepLinkImportRequest;
@@ -39,6 +39,12 @@ pub fn import_provider_from_deeplink(
 
     // Step 1: Merge config file if provided (v3.8+)
     let mut merged_request = parse_and_merge_config(&request)?;
+
+    if let Some(app) = merged_request.app.as_deref() {
+        if let Ok(id) = crate::app_id::AppId::parse(app) {
+            crate::plugin::registry::ensure_app_enabled(&id)?;
+        }
+    }
 
     // Extract required fields (now as Option)
     let app_str = merged_request

@@ -1,7 +1,7 @@
 //! Claude Code provider config codec.
 //!
 //! Claude Code reads `~/.claude/settings.json`; the provider-relevant slice is
-//! the `env` object. RouteDeck stores the whole settings document in one
+//! the `env` object. OCHUB stores the whole settings document in one
 //! `settingsConfig`, shaped `{ "env": { … } }`. The interesting env keys are:
 //!
 //! - `ANTHROPIC_BASE_URL` — the endpoint.
@@ -85,8 +85,8 @@ const ROLES: [Role; 4] = [
 pub struct ClaudeConfig;
 
 impl AppConfig for ClaudeConfig {
-    fn app(&self) -> AppType {
-        AppType::Claude
+    fn app_id(&self) -> crate::app_id::AppId {
+        AppType::Claude.app_id()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -358,8 +358,8 @@ impl AppConfig for ClaudeConfig {
         serde_json::from_str::<Value>(text).map_err(|e| format!("settings.json 解析失败: {e}"))
     }
 
-    fn preview(&self, values: &FormValues) -> Vec<PreviewFile> {
-        let encoded = self.encode(values, &Value::Null, None);
+    fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
+        let encoded = self.encode(values, prior, None);
         vec![PreviewFile {
             filename: "~/.claude/settings.json".into(),
             language: Language::Json,
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn preview_emits_single_settings_json() {
-        let files = ClaudeConfig.preview(&sample_values());
+        let files = ClaudeConfig.preview(&sample_values(), &Value::Null);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].filename, "~/.claude/settings.json");
         assert_eq!(files[0].language, Language::Json);

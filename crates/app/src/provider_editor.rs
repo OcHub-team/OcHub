@@ -1,7 +1,7 @@
 //! Schema-driven provider add/edit form.
 //!
 //! Instead of one generic name/baseURL/key/model form, this renders whatever
-//! [`routedeck_core::provider_config::AppConfig`] the selected app exposes: typed field
+//! [`ochub_core::provider_config::AppConfig`] the selected app exposes: typed field
 //! widgets (text / secret / select / toggle / key-value / model-grid) grouped in
 //! sections, a live preview of the exact file(s) the app will receive, and a
 //! validation strip. Saving encodes the edited values back into both
@@ -10,16 +10,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
-use routedeck_core::provider_config::{
+use gpui::{
+    div, prelude::*, px, Context, Entity, FontWeight, HighlightStyle, MouseButton, SharedString,
+    StyledText, Window,
+};
+use ochub_core::provider_config::{
     self, bool_val, str_val, AppConfig, FieldKind, FormField, FormSection, FormValues,
     GridCellKind, Language, Severity,
 };
-use routedeck_core::services::provider::ProviderService;
-use routedeck_core::{AppState, AppType, Provider, UsageResult};
+use ochub_core::services::provider::ProviderService;
+use ochub_core::{AppState, AppType, Provider, UsageResult};
 use serde_json::{json, Map, Value};
 
+use crate::code_editor::CodeEditor;
 use crate::components;
+use crate::fold::fold_regions;
+use crate::highlight::{self, Lang};
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -48,7 +54,7 @@ struct GridRow {
 struct RawEdit {
     file_index: usize,
     filename: SharedString,
-    input: Entity<TextInput>,
+    input: Entity<CodeEditor>,
     error: Option<SharedString>,
 }
 
@@ -59,6 +65,11 @@ pub struct ProviderEditor {
     schema: Vec<FormSection>,
     /// Working form values; text/kv/grid inputs are pulled into this on demand.
     values: FormValues,
+    /// The authoritative working document (`settingsConfig`) that form values
+    /// are merged ONTO. Starts as the stored config; a direct file edit
+    /// replaces it wholesale, so keys the form doesn't model survive editing,
+    /// preview, and save.
+    working_base: Value,
     original_id: Option<String>,
     original_provider: Option<Provider>,
     provider_id: Entity<TextInput>,
@@ -71,6 +82,8 @@ pub struct ProviderEditor {
     grid_rows: HashMap<String, Vec<GridRow>>,
     next_row_id: usize,
     show_preview: bool,
+    /// Collapsed fold regions in the preview pane: (file index, header line).
+    preview_collapsed: std::collections::HashSet<(usize, usize)>,
     /// When `Some`, a modal code editor for one preview file is open.
     raw_edit: Option<RawEdit>,
     error: Option<SharedString>,
@@ -124,12 +137,17 @@ impl ProviderEditor {
         original_provider: Option<Provider>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let working_base = original_provider
+            .as_ref()
+            .map(|p| p.settings_config.clone())
+            .unwrap_or(Value::Null);
         Self {
             app,
             app_type,
             codec,
             schema,
             values,
+            working_base,
             original_id,
             original_provider,
             provider_id: cx.new(|cx| TextInput::new(cx, "可选供应商 ID")),
@@ -142,6 +160,7 @@ impl ProviderEditor {
             grid_rows: HashMap::new(),
             next_row_id: 0,
             show_preview: true,
+            preview_collapsed: std::collections::HashSet::new(),
             raw_edit: None,
             error: None,
             status: None,
@@ -271,12 +290,13 @@ impl ProviderEditor {
     /// Open the modal code editor for preview file `index`.
     fn open_raw_edit(&mut self, index: usize, cx: &mut Context<Self>) {
         self.pull_values(cx);
-        let files = self.codec.preview(&self.values);
+        let files = self.codec.preview(&self.values, &self.working_base);
         if let Some(file) = files.get(index) {
             let content = file.content.clone();
             let filename = SharedString::from(file.filename.clone());
+            let lang = Lang::from_core(file.language);
             let input = cx.new(|cx| {
-                let mut input = TextInput::new(cx, "").code(true);
+                let mut input = CodeEditor::new(cx, lang, "");
                 input.set_content(content, cx);
                 input
             });
@@ -303,19 +323,14 @@ impl ProviderEditor {
             None => return,
         };
         self.pull_values(cx);
-        let prior = self
-            .original_provider
-            .as_ref()
-            .map(|p| p.settings_config.clone())
-            .unwrap_or(Value::Null);
         let prior_meta = self.original_provider.as_ref().and_then(|p| p.meta.clone());
         let cur_meta = self
             .codec
-            .encode(&self.values, &prior, prior_meta.as_ref())
+            .encode(&self.values, &self.working_base, prior_meta.as_ref())
             .meta;
         let mut contents: Vec<String> = self
             .codec
-            .preview(&self.values)
+            .preview(&self.values, &self.working_base)
             .into_iter()
             .map(|f| f.content)
             .collect();
@@ -324,6 +339,9 @@ impl ProviderEditor {
         }
         match self.codec.parse_files(&contents) {
             Ok(settings) => {
+                // The edited document becomes the new authoritative base, so
+                // keys the form doesn't model are preserved through save.
+                self.working_base = settings.clone();
                 self.values = self.codec.decode(&settings, cur_meta.as_ref());
                 self.text_inputs.clear();
                 self.kv_rows.clear();
@@ -495,13 +513,10 @@ impl ProviderEditor {
             return;
         }
 
-        let prior = self
-            .original_provider
-            .as_ref()
-            .map(|p| p.settings_config.clone())
-            .unwrap_or(Value::Null);
         let prior_meta = self.original_provider.as_ref().and_then(|p| p.meta.clone());
-        let encoded = self.codec.encode(&self.values, &prior, prior_meta.as_ref());
+        let encoded = self
+            .codec
+            .encode(&self.values, &self.working_base, prior_meta.as_ref());
 
         let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
         let category = nonempty(self.category.read(cx).content().trim().to_string());
@@ -563,7 +578,7 @@ impl ProviderEditor {
         self.status = Some(SharedString::from("正在拉取模型列表..."));
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = routedeck_core::services::model_fetch::fetch_models(
+            let result = ochub_core::services::model_fetch::fetch_models(
                 &base_url, &api_key, false, None, None,
             )
             .await;
@@ -606,7 +621,8 @@ impl ProviderEditor {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result =
-                routedeck_core::services::SpeedtestService::test_endpoints(vec![base_url], Some(8)).await;
+                ochub_core::services::SpeedtestService::test_endpoints(vec![base_url], Some(8))
+                    .await;
             this.update(cx, |this, cx| {
                 match result {
                     Ok(results) => {
@@ -654,7 +670,7 @@ impl ProviderEditor {
         self.status = Some(SharedString::from("正在查询余额..."));
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = routedeck_core::services::balance::get_balance(&base_url, &api_key).await;
+            let result = ochub_core::services::balance::get_balance(&base_url, &api_key).await;
             this.update(cx, |this, cx| {
                 match result {
                     Ok(result) => {
@@ -683,19 +699,19 @@ impl ProviderEditor {
                 .gap_1()
                 .child(
                     div()
-                        .text_color(theme::c(theme::SUBTEXT))
+                        .text_color(theme::subtext())
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .child(SharedString::from(label.to_string())),
                 )
                 .when(required, |s| {
-                    s.child(div().text_color(theme::c(theme::RED)).text_xs().child("*"))
+                    s.child(div().text_color(theme::red()).text_xs().child("*"))
                 }),
         );
         if let Some(help) = help {
             col = col.child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child(SharedString::from(help.to_string())),
             );
@@ -732,16 +748,16 @@ impl ProviderEditor {
                             .rounded_md()
                             .cursor_pointer()
                             .text_sm()
-                            .bg(theme::c(if selected {
-                                theme::ACCENT_SOFT
+                            .bg(if selected {
+                                theme::accent_soft()
                             } else {
-                                theme::INSET
-                            }))
-                            .text_color(theme::c(if selected {
-                                theme::ACCENT
+                                theme::inset()
+                            })
+                            .text_color(if selected {
+                                theme::accent()
                             } else {
-                                theme::SUBTEXT
-                            }))
+                                theme::subtext()
+                            })
                             .when(selected, |s| s.font_weight(FontWeight::MEDIUM))
                             .child(SharedString::from(label))
                             .on_click(cx.listener(move |this, _e, _w, cx| {
@@ -837,7 +853,7 @@ impl ProviderEditor {
             header = header.child(
                 div()
                     .flex_1()
-                    .text_color(theme::c(theme::MUTED))
+                    .text_color(theme::muted())
                     .text_xs()
                     .child(SharedString::from(c.label.clone())),
             );
@@ -906,7 +922,7 @@ impl ProviderEditor {
     }
 
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let files = self.codec.preview(&self.values);
+        let files = self.codec.preview(&self.values, &self.working_base);
         let issues = self.codec.validate(&self.values);
 
         let mut col = div()
@@ -923,7 +939,7 @@ impl ProviderEditor {
                     .justify_between()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("将写入的文件"),
@@ -943,10 +959,91 @@ impl ProviderEditor {
                 Language::Yaml => "YAML",
                 Language::Env => "ENV",
             };
-            let lines: Vec<gpui::AnyElement> = content
-                .lines()
-                .map(|l| div().min_h(px(15.)).child(l.to_string()).into_any_element())
+            let hl_lang = Lang::from_core(file.language);
+            let regions = fold_regions(hl_lang, &content);
+            let line_count = content.split('\n').count();
+            // Only honor collapsed marks that still match a current region.
+            let collapsed: std::collections::HashSet<usize> = regions
+                .iter()
+                .filter(|r| self.preview_collapsed.contains(&(idx, r.header)))
+                .map(|r| r.header)
                 .collect();
+            let mut hidden = vec![false; line_count];
+            for region in &regions {
+                if collapsed.contains(&region.header) {
+                    for line in region.hidden() {
+                        if line < line_count {
+                            hidden[line] = true;
+                        }
+                    }
+                }
+            }
+
+            let mut lines: Vec<gpui::AnyElement> = Vec::new();
+            for (i, l) in content.split('\n').enumerate() {
+                if hidden.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                let is_folded = collapsed.contains(&i);
+                let display = if is_folded {
+                    format!("{l} ⋯")
+                } else {
+                    l.to_string()
+                };
+                let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+                let mut offset = 0usize;
+                for (len, token) in highlight::line_spans(hl_lang, l) {
+                    if len > 0 && token != crate::highlight::Token::Plain {
+                        highlights.push((
+                            offset..offset + len,
+                            HighlightStyle {
+                                color: Some(token.color().into()),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                    offset += len;
+                }
+
+                let foldable = regions.iter().any(|r| r.header == i);
+                let chevron: gpui::AnyElement = if foldable {
+                    div()
+                        .w(px(14.))
+                        .flex_shrink_0()
+                        .cursor_pointer()
+                        .text_color(theme::muted())
+                        .child(if is_folded { "▸" } else { "▾" })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e, _w, cx| {
+                                cx.stop_propagation();
+                                let key = (idx, i);
+                                if !this.preview_collapsed.remove(&key) {
+                                    this.preview_collapsed.insert(key);
+                                }
+                                cx.notify();
+                            }),
+                        )
+                        .into_any_element()
+                } else {
+                    div().w(px(14.)).flex_shrink_0().into_any_element()
+                };
+
+                lines.push(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .min_h(px(15.))
+                        .child(chevron)
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(StyledText::new(display).with_highlights(highlights)),
+                        )
+                        .into_any_element(),
+                );
+            }
             col = col.child(
                 div()
                     .id(SharedString::from(format!("preview-file-{idx}")))
@@ -963,7 +1060,7 @@ impl ProviderEditor {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::SUBTEXT))
+                                    .text_color(theme::subtext())
                                     .text_xs()
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(SharedString::from(filename)),
@@ -972,15 +1069,15 @@ impl ProviderEditor {
                                 div()
                                     .px_1p5()
                                     .rounded_sm()
-                                    .bg(theme::c(theme::INSET))
-                                    .text_color(theme::c(theme::MUTED))
+                                    .bg(theme::inset())
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .child(lang),
                             )
                             .child(div().flex_1())
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::ACCENT))
+                                    .text_color(theme::accent())
                                     .text_xs()
                                     .child("点击编辑 ✎"),
                             ),
@@ -992,11 +1089,12 @@ impl ProviderEditor {
                             .w_full()
                             .p_3()
                             .rounded_md()
-                            .bg(theme::c(theme::MANTLE))
+                            .bg(theme::mantle())
                             .border_1()
-                            .border_color(theme::c(theme::BORDER))
+                            .border_color(theme::border())
                             .text_xs()
-                            .text_color(theme::c(theme::TEXT))
+                            .font_family("Menlo")
+                            .text_color(theme::text())
                             .children(lines),
                     ),
             );
@@ -1006,9 +1104,9 @@ impl ProviderEditor {
             let mut list = div().flex().flex_col().gap_1();
             for issue in issues {
                 let (color, tag) = match issue.severity {
-                    Severity::Error => (theme::RED, "错误"),
-                    Severity::Warning => (theme::YELLOW, "警告"),
-                    Severity::Info => (theme::SUBTEXT, "提示"),
+                    Severity::Error => (theme::red(), "错误"),
+                    Severity::Warning => (theme::yellow(), "警告"),
+                    Severity::Info => (theme::subtext(), "提示"),
                 };
                 list = list.child(
                     div()
@@ -1016,10 +1114,10 @@ impl ProviderEditor {
                         .flex_row()
                         .gap_2()
                         .text_xs()
-                        .child(div().text_color(theme::c(color)).flex_shrink_0().child(tag))
+                        .child(div().text_color(color).flex_shrink_0().child(tag))
                         .child(
                             div()
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .text_color(theme::subtext())
                                 .child(SharedString::from(issue.message)),
                         ),
                 );
@@ -1031,7 +1129,7 @@ impl ProviderEditor {
                     .gap_1()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("校验"),
@@ -1050,38 +1148,61 @@ impl ProviderEditor {
             .gap_3()
             .w(px(760.))
             .max_h(px(640.))
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .rounded_lg()
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .shadow(theme::shadow_popover())
             .p_5()
+            // Opaque to mouse/scroll events: clicks inside the card must not
+            // reach the scrim's close handler, and wheel events must not chain
+            // to the scrollable editor pane underneath.
+            .occlude()
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap_1()
+                    .flex_row()
+                    .items_start()
+                    .gap_3()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(raw.filename.clone()),
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_color(theme::text())
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(raw.filename.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child("直接编辑文件内容，应用后会同步回上方表单。"),
+                            ),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
-                            .text_xs()
-                            .child("直接编辑文件内容，应用后会同步回上方表单。"),
+                            .id("raw-close")
+                            .flex_none()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .text_color(theme::muted())
+                            .hover(|s| s.bg(theme::surface_hover()).text_color(theme::text()))
+                            .child("✕")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)),
+                            ),
                     ),
             )
             .when_some(raw.error.clone(), |s, err| {
-                s.child(
-                    div()
-                        .text_color(theme::c(theme::RED))
-                        .text_xs()
-                        .child(err),
-                )
+                s.child(div().text_color(theme::red()).text_xs().child(err))
             })
             .child(
                 div()
@@ -1093,7 +1214,7 @@ impl ProviderEditor {
                     .overflow_y_scroll()
                     .rounded_md()
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(raw.input.clone()),
             )
             .child(
@@ -1122,6 +1243,14 @@ impl ProviderEditor {
                 .items_center()
                 .justify_center()
                 .bg(theme::translucent(0x000000, 0.45))
+                // Swallow all mouse/scroll events so the editor pane behind the
+                // modal neither scrolls nor reacts; clicking the scrim (outside
+                // the occluding card) dismisses the modal.
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)),
+                )
                 .child(card)
                 .into_any_element(),
         )
@@ -1168,7 +1297,7 @@ impl Render for ProviderEditor {
                 .gap_2()
                 .child(
                     div()
-                        .text_color(theme::c(theme::SUBTEXT))
+                        .text_color(theme::subtext())
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .child("从预设开始"),
@@ -1183,12 +1312,9 @@ impl Render for ProviderEditor {
                         .rounded_md()
                         .cursor_pointer()
                         .text_sm()
-                        .bg(theme::c(theme::INSET))
-                        .text_color(theme::c(theme::SUBTEXT))
-                        .hover(|s| {
-                            s.bg(theme::c(theme::ACCENT_SOFT))
-                                .text_color(theme::c(theme::ACCENT))
-                        })
+                        .bg(theme::inset())
+                        .text_color(theme::subtext())
+                        .hover(|s| s.bg(theme::accent_soft()).text_color(theme::accent()))
                         .child(SharedString::from(name))
                         .on_click(cx.listener(move |this, _e, _w, cx| this.apply_preset(i, cx))),
                 );
@@ -1248,7 +1374,7 @@ impl Render for ProviderEditor {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::RED))
+                        .text_color(theme::red())
                         .text_xs()
                         .child(error),
                 )
@@ -1258,7 +1384,7 @@ impl Render for ProviderEditor {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -1338,7 +1464,7 @@ fn field_block(label: &str, input: &Entity<TextInput>) -> impl IntoElement {
         .w_full()
         .child(
             div()
-                .text_color(theme::c(theme::SUBTEXT))
+                .text_color(theme::subtext())
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .child(SharedString::from(label.to_string())),

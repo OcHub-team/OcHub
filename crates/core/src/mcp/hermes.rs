@@ -188,7 +188,7 @@ pub fn sync_single_server_to_hermes(
     let id_owned = id.to_string();
 
     hermes_config::update_mcp_servers_yaml(|servers| {
-        let id_yaml = serde_yaml::Value::String(id_owned.clone());
+        let id_yaml = serde_norway::Value::String(id_owned.clone());
 
         let merged_json = if let Some(existing_yaml) = servers.get(&id_yaml) {
             let existing_json = hermes_config::yaml_to_json(existing_yaml)?;
@@ -242,7 +242,7 @@ pub fn remove_server_from_hermes(id: &str) -> Result<(), AppError> {
 
     let id_owned = id.to_string();
     hermes_config::update_mcp_servers_yaml(|servers| {
-        servers.remove(serde_yaml::Value::String(id_owned.clone()));
+        servers.remove(serde_norway::Value::String(id_owned.clone()));
         Ok(())
     })
 }

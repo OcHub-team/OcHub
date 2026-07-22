@@ -35,7 +35,7 @@ use crate::proxy::types::{ProxyConfig, ProxyServerInfo, ProxyStatus, ProxyTakeov
 use crate::proxy::PROXY_TOKEN_PLACEHOLDER;
 use crate::services::provider::{
     build_effective_settings_with_common_config, sanitize_claude_settings_for_live,
-    write_live_with_common_config,
+    write_live_with_common_config_ungated,
 };
 
 // Codex / Gemini config helpers (ported under crate::apps::*).
@@ -593,6 +593,11 @@ impl ProxyService {
     pub async fn set_takeover_for_app(&self, app_type: &str, enabled: bool) -> Result<(), String> {
         let app = AppType::from_str(app_type).map_err(|e| format!("invalid app type: {e}"))?;
         let app_type_str = app.as_str();
+        // Enabling takeover requires the app to be enabled; disabling (the
+        // restore path) must always be allowed — it is the disable flow itself.
+        if enabled {
+            crate::plugin::registry::ensure_app_type_enabled(&app).map_err(|e| e.to_string())?;
+        }
         let _guard = self.lock_switch_for_app(app_type_str).await;
 
         if enabled {
@@ -1454,7 +1459,7 @@ impl ProxyService {
             );
             return Ok(false);
         }
-        write_live_with_common_config(self.db.as_ref(), app_type, provider)
+        write_live_with_common_config_ungated(self.db.as_ref(), app_type, provider)
             .map_err(|e| format!("write {app_type:?} live config failed: {e}"))?;
         Ok(true)
     }

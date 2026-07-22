@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
-use routedeck_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
-use routedeck_core::settings::{self, S3SyncSettings, WebDavSyncSettings};
-use routedeck_core::{AppError, AppType};
+use ochub_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
+use ochub_core::settings::{self, S3SyncSettings, WebDavSyncSettings};
+use ochub_core::{AppError, AppType};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::ServerState;
@@ -45,10 +45,10 @@ struct FetchModelsRequest {
 }
 
 async fn fetch_models(Json(req): Json<FetchModelsRequest>) -> ApiResult<Json<Value>> {
-    let user_agent = routedeck_core::model::parse_custom_user_agent(req.custom_user_agent.as_deref())
+    let user_agent = ochub_core::model::parse_custom_user_agent(req.custom_user_agent.as_deref())
         .ok()
         .flatten();
-    let models = routedeck_core::services::model_fetch::fetch_models(
+    let models = ochub_core::services::model_fetch::fetch_models(
         &req.base_url,
         &req.api_key,
         req.is_full_url,
@@ -67,7 +67,9 @@ struct EndpointSpeedtestRequest {
 }
 
 async fn endpoint_speedtest(Json(req): Json<EndpointSpeedtestRequest>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::SpeedtestService::test_endpoints(req.urls, req.timeout_secs).await?)
+    to_value(
+        ochub_core::services::SpeedtestService::test_endpoints(req.urls, req.timeout_secs).await?,
+    )
 }
 
 #[derive(Deserialize)]
@@ -79,7 +81,7 @@ struct BalanceRequest {
 }
 
 async fn balance(Json(req): Json<BalanceRequest>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::balance::get_balance(&req.base_url, &req.api_key).await?)
+    to_value(ochub_core::services::balance::get_balance(&req.base_url, &req.api_key).await?)
 }
 
 #[derive(Deserialize)]
@@ -94,11 +96,13 @@ async fn provider_usage(
     Json(req): Json<ProviderUsageRequest>,
 ) -> ApiResult<Json<Value>> {
     let app_type = req.app.parse::<AppType>()?;
+    ochub_core::plugin::ensure_app_type_enabled(&app_type).map_err(ApiError::from)?;
     let result =
-        routedeck_core::services::ProviderService::query_usage(&s.app, app_type, &req.provider_id).await;
+        ochub_core::services::ProviderService::query_usage(&s.app, app_type, &req.provider_id)
+            .await;
     let snapshot = match &result {
         Ok(value) => value.clone(),
-        Err(err) => routedeck_core::UsageResult {
+        Err(err) => ochub_core::UsageResult {
             success: false,
             data: None,
             error: Some(err.to_string()),
@@ -140,8 +144,9 @@ async fn test_usage_script(
     Json(req): Json<TestUsageScriptRequest>,
 ) -> ApiResult<Json<Value>> {
     let app_type = req.app.parse::<AppType>()?;
+    ochub_core::plugin::ensure_app_type_enabled(&app_type).map_err(ApiError::from)?;
     to_value(
-        routedeck_core::services::ProviderService::test_usage_script(
+        ochub_core::services::ProviderService::test_usage_script(
             &s.app,
             app_type,
             &req.provider_id,
@@ -163,14 +168,14 @@ async fn auth_accounts(
     State(s): State<ServerState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::auth_list_accounts(&s.app, &provider).await?)
+    to_value(ochub_core::services::auth::auth_list_accounts(&s.app, &provider).await?)
 }
 
 async fn auth_status(
     State(s): State<ServerState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::auth_get_status(&s.app, &provider).await?)
+    to_value(ochub_core::services::auth::auth_get_status(&s.app, &provider).await?)
 }
 
 #[derive(Deserialize)]
@@ -184,9 +189,12 @@ async fn auth_login(
     Path(provider): Path<String>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<Value>> {
-    let code =
-        routedeck_core::services::auth::auth_start_login(&s.app, &provider, req.github_domain.as_deref())
-            .await?;
+    let code = ochub_core::services::auth::auth_start_login(
+        &s.app,
+        &provider,
+        req.github_domain.as_deref(),
+    )
+    .await?;
     to_value(code)
 }
 
@@ -204,7 +212,7 @@ async fn auth_poll(
     Json(req): Json<AuthPollRequest>,
 ) -> ApiResult<Json<Value>> {
     to_value(
-        routedeck_core::services::auth::auth_poll_for_account(
+        ochub_core::services::auth::auth_poll_for_account(
             &s.app,
             &provider,
             &req.device_code,
@@ -218,7 +226,7 @@ async fn auth_remove_account(
     State(s): State<ServerState>,
     Path((provider, account_id)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    routedeck_core::services::auth::auth_remove_account(&s.app, &provider, &account_id).await?;
+    ochub_core::services::auth::auth_remove_account(&s.app, &provider, &account_id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -226,7 +234,7 @@ async fn auth_set_default_account(
     State(s): State<ServerState>,
     Path((provider, account_id)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    routedeck_core::services::auth::auth_set_default_account(&s.app, &provider, &account_id).await?;
+    ochub_core::services::auth::auth_set_default_account(&s.app, &provider, &account_id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -234,7 +242,7 @@ async fn auth_logout(
     State(s): State<ServerState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    routedeck_core::services::auth::auth_logout(&s.app, &provider).await?;
+    ochub_core::services::auth::auth_logout(&s.app, &provider).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -243,7 +251,7 @@ async fn copilot_device_flow(
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<Value>> {
     to_value(
-        routedeck_core::services::auth::copilot_start_device_flow(&s.app, req.github_domain.as_deref())
+        ochub_core::services::auth::copilot_start_device_flow(&s.app, req.github_domain.as_deref())
             .await?,
     )
 }
@@ -253,7 +261,7 @@ async fn copilot_poll_auth(
     Json(req): Json<AuthPollRequest>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "authenticated": routedeck_core::services::auth::copilot_poll_for_auth(
+        "authenticated": ochub_core::services::auth::copilot_poll_for_auth(
             &s.app,
             &req.device_code,
             req.github_domain.as_deref(),
@@ -267,7 +275,7 @@ async fn copilot_poll_account(
     Json(req): Json<AuthPollRequest>,
 ) -> ApiResult<Json<Value>> {
     to_value(
-        routedeck_core::services::auth::copilot_poll_for_account(
+        ochub_core::services::auth::copilot_poll_for_account(
             &s.app,
             &req.device_code,
             req.github_domain.as_deref(),
@@ -277,14 +285,14 @@ async fn copilot_poll_account(
 }
 
 async fn copilot_accounts(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::copilot_list_accounts(&s.app).await?)
+    to_value(ochub_core::services::auth::copilot_list_accounts(&s.app).await?)
 }
 
 async fn copilot_remove_account(
     State(s): State<ServerState>,
     Path(account_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    routedeck_core::services::auth::copilot_remove_account(&s.app, &account_id).await?;
+    ochub_core::services::auth::copilot_remove_account(&s.app, &account_id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -292,28 +300,28 @@ async fn copilot_default_account(
     State(s): State<ServerState>,
     Path(account_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    routedeck_core::services::auth::copilot_set_default_account(&s.app, &account_id).await?;
+    ochub_core::services::auth::copilot_set_default_account(&s.app, &account_id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn copilot_status(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::copilot_get_auth_status(&s.app).await?)
+    to_value(ochub_core::services::auth::copilot_get_auth_status(&s.app).await?)
 }
 
 async fn copilot_authenticated(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "authenticated": routedeck_core::services::auth::copilot_is_authenticated(&s.app).await?
+        "authenticated": ochub_core::services::auth::copilot_is_authenticated(&s.app).await?
     })))
 }
 
 async fn copilot_logout(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    routedeck_core::services::auth::copilot_logout(&s.app).await?;
+    ochub_core::services::auth::copilot_logout(&s.app).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn copilot_token(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "token": routedeck_core::services::auth::copilot_get_token(&s.app).await?
+        "token": ochub_core::services::auth::copilot_get_token(&s.app).await?
     })))
 }
 
@@ -322,30 +330,30 @@ async fn copilot_token_for_account(
     Path(account_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "token": routedeck_core::services::auth::copilot_get_token_for_account(&s.app, &account_id).await?
+        "token": ochub_core::services::auth::copilot_get_token_for_account(&s.app, &account_id).await?
     })))
 }
 
 async fn copilot_models(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::copilot_get_models(&s.app).await?)
+    to_value(ochub_core::services::auth::copilot_get_models(&s.app).await?)
 }
 
 async fn copilot_models_for_account(
     State(s): State<ServerState>,
     Path(account_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::copilot_get_models_for_account(&s.app, &account_id).await?)
+    to_value(ochub_core::services::auth::copilot_get_models_for_account(&s.app, &account_id).await?)
 }
 
 async fn copilot_usage(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::copilot_get_usage(&s.app).await?)
+    to_value(ochub_core::services::auth::copilot_get_usage(&s.app).await?)
 }
 
 async fn copilot_usage_for_account(
     State(s): State<ServerState>,
     Path(account_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::copilot_get_usage_for_account(&s.app, &account_id).await?)
+    to_value(ochub_core::services::auth::copilot_get_usage_for_account(&s.app, &account_id).await?)
 }
 
 #[derive(Deserialize)]
@@ -358,26 +366,26 @@ async fn codex_oauth_quota(
     State(s): State<ServerState>,
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::get_codex_oauth_quota(&s.app, q.account_id).await?)
+    to_value(ochub_core::services::auth::get_codex_oauth_quota(&s.app, q.account_id).await?)
 }
 
 async fn codex_oauth_models(
     State(s): State<ServerState>,
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::auth::get_codex_oauth_models(&s.app, q.account_id).await?)
+    to_value(ochub_core::services::auth::get_codex_oauth_models(&s.app, q.account_id).await?)
 }
 
 async fn subscription_quota(
     State(s): State<ServerState>,
     Path(tool): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let result = routedeck_core::services::subscription::get_subscription_quota(&tool).await;
+    let result = ochub_core::services::subscription::get_subscription_quota(&tool).await;
     let snapshot = match &result {
         Ok(value) => value.clone(),
-        Err(err) => routedeck_core::services::subscription::SubscriptionQuota {
+        Err(err) => ochub_core::services::subscription::SubscriptionQuota {
             tool: tool.clone(),
-            credential_status: routedeck_core::services::subscription::CredentialStatus::Valid,
+            credential_status: ochub_core::services::subscription::CredentialStatus::Valid,
             credential_message: Some(err.clone()),
             success: false,
             tiers: vec![],
@@ -409,7 +417,8 @@ struct CodingPlanQuotaRequest {
 
 async fn coding_plan_quota(Json(req): Json<CodingPlanQuotaRequest>) -> ApiResult<Json<Value>> {
     to_value(
-        routedeck_core::services::coding_plan::get_coding_plan_quota(&req.base_url, &req.api_key).await?,
+        ochub_core::services::coding_plan::get_coding_plan_quota(&req.base_url, &req.api_key)
+            .await?,
     )
 }
 
@@ -575,13 +584,13 @@ async fn hermes_open_web_ui(Json(req): Json<HermesOpenRequest>) -> ApiResult<Jso
 }
 
 async fn hermes_launch_dashboard() -> ApiResult<Json<Value>> {
-    let preferred = routedeck_core::settings::get_settings().preferred_terminal;
+    let preferred = ochub_core::settings::get_settings().preferred_terminal;
     let target = match preferred.as_deref() {
         Some("iterm2") => "iterm",
         Some(t) => t,
         None => "terminal",
     };
-    routedeck_core::session_manager::terminal::launch_terminal(target, "hermes dashboard", None, None)?;
+    ochub_core::session_manager::terminal::launch_terminal(target, "hermes dashboard", None, None)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -656,23 +665,17 @@ fn open_path(path: &FsPath) -> Result<(), ApiError> {
 }
 
 fn app_config_dir(app: AppType) -> Result<std::path::PathBuf, AppError> {
-    Ok(match app {
-        AppType::Claude => routedeck_core::paths::get_claude_config_dir(),
-        AppType::ClaudeDesktop => claude_desktop::get_config_library_path()?,
-        AppType::Codex => codex::get_codex_config_dir(),
-        AppType::Gemini => gemini::get_gemini_dir(),
-        AppType::OpenCode => opencode::get_opencode_dir(),
-        AppType::OpenClaw => openclaw::get_openclaw_dir(),
-        AppType::Hermes => hermes::get_hermes_dir(),
-    })
+    ochub_core::plugin::get_plugin(&app.app_id())
+        .ok_or_else(|| AppError::InvalidInput(format!("未知的应用类型: {app}")))?
+        .config_dir()
 }
 
 fn app_config_status_sync(
     app: AppType,
     state: Option<&ServerState>,
-) -> Result<routedeck_core::paths::ConfigStatus, AppError> {
+) -> Result<ochub_core::paths::ConfigStatus, AppError> {
     let status = match app {
-        AppType::Claude => routedeck_core::paths::get_claude_config_status(),
+        AppType::Claude => ochub_core::paths::get_claude_config_status(),
         AppType::ClaudeDesktop => {
             let Some(state) = state else {
                 return Err(AppError::Message(
@@ -680,7 +683,7 @@ fn app_config_status_sync(
                 ));
             };
             let status = claude_desktop::get_status(&state.app.db, false)?;
-            routedeck_core::paths::ConfigStatus {
+            ochub_core::paths::ConfigStatus {
                 exists: status.configured,
                 path: status.config_library_path.unwrap_or_default(),
             }
@@ -688,35 +691,35 @@ fn app_config_status_sync(
         AppType::Codex => {
             let auth_path = codex::get_codex_auth_path();
             let config_text = codex::read_codex_config_text().unwrap_or_default();
-            routedeck_core::paths::ConfigStatus {
+            ochub_core::paths::ConfigStatus {
                 exists: auth_path.exists() || !config_text.trim().is_empty(),
                 path: codex::get_codex_config_dir().to_string_lossy().to_string(),
             }
         }
         AppType::Gemini => {
             let env_path = gemini::get_gemini_env_path();
-            routedeck_core::paths::ConfigStatus {
+            ochub_core::paths::ConfigStatus {
                 exists: env_path.exists(),
                 path: gemini::get_gemini_dir().to_string_lossy().to_string(),
             }
         }
         AppType::OpenCode => {
             let config_path = opencode::get_opencode_config_path();
-            routedeck_core::paths::ConfigStatus {
+            ochub_core::paths::ConfigStatus {
                 exists: config_path.exists(),
                 path: opencode::get_opencode_dir().to_string_lossy().to_string(),
             }
         }
         AppType::OpenClaw => {
             let config_path = openclaw::get_openclaw_config_path();
-            routedeck_core::paths::ConfigStatus {
+            ochub_core::paths::ConfigStatus {
                 exists: config_path.exists(),
                 path: openclaw::get_openclaw_dir().to_string_lossy().to_string(),
             }
         }
         AppType::Hermes => {
             let config_path = hermes::get_hermes_config_path();
-            routedeck_core::paths::ConfigStatus {
+            ochub_core::paths::ConfigStatus {
                 exists: config_path.exists(),
                 path: hermes::get_hermes_dir().to_string_lossy().to_string(),
             }
@@ -735,7 +738,7 @@ async fn config_status(
 
 async fn claude_code_config_path() -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "path": routedeck_core::paths::get_claude_settings_path().to_string_lossy().to_string()
+        "path": ochub_core::paths::get_claude_settings_path().to_string_lossy().to_string()
     })))
 }
 
@@ -748,6 +751,7 @@ async fn config_dir(Path(app): Path<String>) -> ApiResult<Json<Value>> {
 
 async fn open_config_folder(Path(app): Path<String>) -> ApiResult<Json<Value>> {
     let app = app.parse::<AppType>()?;
+    ochub_core::plugin::ensure_app_type_enabled(&app).map_err(ApiError::from)?;
     let dir = app_config_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| ApiError(AppError::io(&dir, e)))?;
     open_path(&dir)?;
@@ -756,19 +760,19 @@ async fn open_config_folder(Path(app): Path<String>) -> ApiResult<Json<Value>> {
 
 async fn app_config_path() -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "path": routedeck_core::paths::get_app_config_path().to_string_lossy().to_string()
+        "path": ochub_core::paths::get_app_config_path().to_string_lossy().to_string()
     })))
 }
 
 async fn open_app_config_folder() -> ApiResult<Json<Value>> {
-    let dir = routedeck_core::paths::get_app_config_dir();
+    let dir = ochub_core::paths::get_app_config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| ApiError(AppError::io(&dir, e)))?;
     open_path(&dir)?;
     Ok(Json(json!({ "ok": true, "path": dir.to_string_lossy() })))
 }
 
 async fn app_config_dir_override_get() -> ApiResult<Json<Value>> {
-    let value = routedeck_core::app_store::refresh_app_config_dir_override()
+    let value = ochub_core::app_store::refresh_app_config_dir_override()
         .map(|p| p.to_string_lossy().to_string());
     Ok(Json(json!({ "path": value })))
 }
@@ -782,7 +786,7 @@ struct AppConfigDirOverrideRequest {
 async fn app_config_dir_override_set(
     Json(req): Json<AppConfigDirOverrideRequest>,
 ) -> ApiResult<Json<Value>> {
-    routedeck_core::app_store::set_app_config_dir_to_store(req.path.as_deref())?;
+    ochub_core::app_store::set_app_config_dir_to_store(req.path.as_deref())?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -831,7 +835,7 @@ async fn portable_mode() -> ApiResult<Json<Value>> {
 }
 
 async fn check_for_updates() -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::update::check_for_updates(None).await?)
+    to_value(ochub_core::services::update::check_for_updates(None).await?)
 }
 
 async fn restart_app() -> ApiResult<Json<Value>> {
@@ -840,11 +844,11 @@ async fn restart_app() -> ApiResult<Json<Value>> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
 
     std::thread::Builder::new()
-        .name("RouteDeck-restart".to_string())
+        .name("OCHUB-restart".to_string())
         .spawn(move || {
             std::thread::sleep(Duration::from_millis(150));
             if let Err(err) = Command::new(&exe).args(args).spawn() {
-                log::error!("重启 RouteDeck 失败: {err}");
+                log::error!("重启 OCHUB 失败: {err}");
                 return;
             }
             std::process::exit(0);
@@ -855,7 +859,7 @@ async fn restart_app() -> ApiResult<Json<Value>> {
 }
 
 async fn install_update_and_restart() -> ApiResult<Json<Value>> {
-    let url = routedeck_core::services::latest_release_url(None);
+    let url = ochub_core::services::latest_release_url(None);
     open_url(&url)?;
     Ok(Json(json!({
         "ok": false,
@@ -884,7 +888,7 @@ fn auto_launch_handle() -> Result<AutoLaunch, AppError> {
     let app_path = exe_path;
 
     AutoLaunchBuilder::new()
-        .set_app_name("RouteDeck")
+        .set_app_name("OCHUB")
         .set_app_path(&app_path.to_string_lossy())
         .build()
         .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))
@@ -934,13 +938,13 @@ async fn lightweight_exit() -> Json<Value> {
 
 async fn codex_unify_history_backup() -> Json<Value> {
     Json(json!({
-        "exists": routedeck_core::services::codex_history_migration::has_codex_official_history_unify_backup()
+        "exists": ochub_core::services::codex_history_migration::has_codex_official_history_unify_backup()
     }))
 }
 
 async fn codex_restore_unified_history() -> ApiResult<Json<Value>> {
     let outcome = tokio::task::spawn_blocking(|| {
-        routedeck_core::services::codex_history_migration::restore_codex_official_history_from_backups()
+        ochub_core::services::codex_history_migration::restore_codex_official_history_from_backups()
     })
     .await
     .map_err(|e| {
@@ -969,14 +973,14 @@ async fn codex_restore_unified_history() -> ApiResult<Json<Value>> {
 // ----- OMO / workspace / Claude MCP -----
 
 async fn omo_local_file() -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::OmoService::read_local_file(
-        &routedeck_core::services::omo::STANDARD,
+    to_value(ochub_core::services::OmoService::read_local_file(
+        &ochub_core::services::omo::STANDARD,
     )?)
 }
 
 async fn omo_slim_local_file() -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::OmoService::read_local_file(
-        &routedeck_core::services::omo::SLIM,
+    to_value(ochub_core::services::OmoService::read_local_file(
+        &ochub_core::services::omo::SLIM,
     )?)
 }
 
@@ -1015,13 +1019,13 @@ fn disable_omo_category(state: &ServerState, category: &str) -> Result<(), AppEr
 
 async fn omo_disable(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     disable_omo_category(&s, "omo")?;
-    routedeck_core::services::OmoService::delete_config_file(&routedeck_core::services::omo::STANDARD)?;
+    ochub_core::services::OmoService::delete_config_file(&ochub_core::services::omo::STANDARD)?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn omo_slim_disable(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     disable_omo_category(&s, "omo-slim")?;
-    routedeck_core::services::OmoService::delete_config_file(&routedeck_core::services::omo::SLIM)?;
+    ochub_core::services::OmoService::delete_config_file(&ochub_core::services::omo::SLIM)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1038,17 +1042,17 @@ struct WorkspaceFileWriteRequest {
 
 async fn workspace_allowed_files() -> Json<Value> {
     Json(json!({
-        "files": routedeck_core::services::WorkspaceService::allowed_workspace_files()
+        "files": ochub_core::services::WorkspaceService::allowed_workspace_files()
     }))
 }
 
 async fn workspace_read(Query(q): Query<WorkspaceFileQuery>) -> ApiResult<Json<Value>> {
-    let content = routedeck_core::services::WorkspaceService::read_workspace_file(&q.filename)?;
+    let content = ochub_core::services::WorkspaceService::read_workspace_file(&q.filename)?;
     Ok(Json(json!({ "content": content })))
 }
 
 async fn workspace_write(Json(req): Json<WorkspaceFileWriteRequest>) -> ApiResult<Json<Value>> {
-    routedeck_core::services::WorkspaceService::write_workspace_file(&req.filename, &req.content)?;
+    ochub_core::services::WorkspaceService::write_workspace_file(&req.filename, &req.content)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1060,27 +1064,27 @@ struct WorkspaceOpenRequest {
 
 async fn workspace_open(Json(req): Json<WorkspaceOpenRequest>) -> ApiResult<Json<Value>> {
     let subdir = req.subdir.as_deref().unwrap_or("workspace");
-    let dir = routedeck_core::services::WorkspaceService::ensure_directory_for_subdir(subdir)?;
+    let dir = ochub_core::services::WorkspaceService::ensure_directory_for_subdir(subdir)?;
     open_path(&dir)?;
     Ok(Json(json!({ "ok": true, "path": dir.to_string_lossy() })))
 }
 
 async fn memory_list() -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::WorkspaceService::list_daily_memory_files()?)
+    to_value(ochub_core::services::WorkspaceService::list_daily_memory_files()?)
 }
 
 async fn memory_read(Query(q): Query<WorkspaceFileQuery>) -> ApiResult<Json<Value>> {
-    let content = routedeck_core::services::WorkspaceService::read_daily_memory_file(&q.filename)?;
+    let content = ochub_core::services::WorkspaceService::read_daily_memory_file(&q.filename)?;
     Ok(Json(json!({ "content": content })))
 }
 
 async fn memory_write(Json(req): Json<WorkspaceFileWriteRequest>) -> ApiResult<Json<Value>> {
-    routedeck_core::services::WorkspaceService::write_daily_memory_file(&req.filename, &req.content)?;
+    ochub_core::services::WorkspaceService::write_daily_memory_file(&req.filename, &req.content)?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn memory_delete(Query(q): Query<WorkspaceFileQuery>) -> ApiResult<Json<Value>> {
-    routedeck_core::services::WorkspaceService::delete_daily_memory_file(&q.filename)?;
+    ochub_core::services::WorkspaceService::delete_daily_memory_file(&q.filename)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1090,15 +1094,17 @@ struct MemorySearchRequest {
 }
 
 async fn memory_search(Json(req): Json<MemorySearchRequest>) -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::services::WorkspaceService::search_daily_memory_files(&req.query)?)
+    to_value(ochub_core::services::WorkspaceService::search_daily_memory_files(&req.query)?)
 }
 
 async fn claude_mcp_status() -> ApiResult<Json<Value>> {
-    to_value(routedeck_core::mcp::get_mcp_status()?)
+    to_value(ochub_core::mcp::get_mcp_status()?)
 }
 
 async fn claude_mcp_config() -> ApiResult<Json<Value>> {
-    Ok(Json(json!({ "content": routedeck_core::mcp::read_mcp_json()? })))
+    Ok(Json(
+        json!({ "content": ochub_core::mcp::read_mcp_json()? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1110,12 +1116,12 @@ async fn claude_mcp_upsert(
     Path(id): Path<String>,
     Json(req): Json<ClaudeMcpServerRequest>,
 ) -> ApiResult<Json<Value>> {
-    let changed = routedeck_core::mcp::upsert_mcp_server(&id, req.spec)?;
+    let changed = ochub_core::mcp::upsert_mcp_server(&id, req.spec)?;
     Ok(Json(json!({ "changed": changed })))
 }
 
 async fn claude_mcp_delete(Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let changed = routedeck_core::mcp::delete_mcp_server(&id)?;
+    let changed = ochub_core::mcp::delete_mcp_server(&id)?;
     Ok(Json(json!({ "changed": changed })))
 }
 
@@ -1126,25 +1132,25 @@ struct ClaudeMcpValidateRequest {
 
 async fn claude_mcp_validate(Json(req): Json<ClaudeMcpValidateRequest>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "valid": routedeck_core::mcp::validate_command_in_path(&req.command)?
+        "valid": ochub_core::mcp::validate_command_in_path(&req.command)?
     })))
 }
 
 // ----- Sync connection tests (settings come from device settings) -----
 
 async fn sync_webdav_test() -> ApiResult<Json<Value>> {
-    let settings = routedeck_core::settings::get_settings()
+    let settings = ochub_core::settings::get_settings()
         .webdav_sync
         .ok_or_else(|| ApiError(AppError::Config("WebDAV sync is not configured".into())))?;
-    routedeck_core::services::webdav_sync::check_connection(&settings).await?;
+    ochub_core::services::webdav_sync::check_connection(&settings).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn sync_s3_test() -> ApiResult<Json<Value>> {
-    let settings = routedeck_core::settings::get_settings()
+    let settings = ochub_core::settings::get_settings()
         .s3_sync
         .ok_or_else(|| ApiError(AppError::Config("S3 sync is not configured".into())))?;
-    routedeck_core::services::s3_sync::check_connection(&settings).await?;
+    ochub_core::services::s3_sync::check_connection(&settings).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1210,7 +1216,7 @@ async fn sync_webdav_test_with_settings(
         settings::get_webdav_sync_settings(),
         req.preserve_empty_password.unwrap_or(true),
     );
-    routedeck_core::services::webdav_sync::check_connection(&resolved).await?;
+    ochub_core::services::webdav_sync::check_connection(&resolved).await?;
     Ok(Json(
         json!({ "success": true, "message": "WebDAV connection ok" }),
     ))
@@ -1254,8 +1260,8 @@ fn require_enabled_webdav_settings() -> Result<WebDavSyncSettings, ApiError> {
 
 async fn sync_webdav_upload(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     let mut settings = require_enabled_webdav_settings()?;
-    match routedeck_core::services::webdav_sync::run_with_sync_lock(
-        routedeck_core::services::webdav_sync::upload(&s.app.db, &mut settings),
+    match ochub_core::services::webdav_sync::run_with_sync_lock(
+        ochub_core::services::webdav_sync::upload(&s.app.db, &mut settings),
     )
     .await
     {
@@ -1271,13 +1277,13 @@ async fn sync_webdav_upload(State(s): State<ServerState>) -> ApiResult<Json<Valu
 
 async fn sync_webdav_download(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     let mut settings = require_enabled_webdav_settings()?;
-    match routedeck_core::services::webdav_sync::run_with_sync_lock(
-        routedeck_core::services::webdav_sync::download(&s.app.db, &mut settings),
+    match ochub_core::services::webdav_sync::run_with_sync_lock(
+        ochub_core::services::webdav_sync::download(&s.app.db, &mut settings),
     )
     .await
     {
         Ok(mut value) => {
-            if let Err(err) = routedeck_core::services::ProviderService::sync_current_to_live(&s.app) {
+            if let Err(err) = ochub_core::services::ProviderService::sync_current_to_live(&s.app) {
                 log::warn!("[WebDAV] post-download live sync warning: {err}");
                 attach_warning(&mut value, err.to_string());
             }
@@ -1294,7 +1300,7 @@ async fn sync_webdav_download(State(s): State<ServerState>) -> ApiResult<Json<Va
 
 async fn sync_webdav_remote_info() -> ApiResult<Json<Value>> {
     let settings = require_enabled_webdav_settings()?;
-    let info = routedeck_core::services::webdav_sync::fetch_remote_info(&settings).await?;
+    let info = ochub_core::services::webdav_sync::fetch_remote_info(&settings).await?;
     Ok(Json(info.unwrap_or(json!({ "empty": true }))))
 }
 
@@ -1324,7 +1330,7 @@ async fn sync_s3_test_with_settings(Json(req): Json<S3SettingsRequest>) -> ApiRe
         settings::get_s3_sync_settings(),
         req.preserve_empty_password.unwrap_or(true),
     );
-    routedeck_core::services::s3_sync::check_connection(&resolved).await?;
+    ochub_core::services::s3_sync::check_connection(&resolved).await?;
     Ok(Json(
         json!({ "success": true, "message": "S3 connection ok" }),
     ))
@@ -1366,7 +1372,7 @@ fn require_enabled_s3_settings() -> Result<S3SyncSettings, ApiError> {
 
 async fn sync_s3_upload(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     let mut settings = require_enabled_s3_settings()?;
-    match routedeck_core::services::s3_sync::run_with_sync_lock(routedeck_core::services::s3_sync::upload(
+    match ochub_core::services::s3_sync::run_with_sync_lock(ochub_core::services::s3_sync::upload(
         &s.app.db,
         &mut settings,
     ))
@@ -1384,14 +1390,13 @@ async fn sync_s3_upload(State(s): State<ServerState>) -> ApiResult<Json<Value>> 
 
 async fn sync_s3_download(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     let mut settings = require_enabled_s3_settings()?;
-    match routedeck_core::services::s3_sync::run_with_sync_lock(routedeck_core::services::s3_sync::download(
-        &s.app.db,
-        &mut settings,
-    ))
+    match ochub_core::services::s3_sync::run_with_sync_lock(
+        ochub_core::services::s3_sync::download(&s.app.db, &mut settings),
+    )
     .await
     {
         Ok(mut value) => {
-            if let Err(err) = routedeck_core::services::ProviderService::sync_current_to_live(&s.app) {
+            if let Err(err) = ochub_core::services::ProviderService::sync_current_to_live(&s.app) {
                 log::warn!("[S3] post-download live sync warning: {err}");
                 attach_warning(&mut value, err.to_string());
             }
@@ -1408,7 +1413,7 @@ async fn sync_s3_download(State(s): State<ServerState>) -> ApiResult<Json<Value>
 
 async fn sync_s3_remote_info() -> ApiResult<Json<Value>> {
     let settings = require_enabled_s3_settings()?;
-    let info = routedeck_core::services::s3_sync::fetch_remote_info(&settings).await?;
+    let info = ochub_core::services::s3_sync::fetch_remote_info(&settings).await?;
     Ok(Json(info.unwrap_or(json!({ "empty": true }))))
 }
 
@@ -1454,13 +1459,13 @@ async fn claude_plugin_applied() -> ApiResult<Json<Value>> {
 
 async fn claude_onboarding_skip() -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "changed": routedeck_core::mcp::set_has_completed_onboarding()?
+        "changed": ochub_core::mcp::set_has_completed_onboarding()?
     })))
 }
 
 async fn claude_onboarding_clear() -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "changed": routedeck_core::mcp::clear_has_completed_onboarding()?
+        "changed": ochub_core::mcp::clear_has_completed_onboarding()?
     })))
 }
 
@@ -1468,10 +1473,10 @@ pub fn router() -> Router<ServerState> {
     Router::new()
         .route("/api/models/fetch", post(fetch_models))
         .route("/api/models/speedtest", post(endpoint_speedtest))
-        .route("/api/config/status/:app", get(config_status))
+        .route("/api/config/status/{app}", get(config_status))
         .route("/api/config/claude-code-path", get(claude_code_config_path))
-        .route("/api/config/dir/:app", get(config_dir))
-        .route("/api/config/open-folder/:app", post(open_config_folder))
+        .route("/api/config/dir/{app}", get(config_dir))
+        .route("/api/config/open-folder/{app}", post(open_config_folder))
         .route("/api/config/app-path", get(app_config_path))
         .route("/api/config/app-folder/open", post(open_app_config_folder))
         .route(
@@ -1526,26 +1531,26 @@ pub fn router() -> Router<ServerState> {
         .route("/api/claude-mcp/status", get(claude_mcp_status))
         .route("/api/claude-mcp/config", get(claude_mcp_config))
         .route(
-            "/api/claude-mcp/server/:id",
+            "/api/claude-mcp/server/{id}",
             post(claude_mcp_upsert).delete(claude_mcp_delete),
         )
         .route("/api/claude-mcp/validate", post(claude_mcp_validate))
         .route("/api/balance", post(balance))
         .route("/api/provider-usage", post(provider_usage))
         .route("/api/provider-usage/test-script", post(test_usage_script))
-        .route("/api/subscription/:tool/quota", get(subscription_quota))
+        .route("/api/subscription/{tool}/quota", get(subscription_quota))
         .route("/api/coding-plan/quota", post(coding_plan_quota))
-        .route("/api/auth/:provider/accounts", get(auth_accounts))
-        .route("/api/auth/:provider/status", get(auth_status))
-        .route("/api/auth/:provider/login", post(auth_login))
-        .route("/api/auth/:provider/poll", post(auth_poll))
-        .route("/api/auth/:provider/logout", post(auth_logout))
+        .route("/api/auth/{provider}/accounts", get(auth_accounts))
+        .route("/api/auth/{provider}/status", get(auth_status))
+        .route("/api/auth/{provider}/login", post(auth_login))
+        .route("/api/auth/{provider}/poll", post(auth_poll))
+        .route("/api/auth/{provider}/logout", post(auth_logout))
         .route(
-            "/api/auth/:provider/accounts/:account_id",
+            "/api/auth/{provider}/accounts/{account_id}",
             axum::routing::delete(auth_remove_account),
         )
         .route(
-            "/api/auth/:provider/accounts/:account_id/default",
+            "/api/auth/{provider}/accounts/{account_id}/default",
             post(auth_set_default_account),
         )
         .route("/api/copilot/device-flow", post(copilot_device_flow))
@@ -1559,23 +1564,23 @@ pub fn router() -> Router<ServerState> {
         .route("/api/copilot/models", get(copilot_models))
         .route("/api/copilot/usage", get(copilot_usage))
         .route(
-            "/api/copilot/accounts/:account_id",
+            "/api/copilot/accounts/{account_id}",
             axum::routing::delete(copilot_remove_account),
         )
         .route(
-            "/api/copilot/accounts/:account_id/default",
+            "/api/copilot/accounts/{account_id}/default",
             post(copilot_default_account),
         )
         .route(
-            "/api/copilot/accounts/:account_id/token",
+            "/api/copilot/accounts/{account_id}/token",
             get(copilot_token_for_account),
         )
         .route(
-            "/api/copilot/accounts/:account_id/models",
+            "/api/copilot/accounts/{account_id}/models",
             get(copilot_models_for_account),
         )
         .route(
-            "/api/copilot/accounts/:account_id/usage",
+            "/api/copilot/accounts/{account_id}/usage",
             get(copilot_usage_for_account),
         )
         .route("/api/codex-oauth/quota", get(codex_oauth_quota))
@@ -1589,7 +1594,7 @@ pub fn router() -> Router<ServerState> {
             get(openclaw_live_provider_ids),
         )
         .route(
-            "/api/openclaw/live-provider/:provider_id",
+            "/api/openclaw/live-provider/{provider_id}",
             get(openclaw_live_provider),
         )
         .route("/api/openclaw/health", get(openclaw_health))
@@ -1615,7 +1620,7 @@ pub fn router() -> Router<ServerState> {
             get(hermes_live_provider_ids),
         )
         .route(
-            "/api/hermes/live-provider/:provider_id",
+            "/api/hermes/live-provider/{provider_id}",
             get(hermes_live_provider),
         )
         .route("/api/hermes/model-config", get(hermes_model_config))

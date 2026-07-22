@@ -10,15 +10,15 @@ use gpui::{
     div, ease_out_quint, prelude::*, px, Animation, AnimationExt, Context, ElementId, Entity,
     FontWeight, SharedString, Window,
 };
-use routedeck_core::db::StreamCheckConfig;
-use routedeck_core::services::session_usage::{
+use ochub_core::db::StreamCheckConfig;
+use ochub_core::services::session_usage::{
     get_data_source_breakdown, sync_claude_session_logs, DataSourceSummary, SessionSyncResult,
 };
-use routedeck_core::services::usage_stats::{
+use ochub_core::services::usage_stats::{
     DailyStats, LogFilters, ModelPricingInfo, ModelStats, ProviderStats, RequestLogDetail,
     UsageSummaryByApp,
 };
-use routedeck_core::{services, AppState, UsageSummary};
+use ochub_core::{services, AppState, UsageSummary};
 
 use crate::icons::{icon, IconName};
 use crate::layout;
@@ -539,7 +539,7 @@ impl UsageView {
                     .set_pricing_model_source(app, source.trim())
                     .await?;
             }
-            Ok::<(), routedeck_core::AppError>(())
+            Ok::<(), ochub_core::AppError>(())
         });
 
         self.status = Some(SharedString::from(match result {
@@ -586,22 +586,22 @@ impl UsageView {
             .py_1p5()
             .rounded_md()
             .cursor_pointer()
-            .bg(theme::c(if primary {
-                theme::ACCENT
+            .bg(if primary {
+                theme::accent()
             } else {
-                theme::SURFACE
-            }))
+                theme::surface()
+            })
             .border_1()
-            .border_color(theme::c(if primary {
-                theme::ACCENT
+            .border_color(if primary {
+                theme::accent()
             } else {
-                theme::BORDER
-            }))
-            .text_color(theme::c(if primary {
-                theme::ACCENT_TEXT
+                theme::border()
+            })
+            .text_color(if primary {
+                theme::accent_text()
             } else {
-                theme::TEXT
-            }))
+                theme::text()
+            })
             .text_sm()
             .child(
                 div()
@@ -612,9 +612,9 @@ impl UsageView {
                     .child(icon(
                         icon_name,
                         if primary {
-                            theme::ACCENT_TEXT
+                            theme::accent_text()
                         } else {
-                            theme::TEXT
+                            theme::text()
                         },
                         14.,
                     ))
@@ -638,22 +638,22 @@ impl UsageView {
             .py_1p5()
             .rounded_md()
             .cursor_pointer()
-            .bg(theme::c(if selected {
-                theme::ACCENT
+            .bg(if selected {
+                theme::accent()
             } else {
-                theme::SURFACE
-            }))
+                theme::surface()
+            })
             .border_1()
-            .border_color(theme::c(if selected {
-                theme::ACCENT
+            .border_color(if selected {
+                theme::accent()
             } else {
-                theme::BORDER
-            }))
-            .text_color(theme::c(if selected {
-                theme::ACCENT_TEXT
+                theme::border()
+            })
+            .text_color(if selected {
+                theme::accent_text()
             } else {
-                theme::TEXT
-            }))
+                theme::text()
+            })
             .text_xs()
             .child(
                 div()
@@ -665,9 +665,9 @@ impl UsageView {
                         s.child(icon(
                             icon_name,
                             if selected {
-                                theme::ACCENT_TEXT
+                                theme::accent_text()
                             } else {
-                                theme::SUBTEXT
+                                theme::subtext()
                             },
                             13.,
                         ))
@@ -681,7 +681,7 @@ impl UsageView {
         value: String,
         detail: String,
         icon_name: IconName,
-        tone: u32,
+        tone: gpui::Rgba,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -690,9 +690,9 @@ impl UsageView {
             .flex_1()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -702,7 +702,7 @@ impl UsageView {
                     .child(icon(icon_name, tone, 14.))
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(label),
@@ -710,14 +710,14 @@ impl UsageView {
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
                     .child(SharedString::from(value)),
             )
             .child(
                 div()
-                    .text_color(theme::c(theme::SUBTEXT))
+                    .text_color(theme::subtext())
                     .text_xs()
                     .child(SharedString::from(detail)),
             )
@@ -739,9 +739,9 @@ impl UsageView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -756,8 +756,8 @@ impl UsageView {
                             .w(px(30.))
                             .h(px(30.))
                             .rounded_md()
-                            .bg(theme::c(theme::SURFACE_HOVER))
-                            .child(icon(icon_name, theme::SUBTEXT, 15.)),
+                            .bg(theme::surface_hover())
+                            .child(icon(icon_name, theme::subtext(), 15.)),
                     )
                     .child(
                         div()
@@ -766,14 +766,14 @@ impl UsageView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(title),
                             )
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::MUTED))
+                                    .text_color(theme::muted())
                                     .text_xs()
                                     .child(SharedString::from(detail)),
                             ),
@@ -866,9 +866,9 @@ impl UsageView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::HEADER))
+            .bg(theme::header())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -878,7 +878,7 @@ impl UsageView {
                     .gap_2()
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("范围与口径"),
@@ -986,23 +986,23 @@ impl UsageView {
                     .px_3()
                     .py_1p5()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE))
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(icon(
                         data_source_icon(&source.data_source),
-                        theme::SUBTEXT,
+                        theme::subtext(),
                         13.,
                     ))
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .text_xs()
                             .child(SharedString::from(data_source_label(&source.data_source))),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .child(SharedString::from(format!("{} 次", source.request_count))),
                     )
@@ -1016,9 +1016,9 @@ impl UsageView {
             .gap_3()
             .p_3()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE_HOVER))
+            .bg(theme::surface_hover())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -1028,7 +1028,7 @@ impl UsageView {
                     .gap_2()
                     .child(
                         div()
-                            .text_color(theme::c(theme::SUBTEXT))
+                            .text_color(theme::subtext())
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("数据源"),
@@ -1055,7 +1055,7 @@ impl UsageView {
                     summary.total_requests.to_string(),
                     format!("成功率 {:.1}%", summary.success_rate),
                     IconName::Message,
-                    theme::GREEN,
+                    theme::green(),
                 ))
                 .child(Self::stat_card(
                     "总成本",
@@ -1065,7 +1065,7 @@ impl UsageView {
                         summary.total_input_tokens, summary.total_output_tokens
                     ),
                     IconName::Diamond,
-                    theme::PEACH,
+                    theme::peach(),
                 ))
                 .child(Self::stat_card(
                     "真实 Token",
@@ -1075,14 +1075,14 @@ impl UsageView {
                         summary.total_cache_creation_tokens, summary.total_cache_read_tokens
                     ),
                     IconName::Layers,
-                    theme::ACCENT,
+                    theme::accent(),
                 ))
                 .child(Self::stat_card(
                     "缓存命中",
                     format!("{cache_hit_rate:.1}%"),
                     "重复输入复用比例".to_string(),
                     IconName::Cloud,
-                    theme::TEAL,
+                    theme::teal(),
                 ))
         });
 
@@ -1121,12 +1121,12 @@ impl UsageView {
                             .justify_between()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(SharedString::from(app_label(&item.app_type))),
                             )
-                            .child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
+                            .child(div().text_color(theme::muted()).text_xs().child(
                                 SharedString::from(format!(
                                     "{} 次 · ${}",
                                     item.summary.total_requests,
@@ -1139,13 +1139,13 @@ impl UsageView {
                             .w_full()
                             .h(px(8.))
                             .rounded_md()
-                            .bg(theme::c(theme::SURFACE_HOVER))
+                            .bg(theme::surface_hover())
                             .child(
                                 div()
                                     .w(px(width))
                                     .h(px(8.))
                                     .rounded_md()
-                                    .bg(theme::c(app_tone(&item.app_type))),
+                                    .bg(app_tone(&item.app_type)),
                             ),
                     )
             })
@@ -1157,19 +1157,19 @@ impl UsageView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap_2()
-                    .child(icon(IconName::Layers, theme::ACCENT, 15.))
+                    .child(icon(IconName::Layers, theme::accent(), 15.))
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("按应用拆分"),
                     ),
@@ -1177,7 +1177,7 @@ impl UsageView {
             .when(rows.is_empty(), |s| {
                 s.child(
                     div()
-                        .text_color(theme::c(theme::MUTED))
+                        .text_color(theme::muted())
                         .text_xs()
                         .child("当前筛选范围内还没有用量。"),
                 )
@@ -1207,7 +1207,11 @@ impl UsageView {
             .map(|stat| short_date_label(&stat.date))
             .unwrap_or_default();
         // Re-key the animation on range/shape changes so it replays on filter switches.
-        let anim_id = SharedString::from(format!("usage-trend-{}-{}", self.range.label(), values.len()));
+        let anim_id = SharedString::from(format!(
+            "usage-trend-{}-{}",
+            self.range.label(),
+            values.len()
+        ));
 
         div()
             .flex()
@@ -1215,9 +1219,9 @@ impl UsageView {
             .gap_4()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -1230,17 +1234,17 @@ impl UsageView {
                             .flex_row()
                             .items_center()
                             .gap_2()
-                            .child(icon(IconName::Chart, theme::ACCENT, 16.))
+                            .child(icon(IconName::Chart, theme::accent(), 16.))
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("使用趋势"),
                             ),
                     )
                     .child(
                         div()
-                            .text_color(theme::c(theme::MUTED))
+                            .text_color(theme::muted())
                             .text_xs()
                             .child(SharedString::from(self.range.label())),
                     ),
@@ -1248,7 +1252,7 @@ impl UsageView {
             .when(values.len() < 2, |s| {
                 s.child(
                     div()
-                        .text_color(theme::c(theme::MUTED))
+                        .text_color(theme::muted())
                         .text_xs()
                         .child("当前范围内趋势数据不足（至少需要两个时间桶）。"),
                 )
@@ -1260,15 +1264,15 @@ impl UsageView {
                         .flex_row()
                         .items_center()
                         .gap_4()
-                        .child(Self::trend_stat("累计成本", format_money(
-                            &format!("{total_cost}"),
-                            3,
-                        )))
-                        .child(div().w(px(1.)).h(px(26.)).bg(theme::c(theme::BORDER)))
-                        .child(Self::trend_stat("单桶峰值", format_money(
-                            &format!("{peak_cost}"),
-                            3,
-                        ))),
+                        .child(Self::trend_stat(
+                            "累计成本",
+                            format_money(&format!("{total_cost}"), 3),
+                        ))
+                        .child(div().w(px(1.)).h(px(26.)).bg(theme::border()))
+                        .child(Self::trend_stat(
+                            "单桶峰值",
+                            format_money(&format!("{peak_cost}"), 3),
+                        )),
                 )
                 .child(
                     crate::chart::AreaChart::new(values)
@@ -1288,13 +1292,13 @@ impl UsageView {
                         .justify_between()
                         .child(
                             div()
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .text_color(theme::subtext())
                                 .text_xs()
                                 .child(SharedString::from(first_label)),
                         )
                         .child(
                             div()
-                                .text_color(theme::c(theme::SUBTEXT))
+                                .text_color(theme::subtext())
                                 .text_xs()
                                 .child(SharedString::from(last_label)),
                         ),
@@ -1308,15 +1312,10 @@ impl UsageView {
             .flex()
             .flex_col()
             .gap_0p5()
+            .child(div().text_color(theme::muted()).text_xs().child(label))
             .child(
                 div()
-                    .text_color(theme::c(theme::MUTED))
-                    .text_xs()
-                    .child(label),
-            )
-            .child(
-                div()
-                    .text_color(theme::c(theme::TEXT))
+                    .text_color(theme::text())
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(SharedString::from(value)),
             )
@@ -1371,9 +1370,9 @@ impl UsageView {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE))
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(cell(provider.clone(), 210.))
                     .child(cell(stats.request_count.to_string(), 80.))
                     .child(cell(stats.total_tokens.to_string(), 120.))
@@ -1416,9 +1415,9 @@ impl UsageView {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE))
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(cell(model.clone(), 260.))
                     .child(cell(stats.request_count.to_string(), 90.))
                     .child(cell(stats.total_tokens.to_string(), 130.))
@@ -1474,9 +1473,9 @@ impl UsageView {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE))
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(
                         div()
                             .w(px(170.))
@@ -1486,21 +1485,17 @@ impl UsageView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_color(theme::c(theme::TEXT))
+                                    .text_color(theme::text())
                                     .text_xs()
                                     .child(SharedString::from(short_time(log.created_at))),
                             )
-                            .child(
-                                div()
-                                    .text_color(theme::c(theme::MUTED))
-                                    .text_xs()
-                                    .truncate()
-                                    .child(SharedString::from(format!(
-                                        "{} · {}",
-                                        provider,
-                                        log.data_source.clone().unwrap_or_else(|| "proxy".into())
-                                    ))),
-                            ),
+                            .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                                SharedString::from(format!(
+                                    "{} · {}",
+                                    provider,
+                                    log.data_source.clone().unwrap_or_else(|| "proxy".into())
+                                )),
+                            )),
                     )
                     .child(cell(effective_model_label(log), 230.))
                     .child(cell(
@@ -1550,14 +1545,17 @@ impl UsageView {
                                 this.set_log_page(next, cx);
                             })),
                     )
-                    .child(div().text_color(theme::c(theme::MUTED)).text_xs().child(
-                        SharedString::from(format!(
-                            "{} - {} / {}",
-                            page * LOG_PAGE_SIZE + 1,
-                            ((page + 1) * LOG_PAGE_SIZE).min(self.log_total),
-                            self.log_total
-                        )),
-                    ))
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child(SharedString::from(format!(
+                                "{} - {} / {}",
+                                page * LOG_PAGE_SIZE + 1,
+                                ((page + 1) * LOG_PAGE_SIZE).min(self.log_total),
+                                self.log_total
+                            ))),
+                    )
                     .child(
                         Self::action_button("usage-next-page", "下一页", IconName::Add, false)
                             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -1583,19 +1581,19 @@ impl UsageView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::HEADER))
+            .bg(theme::header())
             .border_1()
-            .border_color(theme::c(theme::BORDER_STRONG))
+            .border_color(theme::border_strong())
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap_2()
-                    .child(icon(IconName::Message, theme::ACCENT, 15.))
+                    .child(icon(IconName::Message, theme::accent(), 15.))
                     .child(
                         div()
-                            .text_color(theme::c(theme::TEXT))
+                            .text_color(theme::text())
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("请求详情"),
                     ),
@@ -1661,8 +1659,8 @@ impl UsageView {
                         .rounded_md()
                         .bg(theme::c(0xffeef0))
                         .border_1()
-                        .border_color(theme::c(theme::RED))
-                        .text_color(theme::c(theme::RED))
+                        .border_color(theme::red())
+                        .text_color(theme::red())
                         .text_xs()
                         .child(SharedString::from(format!("错误信息: {err}"))),
                 )
@@ -1711,9 +1709,9 @@ impl UsageView {
             .gap_3()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(section_label("Provider 快捷筛选"))
             .child(
                 div()
@@ -1753,9 +1751,9 @@ impl UsageView {
                     .px_4()
                     .py_2()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE))
+                    .bg(theme::surface())
                     .border_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(cell(item.model_id.clone(), 220.))
                     .child(cell(item.display_name.clone(), 180.))
                     .child(cell(format!("${}", item.input_cost_per_million), 90.))
@@ -1800,9 +1798,9 @@ impl UsageView {
             .gap_4()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(section_label("计费默认配置"))
             .children(
                 PRICING_APPS
@@ -1917,15 +1915,15 @@ impl UsageView {
             .gap_4()
             .p_4()
             .rounded_lg()
-            .bg(theme::c(theme::SURFACE))
+            .bg(theme::surface())
             .border_1()
-            .border_color(theme::c(theme::BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .p_3()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE_HOVER))
-                    .text_color(theme::c(theme::SUBTEXT))
+                    .bg(theme::surface_hover())
+                    .text_color(theme::subtext())
                     .text_xs()
                     .child("连通检测只确认供应商地址可达；收到任意响应即视为可达，不代表鉴权或模型配置一定正确。"),
             )
@@ -1962,7 +1960,7 @@ impl Render for UsageView {
                     .px_6()
                     .py_4()
                     .border_b_1()
-                    .border_color(theme::c(theme::BORDER))
+                    .border_color(theme::border())
                     .child(
                         div()
                             .flex()
@@ -1977,10 +1975,10 @@ impl Render for UsageView {
                                     .w(px(32.))
                                     .h(px(32.))
                                     .rounded_md()
-                                    .bg(theme::c(theme::SURFACE))
+                                    .bg(theme::surface())
                                     .border_1()
-                                    .border_color(theme::c(theme::BORDER))
-                                    .child(icon(IconName::Chart, theme::ACCENT, 17.)),
+                                    .border_color(theme::border())
+                                    .child(icon(IconName::Chart, theme::accent(), 17.)),
                             )
                             .child(
                                 div()
@@ -1989,14 +1987,14 @@ impl Render for UsageView {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .text_color(theme::c(theme::TEXT))
+                                            .text_color(theme::text())
                                             .text_xl()
                                             .font_weight(FontWeight::BOLD)
                                             .child("用量"),
                                     )
                                     .child(
                                         div()
-                                            .text_color(theme::c(theme::MUTED))
+                                            .text_color(theme::muted())
                                             .text_xs()
                                             .child("模型、成本、缓存、请求日志、定价与检测配置。"),
                                     ),
@@ -2015,7 +2013,7 @@ impl Render for UsageView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -2134,7 +2132,7 @@ fn table_shell(
         .into_iter()
         .map(|label| {
             div()
-                .text_color(theme::c(theme::MUTED))
+                .text_color(theme::muted())
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(label)
@@ -2147,9 +2145,9 @@ fn table_shell(
         .gap_3()
         .p_4()
         .rounded_lg()
-        .bg(theme::c(theme::SURFACE))
+        .bg(theme::surface())
         .border_1()
-        .border_color(theme::c(theme::BORDER))
+        .border_color(theme::border())
         .child(
             div()
                 .flex()
@@ -2163,13 +2161,13 @@ fn table_shell(
                         .gap_1()
                         .child(
                             div()
-                                .text_color(theme::c(theme::TEXT))
+                                .text_color(theme::text())
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(title),
                         )
                         .child(
                             div()
-                                .text_color(theme::c(theme::MUTED))
+                                .text_color(theme::muted())
                                 .text_xs()
                                 .child(SharedString::from(subtitle.to_string())),
                         ),
@@ -2188,8 +2186,8 @@ fn table_shell(
                 div()
                     .p_4()
                     .rounded_md()
-                    .bg(theme::c(theme::SURFACE_HOVER))
-                    .text_color(theme::c(theme::MUTED))
+                    .bg(theme::surface_hover())
+                    .text_color(theme::muted())
                     .text_xs()
                     .child("暂无数据。"),
             )
@@ -2201,7 +2199,7 @@ fn cell(value: impl Into<SharedString>, width: f32) -> impl IntoElement {
     div()
         .w(px(width))
         .min_w_0()
-        .text_color(theme::c(theme::TEXT))
+        .text_color(theme::text())
         .text_xs()
         .truncate()
         .child(value.into())
@@ -2213,8 +2211,8 @@ fn status_badge(status: u16, ok: bool) -> impl IntoElement {
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(theme::c(if ok { theme::GREEN } else { theme::RED }))
-        .text_color(theme::c(theme::ACCENT_TEXT))
+        .bg(if ok { theme::green() } else { theme::red() })
+        .text_color(theme::accent_text())
         .text_xs()
         .child(SharedString::from(status.to_string()))
 }
@@ -2225,15 +2223,10 @@ fn detail_cell(label: &'static str, value: impl Into<SharedString>) -> impl Into
         .flex_col()
         .gap_1()
         .min_w_0()
+        .child(div().text_color(theme::muted()).text_xs().child(label))
         .child(
             div()
-                .text_color(theme::c(theme::MUTED))
-                .text_xs()
-                .child(label),
-        )
-        .child(
-            div()
-                .text_color(theme::c(theme::TEXT))
+                .text_color(theme::text())
                 .text_xs()
                 .truncate()
                 .child(value.into()),
@@ -2242,7 +2235,7 @@ fn detail_cell(label: &'static str, value: impl Into<SharedString>) -> impl Into
 
 fn section_label(label: &'static str) -> impl IntoElement {
     div()
-        .text_color(theme::c(theme::TEXT))
+        .text_color(theme::text())
         .text_sm()
         .font_weight(FontWeight::SEMIBOLD)
         .child(label)
@@ -2256,7 +2249,7 @@ fn form_field(label: &'static str, input: Entity<TextInput>) -> impl IntoElement
         .min_w(px(140.))
         .child(
             div()
-                .text_color(theme::c(theme::MUTED))
+                .text_color(theme::muted())
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(label),
@@ -2307,13 +2300,13 @@ fn app_label(app_type: &str) -> String {
     }
 }
 
-fn app_tone(app_type: &str) -> u32 {
+fn app_tone(app_type: &str) -> gpui::Rgba {
     match app_type {
-        "claude" => theme::PEACH,
-        "codex" => theme::TEXT,
-        "gemini" => theme::TEAL,
-        "opencode" => theme::MAUVE,
-        _ => theme::ACCENT,
+        "claude" => theme::peach(),
+        "codex" => theme::text(),
+        "gemini" => theme::teal(),
+        "opencode" => theme::mauve(),
+        _ => theme::accent(),
     }
 }
 

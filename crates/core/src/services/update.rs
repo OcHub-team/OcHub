@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 
 use crate::{AppError, Result};
 
-const DEFAULT_REPO: &str = "sleepstars/RouteDeck";
+const DEFAULT_REPO: &str = "sleepstars/OCHUB";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -79,10 +79,7 @@ async fn fetch_latest_release(repo: &str) -> Result<GitHubRelease> {
     let response = reqwest::Client::new()
         .get(&url)
         .header("accept", "application/vnd.github+json")
-        .header(
-            "user-agent",
-            format!("RouteDeck/{}", env!("CARGO_PKG_VERSION")),
-        )
+        .header("user-agent", format!("OCHUB/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await
         .map_err(|error| AppError::Message(format!("检查更新失败: {error}")))?;

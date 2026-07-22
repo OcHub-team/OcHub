@@ -2,7 +2,7 @@
 //!
 //! Ported from cc-switch `services/stream_check.rs` (only the serializable data
 //! types — the async `StreamCheckService` that performs the probe is not part
-//! of routedeck-core). Field names / serde renames match the reference 1:1.
+//! of ochub-core). Field names / serde renames match the reference 1:1.
 
 #![allow(dead_code)]
 

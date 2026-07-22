@@ -1,14 +1,14 @@
-//! Device-level settings panel. Reads `routedeck_core::settings::get_settings()` and
-//! writes changes back via `routedeck_core::settings::update_settings`.
+//! Device-level settings panel. Reads `ochub_core::settings::get_settings()` and
+//! writes changes back via `ochub_core::settings::update_settings`.
 
 use std::process::Command;
 use std::sync::Arc;
 
 use gpui::{div, prelude::*, px, Context, Entity, ListAlignment, ListState, SharedString, Window};
-use routedeck_core::app_store;
-use routedeck_core::services::UpdateCheckResult;
-use routedeck_core::settings::{self, AppSettings, S3SyncSettings, VisibleApps, WebDavSyncSettings};
-use routedeck_core::{AppState, AppType};
+use ochub_core::app_store;
+use ochub_core::services::UpdateCheckResult;
+use ochub_core::settings::{self, AppSettings, S3SyncSettings, WebDavSyncSettings};
+use ochub_core::AppState;
 
 use crate::components;
 use crate::layout;
@@ -22,6 +22,14 @@ enum SyncOperation {
     Upload,
     Download,
 }
+
+/// Events the settings view emits for the app shell.
+pub enum SettingsEvent {
+    /// The set of enabled apps changed (sidebar/views must re-derive).
+    AppsChanged,
+}
+
+impl gpui::EventEmitter<SettingsEvent> for SettingsView {}
 
 pub struct SettingsView {
     app: Arc<AppState>,
@@ -88,7 +96,7 @@ impl SettingsView {
         let app_config_dir = cx.new(|cx| {
             text_input(
                 cx,
-                "~/.cc-switch",
+                "~/.ochub",
                 &app_store::get_app_config_dir_override()
                     .map(|path| path.to_string_lossy().to_string())
                     .unwrap_or_default(),
@@ -252,16 +260,16 @@ impl SettingsView {
         let db = self.app.db.clone();
         cx.spawn(async move |this, cx| {
             let result = match operation {
-                SyncOperation::Test => routedeck_core::services::webdav_sync::check_connection(&sync)
+                SyncOperation::Test => ochub_core::services::webdav_sync::check_connection(&sync)
                     .await
                     .map(|_| "WebDAV 连接成功".to_string()),
-                SyncOperation::Upload => routedeck_core::services::webdav_sync::run_with_sync_lock(
-                    routedeck_core::services::webdav_sync::upload(&db, &mut sync),
+                SyncOperation::Upload => ochub_core::services::webdav_sync::run_with_sync_lock(
+                    ochub_core::services::webdav_sync::upload(&db, &mut sync),
                 )
                 .await
                 .map(|_| "WebDAV 上传完成".to_string()),
-                SyncOperation::Download => routedeck_core::services::webdav_sync::run_with_sync_lock(
-                    routedeck_core::services::webdav_sync::download(&db, &mut sync),
+                SyncOperation::Download => ochub_core::services::webdav_sync::run_with_sync_lock(
+                    ochub_core::services::webdav_sync::download(&db, &mut sync),
                 )
                 .await
                 .map(|_| "WebDAV 下载并还原完成".to_string()),
@@ -298,16 +306,16 @@ impl SettingsView {
         let db = self.app.db.clone();
         cx.spawn(async move |this, cx| {
             let result = match operation {
-                SyncOperation::Test => routedeck_core::services::s3_sync::check_connection(&sync)
+                SyncOperation::Test => ochub_core::services::s3_sync::check_connection(&sync)
                     .await
                     .map(|_| "S3 连接成功".to_string()),
-                SyncOperation::Upload => routedeck_core::services::s3_sync::run_with_sync_lock(
-                    routedeck_core::services::s3_sync::upload(&db, &mut sync),
+                SyncOperation::Upload => ochub_core::services::s3_sync::run_with_sync_lock(
+                    ochub_core::services::s3_sync::upload(&db, &mut sync),
                 )
                 .await
                 .map(|_| "S3 上传完成".to_string()),
-                SyncOperation::Download => routedeck_core::services::s3_sync::run_with_sync_lock(
-                    routedeck_core::services::s3_sync::download(&db, &mut sync),
+                SyncOperation::Download => ochub_core::services::s3_sync::run_with_sync_lock(
+                    ochub_core::services::s3_sync::download(&db, &mut sync),
                 )
                 .await
                 .map(|_| "S3 下载并还原完成".to_string()),
@@ -374,18 +382,107 @@ impl SettingsView {
         self.persist(cx);
     }
 
-    fn toggle_visible_app(&mut self, app: AppType, cx: &mut Context<Self>) {
-        let mut visible = self.settings.visible_apps.clone().unwrap_or_default();
-        let current = visible.is_visible(&app);
-        let visible_count = visible_app_count(&visible);
-        if current && visible_count <= 1 {
-            self.status = Some(SharedString::from("至少保留一个可见应用"));
+    fn reload_user_plugins(&mut self, cx: &mut Context<Self>) {
+        let errors = ochub_core::plugin::reload_user_plugins();
+        let plugin_count = ochub_core::plugin::all_plugins()
+            .iter()
+            .filter(|p| p.is_user_manifest())
+            .count();
+        self.status = Some(SharedString::from(if errors.is_empty() {
+            format!("插件已重新加载（{plugin_count} 个用户插件）")
+        } else {
+            format!(
+                "插件已重新加载（{plugin_count} 个成功，{} 个失败）",
+                errors.len()
+            )
+        }));
+        shell_menu::refresh(&self.app, cx);
+        cx.emit(SettingsEvent::AppsChanged);
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
+    fn open_user_plugins_dir(&mut self, cx: &mut Context<Self>) {
+        let dir = ochub_core::plugin::user_plugins_dir();
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.status = Some(SharedString::from(format!("创建插件目录失败: {err}")));
             cx.notify();
             return;
         }
-        set_visible_app(&mut visible, app, !current);
-        self.settings.visible_apps = Some(visible);
-        self.persist(cx);
+        #[cfg(target_os = "macos")]
+        let result = Command::new("open").arg(&dir).status();
+        #[cfg(target_os = "windows")]
+        let result = Command::new("explorer").arg(&dir).status();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let result = Command::new("xdg-open").arg(&dir).status();
+        match result {
+            Ok(status) if status.success() => {
+                self.status = Some(SharedString::from("已打开插件目录"));
+            }
+            Ok(status) => {
+                self.status = Some(SharedString::from(format!("打开失败，状态: {status}")));
+            }
+            Err(err) => {
+                self.status = Some(SharedString::from(format!("打开失败: {err}")));
+            }
+        }
+        cx.notify();
+    }
+
+    fn app_is_enabled(&self, plugin: &dyn ochub_core::plugin::AppPlugin) -> bool {
+        self.settings
+            .app_enabled(plugin.id().as_str())
+            .unwrap_or_else(|| plugin.enabled_by_default())
+    }
+
+    fn toggle_app_enabled(&mut self, id: &str, cx: &mut Context<Self>) {
+        let plugins = ochub_core::plugin::all_plugins();
+        let Some(plugin) = plugins.iter().find(|p| p.id().as_str() == id) else {
+            return;
+        };
+        let currently = self.app_is_enabled(plugin.as_ref());
+        let enabled_count = plugins
+            .iter()
+            .filter(|p| self.app_is_enabled(p.as_ref()))
+            .count();
+        if currently && enabled_count <= 1 {
+            self.status = Some(SharedString::from("至少保留一个启用的应用"));
+            cx.notify();
+            return;
+        }
+
+        // The core service persists the flag and, when disabling an app that
+        // is currently proxy-taken-over, restores its original live config
+        // first.
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            self.status = Some(SharedString::from("操作失败: runtime 初始化失败"));
+            cx.notify();
+            return;
+        };
+        let result = runtime.block_on(ochub_core::services::apps::set_app_enabled(
+            &self.app,
+            plugin.id(),
+            !currently,
+        ));
+        match result {
+            Ok(()) => {
+                self.settings = settings::get_settings();
+                self.status = Some(SharedString::from(if currently {
+                    "已停用"
+                } else {
+                    "已启用"
+                }));
+                shell_menu::refresh(&self.app, cx);
+                cx.emit(SettingsEvent::AppsChanged);
+            }
+            Err(err) => {
+                self.status = Some(SharedString::from(format!("操作失败: {err}")));
+            }
+        }
+        cx.notify();
     }
 
     fn save_paths(&mut self, cx: &mut Context<Self>) {
@@ -442,7 +539,7 @@ impl SettingsView {
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let result = routedeck_core::services::update::check_for_updates(None).await;
+            let result = ochub_core::services::update::check_for_updates(None).await;
             this.update(cx, |this, cx| {
                 this.update_checking = false;
                 match result {
@@ -474,7 +571,7 @@ impl SettingsView {
             .update_info
             .as_ref()
             .map(|info| info.release_url.clone())
-            .unwrap_or_else(|| routedeck_core::services::latest_release_url(None));
+            .unwrap_or_else(|| ochub_core::services::latest_release_url(None));
         match open_url(&url) {
             Ok(()) => {
                 self.status = Some(SharedString::from("已打开发布页"));
@@ -502,7 +599,7 @@ impl SettingsView {
 
     fn render_toggle_row(
         &self,
-        id: &'static str,
+        id: impl Into<gpui::ElementId>,
         label: &str,
         description: &str,
         value: bool,
@@ -519,7 +616,7 @@ impl SettingsView {
                 gpui::Toggled::False
             })
             .cursor_pointer()
-            .hover(|s| s.bg(theme::c(theme::INSET)))
+            .hover(|s| s.bg(theme::inset()))
             .child(layout::row_label(
                 label.to_string(),
                 description.to_string(),
@@ -544,7 +641,7 @@ impl SettingsView {
             .role(gpui::Role::Button)
             .aria_label(SharedString::from(label.to_string()))
             .cursor_pointer()
-            .hover(|s| s.bg(theme::c(theme::INSET)))
+            .hover(|s| s.bg(theme::inset()))
             .child(layout::row_label(
                 label.to_string(),
                 description.to_string(),
@@ -555,8 +652,8 @@ impl SettingsView {
                     .px_3()
                     .py_1()
                     .rounded_md()
-                    .bg(theme::c(theme::INSET))
-                    .text_color(theme::c(theme::TEXT))
+                    .bg(theme::inset())
+                    .text_color(theme::text())
                     .text_sm()
                     .child(SharedString::from(value)),
             )
@@ -618,7 +715,7 @@ impl SettingsView {
                     )
                     .child(
                         Self::action_button(format!("{provider}-download"), "下载", false)
-                            .text_color(theme::c(theme::YELLOW))
+                            .text_color(theme::yellow())
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 download(this, cx);
                             })),
@@ -741,105 +838,81 @@ impl SettingsView {
                 );
                 section_block("基础行为", "窗口、启动、代理与语言偏好。", rows)
             }
-            1 => section_block(
-                "应用显示",
-                "控制主侧栏显示哪些应用入口。",
-                vec![
-                    self.render_toggle_row(
-                        "visible-claude",
-                        "Claude Code",
-                        "显示 Claude Code 供应商入口。",
-                        self.settings
-                            .visible_apps
-                            .clone()
-                            .unwrap_or_default()
-                            .claude,
-                        |this, cx| this.toggle_visible_app(AppType::Claude, cx),
+            1 => {
+                let mut rows: Vec<gpui::AnyElement> = ochub_core::plugin::all_plugins()
+                    .into_iter()
+                    .map(|plugin| {
+                        let id = plugin.id().as_str().to_string();
+                        let label = plugin.display_name().to_string();
+                        let description = if plugin.is_user_manifest() {
+                            format!("启用 {label} 供应商管理（用户插件）。")
+                        } else {
+                            format!("启用 {label} 供应商管理与配置写入。")
+                        };
+                        let enabled = self.app_is_enabled(plugin.as_ref());
+                        self.render_toggle_row(
+                            SharedString::from(format!("app-enabled-{id}")),
+                            &label,
+                            &description,
+                            enabled,
+                            move |this, cx| this.toggle_app_enabled(&id, cx),
+                            cx,
+                        )
+                        .into_any_element()
+                    })
+                    .collect();
+                for (index, err) in ochub_core::plugin::manifest_load_errors()
+                    .into_iter()
+                    .enumerate()
+                {
+                    rows.push(
+                        div()
+                            .id(SharedString::from(format!("plugin-load-error-{index}")))
+                            .px_3()
+                            .py_2()
+                            .text_sm()
+                            .text_color(theme::red())
+                            .child(SharedString::from(format!(
+                                "插件加载失败 {}: {}",
+                                err.path, err.message
+                            )))
+                            .into_any_element(),
+                    );
+                }
+                rows.push(
+                    self.render_value_row(
+                        "reload-user-plugins",
+                        "重新加载插件",
+                        "重新扫描 ~/.ochub/apps/*.toml 并注册用户插件。",
+                        String::new(),
+                        |this, cx| this.reload_user_plugins(cx),
                         cx,
                     )
                     .into_any_element(),
-                    self.render_toggle_row(
-                        "visible-claude-desktop",
-                        "Claude Desktop",
-                        "显示 Claude Desktop 供应商入口。",
-                        self.settings
-                            .visible_apps
-                            .clone()
-                            .unwrap_or_default()
-                            .claude_desktop,
-                        |this, cx| this.toggle_visible_app(AppType::ClaudeDesktop, cx),
+                );
+                rows.push(
+                    self.render_value_row(
+                        "open-user-plugins-dir",
+                        "打开插件目录",
+                        "在文件管理器中打开用户插件目录（不存在时自动创建）。",
+                        String::new(),
+                        |this, cx| this.open_user_plugins_dir(cx),
                         cx,
                     )
                     .into_any_element(),
-                    self.render_toggle_row(
-                        "visible-codex",
-                        "Codex",
-                        "显示 Codex 供应商入口。",
-                        self.settings.visible_apps.clone().unwrap_or_default().codex,
-                        |this, cx| this.toggle_visible_app(AppType::Codex, cx),
-                        cx,
-                    )
-                    .into_any_element(),
-                    self.render_toggle_row(
-                        "visible-gemini",
-                        "Gemini CLI",
-                        "显示 Gemini CLI 供应商入口。",
-                        self.settings
-                            .visible_apps
-                            .clone()
-                            .unwrap_or_default()
-                            .gemini,
-                        |this, cx| this.toggle_visible_app(AppType::Gemini, cx),
-                        cx,
-                    )
-                    .into_any_element(),
-                    self.render_toggle_row(
-                        "visible-opencode",
-                        "OpenCode",
-                        "显示 OpenCode 供应商入口。",
-                        self.settings
-                            .visible_apps
-                            .clone()
-                            .unwrap_or_default()
-                            .opencode,
-                        |this, cx| this.toggle_visible_app(AppType::OpenCode, cx),
-                        cx,
-                    )
-                    .into_any_element(),
-                    self.render_toggle_row(
-                        "visible-openclaw",
-                        "OpenClaw",
-                        "显示 OpenClaw 供应商入口。",
-                        self.settings
-                            .visible_apps
-                            .clone()
-                            .unwrap_or_default()
-                            .openclaw,
-                        |this, cx| this.toggle_visible_app(AppType::OpenClaw, cx),
-                        cx,
-                    )
-                    .into_any_element(),
-                    self.render_toggle_row(
-                        "visible-hermes",
-                        "Hermes",
-                        "显示 Hermes 供应商入口。",
-                        self.settings
-                            .visible_apps
-                            .clone()
-                            .unwrap_or_default()
-                            .hermes,
-                        |this, cx| this.toggle_visible_app(AppType::Hermes, cx),
-                        cx,
-                    )
-                    .into_any_element(),
-                ],
-            ),
+                );
+                section_block(
+                    "应用管理",
+                    "启用或停用应用。停用后不再显示、不再写入其配置文件；数据保留，可随时重新启用。用户可在插件目录放置 TOML manifest 适配新应用。",
+                    rows,
+                )
+            }
             2 => section_block(
                 "配置目录",
-                "覆盖 RouteDeck 数据目录；各 CLI 的配置目录已移至对应应用的「应用设置」。",
+                "覆盖 OCHUB 数据目录；各 CLI 的配置目录已移至对应应用的「应用设置」。",
                 vec![
                     Self::render_input_row(
-                        "RouteDeck 数据目录",
+                        "OCHUB 数据目录",
                         "数据库、备份和托管技能目录；保存后建议重启应用。",
                         self.app_config_dir.clone(),
                     )
@@ -1051,7 +1124,7 @@ impl Render for SettingsView {
                     div()
                         .px_6()
                         .py_2()
-                        .text_color(theme::c(theme::TEAL))
+                        .text_color(theme::teal())
                         .text_xs()
                         .child(status),
                 )
@@ -1126,33 +1199,6 @@ fn option_text_input(
     value: &Option<String>,
 ) -> TextInput {
     text_input(cx, placeholder, value.as_deref().unwrap_or_default())
-}
-
-fn visible_app_count(visible: &VisibleApps) -> usize {
-    [
-        visible.claude,
-        visible.claude_desktop,
-        visible.codex,
-        visible.gemini,
-        visible.opencode,
-        visible.openclaw,
-        visible.hermes,
-    ]
-    .into_iter()
-    .filter(|value| *value)
-    .count()
-}
-
-fn set_visible_app(visible: &mut VisibleApps, app: AppType, value: bool) {
-    match app {
-        AppType::Claude => visible.claude = value,
-        AppType::ClaudeDesktop => visible.claude_desktop = value,
-        AppType::Codex => visible.codex = value,
-        AppType::Gemini => visible.gemini = value,
-        AppType::OpenCode => visible.opencode = value,
-        AppType::OpenClaw => visible.openclaw = value,
-        AppType::Hermes => visible.hermes = value,
-    }
 }
 
 fn input_value(input: &Entity<TextInput>, cx: &mut Context<SettingsView>) -> String {

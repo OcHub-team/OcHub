@@ -11,7 +11,7 @@ Source files (Tauri implementation):
 - `src-tauri/src/database/mod.rs` — `is_prompts_table_empty`.
 - `src-tauri/src/database/schema.rs` — `prompts` table DDL.
 - `src-tauri/src/database/migration.rs` — JSON→SQLite migration of prompts.
-- `src-tauri/src/deeplink/prompt.rs` — import a prompt via `ccswitch://` deep link.
+- `src-tauri/src/deeplink/prompt.rs` — import a prompt via `ochub://` deep link.
 - Frontend: `src/lib/api/prompts.ts`, `src/hooks/usePromptActions.ts`, `src/components/prompts/*`, `src/components/deeplink/PromptConfirmation.tsx`.
 
 ---
@@ -253,7 +253,7 @@ First-launch caller (`lib.rs` setup, ~line 758): only runs when `db.is_prompts_t
 - If `should_enable`: `PromptService::enable_prompt(state, app, &id)` (disables others, writes live file).
 - Returns `id`.
 
-URL shape (for the deep-link subsystem, included for completeness): `ccswitch://import?resource=prompt&app=<app>&name=<name>&content=<base64>&description=<desc>&enabled=<bool>`. After a successful import the frontend dispatches a DOM `CustomEvent("prompt-imported", { detail: { app } })` to trigger a reload (see §6).
+URL shape (for the deep-link subsystem, included for completeness): `ochub://import?resource=prompt&app=<app>&name=<name>&content=<base64>&description=<desc>&enabled=<bool>`. After a successful import the frontend dispatches a DOM `CustomEvent("prompt-imported", { detail: { app } })` to trigger a reload (see §6).
 
 ---
 
@@ -262,7 +262,7 @@ URL shape (for the deep-link subsystem, included for completeness): `ccswitch://
 - **No HTTP / network calls.** Entirely local filesystem + SQLite.
 - Crates: `serde`/`serde_json` (serialization), `indexmap` (`IndexMap`, ordered), `rusqlite` (SQLite via `params!`), `chrono` (`Local`/`Utc` for human-readable names + millis timestamps), `dirs` (`home_dir`), `log`, `std::fs`/`std::time`.
 - OS integration: filesystem read/write of per-app instruction files in the user home dir; atomic write (temp file + rename). No keychain, no process spawning.
-- Tauri-specific: `tauri::command`, `tauri::State<AppState>` (DI of the DB + config), the invoke IPC bridge, the deep-link plugin (`ccswitch://`) feeding `import_prompt_from_deeplink`.
+- Tauri-specific: `tauri::command`, `tauri::State<AppState>` (DI of the DB + config), the invoke IPC bridge, the deep-link plugin (`ochub://`) feeding `import_prompt_from_deeplink`.
 
 ---
 
@@ -276,7 +276,7 @@ URL shape (for the deep-link subsystem, included for completeness): `ccswitch://
 - **Atomic write**: port `write_text_file`/`atomic_write` (temp `{name}.tmp.{nanos}` then `fs::rename`, `create_dir_all` parent). GPUI has no equivalent; just use `std::fs`.
 - **Timestamps**: replicate the seconds-vs-millis split exactly (service = seconds, deeplink = millis) to avoid changing ordering/ids, OR normalize to millis everywhere (a deliberate decision — note it).
 - **Localized errors**: `AppError::localized(key, zh, en)` carries an i18n key + zh/en messages. Reproduce this dual-message error type so the GPUI UI can localize. Key strings to preserve: `claude_desktop.prompts_unsupported`, `home_dir_not_found`, `unsupported_app`. Plain-message errors (`"无法删除已启用的提示词"`, `"提示词 {id} 不存在"`, `"提示词文件不存在"`) are surfaced raw — consider converting to localized keys in the rewrite.
-- **Deep-link event**: Tauri delivers `ccswitch://` URLs to the backend; the frontend learns of a completed import via a DOM `CustomEvent("prompt-imported")`. In GPUI there is no DOM — replace with a model/observer notification: after `import_prompt_from_deeplink`, emit an app-level event so the open Prompt panel (if its `appId` matches) reloads. Single-instance + URL-scheme registration must be reproduced at the OS level (the original explicitly re-registers the scheme on Linux/Windows-debug).
+- **Deep-link event**: Tauri delivers `ochub://` URLs to the backend; the frontend learns of a completed import via a DOM `CustomEvent("prompt-imported")`. In GPUI there is no DOM — replace with a model/observer notification: after `import_prompt_from_deeplink`, emit an app-level event so the open Prompt panel (if its `appId` matches) reloads. Single-instance + URL-scheme registration must be reproduced at the OS level (the original explicitly re-registers the scheme on Linux/Windows-debug).
 - **First-launch import**: reproduce in app startup after DB init, guarded by `is_prompts_table_empty()`, iterating the 6 supported apps (no Claude Desktop), non-fatal on per-app error.
 - **Single-enabled invariant** lives in `enable_prompt` (bulk disable + save), not in a DB constraint. Keep it; the UI's optimistic toggle relies on it.
 - **`upsert_prompt` ignores its `_id` arg** — the prompt's own `id` is authoritative. Don't "fix" this; the deep-link path and the form both rely on `prompt.id`.
@@ -321,7 +321,7 @@ The Prompt subsystem is one **view** within the main window (`currentView === "p
 
 6. **ConfirmDialog** (delete confirmation) — `prompts.confirm.deleteTitle` ("Confirm Delete") + `prompts.confirm.deleteMessage` ("Are you sure you want to delete prompt \"{{name}}\"?"). Confirm → `deletePrompt(id)`.
 
-7. **PromptConfirmation** (`components/deeplink/PromptConfirmation.tsx`) — read-only preview inside the **DeepLinkImportDialog** when a `ccswitch://` prompt import arrives. Shows: title `deeplink.prompt.title` ("Import System Prompt"); App (`deeplink.prompt.app`, capitalized `request.app`); Name (`deeplink.prompt.name`); optional Description (`deeplink.prompt.description`); Content preview (`deeplink.prompt.contentPreview`, base64-decoded, truncated to 500 chars with "…"); if `request.enabled`, a yellow warning `deeplink.prompt.enabledWarning`. Confirm/cancel handled by the parent DeepLinkImportDialog, which on success dispatches `CustomEvent("prompt-imported", {detail:{app}})`.
+7. **PromptConfirmation** (`components/deeplink/PromptConfirmation.tsx`) — read-only preview inside the **DeepLinkImportDialog** when a `ochub://` prompt import arrives. Shows: title `deeplink.prompt.title` ("Import System Prompt"); App (`deeplink.prompt.app`, capitalized `request.app`); Name (`deeplink.prompt.name`); optional Description (`deeplink.prompt.description`); Content preview (`deeplink.prompt.contentPreview`, base64-decoded, truncated to 500 chars with "…"); if `request.enabled`, a yellow warning `deeplink.prompt.enabledWarning`. Confirm/cancel handled by the parent DeepLinkImportDialog, which on success dispatches `CustomEvent("prompt-imported", {detail:{app}})`.
 
 ### 6.2 Hook (`usePromptActions.ts`)
 
@@ -342,7 +342,7 @@ State: `prompts: Record<string, Prompt>`, `loading: boolean`, `currentFileConten
 5. **Delete**: row Delete → confirm → `delete_prompt`. Blocked (backend error toast) if the prompt is enabled.
 6. **Import from existing file**: `import_prompt_from_file` reads the live `*.md` and creates a disabled "Imported Prompt …". (The `prompts.import` / "Import Existing" string and `prompts.currentFile` exist for an import-affordance; wire a toolbar Import button to `importFromFile` in the rewrite.)
 7. **First launch auto-import**: handled in backend startup (auto-enabled). No UI.
-8. **Deep-link import**: `ccswitch://` → DeepLinkImportDialog shows PromptConfirmation → user confirms → backend `import_prompt_from_deeplink` (optionally enables) → frontend reload via `prompt-imported` event.
+8. **Deep-link import**: `ochub://` → DeepLinkImportDialog shows PromptConfirmation → user confirms → backend `import_prompt_from_deeplink` (optionally enables) → frontend reload via `prompt-imported` event.
 
 ### 6.4 i18n keys to translate
 
