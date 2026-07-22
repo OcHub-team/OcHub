@@ -8,7 +8,7 @@ use gpui::{div, prelude::*, Context, FontWeight, SharedString, Window};
 use ochub_core::services::auth;
 use ochub_core::{AppState, ManagedAuthAccount, ManagedAuthDeviceCodeResponse, ManagedAuthStatus};
 
-use crate::components;
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::layout;
 use crate::theme;
 
@@ -20,11 +20,27 @@ struct LoginFlow {
     verification_uri: String,
 }
 
+/// 破坏性操作确认目标（移除账号 / 退出全部），携带展示所需信息。
+#[derive(Clone)]
+enum ConfirmAction {
+    RemoveAccount {
+        provider: &'static str,
+        account_id: String,
+        login: String,
+    },
+    Logout {
+        provider: &'static str,
+        provider_title: &'static str,
+    },
+}
+
 pub struct AuthView {
     app: Arc<AppState>,
     copilot: Option<ManagedAuthStatus>,
     codex: Option<ManagedAuthStatus>,
     login: Option<LoginFlow>,
+    /// 待确认的破坏性操作；`Some` 时展示确认模态。
+    confirm: Option<ConfirmAction>,
     status: Option<SharedString>,
     busy: bool,
 }
@@ -36,6 +52,7 @@ impl AuthView {
             copilot: None,
             codex: None,
             login: None,
+            confirm: None,
             status: None,
             busy: false,
         };
@@ -244,14 +261,6 @@ impl AuthView {
         }
     }
 
-    fn action_button(
-        id: impl Into<gpui::ElementId>,
-        label: &'static str,
-        primary: bool,
-    ) -> gpui::Stateful<gpui::Div> {
-        components::action_button(id, label, primary)
-    }
-
     fn render_account_row(
         &self,
         provider: &'static str,
@@ -259,7 +268,11 @@ impl AuthView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let default_id = account.id.clone();
-        let remove_id = account.id.clone();
+        let confirm_target = ConfirmAction::RemoveAccount {
+            provider,
+            account_id: account.id.clone(),
+            login: account.login.clone(),
+        };
         div()
             .flex()
             .flex_row()
@@ -292,26 +305,19 @@ impl AuthView {
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap_2()
                     .flex_shrink_0()
                     .when(account.is_default, |s| {
-                        s.child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .bg(theme::green())
-                                .text_color(theme::accent_text())
-                                .text_xs()
-                                .child("默认"),
-                        )
+                        s.child(components::badge(BadgeTone::Success, "默认"))
                     })
                     .when(!account.is_default, |s| {
                         s.child(
-                            Self::action_button(
+                            components::button(
                                 format!("auth-default-{}-{}", provider, default_id),
                                 "设为默认",
-                                false,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
                             )
                             .on_click(cx.listener(
                                 move |this, _event, _window, cx| {
@@ -321,15 +327,16 @@ impl AuthView {
                         )
                     })
                     .child(
-                        Self::action_button(
-                            format!("auth-remove-{}-{}", provider, remove_id),
+                        components::button(
+                            format!("auth-remove-{}-{}", provider, account.id),
                             "移除",
-                            false,
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
                         )
-                        .text_color(theme::red())
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.remove_account(provider, remove_id.clone(), cx);
+                                this.confirm = Some(confirm_target.clone());
+                                cx.notify();
                             },
                         )),
                     ),
@@ -352,15 +359,12 @@ impl AuthView {
             .collect::<Vec<_>>();
         let authenticated = status.map(|s| s.authenticated).unwrap_or(false);
         let count = status.map(|s| s.accounts.len()).unwrap_or(0);
-        div()
-            .flex()
-            .flex_col()
+        let confirm_logout = ConfirmAction::Logout {
+            provider,
+            provider_title: title,
+        };
+        components::card()
             .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -386,28 +390,11 @@ impl AuthView {
                                     .child(description),
                             ),
                     )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .bg(if authenticated {
-                                theme::green()
-                            } else {
-                                theme::surface_hover()
-                            })
-                            .text_color(if authenticated {
-                                theme::accent_text()
-                            } else {
-                                theme::subtext()
-                            })
-                            .text_xs()
-                            .child(SharedString::from(if authenticated {
-                                format!("{count} 个账号")
-                            } else {
-                                "未认证".to_string()
-                            })),
-                    ),
+                    .child(if authenticated {
+                        components::badge(BadgeTone::Success, format!("{count} 个账号"))
+                    } else {
+                        components::badge(BadgeTone::Neutral, "未认证")
+                    }),
             )
             .child(
                 div()
@@ -415,16 +402,31 @@ impl AuthView {
                     .flex_row()
                     .gap_2()
                     .child(
-                        Self::action_button(format!("auth-start-{provider}"), "开始登录", true)
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                        components::button(
+                            format!("auth-start-{provider}"),
+                            "开始登录",
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
                                 this.start_login(provider, cx);
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        Self::action_button(format!("auth-logout-{provider}"), "退出全部", false)
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.logout(provider, cx);
-                            })),
+                        components::button(
+                            format!("auth-logout-{provider}"),
+                            "退出全部",
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.confirm = Some(confirm_logout.clone());
+                                cx.notify();
+                            },
+                        )),
                     ),
             )
             .when(accounts.is_empty(), |s| {
@@ -443,49 +445,42 @@ impl Render for AuthView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let login = self.login.clone();
         layout::page()
+            .relative()
             .child(
                 layout::page_header(
                     "认证中心",
                     Some("管理 GitHub Copilot 和 ChatGPT OAuth 账号。".into()),
                 )
                 .child(
-                    Self::action_button("auth-refresh", "刷新", false).on_click(cx.listener(
-                        |this, _event, _window, cx| {
+                    components::button("auth-refresh", "刷新", ButtonTone::Neutral, ButtonSize::Sm)
+                        .on_click(cx.listener(|this, _event, _window, cx| {
                             this.reload(cx);
-                        },
-                    )),
+                        })),
                 ),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
+            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body(
                 "auth-body",
                 layout::content_column()
                     .gap_4()
                     .when_some(login, |s, flow| {
                         s.child(
-                            div()
-                                .flex()
-                                .flex_col()
+                            components::card()
                                 .gap_3()
-                                .p_4()
-                                .rounded_lg()
-                                .bg(theme::surface())
-                                .border_1()
                                 .border_color(theme::yellow())
                                 .child(
                                     div()
-                                        .text_color(theme::text())
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("等待浏览器授权"),
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_color(theme::text())
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child("等待浏览器授权"),
+                                        )
+                                        .child(components::badge(BadgeTone::Warning, "待操作")),
                                 )
                                 .child(div().text_color(theme::muted()).text_xs().child(
                                     SharedString::from(format!(
@@ -499,10 +494,11 @@ impl Render for AuthView {
                                         .flex_row()
                                         .gap_2()
                                         .child(
-                                            Self::action_button(
+                                            components::button(
                                                 "auth-open-url",
                                                 "打开验证页",
-                                                true,
+                                                ButtonTone::Primary,
+                                                ButtonSize::Sm,
                                             )
                                             .on_click(
                                                 cx.listener(|this, _event, _window, cx| {
@@ -511,12 +507,17 @@ impl Render for AuthView {
                                             ),
                                         )
                                         .child(
-                                            Self::action_button("auth-poll", "我已授权", false)
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.poll_login(cx);
-                                                    },
-                                                )),
+                                            components::button(
+                                                "auth-poll",
+                                                "我已授权",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _event, _window, cx| {
+                                                    this.poll_login(cx);
+                                                }),
+                                            ),
                                         ),
                                 ),
                         )
@@ -536,6 +537,67 @@ impl Render for AuthView {
                         cx,
                     )),
             ))
+            .when_some(self.confirm.clone(), |root, action| {
+                let (title, message, confirm_label) = match &action {
+                    ConfirmAction::RemoveAccount { login, .. } => (
+                        "移除账号",
+                        format!("确定移除账号「{login}」吗？此操作不可撤销。"),
+                        "移除",
+                    ),
+                    ConfirmAction::Logout { provider_title, .. } => (
+                        "退出全部账号",
+                        format!(
+                            "确定退出 {provider_title} 的全部账号吗？需要重新登录后才能继续使用。"
+                        ),
+                        "退出全部",
+                    ),
+                };
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header(title))
+                        .child(
+                            components::modal_body().child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_sm()
+                                    .child(SharedString::from(message)),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "auth-confirm-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "auth-confirm-ok",
+                                confirm_label,
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm = None;
+                                match &action {
+                                    ConfirmAction::RemoveAccount {
+                                        provider,
+                                        account_id,
+                                        ..
+                                    } => this.remove_account(*provider, account_id.clone(), cx),
+                                    ConfirmAction::Logout { provider, .. } => {
+                                        this.logout(*provider, cx)
+                                    }
+                                }
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
     }
 }
 

@@ -3,11 +3,13 @@
 
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, Context, Entity, FontWeight, SharedString, Window};
 use ochub_core::db::legacy_json::{McpApps, McpServer};
 use ochub_core::services::McpService;
 use ochub_core::{AppState, AppType};
 
+use crate::components::{self, ButtonSize, ButtonTone};
+use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -29,6 +31,8 @@ pub struct McpView {
     description: Entity<TextInput>,
     spec_json: Entity<TextInput>,
     apps: McpApps,
+    /// 待确认删除的服务器（id, 名称）；`Some` 时展示确认模态。
+    confirm_delete: Option<(String, String)>,
 }
 
 impl McpView {
@@ -47,6 +51,7 @@ impl McpView {
             description,
             spec_json,
             apps: McpApps::default(),
+            confirm_delete: None,
         };
         this.reload();
         this
@@ -275,6 +280,31 @@ impl McpView {
         cx.notify();
     }
 
+    /// 「toggle + app 名」小组件：整个 chip 可点，语义与开关一致。
+    fn toggle_chip(
+        element_id: String,
+        aria: String,
+        enabled: bool,
+        label: SharedString,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(SharedString::from(element_id))
+            .role(gpui::Role::Switch)
+            .aria_label(SharedString::from(aria))
+            .aria_toggled(if enabled {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .cursor_pointer()
+            .child(layout::toggle(enabled))
+            .child(div().text_color(theme::subtext()).text_xs().child(label))
+    }
+
     fn render_app_toggle(
         &self,
         server: &McpServer,
@@ -283,61 +313,28 @@ impl McpView {
     ) -> impl IntoElement {
         let enabled = server.apps.is_enabled_for(&app);
         let id = server.id.clone();
-        div()
-            .id(SharedString::from(format!(
-                "mcp-toggle-{}-{}",
-                server.id,
-                app.as_str()
-            )))
-            .role(gpui::Role::Switch)
-            .aria_label(SharedString::from(format!(
-                "为 {} 启用 MCP 服务器",
-                Self::app_label(app)
-            )))
-            .aria_toggled(if enabled {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(if enabled {
-                theme::green()
-            } else {
-                theme::surface_hover()
-            })
-            .text_color(if enabled {
-                theme::accent_text()
-            } else {
-                theme::subtext()
-            })
-            .text_xs()
-            .child(Self::app_label(app))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.do_toggle_app(id.clone(), app, !enabled, cx);
-            }))
+        Self::toggle_chip(
+            format!("mcp-toggle-{}-{}", server.id, app.as_str()),
+            format!("为 {} 启用 MCP 服务器", Self::app_label(app)),
+            enabled,
+            Self::app_label(app),
+        )
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.do_toggle_app(id.clone(), app, !enabled, cx);
+        }))
     }
 
     fn render_card(&self, server: &McpServer, cx: &mut Context<Self>) -> impl IntoElement {
         let delete_id = server.id.clone();
+        let delete_name = server.name.clone();
         let edit_server = server.clone();
         let endpoint = Self::endpoint(server);
         let apps = Self::enabled_apps_label(server);
         let name = server.name.clone();
         let desc = server.description.clone();
 
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .gap_3()
-            .w_full()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -350,6 +347,7 @@ impl McpView {
                             .flex()
                             .flex_col()
                             .gap_1()
+                            .min_w_0()
                             .child(
                                 div()
                                     .text_color(theme::text())
@@ -383,43 +381,37 @@ impl McpView {
                             .flex_row()
                             .gap_2()
                             .child(
-                                div()
-                                    .id(SharedString::from(format!("mcp-edit-{}", server.id)))
-                                    .role(gpui::Role::Button)
-                                    .aria_label("编辑 MCP 服务器")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::surface_hover())
-                                    .text_color(theme::subtext())
-                                    .text_sm()
-                                    .child("编辑")
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                components::button(
+                                    format!("mcp-edit-{}", server.id),
+                                    "编辑",
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
                                         this.start_edit(edit_server.clone(), cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                div()
-                                    .id(SharedString::from(format!("mcp-delete-{}", server.id)))
-                                    .role(gpui::Role::Button)
-                                    .aria_label("删除 MCP 服务器")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::surface_hover())
-                                    .text_color(theme::red())
-                                    .text_sm()
-                                    .child("删除")
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.do_delete(delete_id.clone(), cx);
-                                    })),
+                                components::button(
+                                    format!("mcp-delete-{}", server.id),
+                                    "删除",
+                                    ButtonTone::Danger,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.confirm_delete =
+                                            Some((delete_id.clone(), delete_name.clone()));
+                                        cx.notify();
+                                    },
+                                )),
                             ),
                     ),
             )
             .child(
-                div().flex().flex_row().flex_wrap().gap_2().children(
+                div().flex().flex_row().flex_wrap().gap_3().children(
                     Self::mcp_apps()
                         .into_iter()
                         .map(|app| self.render_app_toggle(server, app, cx)),
@@ -427,54 +419,17 @@ impl McpView {
             )
     }
 
-    fn render_field(&self, label: &str, input: &Entity<TextInput>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1p5()
-            .child(
-                div()
-                    .text_color(theme::subtext())
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(SharedString::from(label.to_string())),
-            )
-            .child(input.clone())
-    }
-
-    fn render_form_app_pill(&self, app: AppType, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_form_app_toggle(&self, app: AppType, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = self.apps.is_enabled_for(&app);
-        div()
-            .id(SharedString::from(format!("mcp-form-app-{}", app.as_str())))
-            .role(gpui::Role::Switch)
-            .aria_label(SharedString::from(format!(
-                "表单中启用 {}",
-                Self::app_label(app)
-            )))
-            .aria_toggled(if enabled {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .px_3()
-            .py_1p5()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(if enabled {
-                theme::accent()
-            } else {
-                theme::surface()
-            })
-            .text_color(if enabled {
-                theme::accent_text()
-            } else {
-                theme::subtext()
-            })
-            .text_sm()
-            .child(Self::app_label(app))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.set_form_app(app, !enabled, cx);
-            }))
+        Self::toggle_chip(
+            format!("mcp-form-app-{}", app.as_str()),
+            format!("表单中启用 {}", Self::app_label(app)),
+            enabled,
+            Self::app_label(app),
+        )
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.set_form_app(app, !enabled, cx);
+        }))
     }
 
     fn render_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -484,143 +439,81 @@ impl McpView {
             "新增 MCP 服务器"
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .bg(theme::bg())
+        layout::page()
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .px_6()
-                    .py_4()
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .child(title),
+                layout::page_header(title, None).child(
+                    components::button(
+                        "mcp-form-back",
+                        "← 返回",
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
                     )
-                    .child(
-                        div()
-                            .id("mcp-form-back")
-                            .role(gpui::Role::Button)
-                            .aria_label("返回 MCP 列表")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface())
-                            .text_color(theme::subtext())
-                            .text_sm()
-                            .child("返回列表")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.cancel_form(cx);
-                            })),
-                    ),
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.cancel_form(cx);
+                    })),
+                ),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .p_6()
-                    .max_w(px(760.))
-                    .child(self.render_field("名称", &self.name))
-                    .child(self.render_field("描述", &self.description))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_color(theme::subtext())
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("启用到应用"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .children(
-                                        Self::mcp_apps()
-                                            .into_iter()
-                                            .map(|app| self.render_form_app_pill(app, cx)),
-                                    ),
+            .child(components::status_footer(self.status.clone()))
+            .child(layout::scroll_body(
+                "mcp-form-body",
+                layout::content_column().child(
+                    components::card()
+                        .gap_4()
+                        .child(components::field("名称", false, None, self.name.clone()))
+                        .child(components::field(
+                            "描述",
+                            false,
+                            None,
+                            self.description.clone(),
+                        ))
+                        .child(components::field(
+                            "启用到应用",
+                            false,
+                            None,
+                            div().flex().flex_row().flex_wrap().gap_3().children(
+                                Self::mcp_apps()
+                                    .into_iter()
+                                    .map(|app| self.render_form_app_toggle(app, cx)),
                             ),
-                    )
-                    .child(self.render_field("服务器 JSON", &self.spec_json))
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .line_height(px(18.))
-                            .child(
+                        ))
+                        .child(components::field(
+                            "服务器 JSON",
+                            false,
+                            Some(SharedString::from(
                                 r#"示例：{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem"]} 或 {"type":"sse","url":"https://example.com/sse"}"#,
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .id("mcp-form-save")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("保存 MCP 服务器")
-                                    .px_4()
-                                    .py_2()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::accent())
-                                    .text_color(theme::accent_text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("保存")
+                            )),
+                            self.spec_json.clone(),
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap_3()
+                                .child(
+                                    components::button(
+                                        "mcp-form-save",
+                                        "保存",
+                                        ButtonTone::Primary,
+                                        ButtonSize::Sm,
+                                    )
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.do_save(cx);
                                     })),
-                            )
-                            .child(
-                                div()
-                                    .id("mcp-form-cancel")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("取消编辑 MCP 服务器")
-                                    .px_4()
-                                    .py_2()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::surface())
-                                    .text_color(theme::subtext())
-                                    .text_sm()
-                                    .child("取消")
+                                )
+                                .child(
+                                    components::button(
+                                        "mcp-form-cancel",
+                                        "取消",
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Sm,
+                                    )
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.cancel_form(cx);
                                     })),
-                            ),
-                    ),
-            )
+                                ),
+                        ),
+                ),
+            ))
     }
 }
 
@@ -638,6 +531,7 @@ impl Render for McpView {
         let is_empty = cards.is_empty();
 
         layout::page()
+            .relative()
             .child(
                 layout::page_header(
                     "MCP 服务器",
@@ -651,82 +545,114 @@ impl Render for McpView {
                         .flex_row()
                         .gap_2()
                         .child(
-                            div()
-                                .id("mcp-add")
-                                .role(gpui::Role::Button)
-                                .aria_label("新增 MCP 服务器")
-                                .px_4()
-                                .py_2()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .bg(theme::accent())
-                                .text_color(theme::accent_text())
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("新增")
-                                .on_click(cx.listener(|this, _event, _window, cx| {
+                            components::icon_button_tone(
+                                "mcp-add",
+                                "新增",
+                                IconName::Add,
+                                ButtonTone::Primary,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
                                     this.start_add(cx);
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            div()
-                                .id("mcp-import-all")
-                                .role(gpui::Role::Button)
-                                .aria_label("从应用导入 MCP 服务器")
-                                .px_4()
-                                .py_2()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .bg(theme::surface())
-                                .text_color(theme::subtext())
-                                .text_sm()
-                                .child("从应用导入")
-                                .on_click(cx.listener(|this, _event, _window, cx| {
+                            components::icon_button_tone(
+                                "mcp-import-all",
+                                "从应用导入",
+                                IconName::Archive,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
                                     this.do_import_all(cx);
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            div()
-                                .id("mcp-sync")
-                                .role(gpui::Role::Button)
-                                .aria_label("同步 MCP 到应用")
-                                .px_4()
-                                .py_2()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .bg(theme::surface())
-                                .text_color(theme::subtext())
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("同步到应用")
-                                .on_click(cx.listener(|this, _event, _window, cx| {
+                            components::icon_button_tone(
+                                "mcp-sync",
+                                "同步到应用",
+                                IconName::Refresh,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
                                     this.do_sync(cx);
-                                })),
+                                },
+                            )),
                         ),
                 ),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
+            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body(
                 "mcp-list",
                 layout::content_column()
                     .when(is_empty, |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::muted())
-                                .child("还没有配置 MCP 服务器。"),
-                        )
+                        s.child(components::empty_state(
+                            IconName::Blocks,
+                            "还没有配置 MCP 服务器",
+                            "新增服务器，或从各应用现有配置一键导入。",
+                            Some(
+                                components::button(
+                                    "mcp-add-empty",
+                                    "新增服务器",
+                                    ButtonTone::Primary,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.start_add(cx);
+                                }))
+                                .into_any_element(),
+                            ),
+                        ))
                     })
                     .children(cards),
             ))
+            .when_some(self.confirm_delete.clone(), |root, target| {
+                let (delete_id, name) = target;
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header("删除 MCP 服务器"))
+                        .child(
+                            components::modal_body().child(
+                                div().text_color(theme::subtext()).text_sm().child(
+                                    SharedString::from(format!(
+                                        "确定删除服务器「{name}」吗？此操作不可撤销。"
+                                    )),
+                                ),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "mcp-confirm-delete-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "mcp-confirm-delete-ok",
+                                "删除",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                this.do_delete(delete_id.clone(), cx);
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
             .into_any_element()
     }
 }

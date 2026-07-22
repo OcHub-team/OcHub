@@ -10,6 +10,8 @@ use ochub_core::db::legacy_json::Prompt;
 use ochub_core::services::PromptService;
 use ochub_core::{AppState, AppType};
 
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -33,6 +35,8 @@ pub struct PromptsView {
     name: Entity<TextInput>,
     description: Entity<TextInput>,
     content: Entity<TextInput>,
+    /// 待确认删除的提示词（id, 名称）；`Some` 时展示确认模态。
+    confirm_delete: Option<(String, String)>,
 }
 
 impl PromptsView {
@@ -52,6 +56,7 @@ impl PromptsView {
             name,
             description,
             content,
+            confirm_delete: None,
         };
         this.reload();
         this
@@ -230,35 +235,27 @@ impl PromptsView {
         cx.notify();
     }
 
-    fn render_app_pill(&self, app: AppType, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.selected_app == app;
-        div()
-            .id(SharedString::from(format!("prompt-app-{}", app.as_str())))
-            .role(gpui::Role::Button)
-            .aria_label(SharedString::from(format!(
-                "切换提示词应用到 {}",
-                Self::app_label(app)
-            )))
-            .aria_selected(selected)
-            .px_3()
-            .py_1p5()
-            .rounded_md()
-            .cursor_pointer()
-            .text_sm()
-            .bg(if selected {
-                theme::accent()
-            } else {
-                theme::surface()
-            })
-            .text_color(if selected {
-                theme::accent_text()
-            } else {
-                theme::subtext()
-            })
-            .child(Self::app_label(app))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
+    /// app 切换器：`components::segmented`，选中 ix 映射回 `AppType`。
+    fn render_app_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let apps = Self::apps();
+        let labels: Vec<String> = apps
+            .iter()
+            .map(|app| Self::app_label(*app).to_string())
+            .collect();
+        let options: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let selected = apps
+            .iter()
+            .position(|app| *app == self.selected_app)
+            .unwrap_or(0);
+        let apps_for_select = apps.clone();
+        let on_select = cx.listener(move |this, ix: &usize, _window, cx| {
+            if let Some(app) = apps_for_select.get(*ix).copied() {
                 this.select_app(app, cx);
-            }))
+            }
+        });
+        components::segmented("prompts-app", &options, selected, move |ix, window, cx| {
+            on_select(&ix, window, cx)
+        })
     }
 
     fn render_card(&self, prompt: &Prompt, cx: &mut Context<Self>) -> impl IntoElement {
@@ -266,30 +263,22 @@ impl PromptsView {
         let enable_id = prompt.id.clone();
         let edit_prompt = prompt.clone();
         let delete_id = prompt.id.clone();
+        let delete_name = prompt.name.clone();
         let name = prompt.name.clone();
         let desc = prompt.description.clone();
         let preview = Self::prompt_preview(prompt);
 
-        div()
-            .flex()
+        components::card()
             .flex_row()
             .items_center()
             .justify_between()
-            .w_full()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(if enabled {
-                theme::green()
-            } else {
-                theme::border()
-            })
+            .gap_3()
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .min_w_0()
                     .child(
                         div()
                             .flex()
@@ -303,15 +292,7 @@ impl PromptsView {
                                     .child(SharedString::from(name)),
                             )
                             .when(enabled, |s| {
-                                s.child(
-                                    div()
-                                        .px_2()
-                                        .rounded_md()
-                                        .bg(theme::green())
-                                        .text_color(theme::accent_text())
-                                        .text_xs()
-                                        .child("已启用"),
-                                )
+                                s.child(components::badge(BadgeTone::Success, "已启用"))
                             }),
                     )
                     .when_some(desc, |s, d| {
@@ -338,85 +319,51 @@ impl PromptsView {
                     .items_center()
                     .gap_2()
                     .child(
-                        div()
-                            .id(SharedString::from(format!("prompt-enable-{}", prompt.id)))
-                            .role(gpui::Role::Switch)
-                            .aria_label("启用提示词")
-                            .aria_toggled(if enabled {
-                                gpui::Toggled::True
+                        components::button(
+                            format!("prompt-enable-{}", prompt.id),
+                            if enabled { "已启用" } else { "启用" },
+                            if enabled {
+                                ButtonTone::Neutral
                             } else {
-                                gpui::Toggled::False
-                            })
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(if enabled {
-                                theme::surface_hover()
-                            } else {
-                                theme::accent()
-                            })
-                            .text_color(if enabled {
-                                theme::subtext()
-                            } else {
-                                theme::accent_text()
-                            })
-                            .text_sm()
-                            .child(if enabled { "已启用" } else { "启用" })
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                ButtonTone::Primary
+                            },
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
                                 this.do_enable(enable_id.clone(), cx);
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(format!("prompt-edit-{}", prompt.id)))
-                            .role(gpui::Role::Button)
-                            .aria_label("编辑提示词")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface_hover())
-                            .text_color(theme::subtext())
-                            .text_sm()
-                            .child("编辑")
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                        components::button(
+                            format!("prompt-edit-{}", prompt.id),
+                            "编辑",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
                                 this.start_edit(edit_prompt.clone(), cx);
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(format!("prompt-delete-{}", prompt.id)))
-                            .role(gpui::Role::Button)
-                            .aria_label("删除提示词")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface_hover())
-                            .text_color(theme::red())
-                            .text_sm()
-                            .child("删除")
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.do_delete(delete_id.clone(), cx);
-                            })),
+                        components::button(
+                            format!("prompt-delete-{}", prompt.id),
+                            "删除",
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.confirm_delete =
+                                    Some((delete_id.clone(), delete_name.clone()));
+                                cx.notify();
+                            },
+                        )),
                     ),
             )
-    }
-
-    fn render_field(&self, label: &str, input: &Entity<TextInput>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1p5()
-            .child(
-                div()
-                    .text_color(theme::subtext())
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(SharedString::from(label.to_string())),
-            )
-            .child(input.clone())
     }
 
     fn render_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -426,116 +373,75 @@ impl PromptsView {
             "新增提示词"
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .bg(theme::bg())
+        layout::page()
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .px_6()
-                    .py_4()
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .child(title),
+                layout::page_header(title, None).child(
+                    components::button(
+                        "prompt-form-back",
+                        "← 返回",
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
                     )
-                    .child(
-                        div()
-                            .id("prompt-form-back")
-                            .role(gpui::Role::Button)
-                            .aria_label("返回提示词列表")
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(theme::surface())
-                            .text_color(theme::subtext())
-                            .text_sm()
-                            .child("返回列表")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.cancel_form(cx);
-                            })),
-                    ),
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.cancel_form(cx);
+                    })),
+                ),
             )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .p_6()
-                    .max_w(px(720.))
-                    .child(self.render_field("名称", &self.name))
-                    .child(self.render_field("描述", &self.description))
-                    .child(self.render_field("正文", &self.content))
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .line_height(px(18.))
-                            .child("保存已启用的提示词时，会同步写回对应应用的提示词文件。"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .id("prompt-form-save")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("保存提示词")
-                                    .px_4()
-                                    .py_2()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::accent())
-                                    .text_color(theme::accent_text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("保存")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.do_save(cx);
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("prompt-form-cancel")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("取消编辑提示词")
-                                    .px_4()
-                                    .py_2()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::surface())
-                                    .text_color(theme::subtext())
-                                    .text_sm()
-                                    .child("取消")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.cancel_form(cx);
-                                    })),
-                            ),
-                    ),
-            )
+            .child(components::status_footer(self.status.clone()))
+            .child(layout::scroll_body(
+                "prompt-form-body",
+                layout::content_column().child(
+                    components::card()
+                        .gap_4()
+                        .child(components::field("名称", false, None, self.name.clone()))
+                        .child(components::field(
+                            "描述",
+                            false,
+                            None,
+                            self.description.clone(),
+                        ))
+                        .child(components::field("正文", false, None, self.content.clone()))
+                        .child(
+                            div()
+                                .text_color(theme::muted())
+                                .text_xs()
+                                .line_height(px(18.))
+                                .child("保存已启用的提示词时，会同步写回对应应用的提示词文件。"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap_3()
+                                .child(
+                                    components::button(
+                                        "prompt-form-save",
+                                        "保存",
+                                        ButtonTone::Primary,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.do_save(cx);
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    components::button(
+                                        "prompt-form-cancel",
+                                        "取消",
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.cancel_form(cx);
+                                        },
+                                    )),
+                                ),
+                        ),
+                ),
+            ))
     }
 }
 
@@ -553,91 +459,113 @@ impl Render for PromptsView {
         let is_empty = cards.is_empty();
 
         layout::page()
+            .relative()
             .child(
-                div()
-                    .px_6()
-                    .py_4()
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .child("提示词"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_2()
-                            .mt_3()
-                            .child(
-                                div()
-                                    .id("prompt-add")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("新增提示词")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::accent())
-                                    .text_color(theme::accent_text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("新增")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.start_add(cx);
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("prompt-import-file")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("从当前文件导入提示词")
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .bg(theme::surface())
-                                    .text_color(theme::subtext())
-                                    .text_sm()
-                                    .child("从当前文件导入")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.do_import_file(cx);
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div().flex().flex_row().flex_wrap().gap_2().mt_3().children(
-                            Self::apps()
-                                .into_iter()
-                                .map(|a| self.render_app_pill(a, cx)),
-                        ),
-                    ),
-            )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
+                layout::page_header(
+                    "提示词",
+                    Some("按应用管理提示词；启用后写回对应应用的提示词文件。".into()),
                 )
-            })
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(
+                            components::icon_button_tone(
+                                "prompt-add",
+                                "新增",
+                                IconName::Add,
+                                ButtonTone::Primary,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.start_add(cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            components::icon_button_tone(
+                                "prompt-import-file",
+                                "从当前文件导入",
+                                IconName::Archive,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.do_import_file(cx);
+                                },
+                            )),
+                        ),
+                ),
+            )
+            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body(
                 "prompt-list",
                 layout::content_column()
+                    .child(self.render_app_switcher(cx))
                     .when(is_empty, |s| {
-                        s.child(
-                            div()
-                                .text_color(theme::muted())
-                                .child("这个应用还没有提示词。"),
-                        )
+                        s.child(components::empty_state(
+                            IconName::Message,
+                            "这个应用还没有提示词",
+                            "新建提示词，或从当前文件导入现有内容。",
+                            Some(
+                                components::button(
+                                    "prompt-add-empty",
+                                    "新增提示词",
+                                    ButtonTone::Primary,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.start_add(cx);
+                                }))
+                                .into_any_element(),
+                            ),
+                        ))
                     })
                     .children(cards),
             ))
+            .when_some(self.confirm_delete.clone(), |root, target| {
+                let (delete_id, name) = target;
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header("删除提示词"))
+                        .child(
+                            components::modal_body().child(
+                                div().text_color(theme::subtext()).text_sm().child(
+                                    SharedString::from(format!(
+                                        "确定删除提示词「{name}」吗？此操作不可撤销。"
+                                    )),
+                                ),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "prompt-confirm-delete-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "prompt-confirm-delete-ok",
+                                "删除",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_delete = None;
+                                this.do_delete(delete_id.clone(), cx);
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
             .into_any_element()
     }
 }
