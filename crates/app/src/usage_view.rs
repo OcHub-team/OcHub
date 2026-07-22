@@ -20,6 +20,7 @@ use ochub_core::services::usage_stats::{
 };
 use ochub_core::{services, AppState, UsageSummary};
 
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::icons::{icon, IconName};
 use crate::layout;
 use crate::text_input::TextInput;
@@ -115,6 +116,8 @@ pub struct UsageView {
     show_scope_options: bool,
     show_pricing: bool,
     show_stream_config: bool,
+    /// 待确认删除的定价模型 ID；`Some` 时展示确认模态。
+    confirm_delete_pricing: Option<String>,
     pricing_sources: BTreeMap<String, String>,
     pricing_model_id: Entity<TextInput>,
     pricing_display_name: Entity<TextInput>,
@@ -157,6 +160,7 @@ impl UsageView {
             show_scope_options: false,
             show_pricing: false,
             show_stream_config: false,
+            confirm_delete_pricing: None,
             pricing_sources: PRICING_APPS
                 .iter()
                 .map(|app| ((*app).to_string(), "response".to_string()))
@@ -571,304 +575,76 @@ impl UsageView {
         cx.notify();
     }
 
-    fn action_button(
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-        icon_name: IconName,
-        primary: bool,
-    ) -> gpui::Stateful<gpui::Div> {
-        let label = label.into();
-        div()
-            .id(id)
-            .role(gpui::Role::Button)
-            .aria_label(label.clone())
-            .px_3()
-            .py_1p5()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(if primary {
-                theme::accent()
-            } else {
-                theme::surface()
-            })
-            .border_1()
-            .border_color(if primary {
-                theme::accent()
-            } else {
-                theme::border()
-            })
-            .text_color(if primary {
-                theme::accent_text()
-            } else {
-                theme::text()
-            })
-            .text_sm()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(icon(
-                        icon_name,
-                        if primary {
-                            theme::accent_text()
-                        } else {
-                            theme::text()
-                        },
-                        14.,
-                    ))
-                    .child(label),
-            )
-    }
-
-    fn chip(
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-        selected: bool,
-        icon_name: Option<IconName>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let label = label.into();
-        div()
-            .id(id)
-            .role(gpui::Role::Button)
-            .aria_label(label.clone())
-            .aria_selected(selected)
-            .px_3()
-            .py_1p5()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(if selected {
-                theme::accent()
-            } else {
-                theme::surface()
-            })
-            .border_1()
-            .border_color(if selected {
-                theme::accent()
-            } else {
-                theme::border()
-            })
-            .text_color(if selected {
-                theme::accent_text()
-            } else {
-                theme::text()
-            })
-            .text_xs()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .when_some(icon_name, |s, icon_name| {
-                        s.child(icon(
-                            icon_name,
-                            if selected {
-                                theme::accent_text()
-                            } else {
-                                theme::subtext()
-                            },
-                            13.,
-                        ))
-                    })
-                    .child(label),
-            )
-    }
-
-    fn stat_card(
-        label: &'static str,
-        value: String,
-        detail: String,
-        icon_name: IconName,
-        tone: gpui::Rgba,
-    ) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .flex_1()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(icon(icon_name, tone, 14.))
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(label),
-                    ),
-            )
-            .child(
-                div()
-                    .text_color(theme::text())
-                    .text_xl()
-                    .font_weight(FontWeight::BOLD)
-                    .child(SharedString::from(value)),
-            )
-            .child(
-                div()
-                    .text_color(theme::subtext())
-                    .text_xs()
-                    .child(SharedString::from(detail)),
-            )
-    }
-
-    fn disclosure_button(
-        id: &'static str,
-        title: &'static str,
-        detail: String,
-        showing: bool,
-        icon_name: IconName,
-        cx: &mut Context<Self>,
-        toggle: fn(&mut Self),
-    ) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .items_start()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(30.))
-                            .h(px(30.))
-                            .rounded_md()
-                            .bg(theme::surface_hover())
-                            .child(icon(icon_name, theme::subtext(), 15.)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(title),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(SharedString::from(detail)),
-                            ),
-                    ),
-            )
-            .child(
-                Self::action_button(
-                    id,
-                    if showing { "收起" } else { "展开" },
-                    IconName::Add,
-                    false,
-                )
-                .aria_expanded(showing)
-                .aria_label(SharedString::from(format!(
-                    "{} {title}",
-                    if showing { "收起" } else { "展开" }
-                )))
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    toggle(this);
-                    cx.notify();
-                })),
-            )
-    }
-
     fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let range_chips = UsageRange::all()
+        // 单选筛选组统一用 segmented（范围 / 应用 / 状态）。
+        let range_labels: Vec<&str> = UsageRange::all().iter().map(|(_, label)| *label).collect();
+        let range_selected = UsageRange::all()
             .iter()
-            .map(|(range, label)| {
-                let range_value = *range;
-                Self::chip(
-                    ElementId::Name(format!("usage-range-{label}").into()),
-                    *label,
-                    self.range == range_value,
-                    Some(IconName::Clock),
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.set_range(range_value, cx);
-                }))
-            })
-            .collect::<Vec<_>>();
+            .position(|(range, _)| *range == self.range)
+            .unwrap_or(0);
+        let on_range = cx.listener(|this, ix: &usize, _window, cx| {
+            if let Some((range, _)) = UsageRange::all().get(*ix) {
+                this.set_range(*range, cx);
+            }
+        });
+        let range_segmented = components::segmented(
+            "usage-range",
+            &range_labels,
+            range_selected,
+            move |ix, window, cx| on_range(&ix, window, cx),
+        );
 
-        let app_filters = [
-            (None, "全部", IconName::Layers),
-            (Some("claude"), "Claude", IconName::Desktop),
-            (Some("codex"), "Codex", IconName::Code),
-            (Some("gemini"), "Gemini", IconName::Diamond),
-            (Some("opencode"), "OpenCode", IconName::Terminal),
-        ]
-        .into_iter()
-        .map(|(app_type, label, icon_name)| {
-            let selected = self.app_filter.as_deref() == app_type;
-            let next = app_type.map(str::to_string);
-            Self::chip(
-                ElementId::Name(format!("usage-app-{label}").into()),
-                label,
-                selected,
-                Some(icon_name),
-            )
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.set_app_filter(next.clone(), cx);
-            }))
-        })
-        .collect::<Vec<_>>();
+        const APP_FILTERS: [(Option<&str>, &str); 5] = [
+            (None, "全部"),
+            (Some("claude"), "Claude"),
+            (Some("codex"), "Codex"),
+            (Some("gemini"), "Gemini"),
+            (Some("opencode"), "OpenCode"),
+        ];
+        let app_labels: Vec<&str> = APP_FILTERS.iter().map(|(_, label)| *label).collect();
+        let app_selected = APP_FILTERS
+            .iter()
+            .position(|(app, _)| self.app_filter.as_deref() == *app)
+            .unwrap_or(0);
+        let on_app = cx.listener(move |this, ix: &usize, _window, cx| {
+            if let Some((app, _)) = APP_FILTERS.get(*ix) {
+                this.set_app_filter(app.map(str::to_string), cx);
+            }
+        });
+        let app_segmented = components::segmented(
+            "usage-app",
+            &app_labels,
+            app_selected,
+            move |ix, window, cx| on_app(&ix, window, cx),
+        );
 
-        let status_chips = [
+        const STATUS_FILTERS: [(Option<u16>, &str); 6] = [
             (None, "全部状态"),
-            (Some(200_u16), "200"),
-            (Some(400_u16), "400"),
-            (Some(401_u16), "401"),
-            (Some(429_u16), "429"),
-            (Some(500_u16), "500"),
-        ]
-        .into_iter()
-        .map(|(status, label)| {
-            Self::chip(
-                ElementId::Name(format!("usage-status-{label}").into()),
-                label,
-                self.status_filter == status,
-                None,
-            )
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.set_status_filter(status, cx);
-            }))
-        })
-        .collect::<Vec<_>>();
+            (Some(200), "200"),
+            (Some(400), "400"),
+            (Some(401), "401"),
+            (Some(429), "429"),
+            (Some(500), "500"),
+        ];
+        let status_labels: Vec<&str> = STATUS_FILTERS.iter().map(|(_, label)| *label).collect();
+        let status_selected = STATUS_FILTERS
+            .iter()
+            .position(|(status, _)| self.status_filter == *status)
+            .unwrap_or(0);
+        let on_status = cx.listener(move |this, ix: &usize, _window, cx| {
+            if let Some((status, _)) = STATUS_FILTERS.get(*ix) {
+                this.set_status_filter(*status, cx);
+            }
+        });
+        let status_segmented = components::segmented(
+            "usage-status",
+            &status_labels,
+            status_selected,
+            move |ix, window, cx| on_status(&ix, window, cx),
+        );
 
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::header())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -884,11 +660,11 @@ impl UsageView {
                             .child("范围与口径"),
                     )
                     .child(
-                        Self::action_button(
+                        components::button(
                             "usage-clear-filters",
                             "重置",
-                            IconName::Archive,
-                            false,
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
                             |this, _event, _window, cx| {
@@ -903,30 +679,9 @@ impl UsageView {
                         )),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(range_chips),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(app_filters),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(status_chips),
-            )
+            .child(range_segmented)
+            .child(app_segmented)
+            .child(status_segmented)
             .when(
                 self.provider_filter.is_some() || self.model_filter.is_some(),
                 |s| {
@@ -939,7 +694,7 @@ impl UsageView {
                             .when_some(self.provider_filter.clone(), |s, provider| {
                                 let clear_label = format!("Provider: {provider} ×");
                                 s.child(
-                                    Self::chip(
+                                    filter_chip(
                                         "usage-active-provider",
                                         clear_label,
                                         true,
@@ -955,7 +710,7 @@ impl UsageView {
                             .when_some(self.model_filter.clone(), |s, model| {
                                 let clear_label = format!("模型: {model} ×");
                                 s.child(
-                                    Self::chip(
+                                    filter_chip(
                                         "usage-active-model",
                                         clear_label,
                                         true,
@@ -1036,10 +791,16 @@ impl UsageView {
                     .children(sources),
             )
             .child(
-                Self::action_button("usage-sync-sessions", "同步会话", IconName::Refresh, false)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.sync_sessions(cx);
-                    })),
+                components::icon_button_tone(
+                    "usage-sync-sessions",
+                    "同步会话",
+                    IconName::Refresh,
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.sync_sessions(cx);
+                })),
             )
     }
 
@@ -1050,39 +811,39 @@ impl UsageView {
                 .grid()
                 .grid_cols(2)
                 .gap_3()
-                .child(Self::stat_card(
+                .child(components::stat_tile(
+                    Some(IconName::Message),
+                    theme::green(),
                     "总请求数",
                     summary.total_requests.to_string(),
                     format!("成功率 {:.1}%", summary.success_rate),
-                    IconName::Message,
-                    theme::green(),
                 ))
-                .child(Self::stat_card(
+                .child(components::stat_tile(
+                    Some(IconName::Diamond),
+                    theme::peach(),
                     "总成本",
                     format!("${}", format_money(&summary.total_cost, 6)),
                     format!(
                         "输入 {} / 输出 {}",
                         summary.total_input_tokens, summary.total_output_tokens
                     ),
-                    IconName::Diamond,
-                    theme::peach(),
                 ))
-                .child(Self::stat_card(
+                .child(components::stat_tile(
+                    Some(IconName::Layers),
+                    theme::accent(),
                     "真实 Token",
                     summary.real_total_tokens.to_string(),
                     format!(
                         "缓存创建 {} / 读取 {}",
                         summary.total_cache_creation_tokens, summary.total_cache_read_tokens
                     ),
-                    IconName::Layers,
-                    theme::accent(),
                 ))
-                .child(Self::stat_card(
+                .child(components::stat_tile(
+                    Some(IconName::Cloud),
+                    theme::teal(),
                     "缓存命中",
                     format!("{cache_hit_rate:.1}%"),
                     "重复输入复用比例".to_string(),
-                    IconName::Cloud,
-                    theme::teal(),
                 ))
         });
 
@@ -1175,12 +936,12 @@ impl UsageView {
                     ),
             )
             .when(rows.is_empty(), |s| {
-                s.child(
-                    div()
-                        .text_color(theme::muted())
-                        .text_xs()
-                        .child("当前筛选范围内还没有用量。"),
-                )
+                s.child(components::empty_state(
+                    IconName::Layers,
+                    "还没有用量",
+                    "当前筛选范围内还没有用量。",
+                    None,
+                ))
             })
             .children(rows)
     }
@@ -1322,23 +1083,22 @@ impl UsageView {
     }
 
     fn render_section_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tabs = UsageSection::all()
+        let labels: Vec<&str> = UsageSection::all()
             .iter()
-            .map(|(section, label, icon_name)| {
-                let section_value = *section;
-                Self::chip(
-                    ElementId::Name(format!("usage-section-{label}").into()),
-                    *label,
-                    self.section == section_value,
-                    Some(*icon_name),
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.set_section(section_value, cx);
-                }))
-            })
-            .collect::<Vec<_>>();
-
-        div().flex().flex_row().flex_wrap().gap_2().children(tabs)
+            .map(|(_, label, _)| *label)
+            .collect();
+        let selected = UsageSection::all()
+            .iter()
+            .position(|(section, _, _)| *section == self.section)
+            .unwrap_or(0);
+        let on_select = cx.listener(|this, ix: &usize, _window, cx| {
+            if let Some((section, _, _)) = UsageSection::all().get(*ix) {
+                this.set_section(*section, cx);
+            }
+        });
+        components::segmented("usage-section", &labels, selected, move |ix, window, cx| {
+            on_select(&ix, window, cx)
+        })
     }
 
     fn render_active_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1350,221 +1110,260 @@ impl UsageView {
     }
 
     fn render_providers(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let row_count = self.providers.len();
         let rows = self
             .providers
             .iter()
-            .map(|stats| {
+            .enumerate()
+            .map(|(ix, stats)| {
                 let provider = stats.provider_name.clone();
-                div()
-                    .id(ElementId::Name(
-                        format!("usage-provider-row-{provider}").into(),
-                    ))
-                    .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(format!("筛选 Provider {provider}")))
-                    .aria_selected(self.provider_filter.as_deref() == Some(provider.as_str()))
-                    .cursor_pointer()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_2()
-                    .rounded_md()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(cell(provider.clone(), 210.))
-                    .child(cell(stats.request_count.to_string(), 80.))
-                    .child(cell(stats.total_tokens.to_string(), 120.))
-                    .child(cell(
-                        format!("${}", format_money(&stats.total_cost, 4)),
-                        100.,
-                    ))
-                    .child(cell(format!("{:.1}%", stats.success_rate), 90.))
-                    .child(cell(format!("{}ms", stats.avg_latency_ms), 90.))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.set_provider_filter(Some(provider.clone()), cx);
-                    }))
+                components::table_row(
+                    vec![
+                        text_cell(provider.clone()).into_any_element(),
+                        text_cell(stats.request_count.to_string()).into_any_element(),
+                        text_cell(stats.total_tokens.to_string()).into_any_element(),
+                        text_cell(format!("${}", format_money(&stats.total_cost, 4)))
+                            .into_any_element(),
+                        text_cell(format!("{:.1}%", stats.success_rate)).into_any_element(),
+                        text_cell(format!("{}ms", stats.avg_latency_ms)).into_any_element(),
+                    ],
+                    6,
+                    ix + 1 == row_count,
+                )
+                .id(ElementId::Name(
+                    format!("usage-provider-row-{provider}").into(),
+                ))
+                .role(gpui::Role::Button)
+                .aria_label(SharedString::from(format!("筛选 Provider {provider}")))
+                .aria_selected(self.provider_filter.as_deref() == Some(provider.as_str()))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::surface_hover()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.set_provider_filter(Some(provider.clone()), cx);
+                }))
             })
             .collect::<Vec<_>>();
 
-        table_shell(
-            "Provider 统计",
-            "点击行会把整个面板缩小到该 Provider 的统计口径。",
-            vec!["Provider", "请求", "Token", "成本", "成功率", "均延迟"],
-            rows,
-        )
+        components::card()
+            .p_0()
+            .child(table_title(
+                "Provider 统计",
+                "点击行会把整个面板缩小到该 Provider 的统计口径。",
+            ))
+            .child(components::table_header(&[
+                "Provider",
+                "请求",
+                "Token",
+                "成本",
+                "成功率",
+                "均延迟",
+            ]))
+            .when(rows.is_empty(), |s| {
+                s.child(components::empty_state(
+                    IconName::Proxy,
+                    "暂无数据",
+                    "当前筛选范围内没有 Provider 统计。",
+                    None,
+                ))
+            })
+            .children(rows)
     }
 
     fn render_models(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let row_count = self.models.len();
         let rows = self
             .models
             .iter()
-            .map(|stats| {
+            .enumerate()
+            .map(|(ix, stats)| {
                 let model = stats.model.clone();
-                div()
-                    .id(ElementId::Name(format!("usage-model-row-{model}").into()))
-                    .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(format!("筛选模型 {model}")))
-                    .aria_selected(self.model_filter.as_deref() == Some(model.as_str()))
-                    .cursor_pointer()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_2()
-                    .rounded_md()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(cell(model.clone(), 260.))
-                    .child(cell(stats.request_count.to_string(), 90.))
-                    .child(cell(stats.total_tokens.to_string(), 130.))
-                    .child(cell(
-                        format!("${}", format_money(&stats.total_cost, 4)),
-                        110.,
-                    ))
-                    .child(cell(
-                        format!("${}", format_money(&stats.avg_cost_per_request, 6)),
-                        120.,
-                    ))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.set_model_filter(Some(model.clone()), cx);
-                    }))
+                components::table_row(
+                    vec![
+                        text_cell(model.clone()).into_any_element(),
+                        text_cell(stats.request_count.to_string()).into_any_element(),
+                        text_cell(stats.total_tokens.to_string()).into_any_element(),
+                        text_cell(format!("${}", format_money(&stats.total_cost, 4)))
+                            .into_any_element(),
+                        text_cell(format!("${}", format_money(&stats.avg_cost_per_request, 6)))
+                            .into_any_element(),
+                    ],
+                    5,
+                    ix + 1 == row_count,
+                )
+                .id(ElementId::Name(format!("usage-model-row-{model}").into()))
+                .role(gpui::Role::Button)
+                .aria_label(SharedString::from(format!("筛选模型 {model}")))
+                .aria_selected(self.model_filter.as_deref() == Some(model.as_str()))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::surface_hover()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.set_model_filter(Some(model.clone()), cx);
+                }))
             })
             .collect::<Vec<_>>();
 
-        table_shell(
-            "模型统计",
-            "模型按有效计价模型聚合，价格与请求详情保持同一口径。",
-            vec!["模型", "请求", "Token", "总成本", "均成本"],
-            rows,
-        )
+        components::card()
+            .p_0()
+            .child(table_title(
+                "模型统计",
+                "模型按有效计价模型聚合，价格与请求详情保持同一口径。",
+            ))
+            .child(components::table_header(&[
+                "模型",
+                "请求",
+                "Token",
+                "总成本",
+                "均成本",
+            ]))
+            .when(rows.is_empty(), |s| {
+                s.child(components::empty_state(
+                    IconName::Chart,
+                    "暂无数据",
+                    "当前筛选范围内没有模型统计。",
+                    None,
+                ))
+            })
+            .children(rows)
     }
 
     fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let total_pages = self.log_total.div_ceil(LOG_PAGE_SIZE).max(1);
         let page = self.log_page.min(total_pages - 1);
+        let row_count = self.logs.len();
         let rows = self
             .logs
             .iter()
-            .map(|log| {
+            .enumerate()
+            .map(|(ix, log)| {
                 let provider = log
                     .provider_name
                     .clone()
                     .unwrap_or_else(|| log.provider_id.clone());
                 let ok = (200..300).contains(&log.status_code);
                 let request_id = log.request_id.clone();
-                div()
-                    .id(ElementId::Name(
-                        format!("usage-log-row-{request_id}").into(),
-                    ))
-                    .role(gpui::Role::Button)
-                    .aria_label(SharedString::from(format!(
-                        "查看请求详情 {} {}",
-                        log.model, log.status_code
-                    )))
-                    .cursor_pointer()
+                let time_cell = div()
+                    .min_w_0()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_2()
-                    .rounded_md()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::border())
+                    .flex_col()
+                    .gap_1()
                     .child(
                         div()
-                            .w(px(170.))
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .text_xs()
-                                    .child(SharedString::from(short_time(log.created_at))),
-                            )
-                            .child(div().text_color(theme::muted()).text_xs().truncate().child(
-                                SharedString::from(format!(
-                                    "{} · {}",
-                                    provider,
-                                    log.data_source.clone().unwrap_or_else(|| "proxy".into())
-                                )),
-                            )),
+                            .text_color(theme::text())
+                            .text_xs()
+                            .child(SharedString::from(short_time(log.created_at))),
                     )
-                    .child(cell(effective_model_label(log), 230.))
-                    .child(cell(
-                        format!("入 {} / 出 {}", fresh_input_tokens(log), log.output_tokens),
-                        115.,
-                    ))
-                    .child(cell(
-                        format!(
+                    .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                        SharedString::from(format!(
+                            "{} · {}",
+                            provider,
+                            log.data_source.clone().unwrap_or_else(|| "proxy".into())
+                        )),
+                    ));
+                components::table_row(
+                    vec![
+                        time_cell.into_any_element(),
+                        text_cell(effective_model_label(log)).into_any_element(),
+                        text_cell(format!(
+                            "入 {} / 出 {}",
+                            fresh_input_tokens(log),
+                            log.output_tokens
+                        ))
+                        .into_any_element(),
+                        text_cell(format!(
                             "${} · {}ms",
                             format_money(&log.total_cost_usd, 4),
                             log.latency_ms
-                        ),
-                        125.,
-                    ))
-                    .child(status_badge(log.status_code, ok))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.select_log(request_id.clone(), cx);
-                    }))
+                        ))
+                        .into_any_element(),
+                        components::badge(
+                            if ok {
+                                BadgeTone::Success
+                            } else {
+                                BadgeTone::Danger
+                            },
+                            log.status_code.to_string(),
+                        )
+                        .into_any_element(),
+                    ],
+                    5,
+                    ix + 1 == row_count,
+                )
+                .id(ElementId::Name(
+                    format!("usage-log-row-{request_id}").into(),
+                ))
+                .role(gpui::Role::Button)
+                .aria_label(SharedString::from(format!(
+                    "查看请求详情 {} {}",
+                    log.model, log.status_code
+                )))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::surface_hover()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.select_log(request_id.clone(), cx);
+                }))
             })
             .collect::<Vec<_>>();
+
+        let prev = components::button(
+            "usage-prev-page",
+            "上一页",
+            ButtonTone::Neutral,
+            ButtonSize::Sm,
+        )
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            let next = this.log_page.saturating_sub(1);
+            this.set_log_page(next, cx);
+        }));
+        let next = components::button(
+            "usage-next-page",
+            "下一页",
+            ButtonTone::Neutral,
+            ButtonSize::Sm,
+        )
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            let total_pages = this.log_total.div_ceil(LOG_PAGE_SIZE).max(1);
+            let next = (this.log_page + 1).min(total_pages - 1);
+            this.set_log_page(next, cx);
+        }));
 
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(table_shell(
-                "请求日志",
-                &format!(
-                    "第 {} / {} 页 · 共 {} 条",
-                    page + 1,
-                    total_pages,
-                    self.log_total
-                ),
-                vec!["时间 / 来源", "计价模型", "Token", "成本 / 延迟", "状态"],
-                rows,
-            ))
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        Self::action_button("usage-prev-page", "上一页", IconName::Archive, false)
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                let next = this.log_page.saturating_sub(1);
-                                this.set_log_page(next, cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(SharedString::from(format!(
-                                "{} - {} / {}",
-                                page * LOG_PAGE_SIZE + 1,
-                                ((page + 1) * LOG_PAGE_SIZE).min(self.log_total),
-                                self.log_total
-                            ))),
-                    )
-                    .child(
-                        Self::action_button("usage-next-page", "下一页", IconName::Add, false)
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                let total_pages = this.log_total.div_ceil(LOG_PAGE_SIZE).max(1);
-                                let next = (this.log_page + 1).min(total_pages - 1);
-                                this.set_log_page(next, cx);
-                            })),
-                    ),
+                components::card()
+                    .p_0()
+                    .child(table_title(
+                        "请求日志",
+                        format!(
+                            "第 {} / {} 页 · 共 {} 条",
+                            page + 1,
+                            total_pages,
+                            self.log_total
+                        ),
+                    ))
+                    .child(components::table_header(&[
+                        "时间 / 来源",
+                        "计价模型",
+                        "Token",
+                        "成本 / 延迟",
+                        "状态",
+                    ]))
+                    .when(rows.is_empty(), |s| {
+                        s.child(components::empty_state(
+                            IconName::Message,
+                            "暂无数据",
+                            "当前筛选范围内没有请求日志。",
+                            None,
+                        ))
+                    })
+                    .children(rows),
             )
+            .child(components::pagination(
+                prev.into_any_element(),
+                format!("第 {} / {} 页", page + 1, total_pages),
+                next.into_any_element(),
+            ))
             .when_some(self.selected_log.clone(), |s, log| {
                 s.child(Self::render_request_detail(log))
             })
@@ -1575,15 +1374,8 @@ impl UsageView {
             .provider_name
             .clone()
             .unwrap_or_else(|| log.provider_id.clone());
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .gap_3()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::header())
-            .border_1()
-            .border_color(theme::border_strong())
             .child(
                 div()
                     .flex()
@@ -1674,7 +1466,7 @@ impl UsageView {
             .take(8)
             .map(|provider| {
                 let name = provider.provider_name.clone();
-                Self::chip(
+                filter_chip(
                     ElementId::Name(format!("usage-provider-option-{name}").into()),
                     name.clone(),
                     self.provider_filter.as_deref() == Some(name.as_str()),
@@ -1691,7 +1483,7 @@ impl UsageView {
             .take(8)
             .map(|model| {
                 let name = model.model.clone();
-                Self::chip(
+                filter_chip(
                     ElementId::Name(format!("usage-model-option-{name}").into()),
                     name.clone(),
                     self.model_filter.as_deref() == Some(name.as_str()),
@@ -1733,74 +1525,59 @@ impl UsageView {
     }
 
     fn render_pricing_config(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let row_count = self.pricing.len().min(12);
         let pricing_rows = self
             .pricing
             .iter()
             .take(12)
-            .map(|item| {
+            .enumerate()
+            .map(|(ix, item)| {
                 let edit_item = item.clone();
                 let delete_id = item.model_id.clone();
-                div()
-                    .id(ElementId::Name(
-                        format!("pricing-row-{}", item.model_id).into(),
-                    ))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_2()
-                    .rounded_md()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(cell(item.model_id.clone(), 220.))
-                    .child(cell(item.display_name.clone(), 180.))
-                    .child(cell(format!("${}", item.input_cost_per_million), 90.))
-                    .child(cell(format!("${}", item.output_cost_per_million), 90.))
-                    .child(cell(format!("${}", item.cache_read_cost_per_million), 90.))
-                    .child(cell(
-                        format!("${}", item.cache_creation_cost_per_million),
-                        90.,
-                    ))
-                    .child(
-                        Self::action_button(
+                components::table_row(
+                    vec![
+                        text_cell(item.model_id.clone()).into_any_element(),
+                        text_cell(item.display_name.clone()).into_any_element(),
+                        text_cell(format!("${}", item.input_cost_per_million)).into_any_element(),
+                        text_cell(format!("${}", item.output_cost_per_million)).into_any_element(),
+                        text_cell(format!("${}", item.cache_read_cost_per_million))
+                            .into_any_element(),
+                        text_cell(format!("${}", item.cache_creation_cost_per_million))
+                            .into_any_element(),
+                        components::icon_button_tone(
                             ElementId::Name(format!("pricing-edit-{}", item.model_id).into()),
                             "编辑",
                             IconName::Settings,
-                            false,
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
                         )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.edit_pricing(edit_item.clone(), cx);
-                            },
-                        )),
-                    )
-                    .child(
-                        Self::action_button(
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.edit_pricing(edit_item.clone(), cx);
+                        }))
+                        .into_any_element(),
+                        components::button(
                             ElementId::Name(format!("pricing-delete-{}", item.model_id).into()),
                             "删除",
-                            IconName::Archive,
-                            false,
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
                         )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.delete_pricing(delete_id.clone(), cx);
-                            },
-                        )),
-                    )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.confirm_delete_pricing = Some(delete_id.clone());
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    ],
+                    8,
+                    ix + 1 == row_count,
+                )
+                .id(ElementId::Name(
+                    format!("pricing-row-{}", item.model_id).into(),
+                ))
             })
             .collect::<Vec<_>>();
 
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .gap_4()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(section_label("计费默认配置"))
             .children(
                 PRICING_APPS
@@ -1808,11 +1585,12 @@ impl UsageView {
                     .map(|app| self.render_pricing_default_row(app, cx)),
             )
             .child(
-                Self::action_button(
+                components::icon_button_tone(
                     "usage-save-pricing-defaults",
                     "保存计费默认配置",
                     IconName::Check,
-                    true,
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.save_pricing_defaults(cx);
@@ -1824,40 +1602,82 @@ impl UsageView {
                     .grid()
                     .grid_cols(3)
                     .gap_3()
-                    .child(form_field("模型 ID", self.pricing_model_id.clone()))
-                    .child(form_field("显示名称", self.pricing_display_name.clone()))
-                    .child(form_field("输入 / 百万", self.pricing_input_cost.clone()))
-                    .child(form_field("输出 / 百万", self.pricing_output_cost.clone()))
-                    .child(form_field(
+                    .child(components::field(
+                        "模型 ID",
+                        false,
+                        None,
+                        self.pricing_model_id.clone(),
+                    ))
+                    .child(components::field(
+                        "显示名称",
+                        false,
+                        None,
+                        self.pricing_display_name.clone(),
+                    ))
+                    .child(components::field(
+                        "输入 / 百万",
+                        false,
+                        None,
+                        self.pricing_input_cost.clone(),
+                    ))
+                    .child(components::field(
+                        "输出 / 百万",
+                        false,
+                        None,
+                        self.pricing_output_cost.clone(),
+                    ))
+                    .child(components::field(
                         "缓存读 / 百万",
+                        false,
+                        None,
                         self.pricing_cache_read_cost.clone(),
                     ))
-                    .child(form_field(
+                    .child(components::field(
                         "缓存写 / 百万",
+                        false,
+                        None,
                         self.pricing_cache_creation_cost.clone(),
                     )),
             )
             .child(
-                Self::action_button("usage-save-pricing", "保存模型定价", IconName::Check, true)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.save_pricing(cx);
-                    })),
+                components::icon_button_tone(
+                    "usage-save-pricing",
+                    "保存模型定价",
+                    IconName::Check,
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.save_pricing(cx);
+                })),
             )
-            .child(table_shell(
-                "已有模型定价",
-                "最多显示前 12 条；可编辑后保存，也可删除。",
-                vec![
-                    "模型 ID",
-                    "显示名称",
-                    "输入",
-                    "输出",
-                    "读缓存",
-                    "写缓存",
-                    "",
-                    "",
-                ],
-                pricing_rows,
-            ))
+            .child(
+                components::card()
+                    .p_0()
+                    .child(table_title(
+                        "已有模型定价",
+                        "最多显示前 12 条；可编辑后保存，也可删除。",
+                    ))
+                    .child(components::table_header(&[
+                        "模型 ID",
+                        "显示名称",
+                        "输入",
+                        "输出",
+                        "读缓存",
+                        "写缓存",
+                        "",
+                        "",
+                    ]))
+                    .when(pricing_rows.is_empty(), |s| {
+                        s.child(components::empty_state(
+                            IconName::Diamond,
+                            "暂无数据",
+                            "还没有已保存的模型定价。",
+                            None,
+                        ))
+                    })
+                    .children(pricing_rows),
+            )
     }
 
     fn render_pricing_default_row(
@@ -1876,48 +1696,36 @@ impl UsageView {
             "gemini" => self.multiplier_gemini.clone(),
             _ => self.multiplier_claude.clone(),
         };
+        let on_source = cx.listener(move |this, ix: &usize, _window, cx| {
+            this.set_pricing_source(app, if *ix == 0 { "response" } else { "request" }, cx);
+        });
 
         div()
             .flex()
             .flex_row()
             .items_center()
             .gap_3()
-            .child(cell(app_label(app), 100.))
-            .child(form_field("默认倍率", input))
             .child(
-                Self::chip(
-                    ElementId::Name(format!("pricing-source-response-{app}").into()),
-                    "按响应模型计费",
-                    source == "response",
-                    Some(IconName::Message),
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.set_pricing_source(app, "response", cx);
-                })),
+                div()
+                    .w(px(100.))
+                    .min_w_0()
+                    .text_color(theme::text())
+                    .text_xs()
+                    .truncate()
+                    .child(SharedString::from(app_label(app))),
             )
-            .child(
-                Self::chip(
-                    ElementId::Name(format!("pricing-source-request-{app}").into()),
-                    "按请求模型计费",
-                    source == "request",
-                    Some(IconName::Code),
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.set_pricing_source(app, "request", cx);
-                })),
-            )
+            .child(components::field("默认倍率", false, None, input))
+            .child(components::segmented(
+                SharedString::from(format!("pricing-source-{app}")),
+                &["按响应模型计费", "按请求模型计费"],
+                if source == "response" { 0 } else { 1 },
+                move |ix, window, cx| on_source(&ix, window, cx),
+            ))
     }
 
     fn render_stream_config(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
+        components::card()
             .gap_4()
-            .p_4()
-            .rounded_lg()
-            .bg(theme::surface())
-            .border_1()
-            .border_color(theme::border())
             .child(
                 div()
                     .p_3()
@@ -1932,18 +1740,36 @@ impl UsageView {
                     .grid()
                     .grid_cols(3)
                     .gap_3()
-                    .child(form_field("探测超时（秒）", self.stream_timeout_secs.clone()))
-                    .child(form_field("最大重试次数", self.stream_max_retries.clone()))
-                    .child(form_field(
+                    .child(components::field(
+                        "探测超时（秒）",
+                        false,
+                        None,
+                        self.stream_timeout_secs.clone(),
+                    ))
+                    .child(components::field(
+                        "最大重试次数",
+                        false,
+                        None,
+                        self.stream_max_retries.clone(),
+                    ))
+                    .child(components::field(
                         "降级阈值（毫秒）",
+                        false,
+                        None,
                         self.stream_degraded_threshold_ms.clone(),
                     )),
             )
             .child(
-                Self::action_button("usage-save-stream-config", "保存检测参数", IconName::Check, true)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.save_stream_config(cx);
-                    })),
+                components::icon_button_tone(
+                    "usage-save-stream-config",
+                    "保存检测参数",
+                    IconName::Check,
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.save_stream_config(cx);
+                })),
             )
     }
 }
@@ -1951,139 +1777,147 @@ impl UsageView {
 impl Render for UsageView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         layout::page()
+            .relative()
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .px_6()
-                    .py_4()
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .w(px(32.))
-                                    .h(px(32.))
-                                    .rounded_md()
-                                    .bg(theme::surface())
-                                    .border_1()
-                                    .border_color(theme::border())
-                                    .child(icon(IconName::Chart, theme::accent(), 17.)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_xl()
-                                            .font_weight(FontWeight::BOLD)
-                                            .child("用量"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(theme::muted())
-                                            .text_xs()
-                                            .child("模型、成本、缓存、请求日志、定价与检测配置。"),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        Self::action_button("usage-refresh", "刷新", IconName::Refresh, false)
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.reload();
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
+                layout::page_header(
+                    "用量",
+                    Some("模型、成本、缓存、请求日志、定价与检测配置。".into()),
                 )
-            })
-            .child(
-                div()
-                    .id("usage-body")
-                    .flex()
-                    .flex_col()
+                .child(
+                    components::icon_button_tone(
+                        "usage-refresh",
+                        "刷新",
+                        IconName::Refresh,
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.reload();
+                        cx.notify();
+                    })),
+                ),
+            )
+            .child(components::status_footer(self.status.clone()))
+            .child(layout::scroll_body(
+                "usage-body",
+                layout::wide_column()
                     .gap_4()
-                    .p_6()
-                    .w_full()
-                    .overflow_y_scroll()
                     .child(self.render_filters(cx))
                     .child(self.render_data_sources(cx))
                     .child(self.render_summary())
-                    .child(Self::disclosure_button(
-                        "usage-trend-toggle",
-                        "趋势图",
-                        format!("{} 个时间桶 · Token 与成本变化", self.daily.len()),
-                        self.show_trend,
-                        IconName::Chart,
-                        cx,
-                        |this| this.show_trend = !this.show_trend,
-                    ))
+                    .child(
+                        components::disclosure(
+                            "usage-trend-toggle",
+                            "趋势图",
+                            format!("{} 个时间桶 · Token 与成本变化", self.daily.len()),
+                            self.show_trend,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.show_trend = !this.show_trend;
+                                cx.notify();
+                            },
+                        )),
+                    )
                     .when(self.show_trend, |s| s.child(self.render_trend()))
-                    .child(Self::disclosure_button(
-                        "usage-scope-toggle",
-                        "Provider / 模型候选",
-                        "从当前范围内真实有数据的条目里快速筛选。".to_string(),
-                        self.show_scope_options,
-                        IconName::Layers,
-                        cx,
-                        |this| this.show_scope_options = !this.show_scope_options,
-                    ))
+                    .child(
+                        components::disclosure(
+                            "usage-scope-toggle",
+                            "Provider / 模型候选",
+                            "从当前范围内真实有数据的条目里快速筛选。",
+                            self.show_scope_options,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.show_scope_options = !this.show_scope_options;
+                                cx.notify();
+                            },
+                        )),
+                    )
                     .when(self.show_scope_options, |s| {
                         s.child(self.render_scope_options(cx))
                     })
                     .child(self.render_section_tabs(cx))
                     .child(self.render_active_section(cx))
-                    .child(Self::disclosure_button(
-                        "usage-pricing-toggle",
-                        "模型定价配置",
-                        format!("{} 条定价 · 支持默认倍率和计价模型来源", self.pricing.len()),
-                        self.show_pricing,
-                        IconName::Diamond,
-                        cx,
-                        |this| this.show_pricing = !this.show_pricing,
-                    ))
+                    .child(
+                        components::disclosure(
+                            "usage-pricing-toggle",
+                            "模型定价配置",
+                            format!("{} 条定价 · 支持默认倍率和计价模型来源", self.pricing.len()),
+                            self.show_pricing,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.show_pricing = !this.show_pricing;
+                                cx.notify();
+                            },
+                        )),
+                    )
                     .when(self.show_pricing, |s| {
                         s.child(self.render_pricing_config(cx))
                     })
-                    .child(Self::disclosure_button(
-                        "usage-stream-toggle",
-                        "模型检测参数",
-                        format!(
-                            "超时 {}s · 重试 {} · 降级阈值 {}ms",
-                            self.stream_config.timeout_secs,
-                            self.stream_config.max_retries,
-                            self.stream_config.degraded_threshold_ms
-                        ),
-                        self.show_stream_config,
-                        IconName::Wrench,
-                        cx,
-                        |this| this.show_stream_config = !this.show_stream_config,
-                    ))
+                    .child(
+                        components::disclosure(
+                            "usage-stream-toggle",
+                            "模型检测参数",
+                            format!(
+                                "超时 {}s · 重试 {} · 降级阈值 {}ms",
+                                self.stream_config.timeout_secs,
+                                self.stream_config.max_retries,
+                                self.stream_config.degraded_threshold_ms
+                            ),
+                            self.show_stream_config,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.show_stream_config = !this.show_stream_config;
+                                cx.notify();
+                            },
+                        )),
+                    )
                     .when(self.show_stream_config, |s| {
                         s.child(self.render_stream_config(cx))
                     }),
-            )
+            ))
+            .when_some(self.confirm_delete_pricing.clone(), |root, model_id| {
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header("删除模型定价"))
+                        .child(
+                            components::modal_body().child(
+                                div().text_color(theme::subtext()).text_sm().child(
+                                    SharedString::from(format!(
+                                        "确定删除模型定价「{model_id}」吗？此操作不可撤销。"
+                                    )),
+                                ),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "usage-confirm-delete-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_delete_pricing = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "usage-confirm-delete-ok",
+                                "删除",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_delete_pricing = None;
+                                this.delete_pricing(model_id.clone(), cx);
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
     }
 }
 
@@ -2122,82 +1956,32 @@ fn parse_stream_config(
     })
 }
 
-fn table_shell(
-    title: &'static str,
-    subtitle: &str,
-    headers: Vec<&'static str>,
-    rows: Vec<gpui::Stateful<gpui::Div>>,
-) -> impl IntoElement {
-    let header_cells = headers
-        .into_iter()
-        .map(|label| {
-            div()
-                .text_color(theme::muted())
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(label)
-        })
-        .collect::<Vec<_>>();
-
+/// 表格标题块：卡片顶部的标题 + 说明（配合 `components::card().p_0()` 使用）。
+fn table_title(title: &'static str, subtitle: impl Into<SharedString>) -> gpui::Div {
     div()
         .flex()
         .flex_col()
-        .gap_3()
-        .p_4()
-        .rounded_lg()
-        .bg(theme::surface())
-        .border_1()
-        .border_color(theme::border())
+        .gap_1()
+        .px_4()
+        .py_3()
         .child(
             div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_color(theme::text())
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_color(theme::muted())
-                                .text_xs()
-                                .child(SharedString::from(subtitle.to_string())),
-                        ),
-                ),
+                .text_color(theme::text())
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
         )
         .child(
             div()
-                .grid()
-                .grid_cols(header_cells.len() as u16)
-                .gap_3()
-                .px_4()
-                .children(header_cells),
+                .text_color(theme::muted())
+                .text_xs()
+                .child(subtitle.into()),
         )
-        .when(rows.is_empty(), |s| {
-            s.child(
-                div()
-                    .p_4()
-                    .rounded_md()
-                    .bg(theme::surface_hover())
-                    .text_color(theme::muted())
-                    .text_xs()
-                    .child("暂无数据。"),
-            )
-        })
-        .children(rows)
 }
 
-fn cell(value: impl Into<SharedString>, width: f32) -> impl IntoElement {
+/// 纯文本表格单元格（等宽 grid 轨道内截断）。
+fn text_cell(value: impl Into<SharedString>) -> gpui::Div {
     div()
-        .w(px(width))
         .min_w_0()
         .text_color(theme::text())
         .text_xs()
@@ -2205,16 +1989,59 @@ fn cell(value: impl Into<SharedString>, width: f32) -> impl IntoElement {
         .child(value.into())
 }
 
-fn status_badge(status: u16, ok: bool) -> impl IntoElement {
-    div()
-        .w(px(58.))
-        .px_2()
+/// 多选 filter chip：segmented item 观感——未选中 muted 文字 + INSET 底，
+/// 选中为 surface + shadow_xs 浮起。行为（点击切换）由调用点接线。
+fn filter_chip(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    icon_name: Option<IconName>,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    let mut chip = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .aria_selected(selected)
+        .px_3()
         .py_1()
         .rounded_md()
-        .bg(if ok { theme::green() } else { theme::red() })
-        .text_color(theme::accent_text())
-        .text_xs()
-        .child(SharedString::from(status.to_string()))
+        .cursor_pointer()
+        .text_sm()
+        .border_1();
+    if selected {
+        chip = chip
+            .bg(theme::surface())
+            .border_color(theme::border())
+            .shadow_xs()
+            .text_color(theme::text())
+            .font_weight(FontWeight::MEDIUM);
+    } else {
+        chip = chip
+            .bg(theme::inset())
+            .border_color(theme::border())
+            .text_color(theme::muted())
+            .hover(|s| s.bg(theme::surface_hover()).text_color(theme::subtext()));
+    }
+    chip.child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .when_some(icon_name, |s, icon_name| {
+                s.child(icon(
+                    icon_name,
+                    if selected {
+                        theme::subtext()
+                    } else {
+                        theme::muted()
+                    },
+                    13.,
+                ))
+            })
+            .child(label),
+    )
 }
 
 fn detail_cell(label: &'static str, value: impl Into<SharedString>) -> impl IntoElement {
@@ -2239,22 +2066,6 @@ fn section_label(label: &'static str) -> impl IntoElement {
         .text_sm()
         .font_weight(FontWeight::SEMIBOLD)
         .child(label)
-}
-
-fn form_field(label: &'static str, input: Entity<TextInput>) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .min_w(px(140.))
-        .child(
-            div()
-                .text_color(theme::muted())
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(label),
-        )
-        .child(input)
 }
 
 fn format_money(value: &str, digits: usize) -> String {
