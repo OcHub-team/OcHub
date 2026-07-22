@@ -13,7 +13,7 @@ use gpui::{div, prelude::*, Context, Entity, SharedString, Window};
 use ochub_core::settings::{self, AppSettings};
 use ochub_core::AppType;
 
-use crate::components;
+use crate::components::{self, ButtonSize, ButtonTone};
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
@@ -124,31 +124,21 @@ impl AppSettingsView {
                 .w_full()
                 .child(layout::section_header("配置目录", desc))
                 .child(
-                    div()
-                        .w_full()
-                        .rounded_lg()
-                        .bg(theme::surface())
-                        .border_1()
-                        .border_color(theme::border())
-                        .p_4()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(input.clone())
-                        .child(
-                            div().flex().flex_row().justify_end().child(
-                                components::action_button(
-                                    "app-settings-save-dir",
-                                    "保存目录",
-                                    true,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.save_config_dir(cx);
-                                    },
-                                )),
-                            ),
+                    components::card().gap_3().child(input.clone()).child(
+                        div().flex().flex_row().justify_end().child(
+                            components::button(
+                                "app-settings-save-dir",
+                                "保存目录",
+                                ButtonTone::Primary,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.save_config_dir(cx);
+                                },
+                            )),
                         ),
+                    ),
                 )
                 .into_any_element(),
         )
@@ -165,11 +155,15 @@ impl Render for AppSettingsView {
             Some("仅作用于该应用的行为与目录。".into()),
         )
         .child(
-            components::action_button("app-settings-back", "← 返回", false).on_click(cx.listener(
-                |_this, _event, _window, cx| {
-                    cx.emit(AppSettingsEvent::Close);
-                },
-            )),
+            components::button(
+                "app-settings-back",
+                "← 返回",
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|_this, _event, _window, cx| {
+                cx.emit(AppSettingsEvent::Close);
+            })),
         );
 
         let mut column = layout::content_column();
@@ -187,12 +181,10 @@ impl Render for AppSettingsView {
         if let Some(dir) = self.render_config_dir(cx) {
             column = column.child(dir);
         }
-        if let Some(status) = self.status.clone() {
-            column = column.child(div().text_color(theme::teal()).text_xs().child(status));
-        }
 
         layout::page()
             .child(header)
+            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body("app-settings-body", column))
     }
 }

@@ -10,7 +10,7 @@ use ochub_core::services::UpdateCheckResult;
 use ochub_core::settings::{self, AppSettings, S3SyncSettings, WebDavSyncSettings};
 use ochub_core::AppState;
 
-use crate::components;
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::layout;
 use crate::shell_menu;
 use crate::text_input::TextInput;
@@ -21,6 +21,16 @@ enum SyncOperation {
     Test,
     Upload,
     Download,
+}
+
+/// Which remote-sync provider a pending download-and-restore confirmation
+/// targets. Downloading overwrites the local database, so it goes through a
+/// confirm modal before [`SettingsView::run_webdav_sync`] /
+/// [`SettingsView::run_s3_sync`] fires.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SyncDownloadTarget {
+    WebDav,
+    S3,
 }
 
 /// Events the settings view emits for the app shell.
@@ -38,6 +48,8 @@ pub struct SettingsView {
     update_checking: bool,
     update_info: Option<UpdateCheckResult>,
     sync_busy: bool,
+    /// Pending download-and-restore confirmation (overwrites local data).
+    confirm_download: Option<SyncDownloadTarget>,
     webdav_url: Entity<TextInput>,
     webdav_username: Entity<TextInput>,
     webdav_password: Entity<TextInput>,
@@ -137,6 +149,7 @@ impl SettingsView {
             update_checking: false,
             update_info: None,
             sync_busy: false,
+            confirm_download: None,
             webdav_url,
             webdav_username,
             webdav_password,
@@ -646,17 +659,9 @@ impl SettingsView {
                 label.to_string(),
                 description.to_string(),
             ))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .bg(theme::inset())
-                    .text_color(theme::text())
-                    .text_sm()
-                    .child(SharedString::from(value)),
-            )
+            .when(!value.is_empty(), |s| {
+                s.child(components::badge(BadgeTone::Neutral, value))
+            })
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 on_click(this, cx);
             }))
@@ -672,21 +677,13 @@ impl SettingsView {
             .child(div().w(px(320.)).flex_shrink_0().child(input))
     }
 
-    fn action_button(
-        id: impl Into<gpui::ElementId>,
-        label: &'static str,
-        primary: bool,
-    ) -> gpui::Stateful<gpui::Div> {
-        components::action_button(id, label, primary)
-    }
-
     fn render_action_row(
         provider: &'static str,
         status: String,
         save: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         test: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         upload: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-        download: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        download_target: SyncDownloadTarget,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         layout::row()
@@ -701,24 +698,45 @@ impl SettingsView {
                     .gap_2()
                     .flex_shrink_0()
                     .child(
-                        Self::action_button(format!("{provider}-save"), "保存", true)
-                            .on_click(cx.listener(move |this, _event, _window, cx| save(this, cx))),
+                        components::button(
+                            format!("{provider}-save"),
+                            "保存",
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| save(this, cx))),
                     )
                     .child(
-                        Self::action_button(format!("{provider}-test"), "测试", false)
-                            .on_click(cx.listener(move |this, _event, _window, cx| test(this, cx))),
+                        components::button(
+                            format!("{provider}-test"),
+                            "测试",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| test(this, cx))),
                     )
                     .child(
-                        Self::action_button(format!("{provider}-upload"), "上传", false).on_click(
-                            cx.listener(move |this, _event, _window, cx| upload(this, cx)),
-                        ),
+                        components::button(
+                            format!("{provider}-upload"),
+                            "上传",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| upload(this, cx))),
                     )
                     .child(
-                        Self::action_button(format!("{provider}-download"), "下载", false)
-                            .text_color(theme::yellow())
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                download(this, cx);
-                            })),
+                        components::button(
+                            format!("{provider}-download"),
+                            "下载",
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.confirm_download = Some(download_target);
+                                cx.notify();
+                            },
+                        )),
                     ),
             )
     }
@@ -1023,7 +1041,7 @@ impl SettingsView {
                             Self::save_webdav,
                             |this, cx| this.run_webdav_sync(SyncOperation::Test, cx),
                             |this, cx| this.run_webdav_sync(SyncOperation::Upload, cx),
-                            |this, cx| this.run_webdav_sync(SyncOperation::Download, cx),
+                            SyncDownloadTarget::WebDav,
                             cx,
                         )
                         .into_any_element(),
@@ -1103,7 +1121,7 @@ impl SettingsView {
                             Self::save_s3,
                             |this, cx| this.run_s3_sync(SyncOperation::Test, cx),
                             |this, cx| this.run_s3_sync(SyncOperation::Upload, cx),
-                            |this, cx| this.run_s3_sync(SyncOperation::Download, cx),
+                            SyncDownloadTarget::S3,
                             cx,
                         )
                         .into_any_element(),
@@ -1118,21 +1136,66 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         layout::page()
+            .relative()
             .child(layout::page_header("设置", None))
-            .when_some(self.status.clone(), |s, status| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_color(theme::teal())
-                        .text_xs()
-                        .child(status),
-                )
-            })
+            .child(components::status_footer(self.status.clone()))
             .child(layout::virtual_body(gpui::list(
                 self.list_state.clone(),
                 cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
             )))
+            .when_some(self.confirm_download, |root, target| {
+                let provider = match target {
+                    SyncDownloadTarget::WebDav => "WebDAV",
+                    SyncDownloadTarget::S3 => "S3",
+                };
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header(SharedString::from(format!(
+                            "下载并还原 {provider} 快照"
+                        ))))
+                        .child(
+                            components::modal_body().child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_sm()
+                                    .child(SharedString::from(format!(
+                                        "确定从 {provider} 下载快照并还原到本地吗？当前本地数据将被覆盖，此操作不可撤销。"
+                                    ))),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "confirm-download-cancel",
+                                "取消",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.confirm_download = None;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                            components::button(
+                                "confirm-download-ok",
+                                "下载并还原",
+                                ButtonTone::Danger,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.confirm_download = None;
+                                match target {
+                                    SyncDownloadTarget::WebDav => {
+                                        this.run_webdav_sync(SyncOperation::Download, cx);
+                                    }
+                                    SyncDownloadTarget::S3 => {
+                                        this.run_s3_sync(SyncOperation::Download, cx);
+                                    }
+                                }
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
     }
 }
 
