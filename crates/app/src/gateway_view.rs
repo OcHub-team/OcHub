@@ -151,9 +151,19 @@ impl GatewayView {
         let keys = self.app.db.get_gateway_keys().unwrap_or_default();
         self.active_station_by_app.clear();
         for app_type in apply::supported_apps() {
-            if ProviderService::current(&self.app, *app_type)
-                .is_ok_and(|current| current == apply::GATEWAY_PROVIDER_ID)
-            {
+            // Switch-mode apps count as connected when the gateway provider is
+            // current; additive apps have no "current", so the managed gateway
+            // provider entry existing is the connected signal.
+            let connected = if app_type.is_additive_mode() {
+                self.app
+                    .db
+                    .get_provider_by_id(apply::GATEWAY_PROVIDER_ID, app_type.as_str())
+                    .is_ok_and(|provider| provider.is_some())
+            } else {
+                ProviderService::current(&self.app, *app_type)
+                    .is_ok_and(|current| current == apply::GATEWAY_PROVIDER_ID)
+            };
+            if connected {
                 if let Some(route_id) = keys
                     .iter()
                     .find(|key| key.name == app_type.as_str() && key.enabled)
@@ -726,7 +736,7 @@ impl GatewayView {
             .p_4()
             .child(section_title(
                 "其他工具接入",
-                "OpenCode、OpenClaw、Hermes 等使用 OpenAI Chat 接口的工具，填入以下本机地址和密钥即可接入。",
+                "任何使用 OpenAI Chat 接口的工具，填入以下本机地址和密钥即可接入。",
             ));
         let panel = match self.connection_info.clone() {
             None => panel.child(div().text_color(theme::muted()).text_sm().child(
@@ -1215,7 +1225,7 @@ impl GatewayView {
                     div()
                         .text_color(theme::yellow())
                         .text_xs()
-                        .child("OpenAI Chat 格式不支持思考签名等高级能力，应用到 Claude Code 或 Codex 时会自动转换，思考内容不参与后续对话。"),
+                        .child("OpenAI Chat 格式不支持思考签名等高级能力，应用到 Claude Code、Codex 等工具时会自动转换，思考内容不参与后续对话。"),
                 )
             })
             .child(section_title(
@@ -1393,7 +1403,7 @@ impl Render for GatewayView {
                 layout::page_header(
                     "转发站",
                     Some(
-                        "集中管理转发站，一键应用到 Claude Code、Claude Desktop 和 Codex；其他工具可复制连接信息接入。"
+                        "集中管理转发站，一键应用到已启用的 AI 工具；其他工具可复制连接信息手动接入。"
                             .into(),
                     ),
                 )
