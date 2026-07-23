@@ -559,6 +559,14 @@ impl TextInput {
         self
     }
 
+    /// Toggle masking at runtime (reveal/hide a secret in place).
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        if self.masked != masked {
+            self.masked = masked;
+            cx.notify();
+        }
+    }
+
     /// Allow Enter and pasted text to preserve newlines. Rendering still uses
     /// the lightweight GPUI input element, but the saved value remains faithful.
     pub fn multiline(mut self, multiline: bool) -> Self {

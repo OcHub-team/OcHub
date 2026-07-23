@@ -291,6 +291,13 @@ impl AppRoot {
             }
         })
         .detach();
+        cx.subscribe(&this.gateway_view, |this, _view, event, cx| match event {
+            crate::gateway_view::GatewayEvent::OpenProviders(app) => {
+                this.selected_app = *app;
+                this.select_section(Section::Providers, cx);
+            }
+        })
+        .detach();
         this.connect_toast_sources(cx);
         this.reload(cx);
         if initial_section == Section::Providers
@@ -327,10 +334,11 @@ impl AppRoot {
     ) {
         let notifications = notifications.clone();
         cx.observe(source, move |_this, source, cx| {
-            let message = source.update(cx, |source, _| source.take_toast());
+            let (message, level) =
+                source.update(cx, |source, _| (source.take_toast(), source.take_toast_level()));
             if let Some(message) = message {
                 notifications.update(cx, |host, cx| {
-                    host.status(message, cx);
+                    host.status_leveled(level, message, cx);
                 });
             }
         })
@@ -342,10 +350,11 @@ impl AppRoot {
         notifications: &Entity<NotificationHost>,
         cx: &mut Context<Self>,
     ) {
-        let message = source.update(cx, |source, _| source.take_toast());
+        let (message, level) =
+            source.update(cx, |source, _| (source.take_toast(), source.take_toast_level()));
         if let Some(message) = message {
             notifications.update(cx, |host, cx| {
-                host.status(message, cx);
+                host.status_leveled(level, message, cx);
             });
         }
     }
@@ -589,7 +598,7 @@ impl AppRoot {
                 } else {
                     self.notify_warning(
                         format!("已切换到「{name}」"),
-                        format!("应用工具配置时返回 {} 个警告", result.warnings.len()),
+                        Self::warnings_summary(&result.warnings),
                         cx,
                     );
                 }
@@ -603,19 +612,32 @@ impl AppRoot {
         cx.notify();
     }
 
-    fn connect_local_gateway(&mut self, cx: &mut Context<Self>) {
-        let station_route_id = self
+    /// The enabled station route currently bound to the selected app, if any.
+    fn bound_station_route(&self) -> Option<&GatewayRoute> {
+        let route_id = self
             .gateway_keys
             .iter()
             .find(|key| key.name == self.selected_app.as_str() && key.enabled)
             .and_then(|key| key.route_id.as_deref())
-            .filter(|route_id| route_id.starts_with(apply::STATION_ROUTE_PREFIX))
-            .filter(|route_id| {
-                self.gateway_routes
-                    .iter()
-                    .any(|route| route.id == **route_id && route.enabled)
-            });
-        if station_route_id.is_none() {
+            .filter(|route_id| route_id.starts_with(apply::STATION_ROUTE_PREFIX))?;
+        self.gateway_routes
+            .iter()
+            .find(|route| route.id == route_id && route.enabled)
+    }
+
+    /// Toast body for config-write warnings: count plus the first few actual
+    /// messages, so users never see a bare number with no detail.
+    fn warnings_summary(warnings: &[String]) -> String {
+        let shown: Vec<&str> = warnings.iter().take(3).map(String::as_str).collect();
+        let mut text = format!("{} 条警告：{}", warnings.len(), shown.join("；"));
+        if warnings.len() > 3 {
+            text.push('…');
+        }
+        text
+    }
+
+    fn connect_local_gateway(&mut self, cx: &mut Context<Self>) {
+        if self.bound_station_route().is_none() {
             self.notify_warning(
                 "请先应用一个转发站",
                 "进入“转发站”页面，选择一个配置并应用到当前 CLI。",
@@ -664,7 +686,7 @@ impl AppRoot {
                     Ok(result) => {
                         this.notify_warning(
                             "已切换到转发站模式",
-                            format!("写入应用配置时返回 {} 个警告", result.warnings.len()),
+                            Self::warnings_summary(&result.warnings),
                             cx,
                         );
                     }
@@ -1063,7 +1085,7 @@ impl AppRoot {
         let can_move_down = !is_gateway
             && visible_position.is_some_and(|position| position + 1 < visible_ids.len());
         let base_url = if is_gateway {
-            "模型、格式与思考映射由所选转发站处理".to_string()
+            self.gateway_via_station_line()
         } else {
             self.provider_base_url(provider)
         };
@@ -1073,13 +1095,21 @@ impl AppRoot {
             .as_ref()
             .and_then(|meta| meta.live_config_managed)
             .unwrap_or(!is_additive);
-        let main_label = if is_additive {
+        // In switch mode the gateway card needs a bound station before it can
+        // be switched to; without one the button becomes a setup shortcut.
+        let gateway_needs_setup =
+            is_gateway && !is_additive && self.bound_station_route().is_none();
+        let main_label = if gateway_needs_setup {
+            "配置转发站"
+        } else if is_additive {
             if is_in_live {
                 "从工具移除"
             } else {
                 "添加到工具"
             }
         } else if is_current {
+            // Unreachable in switch mode (the current provider is filtered out
+            // of the list); kept for the additive rendering path.
             "已启用"
         } else {
             "切换"
@@ -1157,7 +1187,7 @@ impl AppRoot {
                                         s.child(components::badge(BadgeTone::Accent, "当前"))
                                     })
                                     .when(is_gateway, |s| {
-                                        s.child(components::badge(BadgeTone::Neutral, "转发站模式"))
+                                        s.child(components::badge(BadgeTone::Accent, "转发站模式"))
                                     }),
                             )
                             .child(
@@ -1256,7 +1286,9 @@ impl AppRoot {
                         .aria_selected(is_current || (is_additive && is_in_live))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                if is_additive && is_in_live {
+                                if gateway_needs_setup {
+                                    this.select_section(Section::Gateway, cx);
+                                } else if is_additive && is_in_live {
                                     this.do_remove_from_live(live_id.clone(), cx);
                                 } else {
                                     this.do_switch(id.clone(), cx);
@@ -1265,6 +1297,15 @@ impl AppRoot {
                         )),
                     ),
             )
+    }
+
+    /// Third line for gateway cards/hero: name the station actually serving
+    /// the selected app instead of a generic explanation.
+    fn gateway_via_station_line(&self) -> String {
+        match self.bound_station_route() {
+            Some(route) => format!("经「{}」转发", route.name),
+            None => "尚未选择转发站".to_string(),
+        }
     }
 
     /// The "console" hero: a single prominent card that answers *which provider is
@@ -1369,7 +1410,7 @@ impl AppRoot {
                             ))
                             .child(div().text_color(theme::muted()).text_xs().truncate().child(
                                 SharedString::from(if is_gateway {
-                                    "模型、格式与思考映射由所选转发站处理".to_string()
+                                    self.gateway_via_station_line()
                                 } else {
                                     base_url
                                 }),
@@ -1612,7 +1653,9 @@ impl AppRoot {
                     ButtonSize::Sm,
                 );
                 let button = if active {
-                    button.cursor_not_allowed().opacity(0.65)
+                    button
+                        .cursor_not_allowed()
+                        .opacity(components::DISABLED_OPACITY)
                 } else {
                     button.on_click(cx.listener(move |this, _event, _window, cx| {
                         this.activate_gateway_route(route_id.clone(), cx);
