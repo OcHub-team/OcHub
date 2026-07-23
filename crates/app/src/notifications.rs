@@ -289,12 +289,18 @@ impl NotificationHost {
         )
     }
 
-    pub fn status(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) -> u64 {
+    /// Status toast with an explicit level. `None` falls back to keyword
+    /// inference — blocking/refusal messages should always pass an explicit
+    /// level so their wording never gets mis-classified.
+    pub fn status_leveled(
+        &mut self,
+        level: Option<NotificationLevel>,
+        message: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
         let message = message.into();
-        self.notify(
-            NotificationRequest::new(NotificationLevel::from_text(message.as_ref()), message),
-            cx,
-        )
+        let level = level.unwrap_or_else(|| NotificationLevel::from_text(message.as_ref()));
+        self.notify(NotificationRequest::new(level, message), cx)
     }
 
     pub fn notify(&mut self, request: NotificationRequest, cx: &mut Context<Self>) -> u64 {
@@ -514,6 +520,11 @@ impl NotificationHost {
 /// emitting the same state again on unrelated redraws.
 pub trait ToastSource {
     fn take_toast(&mut self) -> Option<SharedString>;
+    /// Explicit level for the toast just taken. Default `None` keeps keyword
+    /// inference; views with blocking/refusal toasts should set it explicitly.
+    fn take_toast_level(&mut self) -> Option<NotificationLevel> {
+        None
+    }
 }
 
 macro_rules! impl_status_toasts {
@@ -526,7 +537,23 @@ macro_rules! impl_status_toasts {
     };
 }
 
+/// Like [`impl_status_toasts!`] but also forwards an explicit
+/// `self.status_level` set alongside `self.status`.
+macro_rules! impl_status_toasts_leveled {
+    ($view:ty) => {
+        impl $crate::notifications::ToastSource for $view {
+            fn take_toast(&mut self) -> Option<gpui::SharedString> {
+                self.status.take()
+            }
+            fn take_toast_level(&mut self) -> Option<$crate::notifications::NotificationLevel> {
+                self.status_level.take()
+            }
+        }
+    };
+}
+
 pub(crate) use impl_status_toasts;
+pub(crate) use impl_status_toasts_leveled;
 
 impl Render for NotificationHost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

@@ -176,6 +176,17 @@ pub fn field(
     help: Option<SharedString>,
     control: impl IntoElement,
 ) -> gpui::Div {
+    field_with_error(label, required, help, None, control)
+}
+
+/// [`field`] with an inline validation error rendered in red below the control.
+pub fn field_with_error(
+    label: impl Into<SharedString>,
+    required: bool,
+    help: Option<SharedString>,
+    error: Option<SharedString>,
+    control: impl IntoElement,
+) -> gpui::Div {
     let mut label_row = div()
         .flex()
         .flex_row()
@@ -197,7 +208,11 @@ pub fn field(
     if let Some(help) = help {
         col = col.child(div().text_color(theme::muted()).text_xs().child(help));
     }
-    col.child(control)
+    col = col.child(control);
+    if let Some(error) = error {
+        col = col.child(div().text_color(theme::red()).text_xs().child(error));
+    }
+    col
 }
 
 /// Horizontal field for grouped settings rows: semibold label + muted
@@ -364,6 +379,15 @@ pub fn card() -> gpui::Div {
         .border_color(theme::border())
         .p_4()
 }
+
+/// A [`card`] highlighted as the active editing surface (accent border).
+pub fn card_emphasis() -> gpui::Div {
+    card().border_color(theme::accent())
+}
+
+/// Opacity applied to disabled interactive elements. Keep call sites on this
+/// constant so the disabled look stays uniform across pages.
+pub const DISABLED_OPACITY: f32 = 0.6;
 
 /// Legacy thin panel (kept for the provider list hero/card; new code: `card`).
 pub fn panel() -> gpui::Div {
