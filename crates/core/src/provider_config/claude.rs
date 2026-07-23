@@ -174,7 +174,7 @@ impl AppConfig for ClaudeConfig {
                             ],
                         },
                     )
-                    .help("仅存于 meta.apiFormat，绝不写入 settings.json；驱动代理转换。"),
+                    .help("仅存于 meta.apiFormat，绝不写入 settings.json；用于网关协议转换。"),
                     FormField::new(
                         "custom_user_agent",
                         "自定义 User-Agent (meta)",
@@ -188,7 +188,7 @@ impl AppConfig for ClaudeConfig {
                         "Base URL 为完整地址 (meta)",
                         FieldKind::Toggle,
                     )
-                    .help("存于 meta.isFullUrl；上游已是完整端点、代理不再追加路径时开启。"),
+                    .help("存于 meta.isFullUrl；上游已是完整端点、网关不再追加路径时开启。"),
                 ],
             )
             .advanced(),
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn anthropic_api_format_is_none_in_meta() {
         let result = ClaudeConfig.encode(&sample_values(), &Value::Null, None);
-        // Default "anthropic" stays None so it does not override the proxy default.
+        // Default "anthropic" stays None so it does not override the gateway default.
         assert!(result.meta.unwrap().api_format.is_none());
     }
 

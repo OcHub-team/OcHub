@@ -3,7 +3,7 @@
 # This reproduces the native `provider_config::GeminiConfig` codec and the
 # Gemini branch of `write_gemini_live` 1:1 (schema, encode/decode, preview,
 # validation, and the on-disk `.env` + `settings.json` writes). The built-in
-# plugin keeps its native UI metadata / MCP / prompt / skills / proxy
+# plugin keeps its native UI metadata / MCP / skills / gateway
 # capabilities; only the provider codec and the live-config write route through
 # this manifest.
 

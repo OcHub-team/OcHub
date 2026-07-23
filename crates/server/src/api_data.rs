@@ -541,10 +541,6 @@ async fn deeplink_import(
             let result = ochub_core::deeplink::import_mcp_from_deeplink(&s.app, request)?;
             to_value(json!({ "resource": "mcp", "result": serde_json::to_value(result).ok() }))
         }
-        "prompt" => {
-            let id = ochub_core::deeplink::import_prompt_from_deeplink(&s.app, request)?;
-            to_value(json!({ "resource": "prompt", "result": serde_json::to_value(id).ok() }))
-        }
         "skill" => {
             let id = ochub_core::deeplink::import_skill_from_deeplink(&s.app, request)?;
             to_value(json!({ "resource": "skill", "result": serde_json::to_value(id).ok() }))

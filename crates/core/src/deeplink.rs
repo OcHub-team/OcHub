@@ -4,15 +4,13 @@
 //! configurations via deep links. Supports importing:
 //! - Provider configurations (Claude/Codex/Gemini/...)
 //! - MCP server configurations
-//! - Prompts
 //! - Skills
 //!
 //! The import functions take `&AppState` and call the already-ported services
-//! (ProviderService, McpService, PromptService) and DB DAOs.
+//! (ProviderService, McpService) and DB DAOs.
 
 mod mcp;
 mod parser;
-mod prompt;
 mod provider;
 mod skill;
 mod utils;
@@ -25,7 +23,6 @@ use serde::{Deserialize, Serialize};
 // Re-export public API
 pub use mcp::{import_mcp_from_deeplink, McpImportError, McpImportResult};
 pub use parser::parse_deeplink_url;
-pub use prompt::import_prompt_from_deeplink;
 pub use provider::{import_provider_from_deeplink, parse_and_merge_config};
 pub use skill::import_skill_from_deeplink;
 pub use utils::{decode_base64_param, infer_homepage_from_endpoint, validate_url};
@@ -39,11 +36,11 @@ pub use utils::{decode_base64_param, infer_homepage_from_endpoint, validate_url}
 pub struct DeepLinkImportRequest {
     /// Protocol version (e.g., "v1")
     pub version: String,
-    /// Resource type to import: "provider" | "prompt" | "mcp" | "skill"
+    /// Resource type to import: "provider" | "mcp" | "skill"
     pub resource: String,
 
     // ============ Common fields ============
-    /// Target application (claude/codex/gemini) - for provider, prompt, skill
+    /// Target application (claude/codex/gemini) - for provider, skill
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
     /// Resource name
@@ -81,14 +78,6 @@ pub struct DeepLinkImportRequest {
     /// Optional Opus model (Claude only, v3.7.1+)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opus_model: Option<String>,
-
-    // ============ Prompt-specific fields ============
-    /// Base64 encoded Markdown content
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    /// Prompt description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
 
     // ============ MCP-specific fields ============
     /// Target applications for MCP (comma-separated: "claude,codex,gemini")

@@ -4,7 +4,7 @@
 
 use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
 
-use crate::components::{self, BadgeTone, BannerTone, ButtonSize, ButtonTone};
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
@@ -80,29 +80,6 @@ impl gpui::Render for GalleryView {
                 )
                 .into_any_element(),
             ]));
-
-        let banners = components::card().gap_2().child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(components::status_banner_tone(
-                    BannerTone::Info,
-                    "这是一条信息提示（Info）。",
-                ))
-                .child(components::status_banner_tone(
-                    BannerTone::Success,
-                    "操作已成功完成（Success）。",
-                ))
-                .child(components::status_banner_tone(
-                    BannerTone::Warning,
-                    "存在配置冲突，请检查（Warning）。",
-                ))
-                .child(components::status_banner_tone(
-                    BannerTone::Error,
-                    "保存失败：无法写入文件（Error）。",
-                )),
-        );
 
         let fields = components::card()
             .gap_4()
@@ -254,7 +231,7 @@ impl gpui::Render for GalleryView {
             .child(components::stat_tile(
                 None,
                 theme::green(),
-                "代理状态",
+                "网关状态",
                 "运行中",
                 "http://127.0.0.1:4180",
             ))
@@ -381,7 +358,6 @@ impl gpui::Render for GalleryView {
                 "gallery-scroll",
                 layout::content_column()
                     .child(Self::section("按钮", "tone × size,统一悬停与字重", buttons))
-                    .child(Self::section("状态条", "四级 banner + 自动检测", banners))
                     .child(Self::section(
                         "表单字段",
                         "竖排 field / 必填 / 横排 field_row",

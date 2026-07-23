@@ -4,7 +4,10 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, Context, Entity, ListAlignment, ListState, SharedString, Window};
+use gpui::{
+    div, prelude::*, px, App, Context, Entity, Focusable, ListAlignment, ListState, SharedString,
+    Window,
+};
 use ochub_core::app_store;
 use ochub_core::services::UpdateCheckResult;
 use ochub_core::settings::{self, AppSettings, S3SyncSettings, WebDavSyncSettings};
@@ -74,6 +77,58 @@ pub struct SettingsView {
 const SETTINGS_BLOCK_COUNT: usize = 6;
 
 impl SettingsView {
+    pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_download.is_some() {
+            window.play_system_bell();
+            return;
+        }
+        let focused = |input: &Entity<TextInput>, cx: &App| {
+            input.read(cx).focus_handle(cx).is_focused(window)
+        };
+        if [
+            &self.webdav_url,
+            &self.webdav_username,
+            &self.webdav_password,
+            &self.webdav_remote_root,
+            &self.webdav_profile,
+        ]
+        .into_iter()
+        .any(|input| focused(input, cx))
+        {
+            self.save_webdav(cx);
+        } else if [
+            &self.s3_region,
+            &self.s3_bucket,
+            &self.s3_access_key,
+            &self.s3_secret_key,
+            &self.s3_endpoint,
+            &self.s3_remote_root,
+            &self.s3_profile,
+        ]
+        .into_iter()
+        .any(|input| focused(input, cx))
+        {
+            self.save_s3(cx);
+        } else if focused(&self.app_config_dir, cx) {
+            self.save_paths(cx);
+        } else if focused(&self.preferred_terminal, cx)
+            || focused(&self.backup_interval_hours, cx)
+            || focused(&self.backup_retain_count, cx)
+        {
+            self.save_terminal_and_backup(cx);
+        } else {
+            window.play_system_bell();
+        }
+    }
+
+    pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_download.take().is_some() {
+            cx.notify();
+        } else {
+            window.play_system_bell();
+        }
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings = settings::get_settings();
         let webdav = settings.webdav_sync.clone().unwrap_or_default();
@@ -357,11 +412,6 @@ impl SettingsView {
         self.persist(cx);
     }
 
-    fn toggle_local_proxy(&mut self, cx: &mut Context<Self>) {
-        self.settings.enable_local_proxy = !self.settings.enable_local_proxy;
-        self.persist(cx);
-    }
-
     fn toggle_app_window_controls(&mut self, cx: &mut Context<Self>) {
         self.settings.use_app_window_controls = !self.settings.use_app_window_controls;
         self.persist(cx);
@@ -374,14 +424,6 @@ impl SettingsView {
 
     fn toggle_silent_startup(&mut self, cx: &mut Context<Self>) {
         self.settings.silent_startup = !self.settings.silent_startup;
-        self.persist(cx);
-    }
-
-    fn toggle_failover(&mut self, cx: &mut Context<Self>) {
-        self.settings.enable_failover_toggle = !self.settings.enable_failover_toggle;
-        if self.settings.enable_failover_toggle {
-            self.settings.failover_confirmed = Some(true);
-        }
         self.persist(cx);
     }
 
@@ -464,9 +506,7 @@ impl SettingsView {
             return;
         }
 
-        // The core service persists the flag and, when disabling an app that
-        // is currently proxy-taken-over, restores its original live config
-        // first.
+        // The core service persists the flag and refreshes the enabled-app registry.
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -802,24 +842,6 @@ impl SettingsView {
                         cx,
                     )
                     .into_any_element(),
-                    self.render_toggle_row(
-                        "set-proxy",
-                        "启用本地代理",
-                        "允许内置代理服务临时接管工具配置。",
-                        self.settings.enable_local_proxy,
-                        Self::toggle_local_proxy,
-                        cx,
-                    )
-                    .into_any_element(),
-                    self.render_toggle_row(
-                        "set-failover",
-                        "显示故障转移能力",
-                        "启用代理模式下的供应商故障转移队列相关开关。",
-                        self.settings.enable_failover_toggle,
-                        Self::toggle_failover,
-                        cx,
-                    )
-                    .into_any_element(),
                 ];
                 rows.push(
                     self.render_value_row(
@@ -854,7 +876,7 @@ impl SettingsView {
                     )
                     .into_any_element(),
                 );
-                section_block("基础行为", "窗口、启动、代理与语言偏好。", rows)
+                section_block("基础行为", "窗口、启动与语言偏好。", rows)
             }
             1 => {
                 let mut rows: Vec<gpui::AnyElement> = ochub_core::plugin::all_plugins()
@@ -1138,7 +1160,6 @@ impl Render for SettingsView {
         layout::page()
             .relative()
             .child(layout::page_header("设置", None))
-            .child(components::status_footer(self.status.clone()))
             .child(layout::virtual_body(gpui::list(
                 self.list_state.clone(),
                 cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
@@ -1316,3 +1337,5 @@ fn sync_status_text(enabled: bool, auto_sync: bool, status: &settings::WebDavSyn
     }
     mode.to_string()
 }
+
+crate::notifications::impl_status_toasts!(SettingsView);

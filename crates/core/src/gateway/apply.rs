@@ -115,7 +115,6 @@ pub fn apply_to_app(
         meta: None,
         icon: None,
         icon_color: None,
-        in_failover_queue: false,
     };
 
     let existing = state

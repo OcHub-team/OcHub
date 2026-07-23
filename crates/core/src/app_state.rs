@@ -6,15 +6,14 @@ use tokio::sync::RwLock;
 
 use crate::app_type::AppType;
 use crate::db::Database;
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
-use crate::proxy::providers::copilot_auth::CopilotAuthManager;
+use crate::managed_auth::codex_oauth_auth::CodexOAuthManager;
+use crate::managed_auth::copilot_auth::CopilotAuthManager;
 use crate::services::provider::ProviderService;
-use crate::services::{ProxyService, UsageCache};
+use crate::services::UsageCache;
 
 /// Global application state shared across the switching layer and writers.
 pub struct AppState {
     pub db: Arc<Database>,
-    pub proxy_service: ProxyService,
     /// Local relay gateway (standing multi-dialect server + channel routing).
     pub gateway: Arc<crate::gateway::GatewayService>,
     pub usage_cache: Arc<UsageCache>,
@@ -35,14 +34,10 @@ impl AppState {
         let auth_dir = crate::paths::get_app_config_dir();
         let copilot_auth = Arc::new(RwLock::new(CopilotAuthManager::new(auth_dir.clone())));
         let codex_oauth = Arc::new(RwLock::new(CodexOAuthManager::new(auth_dir)));
-        let proxy_service =
-            ProxyService::new(db.clone(), copilot_auth.clone(), codex_oauth.clone());
-
         let gateway = Arc::new(crate::gateway::GatewayService::new(db.clone()));
 
         Self {
             db,
-            proxy_service,
             gateway,
             usage_cache: Arc::new(UsageCache::new()),
             copilot_auth,
@@ -102,6 +97,30 @@ impl AppState {
             }
             Ok(_) => {}
             Err(e) => log::warn!("failed to backfill historical usage costs: {e}"),
+        }
+
+        // A v2 installation may have exited while the retired local proxy had
+        // rewritten Claude/Codex/Gemini live files. Reapply the current
+        // provider once after migration so no tool remains pointed at a dead
+        // loopback listener. Keep the flag on failure for the next launch.
+        if self
+            .db
+            .get_bool_flag("legacy_proxy_cleanup_pending")
+            .unwrap_or(false)
+        {
+            match crate::services::provider::live::restore_live_after_legacy_local_routing(self) {
+                Ok(()) => {
+                    if let Err(error) = self.db.set_setting("legacy_proxy_cleanup_pending", "false")
+                    {
+                        log::warn!("failed to finish legacy routing cleanup: {error}");
+                    } else {
+                        log::info!("restored live configs after removing legacy local routing");
+                    }
+                }
+                Err(error) => {
+                    log::warn!("legacy local-routing cleanup will retry next launch: {error}")
+                }
+            }
         }
 
         let db_for_codex_history_migration = self.db.clone();

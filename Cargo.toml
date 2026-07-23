@@ -33,11 +33,9 @@ anyhow = "1.0"
 # Async runtime + http
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "fs", "process", "io-util"] }
 futures = "0.3"
-async-stream = "0.3"
 bytes = "1.5"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "stream", "socks", "blocking"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "stream", "blocking"] }
 axum = { version = "0.8", features = ["ws"] }
-tower = "0.5"
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 http = "1"
 

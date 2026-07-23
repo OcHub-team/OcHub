@@ -16,7 +16,7 @@ use crate::error::AppError;
 use crate::model::Provider;
 use crate::provider_config::AppConfig;
 
-use super::capabilities::{LiveConfigOps, ProxySpec, WireDialect};
+use super::capabilities::LiveConfigOps;
 use super::plugin_manifest::ManifestPlugin;
 use super::{AppMode, AppPlugin};
 
@@ -29,18 +29,9 @@ struct BuiltinSpec {
     sort: i32,
     enabled_by_default: bool,
     mode: AppMode,
-    prompt_filename: Option<&'static str>,
     mcp: bool,
     skills: bool,
-    proxy: Option<ProxySpec>,
 }
-
-const TAKEOVER: fn(WireDialect) -> Option<ProxySpec> = |dialect| {
-    Some(ProxySpec {
-        dialect,
-        supports_takeover: true,
-    })
-};
 
 fn builtin_specs() -> Vec<BuiltinSpec> {
     vec![
@@ -52,10 +43,8 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             sort: 0,
             enabled_by_default: true,
             mode: AppMode::Switch,
-            prompt_filename: Some("CLAUDE.md"),
             mcp: true,
             skills: true,
-            proxy: TAKEOVER(WireDialect::Anthropic),
         },
         BuiltinSpec {
             app: AppType::ClaudeDesktop,
@@ -65,10 +54,8 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             sort: 10,
             enabled_by_default: true,
             mode: AppMode::Switch,
-            prompt_filename: None,
             mcp: false,
             skills: false,
-            proxy: None,
         },
         BuiltinSpec {
             app: AppType::Codex,
@@ -78,10 +65,8 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             sort: 20,
             enabled_by_default: true,
             mode: AppMode::Switch,
-            prompt_filename: Some("AGENTS.md"),
             mcp: true,
             skills: true,
-            proxy: TAKEOVER(WireDialect::OpenAiResponses),
         },
         BuiltinSpec {
             app: AppType::Gemini,
@@ -91,10 +76,8 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             sort: 30,
             enabled_by_default: true,
             mode: AppMode::Switch,
-            prompt_filename: Some("GEMINI.md"),
             mcp: true,
             skills: true,
-            proxy: TAKEOVER(WireDialect::Gemini),
         },
         BuiltinSpec {
             app: AppType::OpenCode,
@@ -104,10 +87,8 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             sort: 40,
             enabled_by_default: true,
             mode: AppMode::Additive,
-            prompt_filename: Some("AGENTS.md"),
             mcp: true,
             skills: true,
-            proxy: None,
         },
         BuiltinSpec {
             app: AppType::OpenClaw,
@@ -117,10 +98,8 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             sort: 50,
             enabled_by_default: true,
             mode: AppMode::Additive,
-            prompt_filename: Some("AGENTS.md"),
             mcp: false,
             skills: false,
-            proxy: None,
         },
         BuiltinSpec {
             app: AppType::Hermes,
@@ -130,10 +109,8 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             sort: 60,
             enabled_by_default: false,
             mode: AppMode::Additive,
-            prompt_filename: Some("AGENTS.md"),
             mcp: true,
             skills: true,
-            proxy: None,
         },
     ]
 }
@@ -143,7 +120,7 @@ pub(super) fn builtin_plugins() -> Vec<Arc<dyn AppPlugin>> {
         .into_iter()
         .map(|spec| {
             // Gemini's provider codec and live write route through the embedded
-            // manifest engine; its UI metadata / MCP / prompt / skills / proxy
+            // manifest engine; its UI metadata / MCP / skills
             // capabilities stay native on this wrapper.
             let manifest = if spec.app == AppType::Gemini {
                 Some(super::builtin_gemini_plugin())
@@ -218,20 +195,12 @@ impl AppPlugin for BuiltinPlugin {
         self
     }
 
-    fn prompt_filename(&self) -> Option<&str> {
-        self.spec.prompt_filename
-    }
-
     fn supports_mcp(&self) -> bool {
         self.spec.mcp
     }
 
     fn supports_skills(&self) -> bool {
         self.spec.skills
-    }
-
-    fn proxy(&self) -> Option<ProxySpec> {
-        self.spec.proxy
     }
 }
 

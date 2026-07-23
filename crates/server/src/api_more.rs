@@ -682,7 +682,7 @@ fn app_config_status_sync(
                     "Claude Desktop status requires server state".to_string(),
                 ));
             };
-            let status = claude_desktop::get_status(&state.app.db, false)?;
+            let status = claude_desktop::get_status(&state.app.db)?;
             ochub_core::paths::ConfigStatus {
                 exists: status.configured,
                 path: status.config_library_path.unwrap_or_default(),
@@ -970,7 +970,7 @@ async fn codex_restore_unified_history() -> ApiResult<Json<Value>> {
     })))
 }
 
-// ----- OMO / workspace / Claude MCP -----
+// ----- OMO / Claude MCP -----
 
 async fn omo_local_file() -> ApiResult<Json<Value>> {
     to_value(ochub_core::services::OmoService::read_local_file(
@@ -1027,74 +1027,6 @@ async fn omo_slim_disable(State(s): State<ServerState>) -> ApiResult<Json<Value>
     disable_omo_category(&s, "omo-slim")?;
     ochub_core::services::OmoService::delete_config_file(&ochub_core::services::omo::SLIM)?;
     Ok(Json(json!({ "ok": true })))
-}
-
-#[derive(Deserialize)]
-struct WorkspaceFileQuery {
-    filename: String,
-}
-
-#[derive(Deserialize)]
-struct WorkspaceFileWriteRequest {
-    filename: String,
-    content: String,
-}
-
-async fn workspace_allowed_files() -> Json<Value> {
-    Json(json!({
-        "files": ochub_core::services::WorkspaceService::allowed_workspace_files()
-    }))
-}
-
-async fn workspace_read(Query(q): Query<WorkspaceFileQuery>) -> ApiResult<Json<Value>> {
-    let content = ochub_core::services::WorkspaceService::read_workspace_file(&q.filename)?;
-    Ok(Json(json!({ "content": content })))
-}
-
-async fn workspace_write(Json(req): Json<WorkspaceFileWriteRequest>) -> ApiResult<Json<Value>> {
-    ochub_core::services::WorkspaceService::write_workspace_file(&req.filename, &req.content)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-#[derive(Deserialize)]
-struct WorkspaceOpenRequest {
-    #[serde(default)]
-    subdir: Option<String>,
-}
-
-async fn workspace_open(Json(req): Json<WorkspaceOpenRequest>) -> ApiResult<Json<Value>> {
-    let subdir = req.subdir.as_deref().unwrap_or("workspace");
-    let dir = ochub_core::services::WorkspaceService::ensure_directory_for_subdir(subdir)?;
-    open_path(&dir)?;
-    Ok(Json(json!({ "ok": true, "path": dir.to_string_lossy() })))
-}
-
-async fn memory_list() -> ApiResult<Json<Value>> {
-    to_value(ochub_core::services::WorkspaceService::list_daily_memory_files()?)
-}
-
-async fn memory_read(Query(q): Query<WorkspaceFileQuery>) -> ApiResult<Json<Value>> {
-    let content = ochub_core::services::WorkspaceService::read_daily_memory_file(&q.filename)?;
-    Ok(Json(json!({ "content": content })))
-}
-
-async fn memory_write(Json(req): Json<WorkspaceFileWriteRequest>) -> ApiResult<Json<Value>> {
-    ochub_core::services::WorkspaceService::write_daily_memory_file(&req.filename, &req.content)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn memory_delete(Query(q): Query<WorkspaceFileQuery>) -> ApiResult<Json<Value>> {
-    ochub_core::services::WorkspaceService::delete_daily_memory_file(&q.filename)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-#[derive(Deserialize)]
-struct MemorySearchRequest {
-    query: String,
-}
-
-async fn memory_search(Json(req): Json<MemorySearchRequest>) -> ApiResult<Json<Value>> {
-    to_value(ochub_core::services::WorkspaceService::search_daily_memory_files(&req.query)?)
 }
 
 async fn claude_mcp_status() -> ApiResult<Json<Value>> {
@@ -1516,18 +1448,6 @@ pub fn router() -> Router<ServerState> {
             get(omo_slim_current_provider),
         )
         .route("/api/omo-slim/disable", post(omo_slim_disable))
-        .route("/api/workspace/allowed-files", get(workspace_allowed_files))
-        .route(
-            "/api/workspace/file",
-            get(workspace_read).put(workspace_write),
-        )
-        .route("/api/workspace/open", post(workspace_open))
-        .route("/api/workspace/memory", get(memory_list))
-        .route(
-            "/api/workspace/memory/file",
-            get(memory_read).put(memory_write).delete(memory_delete),
-        )
-        .route("/api/workspace/memory/search", post(memory_search))
         .route("/api/claude-mcp/status", get(claude_mcp_status))
         .route("/api/claude-mcp/config", get(claude_mcp_config))
         .route(

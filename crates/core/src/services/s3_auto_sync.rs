@@ -56,11 +56,10 @@ pub fn should_trigger_for_table(table: &str) -> bool {
         "providers"
             | "provider_endpoints"
             | "mcp_servers"
-            | "prompts"
             | "skills"
             | "skill_repos"
             | "settings"
-            | "proxy_config"
+            | "usage_config"
     )
 }
 
@@ -201,7 +200,7 @@ mod tests {
     fn should_trigger_sync_for_config_tables_only() {
         assert!(should_trigger_for_table("providers"));
         assert!(should_trigger_for_table("settings"));
-        assert!(!should_trigger_for_table("proxy_request_logs"));
+        assert!(!should_trigger_for_table("usage_logs"));
         assert!(!should_trigger_for_table("provider_health"));
     }
 

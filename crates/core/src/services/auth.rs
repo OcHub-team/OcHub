@@ -12,8 +12,8 @@
 //! - Codex / ChatGPT OAuth quota + models (`get_codex_oauth_*`)
 
 use crate::app_state::AppState;
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthError;
-use crate::proxy::providers::copilot_auth::{
+use crate::managed_auth::codex_oauth_auth::CodexOAuthError;
+use crate::managed_auth::copilot_auth::{
     CopilotAuthError, CopilotAuthStatus, CopilotModel, CopilotUsageResponse, GitHubAccount,
     GitHubDeviceCodeResponse,
 };

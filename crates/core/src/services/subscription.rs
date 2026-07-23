@@ -321,7 +321,7 @@ const KNOWN_TIERS: &[&str] = &[
 
 /// 查询 Claude 官方订阅额度
 async fn query_claude_quota(access_token: &str) -> SubscriptionQuota {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get("https://api.anthropic.com/api/oauth/usage")
@@ -656,7 +656,7 @@ pub(crate) async fn query_codex_quota(
     tool_label: &str,
     expired_message: &str,
 ) -> SubscriptionQuota {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let mut req = client
         .get("https://chatgpt.com/backend-api/wham/usage")
@@ -956,7 +956,7 @@ fn parse_gemini_file_json(content: &str) -> GeminiCredentials {
 async fn refresh_gemini_token(refresh_token: &str) -> Option<String> {
     let client_id = std::env::var("GEMINI_OAUTH_CLIENT_ID").ok()?;
     let client_secret = std::env::var("GEMINI_OAUTH_CLIENT_SECRET").ok()?;
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .post("https://oauth2.googleapis.com/token")
@@ -1037,7 +1037,7 @@ fn classify_gemini_model(model_id: &str) -> &str {
 /// 1. loadCodeAssist → 获取 cloudaicompanionProject
 /// 2. retrieveUserQuota → 获取按模型分桶的配额数据
 async fn query_gemini_quota(access_token: &str) -> SubscriptionQuota {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     // ── Step 1: loadCodeAssist 获取项目 ID ──
     let load_resp = client

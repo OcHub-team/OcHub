@@ -39,6 +39,18 @@ pub fn app_has_settings(app: AppType) -> bool {
 }
 
 impl AppSettingsView {
+    pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.config_dir.is_some() {
+            self.save_config_dir(cx);
+        } else {
+            window.play_system_bell();
+        }
+    }
+
+    pub(crate) fn shortcut_cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(AppSettingsEvent::Close);
+    }
+
     pub fn new(app_type: AppType, cx: &mut Context<Self>) -> Self {
         let settings = settings::get_settings();
         let config_dir = Self::make_config_dir_input(app_type, &settings, cx);
@@ -184,7 +196,6 @@ impl Render for AppSettingsView {
 
         layout::page()
             .child(header)
-            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body("app-settings-body", column))
     }
 }
@@ -300,3 +311,5 @@ fn write_config_dir(settings: &mut AppSettings, app: AppType, value: Option<Stri
 fn app_label(app: AppType) -> gpui::SharedString {
     crate::app_meta::label(app)
 }
+
+crate::notifications::impl_status_toasts!(AppSettingsView);

@@ -134,7 +134,7 @@ impl AppConfig for CodexConfig {
                                 .with_hint("当前 Codex 仅支持 responses")],
                         },
                     )
-                    .help("chat 已被 Codex 移除；chat-only 上游需经翻译代理。"),
+                    .help("chat 已被 Codex 移除；chat-only 上游需经网关翻译。"),
                     FormField::new("disable_response_storage", "禁用响应存储", FieldKind::Toggle)
                         .help("disable_response_storage = true（ZDR / 不支持存储的上游）。"),
                     FormField::new(
@@ -344,7 +344,7 @@ impl AppConfig for CodexConfig {
         if wire_api == "chat" {
             issues.push(
                 ConfigIssue::error(
-                    "wire_api = \"chat\" 已被 Codex 移除（约 2026-02）。请改用 responses；纯 chat-completions 上游需经翻译代理。",
+                    "wire_api = \"chat\" 已被 Codex 移除（约 2026-02）。请改用 responses；纯 chat-completions 上游需经网关翻译。",
                 )
                 .for_field("wire_api"),
             );

@@ -8,8 +8,9 @@
 //! baseline, so the chart "rises" into view.
 
 use gpui::{
-    canvas, linear_color_stop, linear_gradient, point, px, App, Bounds, Hsla, IntoElement,
-    PathBuilder, Pixels, RenderOnce, Styled, Window,
+    canvas, fill, linear_color_stop, linear_gradient, outline, point, px, size, App, BorderStyle,
+    Bounds, Hsla, IntoElement, PathBuilder, Pixels, RenderOnce, SharedString, Styled, TextRun,
+    Window,
 };
 
 use crate::theme;
@@ -18,6 +19,11 @@ use crate::theme;
 #[derive(IntoElement)]
 pub struct AreaChart {
     values: Vec<f32>,
+    /// Pre-formatted tooltip text per bucket (same order as `values`).
+    /// Empty disables hover. The caller must re-render on mouse move over the
+    /// chart (e.g. an `on_mouse_move` → `cx.notify()` wrapper) — the paint pass
+    /// reads the live mouse position each frame.
+    hover_labels: Vec<SharedString>,
     line: Hsla,
     fill_top: Hsla,
     fill_bottom: Hsla,
@@ -29,6 +35,7 @@ impl AreaChart {
     pub fn new(values: Vec<f32>) -> Self {
         let mut chart = Self {
             values,
+            hover_labels: Vec::new(),
             line: theme::accent().into(),
             fill_top: theme::accent().into(),
             fill_bottom: theme::accent().into(),
@@ -37,6 +44,13 @@ impl AreaChart {
         };
         chart.set_palette(theme::accent());
         chart
+    }
+
+    /// Enable hover: show `labels[i]` in a tooltip when the pointer is over
+    /// bucket `i`, with a crosshair + marker dot on the curve.
+    pub fn hover_labels(mut self, labels: Vec<SharedString>) -> Self {
+        self.hover_labels = labels;
+        self
     }
 
     fn set_palette(&mut self, color: gpui::Rgba) {
@@ -68,6 +82,7 @@ impl RenderOnce for AreaChart {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let AreaChart {
             values,
+            hover_labels,
             line,
             fill_top,
             fill_bottom,
@@ -77,7 +92,7 @@ impl RenderOnce for AreaChart {
 
         canvas(
             move |_bounds, _window, _cx| (),
-            move |bounds, _prepaint, window, _cx| {
+            move |bounds, _prepaint, window, cx| {
                 paint_area(
                     bounds,
                     &values,
@@ -87,6 +102,7 @@ impl RenderOnce for AreaChart {
                     progress,
                     window,
                 );
+                paint_hover(bounds, &values, &hover_labels, line, window, cx);
             },
         )
         .w_full()
@@ -94,18 +110,19 @@ impl RenderOnce for AreaChart {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn paint_area(
-    bounds: Bounds<Pixels>,
-    values: &[f32],
-    line: Hsla,
-    fill_top: Hsla,
-    fill_bottom: Hsla,
-    progress: f32,
-    window: &mut Window,
-) {
+/// The canvas-space projection shared by the area fill and the hover overlay.
+struct ChartGeom {
+    x0: f32,
+    top: f32,
+    width: f32,
+    usable_h: f32,
+    baseline: f32,
+    pts: Vec<(f32, f32)>,
+}
+
+fn chart_geometry(bounds: Bounds<Pixels>, values: &[f32], progress: f32) -> Option<ChartGeom> {
     if values.len() < 2 {
-        return;
+        return None;
     }
 
     let pad_v = 8.0_f32;
@@ -133,6 +150,34 @@ fn paint_area(
             (x, y)
         })
         .collect();
+
+    Some(ChartGeom {
+        x0,
+        top,
+        width,
+        usable_h,
+        baseline,
+        pts,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_area(
+    bounds: Bounds<Pixels>,
+    values: &[f32],
+    line: Hsla,
+    fill_top: Hsla,
+    fill_bottom: Hsla,
+    progress: f32,
+    window: &mut Window,
+) {
+    let Some(ChartGeom {
+        x0, baseline, pts, ..
+    }) = chart_geometry(bounds, values, progress)
+    else {
+        return;
+    };
+    let n = pts.len();
 
     // Gradient area: curve along the top, drop to the baseline, close back to the start.
     let mut fill = PathBuilder::fill();
@@ -183,4 +228,94 @@ fn smooth_through(builder: &mut PathBuilder, pts: &[(f32, f32)]) {
         );
     }
     builder.line_to(point(px(pts[n - 1].0), px(pts[n - 1].1)));
+}
+
+/// Crosshair + tooltip for the bucket nearest the pointer, painted above the
+/// area/line. No-op when hover labels are absent or the pointer is outside the
+/// chart. The overlay tracks the fully-drawn curve (progress = 1), so it stays
+/// put while the draw-in animation plays underneath.
+fn paint_hover(
+    bounds: Bounds<Pixels>,
+    values: &[f32],
+    labels: &[SharedString],
+    line: Hsla,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if labels.is_empty() {
+        return;
+    }
+    let mouse = window.mouse_position();
+    if !bounds.contains(&mouse) {
+        return;
+    }
+    let Some(geom) = chart_geometry(bounds, values, 1.0) else {
+        return;
+    };
+    let n = geom.pts.len();
+    let rel = ((f32::from(mouse.x) - geom.x0) / geom.width).clamp(0.0, 1.0);
+    let ix = (rel * (n - 1) as f32).round() as usize;
+    let Some(&(dot_x, dot_y)) = geom.pts.get(ix) else {
+        return;
+    };
+    let Some(label) = labels.get(ix) else {
+        return;
+    };
+
+    // Crosshair through the hovered bucket, dot on the curve.
+    window.paint_quad(fill(
+        Bounds::new(
+            point(px(dot_x - 0.5), px(geom.top)),
+            size(px(1.), px(geom.usable_h)),
+        ),
+        line.opacity(0.35),
+    ));
+    let r = 3.5_f32;
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                point(px(dot_x - r), px(dot_y - r)),
+                size(px(2. * r), px(2. * r)),
+            ),
+            line,
+        )
+        .corner_radii(px(r)),
+    );
+
+    // Tooltip card; flips to the left of the crosshair near the right edge.
+    let font_size = px(11.);
+    let line_height = px(16.);
+    let run = TextRun {
+        len: label.len(),
+        font: window.text_style().font(),
+        color: theme::text().into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let shaped = window
+        .text_system()
+        .shape_line(label.clone(), font_size, &[run], None);
+    let pad_x = 8.0_f32;
+    let pad_y = 4.0_f32;
+    let tip_w = f32::from(shaped.width) + pad_x * 2.;
+    let tip_h = f32::from(line_height) + pad_y * 2.;
+    let right_edge = f32::from(bounds.origin.x) + f32::from(bounds.size.width);
+    let mut tip_x = dot_x + 10.;
+    if tip_x + tip_w > right_edge - 2. {
+        tip_x = dot_x - 10. - tip_w;
+    }
+    let tip_y = (dot_y - tip_h - 10.).max(f32::from(bounds.origin.y));
+    let tip_bounds = Bounds::new(point(px(tip_x), px(tip_y)), size(px(tip_w), px(tip_h)));
+    window.paint_quad(fill(tip_bounds, theme::overlay()).corner_radii(px(6.)));
+    window
+        .paint_quad(outline(tip_bounds, theme::border(), BorderStyle::Solid).corner_radii(px(6.)));
+    let _ = shaped.paint(
+        point(px(tip_x + pad_x), px(tip_y + pad_y)),
+        line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }

@@ -16,7 +16,7 @@
 //! verbatim from the store. The client never sees the signature.
 //!
 //! Storage is pluggable via [`SignatureStore`]; [`MemorySignatureStore`] is a
-//! TTL-bounded in-process default suitable for a local proxy.
+//! TTL-bounded in-process default suitable for the local gateway.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -21,19 +21,3 @@ pub trait LiveConfigOps: Send + Sync {
     /// Read the current live config (import / editor prefill).
     fn read_live(&self) -> Result<Value, AppError>;
 }
-
-/// The API dialect an app speaks on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WireDialect {
-    Anthropic,
-    OpenAiResponses,
-    Gemini,
-}
-
-/// Proxy capability of an app.
-#[derive(Debug, Clone, Copy)]
-pub struct ProxySpec {
-    pub dialect: WireDialect,
-    /// Whether the local proxy may take over this app's live config.
-    pub supports_takeover: bool,
-}

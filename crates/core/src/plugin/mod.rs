@@ -4,7 +4,7 @@
 //! apps — is described by one [`AppPlugin`] behind the process-wide
 //! [`registry`]. Per-app *data* (labels, dirs, modes, capability flags) lives
 //! on the trait; per-app *leaf writers* live behind [`LiveConfigOps`];
-//! stateful orchestration (switching transactions, proxy takeover, MCP/skill
+//! stateful orchestration (switching transactions, MCP/skill
 //! sync) stays in `services` and consults the registry for iteration and
 //! enable/disable gating.
 
@@ -24,7 +24,7 @@ mod manifest_tests;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
-pub use capabilities::{LiveConfigOps, ProxySpec, WireDialect};
+pub use capabilities::LiveConfigOps;
 pub use hooks::HookRegistry;
 pub use loader::{
     load_and_register_user_plugins, manifest_load_errors, reload_user_plugins, user_plugins_dir,
@@ -108,20 +108,10 @@ pub trait AppPlugin: Send + Sync + 'static {
     fn live(&self) -> &dyn LiveConfigOps;
 
     // ---- optional capabilities ----
-    /// Prompt file name inside [`config_dir`](AppPlugin::config_dir);
-    /// `None` = prompts unsupported.
-    fn prompt_filename(&self) -> Option<&str> {
-        None
-    }
     fn supports_mcp(&self) -> bool {
         false
     }
     fn supports_skills(&self) -> bool {
         false
-    }
-    /// Proxy capability (wire dialect + takeover support); `None` = the local
-    /// provider proxy cannot serve this app.
-    fn proxy(&self) -> Option<ProxySpec> {
-        None
     }
 }

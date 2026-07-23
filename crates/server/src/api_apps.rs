@@ -1,5 +1,5 @@
 //! Control-API routes for the provider-attached subsystems: MCP servers,
-//! prompts, common-config snippets, and skills.
+//! common-config snippets, and skills.
 
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, post, put};
@@ -8,9 +8,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path as FsPath;
 
-use ochub_core::db::legacy_json::{McpApps, McpServer, Prompt, SkillRepo};
+use ochub_core::db::legacy_json::{McpApps, McpServer, SkillRepo};
 use ochub_core::services::skill::{DiscoverableSkill, ImportSkillSelection};
-use ochub_core::services::{ConfigService, McpService, PromptService, SkillService};
+use ochub_core::services::{ConfigService, McpService, SkillService};
 use ochub_core::settings::SkillStorageLocation;
 use ochub_core::{AppError, AppType};
 
@@ -177,67 +177,6 @@ async fn mcp_config_enabled(
     let app_ty = parse_app(&app)?;
     McpService::toggle_app(&s.app, &id, app_ty, req.enabled)?;
     Ok(Json(json!({ "ok": true })))
-}
-
-// ----- Prompts -----
-
-#[derive(Deserialize)]
-struct UpsertPromptRequest {
-    #[serde(default)]
-    id: Option<String>,
-    prompt: Prompt,
-}
-
-async fn prompts_list(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let app = parse_app(&app)?;
-    to_value(PromptService::get_prompts(&s.app, app)?)
-}
-
-async fn prompts_upsert(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-    Json(req): Json<UpsertPromptRequest>,
-) -> ApiResult<Json<Value>> {
-    let app = parse_app(&app)?;
-    let id = req.id.unwrap_or_else(|| req.prompt.id.clone());
-    PromptService::upsert_prompt(&s.app, app, &id, req.prompt)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn prompts_delete(
-    State(s): State<ServerState>,
-    Path((app, id)): Path<(String, String)>,
-) -> ApiResult<Json<Value>> {
-    let app = parse_app(&app)?;
-    PromptService::delete_prompt(&s.app, app, &id)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn prompts_enable(
-    State(s): State<ServerState>,
-    Path((app, id)): Path<(String, String)>,
-) -> ApiResult<Json<Value>> {
-    let app = parse_app(&app)?;
-    PromptService::enable_prompt(&s.app, app, &id)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn prompts_current_file(Path(app): Path<String>) -> ApiResult<Json<Value>> {
-    let app = parse_app(&app)?;
-    let content = PromptService::get_current_file_content(app)?;
-    Ok(Json(json!({ "content": content })))
-}
-
-async fn prompts_import_file(
-    State(s): State<ServerState>,
-    Path(app): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let app = parse_app(&app)?;
-    let id = PromptService::import_from_file(&s.app, app)?;
-    Ok(Json(json!({ "id": id })))
 }
 
 // ----- Common config snippet -----
@@ -452,7 +391,7 @@ async fn skill_repo_delete(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// MCP + prompts + config-snippet + skills routes. Per-id routes use a `by-id`
+/// MCP + config-snippet + skills routes. Per-id routes use a `by-id`
 /// segment so `:id` never sits as a sibling of a static segment.
 pub fn router() -> Router<ServerState> {
     Router::new()
@@ -470,11 +409,6 @@ pub fn router() -> Router<ServerState> {
         )
         .route("/api/mcp/by-id/{id}", delete(mcp_delete))
         .route("/api/mcp/by-id/{id}/toggle", post(mcp_toggle))
-        .route("/api/prompts/{app}", get(prompts_list).post(prompts_upsert))
-        .route("/api/prompts/{app}/current-file", get(prompts_current_file))
-        .route("/api/prompts/{app}/import-file", post(prompts_import_file))
-        .route("/api/prompts/{app}/by-id/{id}", delete(prompts_delete))
-        .route("/api/prompts/{app}/by-id/{id}/enable", post(prompts_enable))
         .route(
             "/api/config/{app}/common-snippet",
             get(snippet_get).put(snippet_set),

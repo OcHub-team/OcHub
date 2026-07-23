@@ -17,34 +17,34 @@ pub mod db;
 pub mod deeplink;
 pub mod error;
 pub mod gateway;
+pub mod http_client;
+pub mod managed_auth;
 pub mod mcp;
 pub mod model;
 pub mod paths;
 pub mod plugin;
-pub mod prompt;
 pub mod provider_config;
-pub mod proxy;
 pub mod services;
 pub mod session_manager;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod usage_script;
+pub mod usage_tracking;
 
 pub use app_id::AppId;
 pub use app_state::AppState;
 pub use app_type::AppType;
 pub use db::Database;
 pub use deeplink::{
-    import_mcp_from_deeplink, import_prompt_from_deeplink, import_provider_from_deeplink,
-    import_skill_from_deeplink, parse_deeplink_url, DeepLinkImportRequest, McpImportError,
-    McpImportResult,
+    import_mcp_from_deeplink, import_provider_from_deeplink, import_skill_from_deeplink,
+    parse_deeplink_url, DeepLinkImportRequest, McpImportError, McpImportResult,
 };
 pub use error::{AppError, Result};
 pub use model::{
-    parse_custom_user_agent, AuthBinding, AuthBindingSource, ClaudeDesktopMode,
-    ClaudeDesktopModelRoute, CodexChatReasoningConfig, Provider, ProviderManager, ProviderMeta,
-    ProviderTestConfig, UsageData, UsageResult, UsageScript,
+    parse_custom_user_agent, AuthBinding, AuthBindingSource, ClaudeDesktopModelRoute,
+    CodexChatReasoningConfig, Provider, ProviderManager, ProviderMeta, ProviderTestConfig,
+    UsageData, UsageResult, UsageScript,
 };
 pub use services::{
     build_models_url_candidates, check_env_conflicts, delete_env_vars, fetch_models,
@@ -55,18 +55,17 @@ pub use services::{
     restore_codex_official_history_from_backups, restore_env_backup, BackupInfo,
     CodexHistoryProviderBucketMigrationOutcome, CodexOfficialHistoryRestoreOutcome,
     CodexProviderTemplateBucketMigrationOutcome, ConfigService, DailyStats, EndpointLatency,
-    EnvConflict, FetchedModel, LogFilters, McpService, ModelStats, PaginatedLogs, PromptService,
-    ProviderLimitStatus, ProviderService, ProviderStats, ProxyService, RequestLogDetail,
-    SkillService, SpeedtestService, SwitchResult, UsageCache, UsageSummary, UsageSummaryByApp,
-    WorkspaceService,
+    EnvConflict, FetchedModel, LogFilters, McpService, ModelStats, PaginatedLogs,
+    ProviderLimitStatus, ProviderService, ProviderStats, RequestLogDetail, SkillService,
+    SpeedtestService, SwitchResult, UsageCache, UsageSummary, UsageSummaryByApp,
 };
 
 // Authentication / managed-account subsystem (GitHub Copilot OAuth device flow,
 // Codex/ChatGPT OAuth, generic managed accounts). Ported from cc-switch
-// `commands/{auth,copilot,codex_oauth}.rs` + `proxy/providers/*`.
-pub use proxy::providers::{
-    AuthInfo, AuthStrategy, CodexOAuthError, CodexOAuthManager, CodexOAuthStatus, CopilotAuthError,
-    CopilotAuthManager, CopilotAuthStatus, CopilotModel, CopilotToken, CopilotUsageResponse,
-    GitHubAccount, GitHubDeviceCodeResponse,
+// `commands/{auth,copilot,codex_oauth}.rs`.
+pub use managed_auth::{
+    CodexOAuthError, CodexOAuthManager, CodexOAuthStatus, CopilotAuthError, CopilotAuthManager,
+    CopilotAuthStatus, CopilotModel, CopilotToken, CopilotUsageResponse, GitHubAccount,
+    GitHubDeviceCodeResponse,
 };
 pub use services::auth::{ManagedAuthAccount, ManagedAuthDeviceCodeResponse, ManagedAuthStatus};

@@ -58,7 +58,6 @@ pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppErr
     // Dispatch to appropriate parser based on resource type
     match resource.as_str() {
         "provider" => parse_provider_deeplink(&params, version, resource),
-        "prompt" => parse_prompt_deeplink(&params, version, resource),
         "mcp" => parse_mcp_deeplink(&params, version, resource),
         "skill" => parse_skill_deeplink(&params, version, resource),
         _ => Err(AppError::InvalidInput(format!(
@@ -157,8 +156,6 @@ fn parse_provider_deeplink(
         haiku_model,
         sonnet_model,
         opus_model,
-        content: None,
-        description: None,
         apps: None,
         repo: None,
         directory: None,
@@ -173,76 +170,6 @@ fn parse_provider_deeplink(
         usage_access_token,
         usage_user_id,
         usage_auto_interval,
-    })
-}
-
-/// Parse prompt deep link parameters
-fn parse_prompt_deeplink(
-    params: &HashMap<String, String>,
-    version: String,
-    resource: String,
-) -> Result<DeepLinkImportRequest, AppError> {
-    let app = params
-        .get("app")
-        .ok_or_else(|| AppError::InvalidInput("Missing 'app' parameter for prompt".to_string()))?
-        .clone();
-
-    // Validate app type
-    if !matches!(
-        app.as_str(),
-        "claude" | "codex" | "gemini" | "opencode" | "openclaw" | "hermes"
-    ) {
-        return Err(AppError::InvalidInput(format!(
-            "Invalid app type: must be 'claude', 'codex', 'gemini', 'opencode', 'openclaw', or 'hermes', got '{app}'"
-        )));
-    }
-
-    let name = params
-        .get("name")
-        .ok_or_else(|| AppError::InvalidInput("Missing 'name' parameter for prompt".to_string()))?
-        .clone();
-
-    let content = params
-        .get("content")
-        .ok_or_else(|| {
-            AppError::InvalidInput("Missing 'content' parameter for prompt".to_string())
-        })?
-        .clone();
-
-    let description = params.get("description").cloned();
-    let enabled = params.get("enabled").and_then(|v| v.parse::<bool>().ok());
-
-    Ok(DeepLinkImportRequest {
-        version,
-        resource,
-        app: Some(app),
-        name: Some(name),
-        enabled,
-        content: Some(content),
-        description,
-        icon: None,
-        homepage: None,
-        endpoint: None,
-        api_key: None,
-        model: None,
-        notes: None,
-        haiku_model: None,
-        sonnet_model: None,
-        opus_model: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
-        config: None,
-        config_format: None,
-        config_url: None,
-        usage_enabled: None,
-        usage_script: None,
-        usage_api_key: None,
-        usage_base_url: None,
-        usage_access_token: None,
-        usage_user_id: None,
-        usage_auto_interval: None,
     })
 }
 
@@ -295,8 +222,6 @@ fn parse_mcp_deeplink(
         haiku_model: None,
         sonnet_model: None,
         opus_model: None,
-        content: None,
-        description: None,
         repo: None,
         directory: None,
         branch: None,
@@ -350,8 +275,6 @@ fn parse_skill_deeplink(
         haiku_model: None,
         sonnet_model: None,
         opus_model: None,
-        content: None,
-        description: None,
         apps: None,
         config: None,
         config_format: None,

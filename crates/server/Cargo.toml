@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "OCHUB axum server: control API + local provider proxy"
+description = "OCHUB axum server: control API + local relay gateway"
 
 [lib]
 name = "ochub_server"
@@ -18,15 +18,10 @@ path = "src/main.rs"
 ochub-core = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
-futures.workspace = true
-bytes.workspace = true
 axum.workspace = true
-tower.workspace = true
 tower-http.workspace = true
-http.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

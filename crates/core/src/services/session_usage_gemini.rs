@@ -4,7 +4,7 @@
 //!
 //! ## 数据流
 //! ```text
-//! ~/.gemini/tmp/*/chats/session-*.json → 全量解析 → 费用计算 → proxy_request_logs 表
+//! ~/.gemini/tmp/*/chats/session-*.json → 全量解析 → 费用计算 → usage_logs 表
 //! ```
 //!
 //! ## 与 Claude/Codex 解析器的差异
@@ -16,12 +16,12 @@
 use crate::apps::gemini::get_gemini_dir;
 use crate::db::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
+use crate::usage_tracking::calculator::{CostCalculator, ModelPricing};
+use crate::usage_tracking::parser::TokenUsage;
 use rust_decimal::Decimal;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -224,7 +224,7 @@ fn parse_gemini_tokens(tokens: &serde_json::Value) -> GeminiTokens {
     }
 }
 
-/// 插入单条 Gemini 会话记录到 proxy_request_logs
+/// 插入单条 Gemini 会话记录到 usage_logs
 fn insert_gemini_session_entry(
     db: &Database,
     request_id: &str,
@@ -299,7 +299,7 @@ fn insert_gemini_session_entry(
 
     // 使用 UPSERT：新记录插入，已存在记录更新 token 和费用（Gemini 全量重读可能携带更新值）
     conn.execute(
-        "INSERT INTO proxy_request_logs (
+        "INSERT INTO usage_logs (
             request_id, provider_id, app_type, model, request_model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
@@ -373,18 +373,18 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_gemini_session_skips_matching_proxy_log() -> Result<(), AppError> {
+    fn test_insert_gemini_session_skips_matching_captured_log() -> Result<(), AppError> {
         let db = Database::memory()?;
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    "gemini-proxy",
+                    "gemini-gateway",
                     "google",
                     "gemini",
                     "gemini-2.5-pro",
@@ -397,7 +397,7 @@ mod tests {
                     100,
                     200,
                     1000,
-                    "proxy"
+                    "gateway"
                 ],
             )?;
         }
@@ -419,9 +419,7 @@ mod tests {
         assert!(!inserted);
 
         let conn = lock_conn!(db.conn);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM usage_logs", [], |row| row.get(0))?;
         assert_eq!(count, 1);
 
         Ok(())

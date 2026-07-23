@@ -5,7 +5,7 @@
 //!
 //! ## 数据流
 //! ```text
-//! ~/.codex/sessions/YYYY/MM/DD/*.jsonl → 增量解析 → delta 计算 → 费用计算 → proxy_request_logs 表
+//! ~/.codex/sessions/YYYY/MM/DD/*.jsonl → 增量解析 → delta 计算 → 费用计算 → usage_logs 表
 //! ```
 //!
 //! ## 解析的事件类型
@@ -16,12 +16,12 @@
 use crate::apps::codex::get_codex_config_dir;
 use crate::db::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
+use crate::usage_tracking::calculator::{CostCalculator, ModelPricing};
+use crate::usage_tracking::parser::TokenUsage;
 use rust_decimal::Decimal;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -426,7 +426,7 @@ fn sync_single_codex_file(db: &Database, file_path: &Path) -> Result<(u32, u32),
     Ok((imported, skipped))
 }
 
-/// 插入单条 Codex 会话记录到 proxy_request_logs
+/// 插入单条 Codex 会话记录到 usage_logs
 fn insert_codex_session_entry(
     db: &Database,
     request_id: &str,
@@ -498,7 +498,7 @@ fn insert_codex_session_entry(
 
     let inserted_rows = conn
         .execute(
-            "INSERT OR IGNORE INTO proxy_request_logs (
+            "INSERT OR IGNORE INTO usage_logs (
             request_id, provider_id, app_type, model, request_model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
@@ -660,18 +660,18 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_codex_session_skips_matching_proxy_log() -> Result<(), AppError> {
+    fn test_insert_codex_session_skips_matching_captured_log() -> Result<(), AppError> {
         let db = Database::memory()?;
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    "codex-proxy",
+                    "codex-gateway",
                     "openai",
                     "codex",
                     "gpt-5.4",
@@ -684,7 +684,7 @@ mod tests {
                     100,
                     200,
                     1000,
-                    "proxy"
+                    "gateway"
                 ],
             )?;
         }
@@ -705,9 +705,7 @@ mod tests {
         assert!(!inserted);
 
         let conn = lock_conn!(db.conn);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM usage_logs", [], |row| row.get(0))?;
         assert_eq!(count, 1);
 
         Ok(())

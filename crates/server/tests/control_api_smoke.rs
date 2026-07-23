@@ -31,15 +31,13 @@ async fn control_api_smoke_covers_core_feature_groups() {
         "/api/providers/claude",
         "/api/providers/codex",
         "/api/providers/gemini",
-        "/api/proxy/status",
-        "/api/proxy/config",
-        "/api/proxy/takeover",
-        "/api/proxy/circuit-breaker/config",
-        "/api/upstream-proxy/status",
-        "/api/proxy/stream-check/config",
+        "/api/gateway/status",
+        "/api/gateway/config",
+        "/api/gateway/channels",
+        "/api/gateway/keys",
+        "/api/gateway/supported-apps",
         "/api/mcp",
         "/api/mcp/config/claude",
-        "/api/prompts/claude",
         "/api/skills",
         "/api/usage/summary",
         "/api/usage/by-app",
@@ -56,8 +54,6 @@ async fn control_api_smoke_covers_core_feature_groups() {
         "/api/portable",
         "/api/lightweight",
         "/api/codex/history/unify-backup",
-        "/api/workspace/allowed-files",
-        "/api/workspace/memory",
         "/api/claude-mcp/status",
         "/api/copilot/status",
         "/api/copilot/accounts",
@@ -84,6 +80,17 @@ async fn control_api_smoke_covers_core_feature_groups() {
             "GET {path} returned {}",
             response.status()
         );
+    }
+
+    // The retired proxy control surface must not remain reachable as an alias.
+    for path in [
+        "/api/proxy/status",
+        "/api/proxy/config",
+        "/api/proxy/takeover",
+        "/api/upstream-proxy/status",
+    ] {
+        let response = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND, "{path}");
     }
 
     let parse_response = client

@@ -17,8 +17,8 @@ use crate::theme;
 /// Max width of the centered content column, shared by every view so pages align.
 pub const CONTENT_MAX_WIDTH: f32 = 800.;
 
-/// Max width for data-dense pages (provider list, usage, tools, proxy,
-/// gateway): same centered layout, wider column.
+/// Max width for data-dense pages (provider list, usage, tools, gateway):
+/// same centered layout, wider column.
 pub const WIDE_MAX_WIDTH: f32 = 1080.;
 
 /// Outermost page container: a full-height flex column on the window background.
@@ -36,15 +36,24 @@ pub fn page() -> gpui::Div {
 /// action buttons. Chain `.child(...)` onto the returned element to add actions —
 /// `justify_between` pushes them to the trailing edge.
 pub fn page_header(title: impl Into<SharedString>, subtitle: Option<SharedString>) -> gpui::Div {
-    let mut title_col = div().flex().flex_col().gap_1().child(
+    let mut title_col = div().flex().flex_col().flex_1().min_w_0().gap_1().child(
         div()
+            .min_w_0()
+            .truncate()
             .text_color(theme::text())
             .text_xl()
             .font_weight(FontWeight::BOLD)
             .child(title.into()),
     );
     if let Some(subtitle) = subtitle {
-        title_col = title_col.child(div().text_color(theme::muted()).text_xs().child(subtitle));
+        title_col = title_col.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(theme::muted())
+                .text_xs()
+                .child(subtitle),
+        );
     }
     div()
         .flex()
@@ -86,6 +95,15 @@ pub fn scroll_body(
 /// with `gpui::list(state, cx.processor(|this, ix, window, cx| ...))`; each item
 /// should carry its own bottom spacing (the list draws no inter-item gap).
 pub fn virtual_body(list: gpui::List) -> impl IntoElement {
+    virtual_body_with_width(list, CONTENT_MAX_WIDTH)
+}
+
+/// [`virtual_body`] at [`WIDE_MAX_WIDTH`], for the data-dense pages.
+pub fn wide_virtual_body(list: gpui::List) -> impl IntoElement {
+    virtual_body_with_width(list, WIDE_MAX_WIDTH)
+}
+
+fn virtual_body_with_width(list: gpui::List, max_width: f32) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -100,7 +118,7 @@ pub fn virtual_body(list: gpui::List) -> impl IntoElement {
                 .flex_1()
                 .min_h_0()
                 .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH))
+                .max_w(px(max_width))
                 .py_6(),
         )
 }

@@ -592,8 +592,8 @@ async fn get_single_tool_version_impl(tool: &str) -> ToolVersion {
 
     let env_type = tool_env_type().to_string();
 
-    // 使用全局 HTTP 客户端（已包含代理配置）
-    let client = crate::proxy::http_client::get();
+    // 使用全局 HTTP 客户端以复用连接池。
+    let client = crate::http_client::get();
 
     // 1. 获取本地版本：PATH 第一个命令优先；只有它确实没装才去常见目录兜底扫描。
     let probe = match try_get_version(tool) {

@@ -5,11 +5,13 @@
 //! disclosure, stat tiles, tables, pagination, status footer. Views compose
 //! these instead of hand-rolling styling so every page stays consistent.
 
+use chrono::{Datelike, Local, NaiveDate};
 use gpui::{
-    div, prelude::*, px, AnyElement, App, ElementId, FontWeight, Rgba, SharedString, Window,
+    div, prelude::*, px, AnyElement, App, ElementId, Entity, FontWeight, Rgba, SharedString, Window,
 };
 
 use crate::icons::{icon, IconName};
+use crate::text_input::TextInput;
 use crate::theme;
 
 // ── Buttons ────────────────────────────────────────────────────────────────
@@ -35,11 +37,15 @@ impl ButtonTone {
     /// (bg, hover_bg, fg)
     fn colors(self) -> (Rgba, Rgba, Rgba) {
         match self {
-            Self::Primary => (theme::accent(), theme::accent_hover(), theme::accent_text()),
+            Self::Primary => (
+                theme::accent_fill(),
+                theme::accent_hover(),
+                theme::accent_text(),
+            ),
             Self::Neutral => (theme::inset(), theme::surface_hover(), theme::text()),
-            Self::Danger => (theme::red_soft(), theme::c(0xf0d2cc), theme::red()),
+            Self::Danger => (theme::red_soft(), theme::red_hover(), theme::red()),
             Self::Ghost => (
-                theme::c(0xffffff).alpha(0.),
+                theme::surface().alpha(0.),
                 theme::surface_hover(),
                 theme::text(),
             ),
@@ -84,6 +90,8 @@ pub fn icon_button_tone(
     )
 }
 
+/// 按钮只有 padding、没有宽度约束：放进纵向 flex 列（如 `card()`）会被交叉轴
+/// stretch 拉满整行——调用点须套一层 `div().flex().flex_row()` 保持内容宽。
 fn button_base(
     id: impl Into<ElementId>,
     label: SharedString,
@@ -179,7 +187,13 @@ pub fn field(
     if required {
         label_row = label_row.child(div().text_color(theme::red()).child("*"));
     }
-    let mut col = div().flex().flex_col().gap(px(6.)).child(label_row);
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .gap(px(6.))
+        .child(label_row);
     if let Some(help) = help {
         col = col.child(div().text_color(theme::muted()).text_xs().child(help));
     }
@@ -224,8 +238,11 @@ pub fn segmented(
         .id(id.clone())
         .flex()
         .flex_row()
+        .flex_wrap()
         .items_center()
         .flex_none()
+        .max_w_full()
+        .min_w_0()
         .gap(px(2.))
         .p(px(2.))
         .rounded_lg()
@@ -237,6 +254,9 @@ pub fn segmented(
             .role(gpui::Role::Button)
             .aria_label(SharedString::from(format!("{id} 选项 {option}")))
             .aria_selected(is_selected)
+            .flex_none()
+            .max_w_full()
+            .overflow_hidden()
             .px_3()
             .py_1()
             .rounded_md()
@@ -401,7 +421,7 @@ pub fn modal_overlay(child: impl IntoElement) -> gpui::Div {
         .flex()
         .items_center()
         .justify_center()
-        .bg(theme::c(0x000000).alpha(0.45))
+        .bg(theme::scrim().alpha(if theme::is_dark() { 0.68 } else { 0.45 }))
         .occlude()
         .child(child)
 }
@@ -413,7 +433,7 @@ pub fn modal_card() -> gpui::Div {
         .flex()
         .flex_col()
         .rounded_lg()
-        .bg(theme::surface())
+        .bg(theme::overlay())
         .border_1()
         .border_color(theme::border())
         .shadow(theme::shadow_popover())
@@ -514,7 +534,7 @@ pub fn disclosure(
 // ── Stat tile ───────────────────────────────────────────────────────────────
 
 /// Metric card: dot or icon + caption label, big value, muted detail line.
-/// The single tile for gateway/proxy/tools/usage dashboards.
+/// The single tile for gateway/tools/usage dashboards.
 pub fn stat_tile(
     icon_name: Option<IconName>,
     tone: Rgba,
@@ -609,6 +629,123 @@ pub fn table_row(cells: Vec<AnyElement>, n_cols: usize, last: bool) -> gpui::Div
 
 /// Footer pagination bar: prev button, "3 / 12" label, next button. Buttons
 /// are built (and wired) at the call site with `components::button`.
+/// 解析日期输入：支持 `YYYY-MM-DD`、`YYYY/MM/DD`、`MM-DD`（按当前年补全）。
+pub fn parse_jump_date(text: &str) -> Option<NaiveDate> {
+    let t = text.trim().replace('/', "-");
+    if t.is_empty() {
+        return None;
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(&t, "%Y-%m-%d") {
+        return Some(date);
+    }
+    NaiveDate::parse_from_str(&format!("{}-{t}", Local::now().year()), "%Y-%m-%d").ok()
+}
+
+/// 翻页条（antd 风格）：`[1] 2 … N   跳至 [x] 页          共 N 条`。
+/// 页码按钮直接点击切页，当前页高亮为 accent 实底；间断处补省略号；
+/// “跳至”输入框由调用方持有并在构造时通过 [`TextInput::set_on_enter`]
+/// 接回车提交（本组件只负责渲染布局）。`on_select_page` 收 0-based 页码。
+/// 旧的 [`pagination`]（仅上/下页）保留给不需要跳转的简单场合。
+pub fn pagination_bar(
+    id: &'static str,
+    page: u32,
+    total_pages: u32,
+    total_items: Option<u64>,
+    page_input: &Entity<TextInput>,
+    on_select_page: impl Fn(u32, &mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    let total_pages = total_pages.max(1);
+    let last = total_pages - 1;
+    let page = page.min(last);
+    let on_select_page = std::rc::Rc::new(on_select_page);
+
+    // 页码集合：首页、末页、当前页 ±1；端点附近再补一格，间断处渲染省略号。
+    let mut numbers = std::collections::BTreeSet::new();
+    numbers.insert(0);
+    numbers.insert(last);
+    for delta in -1i64..=1 {
+        let candidate = page as i64 + delta;
+        if (0..=last as i64).contains(&candidate) {
+            numbers.insert(candidate as u32);
+        }
+    }
+    if page <= 1 && last >= 1 {
+        numbers.insert(1);
+    }
+    if page + 2 >= last && last >= 1 {
+        numbers.insert(last - 1);
+    }
+
+    let mut bar = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .flex_wrap()
+        .gap_1()
+        .w_full()
+        .py_3();
+
+    let mut previous: Option<u32> = None;
+    for number in numbers {
+        if let Some(prev) = previous {
+            if number > prev + 1 {
+                bar = bar.child(div().px_1().text_color(theme::muted()).text_sm().child("…"));
+            }
+        }
+        previous = Some(number);
+
+        let is_current = number == page;
+        let mut cell = div()
+            .id(ElementId::Name(format!("{id}-p{number}").into()))
+            .role(gpui::Role::Button)
+            .aria_label(SharedString::from(format!("第 {} 页", number + 1)))
+            .aria_selected(is_current)
+            .min_w(px(28.))
+            .h(px(28.))
+            .px_1p5()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .text_sm();
+        if is_current {
+            cell = cell
+                .bg(theme::accent_fill())
+                .text_color(theme::accent_text())
+                .font_weight(FontWeight::SEMIBOLD);
+        } else {
+            let cb = on_select_page.clone();
+            cell = cell
+                .text_color(theme::subtext())
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::surface_hover()).text_color(theme::text()))
+                .on_click(move |_event, window, cx| cb(number, window, cx));
+        }
+        bar = bar.child(cell.child(SharedString::from((number + 1).to_string())));
+    }
+
+    bar.child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .ml_3()
+            .child(div().text_color(theme::subtext()).text_sm().child("跳至"))
+            .child(div().w(px(56.)).flex_none().child(page_input.clone()))
+            .child(div().text_color(theme::subtext()).text_sm().child("页")),
+    )
+    .child(div().flex_1())
+    .when_some(total_items, |bar, total| {
+        bar.child(
+            div()
+                .text_color(theme::muted())
+                .text_sm()
+                .child(SharedString::from(format!("共 {total} 条"))),
+        )
+    })
+}
+
 pub fn pagination(prev: AnyElement, label: impl Into<SharedString>, next: AnyElement) -> gpui::Div {
     div()
         .flex()
@@ -625,106 +762,4 @@ pub fn pagination(prev: AnyElement, label: impl Into<SharedString>, next: AnyEle
                 .child(label.into()),
         )
         .child(next)
-}
-
-// ── Status banner / footer ──────────────────────────────────────────────────
-
-#[derive(Clone, Copy)]
-pub enum BannerTone {
-    Info,
-    Success,
-    Warning,
-    Error,
-}
-
-impl BannerTone {
-    fn from_text(text: &str) -> Self {
-        if text.contains("失败") || text.contains("错误") || text.contains("不可用") {
-            Self::Error
-        } else if text.contains("警告") || text.contains("跳过") || text.contains("冲突") {
-            Self::Warning
-        } else if text.contains("成功") || text.contains("已") {
-            Self::Success
-        } else {
-            Self::Info
-        }
-    }
-
-    /// (soft bg, accent, fg, icon)
-    fn colors(self) -> (Rgba, Rgba, Rgba, IconName) {
-        match self {
-            Self::Info => (
-                theme::accent_soft(),
-                theme::accent(),
-                theme::text(),
-                IconName::Proxy,
-            ),
-            Self::Success => (
-                theme::green_soft(),
-                theme::green(),
-                theme::text(),
-                IconName::Check,
-            ),
-            Self::Warning => (
-                theme::yellow_soft(),
-                theme::yellow(),
-                theme::text(),
-                IconName::Settings,
-            ),
-            Self::Error => (
-                theme::red_soft(),
-                theme::red(),
-                theme::text(),
-                IconName::Wrench,
-            ),
-        }
-    }
-}
-
-/// Tinted banner with tone icon; tone auto-detected from the message text.
-pub fn status_banner(message: impl Into<SharedString>) -> impl IntoElement {
-    let message = message.into();
-    status_banner_tone(BannerTone::from_text(&message.to_string()), message)
-}
-
-/// Tinted banner with an explicit tone.
-pub fn status_banner_tone(tone: BannerTone, message: impl Into<SharedString>) -> impl IntoElement {
-    let (bg, accent, fg, icon_name) = tone.colors();
-    div()
-        .flex()
-        .flex_row()
-        .items_start()
-        .gap_2()
-        .px_3()
-        .py_2()
-        .rounded_md()
-        .border_1()
-        .border_color(accent.alpha(0.32))
-        .bg(bg.alpha(0.8))
-        .child(
-            div()
-                .mt(px(2.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(accent)
-                .child(icon(icon_name, accent, 14.)),
-        )
-        .child(
-            div()
-                .text_color(fg)
-                .text_sm()
-                .line_height(px(18.))
-                .child(message.into()),
-        )
-}
-
-/// The standard status strip at the bottom of a page: renders the banner when
-/// `status` is `Some`, collapses otherwise. Replaces the ~14 hand-rolled
-/// copies scattered across views.
-pub fn status_footer(status: Option<SharedString>) -> gpui::Div {
-    div()
-        .px_6()
-        .py_2()
-        .when_some(status, |s, message| s.child(status_banner(message)))
 }

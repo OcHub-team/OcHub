@@ -856,41 +856,6 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
     Some(json!({ "models": entries }))
 }
 
-/// Decide the `config.toml` text to write during a takeover-off restore,
-/// projecting the model catalog **only when `settings` carries an inline
-/// `modelCatalog`**.
-///
-/// Restore feeds back a stored backup, and Codex backups come in two shapes that
-/// need opposite handling:
-///
-/// - **Snapshot backup** (`read_codex_live_settings`): `{ auth, config }` with no
-///   inline `modelCatalog`. Its `config.toml` text already carries whatever
-///   `model_catalog_json` pointer existed at backup time, and the generated
-///   catalog file on disk is untouched. Here we must keep the config **raw** —
-///   running catalog projection would see "no specs" and strip the live pointer.
-/// - **Provider-rebuilt backup** (`update_live_backup_from_provider`): the DB
-///   provider's settings, i.e. `{ auth, config (no pointer), modelCatalog
-///   (inline DB SSOT) }`. Here the pointer/catalog file must be (re)generated
-///   from the inline `modelCatalog`, or the mapping is lost on restore.
-///
-/// Gating on the presence of the inline `modelCatalog` key routes each shape
-/// correctly; an empty inline catalog still projects (and so correctly drops a
-/// now-stale pointer), while an absent key leaves the text untouched. This is
-/// **orthogonal to auth** — a provider-rebuilt backup can pair an inline
-/// `modelCatalog` with empty `auth.json` (the API key living in the config's
-/// `experimental_bearer_token`), so the caller must decide config projection
-/// independently of whether it writes or deletes `auth.json`.
-pub fn prepare_codex_live_config_text_with_optional_catalog(
-    settings: &Value,
-    config_text: &str,
-) -> Result<String, AppError> {
-    if settings.get("modelCatalog").is_some() {
-        prepare_codex_config_text_with_model_catalog(settings, config_text)
-    } else {
-        Ok(config_text.to_string())
-    }
-}
-
 pub fn write_codex_provider_live_with_catalog(
     settings: &Value,
     category: Option<&str>,
@@ -1173,9 +1138,7 @@ pub fn strip_codex_unified_session_bucket(config_text: &str) -> Result<String, A
 /// 统一会话开关开启时，把官方供应商 `{ auth, config }` 设置对象中的
 /// config 文本注入共享 custom 路由；开关关闭或非官方供应商时不做改动。
 ///
-/// 普通 live 写入（`write_codex_live_for_provider`）与代理接管备份
-/// （`update_live_backup_from_provider`）两条落盘路径共用：接管期间
-/// live 归代理所有，注入必须进备份，接管释放恢复的 live 才带统一路由。
+/// 普通 live 写入共用，确保统一会话开关在当前官方供应商上即时生效。
 pub fn apply_codex_unified_session_bucket_to_settings(
     category: Option<&str>,
     settings: &mut Value,
@@ -1390,54 +1353,6 @@ pub fn update_codex_toml_field(toml_str: &str, field: &str, value: &str) -> Resu
     }
 
     Ok(doc.to_string())
-}
-
-/// Remove `base_url` from the active model_provider section only if it matches `predicate`.
-/// Also removes top-level `base_url` if it matches.
-/// Used by proxy cleanup to strip local proxy URLs without touching user-configured URLs.
-pub fn remove_codex_toml_base_url_if(toml_str: &str, predicate: impl Fn(&str) -> bool) -> String {
-    let mut doc = match toml_str.parse::<DocumentMut>() {
-        Ok(doc) => doc,
-        Err(_) => return toml_str.to_string(),
-    };
-
-    let model_provider = doc
-        .get("model_provider")
-        .and_then(|item| item.as_str())
-        .map(str::to_string);
-
-    if let Some(provider_key) = model_provider {
-        if let Some(model_providers) = doc
-            .get_mut("model_providers")
-            .and_then(|v| v.as_table_mut())
-        {
-            if let Some(provider_table) = model_providers
-                .get_mut(provider_key.as_str())
-                .and_then(|v| v.as_table_mut())
-            {
-                let should_remove = provider_table
-                    .get("base_url")
-                    .and_then(|item| item.as_str())
-                    .map(&predicate)
-                    .unwrap_or(false);
-                if should_remove {
-                    provider_table.remove("base_url");
-                }
-            }
-        }
-    }
-
-    // Fallback: also clean up top-level base_url if it matches
-    let should_remove_root = doc
-        .get("base_url")
-        .and_then(|item| item.as_str())
-        .map(&predicate)
-        .unwrap_or(false);
-    if should_remove_root {
-        doc.as_table_mut().remove("base_url");
-    }
-
-    doc.to_string()
 }
 
 #[cfg(test)]
@@ -1982,51 +1897,6 @@ model = "gpt-4"
             .and_then(|v| v.get("model"))
             .and_then(|v| v.as_str());
         assert_eq!(profile_model, Some("gpt-4"));
-    }
-
-    #[test]
-    fn remove_base_url_if_predicate() {
-        let input = r#"model_provider = "any"
-
-[model_providers.any]
-name = "any"
-base_url = "http://127.0.0.1:5000/v1"
-wire_api = "responses"
-"#;
-
-        let result =
-            remove_codex_toml_base_url_if(input, |url| url.starts_with("http://127.0.0.1"));
-        let parsed: toml::Value = toml::from_str(&result).unwrap();
-
-        let any_section = parsed
-            .get("model_providers")
-            .and_then(|v| v.get("any"))
-            .unwrap();
-        assert!(any_section.get("base_url").is_none());
-        assert_eq!(
-            any_section.get("wire_api").and_then(|v| v.as_str()),
-            Some("responses")
-        );
-    }
-
-    #[test]
-    fn remove_base_url_if_keeps_non_matching() {
-        let input = r#"model_provider = "any"
-
-[model_providers.any]
-base_url = "https://production.api/v1"
-"#;
-
-        let result =
-            remove_codex_toml_base_url_if(input, |url| url.starts_with("http://127.0.0.1"));
-        let parsed: toml::Value = toml::from_str(&result).unwrap();
-
-        let base_url = parsed
-            .get("model_providers")
-            .and_then(|v| v.get("any"))
-            .and_then(|v| v.get("base_url"))
-            .and_then(|v| v.as_str());
-        assert_eq!(base_url, Some("https://production.api/v1"));
     }
 
     #[test]

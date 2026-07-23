@@ -5,10 +5,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{Datelike, Duration, Local, TimeZone};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use gpui::{
-    div, ease_out_quint, prelude::*, px, Animation, AnimationExt, Context, ElementId, Entity,
-    FontWeight, SharedString, Window,
+    anchored, deferred, div, ease_out_quint, point, prelude::*, px, relative, Anchor, Animation,
+    AnimationExt, Context, ElementId, Entity, FontWeight, ListAlignment, ListState, MouseButton,
+    ScrollHandle, SharedString, Window,
 };
 use ochub_core::db::StreamCheckConfig;
 use ochub_core::services::session_usage::{
@@ -28,28 +29,170 @@ use crate::theme;
 
 const LOG_PAGE_SIZE: u32 = 20;
 const PRICING_APPS: [&str; 3] = ["claude", "codex", "gemini"];
+const DATETIME_PICKER_GAP: f32 = 4.;
+
+/// Number of top-level blocks rendered by [`UsageView::render_block`] into the
+/// virtualized list (filters, data sources, summary, trend, scope, tabs,
+/// active section, pricing, stream config).
+const USAGE_BLOCK_COUNT: usize = 9;
+
+/// Everything [`UsageView::reload`] fetches, loaded in one background pass so
+/// the UI thread never blocks on the SQLite connection while the gateway records usage.
+struct UsageData {
+    summary: Option<UsageSummary>,
+    summary_by_app: Vec<UsageSummaryByApp>,
+    daily: Vec<DailyStats>,
+    providers: Vec<ProviderStats>,
+    provider_options: Vec<String>,
+    models: Vec<ModelStats>,
+    model_options: Vec<String>,
+    logs: Vec<RequestLogDetail>,
+    log_total: u32,
+    data_sources: Vec<DataSourceSummary>,
+    pricing: Vec<ModelPricingInfo>,
+    stream_config: StreamCheckConfig,
+    errors: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_usage_data(
+    app: &AppState,
+    start: Option<i64>,
+    end: Option<i64>,
+    app_filter: Option<&str>,
+    provider_filter: Option<&str>,
+    model_filter: Option<&str>,
+    status_filter: Option<u16>,
+    log_page: u32,
+) -> UsageData {
+    let mut errors = Vec::new();
+
+    let summary =
+        match app
+            .db
+            .get_usage_summary(start, end, app_filter, provider_filter, model_filter)
+        {
+            Ok(summary) => Some(summary),
+            Err(err) => {
+                errors.push(format!("加载用量失败: {err}"));
+                None
+            }
+        };
+
+    let filters = LogFilters {
+        app_type: app_filter.map(str::to_string),
+        provider_name: provider_filter.map(str::to_string),
+        model: model_filter.map(str::to_string),
+        status_code: status_filter,
+        start_date: start,
+        end_date: end,
+    };
+    let (logs, log_total) = match app.db.get_request_logs(&filters, log_page, LOG_PAGE_SIZE) {
+        Ok(page) => (page.data, page.total),
+        Err(err) => {
+            errors.push(format!("加载请求日志失败: {err}"));
+            (Vec::new(), 0)
+        }
+    };
+
+    let providers = app
+        .db
+        .get_provider_stats(start, end, app_filter, provider_filter, model_filter)
+        .unwrap_or_default();
+    let mut provider_options = if provider_filter.is_none() && model_filter.is_none() {
+        providers
+            .iter()
+            .map(|stats| stats.provider_name.clone())
+            .collect::<Vec<_>>()
+    } else {
+        app.db
+            .get_provider_stats(start, end, app_filter, None, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|stats| stats.provider_name)
+            .collect::<Vec<_>>()
+    };
+    if let Some(selected) = provider_filter {
+        if !provider_options.iter().any(|provider| provider == selected) {
+            provider_options.push(selected.to_string());
+        }
+    }
+    provider_options.sort_by_key(|provider| provider.to_lowercase());
+    provider_options.dedup();
+
+    let models = app
+        .db
+        .get_model_stats(start, end, app_filter, provider_filter, model_filter)
+        .unwrap_or_default();
+    let mut model_options = if model_filter.is_none() {
+        models
+            .iter()
+            .map(|stats| stats.model.clone())
+            .collect::<Vec<_>>()
+    } else {
+        app.db
+            .get_model_stats(start, end, app_filter, provider_filter, None)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|stats| stats.model)
+            .collect::<Vec<_>>()
+    };
+    if let Some(selected) = model_filter {
+        if !model_options.iter().any(|model| model == selected) {
+            model_options.push(selected.to_string());
+        }
+    }
+    model_options.sort_by_key(|model| model.to_lowercase());
+    model_options.dedup();
+
+    UsageData {
+        summary,
+        summary_by_app: app
+            .db
+            .get_usage_summary_by_app(start, end, provider_filter, model_filter)
+            .unwrap_or_default(),
+        daily: app
+            .db
+            .get_daily_trends(start, end, app_filter, provider_filter, model_filter)
+            .unwrap_or_default(),
+        providers,
+        provider_options,
+        models,
+        model_options,
+        logs,
+        log_total,
+        data_sources: get_data_source_breakdown(&app.db).unwrap_or_default(),
+        pricing: app.db.get_model_pricing().unwrap_or_default(),
+        stream_config: app.db.get_stream_check_config().unwrap_or_default(),
+        errors,
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UsageRange {
     Today,
-    OneDay,
     SevenDays,
-    FourteenDays,
     ThirtyDays,
+    /// 自定义时间范围（本地时区，精确到秒）。
+    Custom {
+        start: i64,
+        end: i64,
+    },
 }
 
 impl UsageRange {
     fn all() -> &'static [(Self, &'static str)] {
         &[
             (Self::Today, "今天"),
-            (Self::OneDay, "24 小时"),
-            (Self::SevenDays, "7 天"),
-            (Self::FourteenDays, "14 天"),
-            (Self::ThirtyDays, "30 天"),
+            (Self::SevenDays, "最近 1 周"),
+            (Self::ThirtyDays, "最近 30 天"),
         ]
     }
 
     fn label(self) -> &'static str {
+        if matches!(self, Self::Custom { .. }) {
+            return "自定义";
+        }
         Self::all()
             .iter()
             .find_map(|(range, label)| (*range == self).then_some(*label))
@@ -65,10 +208,9 @@ impl UsageRange {
                 .single()
                 .map(|date| date.timestamp())
                 .unwrap_or(end - 24 * 60 * 60),
-            Self::OneDay => (now - Duration::hours(24)).timestamp(),
             Self::SevenDays => (now - Duration::days(7)).timestamp(),
-            Self::FourteenDays => (now - Duration::days(14)).timestamp(),
             Self::ThirtyDays => (now - Duration::days(30)).timestamp(),
+            Self::Custom { start, end } => return (Some(start), Some(end)),
         };
         (Some(start), Some(end))
     }
@@ -81,11 +223,25 @@ enum UsageSection {
     Models,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FilterPopover {
+    Time,
+    Provider,
+    Model,
+    Status,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RangeEndpoint {
+    Start,
+    End,
+}
+
 impl UsageSection {
     fn all() -> &'static [(Self, &'static str, IconName)] {
         &[
             (Self::Logs, "请求日志", IconName::Message),
-            (Self::Providers, "Provider 统计", IconName::Proxy),
+            (Self::Providers, "Provider 统计", IconName::Cloud),
             (Self::Models, "模型统计", IconName::Chart),
         ]
     }
@@ -97,7 +253,9 @@ pub struct UsageView {
     summary_by_app: Vec<UsageSummaryByApp>,
     daily: Vec<DailyStats>,
     providers: Vec<ProviderStats>,
+    provider_options: Vec<String>,
     models: Vec<ModelStats>,
+    model_options: Vec<String>,
     logs: Vec<RequestLogDetail>,
     log_total: u32,
     data_sources: Vec<DataSourceSummary>,
@@ -116,6 +274,12 @@ pub struct UsageView {
     show_scope_options: bool,
     show_pricing: bool,
     show_stream_config: bool,
+    open_filter_popover: Option<FilterPopover>,
+    active_datetime_picker: Option<RangeEndpoint>,
+    picker_year: i32,
+    picker_month: u32,
+    picker_hour_scroll: ScrollHandle,
+    picker_minute_scroll: ScrollHandle,
     /// 待确认删除的定价模型 ID；`Some` 时展示确认模态。
     confirm_delete_pricing: Option<String>,
     pricing_sources: BTreeMap<String, String>,
@@ -131,17 +295,28 @@ pub struct UsageView {
     stream_timeout_secs: Entity<TextInput>,
     stream_max_retries: Entity<TextInput>,
     stream_degraded_threshold_ms: Entity<TextInput>,
+    log_page_input: Entity<TextInput>,
+    range_start_input: Entity<TextInput>,
+    range_end_input: Entity<TextInput>,
+    /// Whether the current `status` message came from a failed data load, so a
+    /// later successful reload knows it may clear it (and only it).
+    load_error: bool,
+    /// Drives the virtualized page body (one item per top-level block).
+    list_state: ListState,
 }
 
 impl UsageView {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
+        let now = Local::now();
         let mut this = Self {
             app,
             summary: None,
             summary_by_app: Vec::new(),
             daily: Vec::new(),
             providers: Vec::new(),
+            provider_options: Vec::new(),
             models: Vec::new(),
+            model_options: Vec::new(),
             logs: Vec::new(),
             log_total: 0,
             data_sources: Vec::new(),
@@ -160,6 +335,12 @@ impl UsageView {
             show_scope_options: false,
             show_pricing: false,
             show_stream_config: false,
+            open_filter_popover: None,
+            active_datetime_picker: None,
+            picker_year: now.year(),
+            picker_month: now.month(),
+            picker_hour_scroll: ScrollHandle::new(),
+            picker_minute_scroll: ScrollHandle::new(),
             confirm_delete_pricing: None,
             pricing_sources: PRICING_APPS
                 .iter()
@@ -177,122 +358,152 @@ impl UsageView {
             stream_timeout_secs: cx.new(|cx| text_input(cx, "8", "8")),
             stream_max_retries: cx.new(|cx| text_input(cx, "1", "1")),
             stream_degraded_threshold_ms: cx.new(|cx| text_input(cx, "6000", "6000")),
+            log_page_input: cx.new(|cx| text_input(cx, "页码", "")),
+            range_start_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
+            range_end_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
+            load_error: false,
+            list_state: ListState::new(USAGE_BLOCK_COUNT, ListAlignment::Top, px(600.)),
         };
-        this.reload();
+        this.reload(cx);
         this.load_config_forms(cx);
+        // “跳至 X 页”回车提交。
+        let jump = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
+            let text = input_value(&this.log_page_input, cx);
+            if let Ok(target) = text.parse::<u32>() {
+                if target >= 1 {
+                    let total_pages = this.log_total.div_ceil(LOG_PAGE_SIZE).max(1);
+                    this.set_log_page((target - 1).min(total_pages - 1), cx);
+                }
+            }
+        });
+        this.log_page_input.update(cx, |input, _| {
+            input.set_on_enter(move |window, cx| jump(&(), window, cx));
+        });
+        let apply_start = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
+            this.apply_custom_range(cx);
+        });
+        this.range_start_input.update(cx, |input, _| {
+            input.set_on_enter(move |window, cx| apply_start(&(), window, cx));
+        });
+        let apply_end = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
+            this.apply_custom_range(cx);
+        });
+        this.range_end_input.update(cx, |input, _| {
+            input.set_on_enter(move |window, cx| apply_end(&(), window, cx));
+        });
         this
     }
 
-    pub fn reload(&mut self) {
-        self.status = None;
+    /// Kick off a background reload of everything the page shows. The queries
+    /// share the SQLite connection with the gateway's usage logging, so they
+    /// must never run on the UI thread.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        let app = self.app.clone();
         let (start, end) = self.range.bounds();
-        let app_type = self.app_filter.as_deref();
-        let provider_name = self.provider_filter.as_deref();
-        let model = self.model_filter.as_deref();
+        let app_filter = self.app_filter.clone();
+        let provider_filter = self.provider_filter.clone();
+        let model_filter = self.model_filter.clone();
+        let status_filter = self.status_filter;
+        let log_page = self.log_page;
+        cx.spawn(async move |this, cx| {
+            let data = cx
+                .background_spawn(async move {
+                    load_usage_data(
+                        &app,
+                        start,
+                        end,
+                        app_filter.as_deref(),
+                        provider_filter.as_deref(),
+                        model_filter.as_deref(),
+                        status_filter,
+                        log_page,
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| this.apply_data(data, cx)).ok();
+        })
+        .detach();
+    }
 
-        match self
-            .app
-            .db
-            .get_usage_summary(start, end, app_type, provider_name, model)
-        {
-            Ok(s) => self.summary = Some(s),
-            Err(err) => {
-                self.summary = None;
-                self.status = Some(SharedString::from(format!("加载用量失败: {err}")));
+    fn apply_data(&mut self, data: UsageData, cx: &mut Context<Self>) {
+        if data.errors.is_empty() {
+            if self.load_error {
+                self.status = None;
+                self.load_error = false;
             }
+        } else {
+            self.status = Some(SharedString::from(data.errors.join("；")));
+            self.load_error = true;
         }
-
-        self.summary_by_app = self
-            .app
-            .db
-            .get_usage_summary_by_app(start, end, provider_name, model)
-            .unwrap_or_default();
-        self.daily = self
-            .app
-            .db
-            .get_daily_trends(start, end, app_type, provider_name, model)
-            .unwrap_or_default();
-        self.providers = self
-            .app
-            .db
-            .get_provider_stats(start, end, app_type, provider_name, model)
-            .unwrap_or_default();
-        self.models = self
-            .app
-            .db
-            .get_model_stats(start, end, app_type, provider_name, model)
-            .unwrap_or_default();
-
-        let filters = LogFilters {
-            app_type: self.app_filter.clone(),
-            provider_name: self.provider_filter.clone(),
-            model: self.model_filter.clone(),
-            status_code: self.status_filter,
-            start_date: start,
-            end_date: end,
-        };
-        match self
-            .app
-            .db
-            .get_request_logs(&filters, self.log_page, LOG_PAGE_SIZE)
-        {
-            Ok(page) => {
-                self.logs = page.data;
-                self.log_total = page.total;
-            }
-            Err(err) => {
-                self.logs.clear();
-                self.log_total = 0;
-                self.status = Some(SharedString::from(format!("加载请求日志失败: {err}")));
-            }
-        }
-
-        self.data_sources = get_data_source_breakdown(&self.app.db).unwrap_or_default();
-        self.pricing = self.app.db.get_model_pricing().unwrap_or_default();
-        self.stream_config = self.app.db.get_stream_check_config().unwrap_or_default();
+        self.summary = data.summary;
+        self.summary_by_app = data.summary_by_app;
+        self.daily = data.daily;
+        self.providers = data.providers;
+        self.provider_options = data.provider_options;
+        self.models = data.models;
+        self.model_options = data.model_options;
+        self.logs = data.logs;
+        self.log_total = data.log_total;
+        self.data_sources = data.data_sources;
+        self.pricing = data.pricing;
+        self.stream_config = data.stream_config;
+        self.list_state.remeasure();
+        cx.notify();
     }
 
     fn load_config_forms(&mut self, cx: &mut Context<Self>) {
-        if let Ok(config) = self.app.db.get_stream_check_config() {
-            self.stream_config = config.clone();
-            set_input(
-                &self.stream_timeout_secs,
-                config.timeout_secs.to_string(),
-                cx,
-            );
-            set_input(&self.stream_max_retries, config.max_retries.to_string(), cx);
-            set_input(
-                &self.stream_degraded_threshold_ms,
-                config.degraded_threshold_ms.to_string(),
-                cx,
-            );
-        }
-
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
-            self.status = Some(SharedString::from(
-                "无法加载计费默认配置: runtime 初始化失败",
-            ));
-            return;
-        };
-
-        for app in PRICING_APPS {
-            let multiplier = runtime
-                .block_on(self.app.db.get_default_cost_multiplier(app))
-                .unwrap_or_else(|_| "1".to_string());
-            let source = runtime
-                .block_on(self.app.db.get_pricing_model_source(app))
-                .unwrap_or_else(|_| "response".to_string());
-            self.pricing_sources.insert(app.to_string(), source);
-            match app {
-                "claude" => set_input(&self.multiplier_claude, multiplier, cx),
-                "codex" => set_input(&self.multiplier_codex, multiplier, cx),
-                "gemini" => set_input(&self.multiplier_gemini, multiplier, cx),
-                _ => {}
-            }
-        }
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_spawn(async move {
+                    let stream_config = app.db.get_stream_check_config().ok();
+                    let mut pricing_defaults = Vec::new();
+                    for name in PRICING_APPS {
+                        let multiplier = app
+                            .db
+                            .get_default_cost_multiplier(name)
+                            .await
+                            .unwrap_or_else(|_| "1".to_string());
+                        let source = app
+                            .db
+                            .get_pricing_model_source(name)
+                            .await
+                            .unwrap_or_else(|_| "response".to_string());
+                        pricing_defaults.push((name, multiplier, source));
+                    }
+                    (stream_config, pricing_defaults)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let (stream_config, pricing_defaults) = loaded;
+                if let Some(config) = stream_config {
+                    this.stream_config = config.clone();
+                    set_input(
+                        &this.stream_timeout_secs,
+                        config.timeout_secs.to_string(),
+                        cx,
+                    );
+                    set_input(&this.stream_max_retries, config.max_retries.to_string(), cx);
+                    set_input(
+                        &this.stream_degraded_threshold_ms,
+                        config.degraded_threshold_ms.to_string(),
+                        cx,
+                    );
+                }
+                for (name, multiplier, source) in pricing_defaults {
+                    this.pricing_sources.insert(name.to_string(), source);
+                    match name {
+                        "claude" => set_input(&this.multiplier_claude, multiplier, cx),
+                        "codex" => set_input(&this.multiplier_codex, multiplier, cx),
+                        "gemini" => set_input(&this.multiplier_gemini, multiplier, cx),
+                        _ => {}
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn reset_log_page(&mut self) {
@@ -303,19 +514,182 @@ impl UsageView {
     fn set_range(&mut self, range: UsageRange, cx: &mut Context<Self>) {
         self.range = range;
         self.reset_log_page();
-        self.reload();
+        self.reload(cx);
         cx.notify();
     }
 
-    fn set_app_filter(&mut self, app_type: Option<String>, cx: &mut Context<Self>) {
-        if self.app_filter != app_type {
-            self.provider_filter = None;
-            self.model_filter = None;
+    fn toggle_filter_popover(&mut self, popover: FilterPopover, cx: &mut Context<Self>) {
+        if self.open_filter_popover == Some(popover) {
+            self.open_filter_popover = None;
+            self.active_datetime_picker = None;
+        } else {
+            if popover == FilterPopover::Time {
+                self.sync_range_inputs(cx);
+            }
+            self.active_datetime_picker = None;
+            self.open_filter_popover = Some(popover);
         }
-        self.app_filter = app_type;
-        self.reset_log_page();
-        self.reload();
         cx.notify();
+    }
+
+    fn sync_range_inputs(&mut self, cx: &mut Context<Self>) {
+        let (Some(start), Some(end)) = self.range.bounds() else {
+            return;
+        };
+        set_input(
+            &self.range_start_input,
+            format_local_timestamp(start, true),
+            cx,
+        );
+        set_input(&self.range_end_input, format_local_timestamp(end, true), cx);
+    }
+
+    fn endpoint_input(&self, endpoint: RangeEndpoint) -> &Entity<TextInput> {
+        match endpoint {
+            RangeEndpoint::Start => &self.range_start_input,
+            RangeEndpoint::End => &self.range_end_input,
+        }
+    }
+
+    fn endpoint_datetime(
+        &self,
+        endpoint: RangeEndpoint,
+        cx: &mut Context<Self>,
+    ) -> chrono::DateTime<Local> {
+        let input = input_value(self.endpoint_input(endpoint), cx);
+        let parsed = parse_local_timestamp(&input, endpoint == RangeEndpoint::End)
+            .and_then(|timestamp| Local.timestamp_opt(timestamp, 0).single());
+        if let Some(value) = parsed {
+            return value;
+        }
+
+        let (start, end) = self.range.bounds();
+        let fallback = match endpoint {
+            RangeEndpoint::Start => start,
+            RangeEndpoint::End => end,
+        };
+        fallback
+            .and_then(|timestamp| Local.timestamp_opt(timestamp, 0).single())
+            .unwrap_or_else(Local::now)
+    }
+
+    fn toggle_datetime_picker(&mut self, endpoint: RangeEndpoint, cx: &mut Context<Self>) {
+        if self.active_datetime_picker == Some(endpoint) {
+            self.active_datetime_picker = None;
+        } else {
+            let selected = self.endpoint_datetime(endpoint, cx);
+            self.picker_year = selected.year();
+            self.picker_month = selected.month();
+            self.picker_hour_scroll
+                .scroll_to_top_of_item(selected.hour() as usize);
+            self.picker_minute_scroll
+                .scroll_to_top_of_item(selected.minute() as usize);
+            self.active_datetime_picker = Some(endpoint);
+        }
+        cx.notify();
+    }
+
+    fn update_datetime_endpoint(
+        &mut self,
+        endpoint: RangeEndpoint,
+        date: NaiveDate,
+        hour: u32,
+        minute: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let second = if endpoint == RangeEndpoint::End {
+            59
+        } else {
+            0
+        };
+        let Some(value) = Local
+            .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, second)
+            .earliest()
+        else {
+            return;
+        };
+        let input = self.endpoint_input(endpoint).clone();
+        set_input(&input, format_local_timestamp(value.timestamp(), true), cx);
+        cx.notify();
+    }
+
+    fn select_picker_date(
+        &mut self,
+        endpoint: RangeEndpoint,
+        date: NaiveDate,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.endpoint_datetime(endpoint, cx);
+        self.picker_year = date.year();
+        self.picker_month = date.month();
+        self.update_datetime_endpoint(endpoint, date, current.hour(), current.minute(), cx);
+    }
+
+    fn select_picker_hour(&mut self, endpoint: RangeEndpoint, hour: u32, cx: &mut Context<Self>) {
+        let current = self.endpoint_datetime(endpoint, cx);
+        self.update_datetime_endpoint(endpoint, current.date_naive(), hour, current.minute(), cx);
+        self.picker_hour_scroll.scroll_to_top_of_item(hour as usize);
+    }
+
+    fn select_picker_minute(
+        &mut self,
+        endpoint: RangeEndpoint,
+        minute: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.endpoint_datetime(endpoint, cx);
+        self.update_datetime_endpoint(endpoint, current.date_naive(), current.hour(), minute, cx);
+        self.picker_minute_scroll
+            .scroll_to_top_of_item(minute as usize);
+    }
+
+    fn select_picker_today(&mut self, endpoint: RangeEndpoint, cx: &mut Context<Self>) {
+        let current = self.endpoint_datetime(endpoint, cx);
+        let today = Local::now().date_naive();
+        self.picker_year = today.year();
+        self.picker_month = today.month();
+        self.update_datetime_endpoint(endpoint, today, current.hour(), current.minute(), cx);
+    }
+
+    fn clear_picker_value(&mut self, endpoint: RangeEndpoint, cx: &mut Context<Self>) {
+        let input = self.endpoint_input(endpoint).clone();
+        set_input(&input, "", cx);
+        self.active_datetime_picker = None;
+        cx.notify();
+    }
+
+    fn shift_picker_month(&mut self, delta: i32, cx: &mut Context<Self>) {
+        (self.picker_year, self.picker_month) =
+            shifted_year_month(self.picker_year, self.picker_month, delta);
+        cx.notify();
+    }
+
+    /// 应用时间弹层里的自定义范围（本地时区，精确到秒）。
+    fn apply_custom_range(&mut self, cx: &mut Context<Self>) {
+        let start_text = input_value(&self.range_start_input, cx);
+        let end_text = input_value(&self.range_end_input, cx);
+        let Some(start) = parse_local_timestamp(&start_text, false) else {
+            self.status = Some(SharedString::from(
+                "开始时间格式不正确，请使用 YYYY/MM/DD HH:mm:ss",
+            ));
+            cx.notify();
+            return;
+        };
+        let Some(end) = parse_local_timestamp(&end_text, true) else {
+            self.status = Some(SharedString::from(
+                "结束时间格式不正确，请使用 YYYY/MM/DD HH:mm:ss",
+            ));
+            cx.notify();
+            return;
+        };
+        if start > end {
+            self.status = Some(SharedString::from("开始时间不能晚于结束时间"));
+            cx.notify();
+            return;
+        }
+        self.open_filter_popover = None;
+        self.active_datetime_picker = None;
+        self.set_range(UsageRange::Custom { start, end }, cx);
     }
 
     fn set_provider_filter(&mut self, provider_name: Option<String>, cx: &mut Context<Self>) {
@@ -324,99 +698,125 @@ impl UsageView {
         }
         self.provider_filter = provider_name;
         self.reset_log_page();
-        self.reload();
+        self.reload(cx);
         cx.notify();
     }
 
     fn set_model_filter(&mut self, model: Option<String>, cx: &mut Context<Self>) {
         self.model_filter = model;
         self.reset_log_page();
-        self.reload();
+        self.reload(cx);
         cx.notify();
     }
 
     fn set_status_filter(&mut self, status: Option<u16>, cx: &mut Context<Self>) {
         self.status_filter = status;
         self.reset_log_page();
-        self.reload();
+        self.reload(cx);
         cx.notify();
     }
 
     fn set_section(&mut self, section: UsageSection, cx: &mut Context<Self>) {
         self.section = section;
+        self.list_state.remeasure();
         cx.notify();
     }
 
     fn set_log_page(&mut self, page: u32, cx: &mut Context<Self>) {
         self.log_page = page;
         self.selected_log = None;
-        self.reload();
+        self.reload(cx);
         cx.notify();
     }
 
     fn select_log(&mut self, request_id: String, cx: &mut Context<Self>) {
-        match self.app.db.get_request_detail(&request_id) {
-            Ok(detail) => {
-                self.selected_log = detail;
-                self.status = None;
-            }
-            Err(err) => {
-                self.selected_log = None;
-                self.status = Some(SharedString::from(format!("读取请求详情失败: {err}")));
-            }
-        }
-        cx.notify();
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let detail = cx
+                .background_spawn(async move { app.db.get_request_detail(&request_id) })
+                .await;
+            this.update(cx, |this, cx| {
+                match detail {
+                    Ok(detail) => {
+                        this.selected_log = detail;
+                        this.status = None;
+                    }
+                    Err(err) => {
+                        this.selected_log = None;
+                        this.status = Some(SharedString::from(format!("读取请求详情失败: {err}")));
+                    }
+                }
+                this.list_state.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn sync_sessions(&mut self, cx: &mut Context<Self>) {
-        let mut result = match sync_claude_session_logs(&self.app.db) {
-            Ok(result) => result,
-            Err(err) => SessionSyncResult {
-                imported: 0,
-                skipped: 0,
-                files_scanned: 0,
-                errors: vec![format!("Claude sync failed: {err}")],
-            },
-        };
-
-        for (label, sync_result) in [
-            (
-                "Codex",
-                services::session_usage_codex::sync_codex_usage(&self.app.db),
-            ),
-            (
-                "Gemini",
-                services::session_usage_gemini::sync_gemini_usage(&self.app.db),
-            ),
-            (
-                "OpenCode",
-                services::session_usage_opencode::sync_opencode_usage(&self.app.db),
-            ),
-        ] {
-            match sync_result {
-                Ok(r) => {
-                    result.imported += r.imported;
-                    result.skipped += r.skipped;
-                    result.files_scanned += r.files_scanned;
-                    result.errors.extend(r.errors);
-                }
-                Err(err) => result.errors.push(format!("{label} sync failed: {err}")),
-            }
-        }
-
-        self.status = Some(SharedString::from(format!(
-            "会话同步完成: 导入 {} 条，跳过 {} 条，扫描 {} 个文件{}",
-            result.imported,
-            result.skipped,
-            result.files_scanned,
-            if result.errors.is_empty() {
-                String::new()
-            } else {
-                format!("，{} 个错误", result.errors.len())
-            }
-        )));
-        self.reload();
+        self.status = Some(SharedString::from("正在同步会话…"));
         cx.notify();
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let mut result = match sync_claude_session_logs(&app.db) {
+                        Ok(result) => result,
+                        Err(err) => SessionSyncResult {
+                            imported: 0,
+                            skipped: 0,
+                            files_scanned: 0,
+                            errors: vec![format!("Claude sync failed: {err}")],
+                        },
+                    };
+
+                    for (label, sync_result) in [
+                        (
+                            "Codex",
+                            services::session_usage_codex::sync_codex_usage(&app.db),
+                        ),
+                        (
+                            "Gemini",
+                            services::session_usage_gemini::sync_gemini_usage(&app.db),
+                        ),
+                        (
+                            "OpenCode",
+                            services::session_usage_opencode::sync_opencode_usage(&app.db),
+                        ),
+                    ] {
+                        match sync_result {
+                            Ok(r) => {
+                                result.imported += r.imported;
+                                result.skipped += r.skipped;
+                                result.files_scanned += r.files_scanned;
+                                result.errors.extend(r.errors);
+                            }
+                            Err(err) => result.errors.push(format!("{label} sync failed: {err}")),
+                        }
+                    }
+                    result
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.status = Some(SharedString::from(format!(
+                    "会话同步完成: 导入 {} 条，跳过 {} 条，扫描 {} 个文件{}",
+                    result.imported,
+                    result.skipped,
+                    result.files_scanned,
+                    if result.errors.is_empty() {
+                        String::new()
+                    } else {
+                        format!("，{} 个错误", result.errors.len())
+                    }
+                )));
+                this.load_error = false;
+                this.reload(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn edit_pricing(&mut self, pricing: ModelPricingInfo, cx: &mut Context<Self>) {
@@ -460,7 +860,7 @@ impl UsageView {
         ) {
             Ok(()) => {
                 self.status = Some(SharedString::from(format!("已保存模型定价: {model_id}")));
-                self.reload();
+                self.reload(cx);
             }
             Err(err) => {
                 self.status = Some(SharedString::from(format!("保存模型定价失败: {err}")));
@@ -473,7 +873,7 @@ impl UsageView {
         match self.app.db.delete_model_pricing(&model_id) {
             Ok(()) => {
                 self.status = Some(SharedString::from(format!("已删除模型定价: {model_id}")));
-                self.reload();
+                self.reload(cx);
             }
             Err(err) => {
                 self.status = Some(SharedString::from(format!("删除模型定价失败: {err}")));
@@ -521,36 +921,29 @@ impl UsageView {
             ),
         ];
 
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
-            self.status = Some(SharedString::from(
-                "保存计费默认配置失败: runtime 初始化失败",
-            ));
-            cx.notify();
-            return;
-        };
-
-        let result = runtime.block_on(async {
-            for (app, multiplier, source) in configs {
-                self.app
-                    .db
-                    .set_default_cost_multiplier(app, multiplier.trim())
-                    .await?;
-                self.app
-                    .db
-                    .set_pricing_model_source(app, source.trim())
-                    .await?;
-            }
-            Ok::<(), ochub_core::AppError>(())
-        });
-
-        self.status = Some(SharedString::from(match result {
-            Ok(()) => "计费默认配置已保存".to_string(),
-            Err(err) => format!("保存计费默认配置失败: {err}"),
-        }));
-        cx.notify();
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    for (name, multiplier, source) in configs {
+                        app.db
+                            .set_default_cost_multiplier(name, multiplier.trim())
+                            .await?;
+                        app.db.set_pricing_model_source(name, source.trim()).await?;
+                    }
+                    Ok::<(), ochub_core::AppError>(())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.status = Some(SharedString::from(match result {
+                    Ok(()) => "计费默认配置已保存".to_string(),
+                    Err(err) => format!("保存计费默认配置失败: {err}"),
+                }));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn save_stream_config(&mut self, cx: &mut Context<Self>) {
@@ -575,49 +968,246 @@ impl UsageView {
         cx.notify();
     }
 
+    fn render_datetime_picker(
+        &self,
+        endpoint: RangeEndpoint,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let selected = self.endpoint_datetime(endpoint, cx);
+        let selected_date = selected.date_naive();
+        let selected_hour = selected.hour();
+        let selected_minute = selected.minute();
+        let today = Local::now().date_naive();
+        let first_of_month =
+            NaiveDate::from_ymd_opt(self.picker_year, self.picker_month, 1).unwrap_or(today);
+        let calendar_start =
+            first_of_month - Duration::days(first_of_month.weekday().num_days_from_sunday() as i64);
+
+        let mut weekday_header = div().grid().grid_cols(7).gap(px(2.)).w_full();
+        for weekday in ["日", "一", "二", "三", "四", "五", "六"] {
+            weekday_header = weekday_header.child(
+                div()
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme::muted())
+                    .child(weekday),
+            );
+        }
+
+        let mut day_grid = div().grid().grid_cols(7).gap(px(2.)).w_full();
+        for ix in 0..42 {
+            let date = calendar_start + Duration::days(ix);
+            let in_current_month = date.month() == self.picker_month;
+            let is_selected = date == selected_date;
+            let is_today = date == today;
+            day_grid = day_grid.child(
+                calendar_day_button(
+                    ElementId::Name(
+                        format!(
+                            "usage-picker-day-{}-{}-{}",
+                            date.year(),
+                            date.month(),
+                            date.day()
+                        )
+                        .into(),
+                    ),
+                    date,
+                    in_current_month,
+                    is_selected,
+                    is_today,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.select_picker_date(endpoint, date, cx);
+                })),
+            );
+        }
+
+        let calendar = div()
+            .w(px(236.))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(42.))
+                    .px_3()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text())
+                            .child(SharedString::from(format!(
+                                "{}年{:02}月",
+                                self.picker_year, self.picker_month
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                calendar_nav_button(
+                                    "usage-picker-previous-month",
+                                    "上个月",
+                                    IconName::ChevronLeft,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.shift_picker_month(-1, cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                calendar_nav_button(
+                                    "usage-picker-next-month",
+                                    "下个月",
+                                    IconName::ChevronRight,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.shift_picker_month(1, cx);
+                                    },
+                                )),
+                            ),
+                    ),
+            )
+            .child(div().px_3().child(weekday_header))
+            .child(div().px_3().pt_1().child(day_grid))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .h(px(40.))
+                    .px_3()
+                    .border_t_1()
+                    .border_color(theme::border())
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        calendar_footer_button("usage-picker-clear", "清除").on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.clear_picker_value(endpoint, cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        calendar_footer_button("usage-picker-today", "今天").on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.select_picker_today(endpoint, cx);
+                            },
+                        )),
+                    ),
+            );
+
+        let hour_scroll_id = match endpoint {
+            RangeEndpoint::Start => "usage-picker-start-hours",
+            RangeEndpoint::End => "usage-picker-end-hours",
+        };
+        let mut hour_options = div()
+            .id(hour_scroll_id)
+            .w(px(54.))
+            .h(px(252.))
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .track_scroll(&self.picker_hour_scroll);
+        for hour in 0..24u32 {
+            hour_options = hour_options.child(
+                time_value_button(
+                    ElementId::Name(format!("{hour_scroll_id}-{hour}").into()),
+                    hour,
+                    hour == selected_hour,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.select_picker_hour(endpoint, hour, cx);
+                })),
+            );
+        }
+
+        let minute_scroll_id = match endpoint {
+            RangeEndpoint::Start => "usage-picker-start-minutes",
+            RangeEndpoint::End => "usage-picker-end-minutes",
+        };
+        let mut minute_options = div()
+            .id(minute_scroll_id)
+            .w(px(54.))
+            .h(px(252.))
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .track_scroll(&self.picker_minute_scroll);
+        for minute in 0..60u32 {
+            minute_options = minute_options.child(
+                time_value_button(
+                    ElementId::Name(format!("{minute_scroll_id}-{minute}").into()),
+                    minute,
+                    minute == selected_minute,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.select_picker_minute(endpoint, minute, cx);
+                })),
+            );
+        }
+
+        let time_selector = div()
+            .w(px(111.))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .child(
+                div()
+                    .w(px(55.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(time_column_label("时"))
+                    .child(hour_options),
+            )
+            .child(
+                div()
+                    .w(px(56.))
+                    .border_l_1()
+                    .border_color(theme::border())
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(time_column_label("分"))
+                    .child(minute_options),
+            );
+
+        let popover_id = match endpoint {
+            RangeEndpoint::Start => "usage-start-datetime-popover",
+            RangeEndpoint::End => "usage-end-datetime-popover",
+        };
+        filter_popover_panel(popover_id, 348.)
+            .h(px(296.))
+            .p_0()
+            .flex_row()
+            .child(calendar)
+            .child(div().w(px(1.)).h_full().bg(theme::border()))
+            .child(time_selector)
+            .on_mouse_down_out(cx.listener(move |this, _event, _window, cx| {
+                if this.active_datetime_picker == Some(endpoint) {
+                    this.active_datetime_picker = None;
+                    cx.notify();
+                }
+            }))
+    }
+
     fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // 单选筛选组统一用 segmented（范围 / 应用 / 状态）。
-        let range_labels: Vec<&str> = UsageRange::all().iter().map(|(_, label)| *label).collect();
-        let range_selected = UsageRange::all()
-            .iter()
-            .position(|(range, _)| *range == self.range)
-            .unwrap_or(0);
-        let on_range = cx.listener(|this, ix: &usize, _window, cx| {
-            if let Some((range, _)) = UsageRange::all().get(*ix) {
-                this.set_range(*range, cx);
-            }
-        });
-        let range_segmented = components::segmented(
-            "usage-range",
-            &range_labels,
-            range_selected,
-            move |ix, window, cx| on_range(&ix, window, cx),
-        );
-
-        const APP_FILTERS: [(Option<&str>, &str); 5] = [
-            (None, "全部"),
-            (Some("claude"), "Claude"),
-            (Some("codex"), "Codex"),
-            (Some("gemini"), "Gemini"),
-            (Some("opencode"), "OpenCode"),
-        ];
-        let app_labels: Vec<&str> = APP_FILTERS.iter().map(|(_, label)| *label).collect();
-        let app_selected = APP_FILTERS
-            .iter()
-            .position(|(app, _)| self.app_filter.as_deref() == *app)
-            .unwrap_or(0);
-        let on_app = cx.listener(move |this, ix: &usize, _window, cx| {
-            if let Some((app, _)) = APP_FILTERS.get(*ix) {
-                this.set_app_filter(app.map(str::to_string), cx);
-            }
-        });
-        let app_segmented = components::segmented(
-            "usage-app",
-            &app_labels,
-            app_selected,
-            move |ix, window, cx| on_app(&ix, window, cx),
-        );
-
         const STATUS_FILTERS: [(Option<u16>, &str); 6] = [
             (None, "全部状态"),
             (Some(200), "200"),
@@ -626,44 +1216,421 @@ impl UsageView {
             (Some(429), "429"),
             (Some(500), "500"),
         ];
-        let status_labels: Vec<&str> = STATUS_FILTERS.iter().map(|(_, label)| *label).collect();
-        let status_selected = STATUS_FILTERS
-            .iter()
-            .position(|(status, _)| self.status_filter == *status)
-            .unwrap_or(0);
-        let on_status = cx.listener(move |this, ix: &usize, _window, cx| {
-            if let Some((status, _)) = STATUS_FILTERS.get(*ix) {
-                this.set_status_filter(*status, cx);
-            }
-        });
-        let status_segmented = components::segmented(
-            "usage-status",
-            &status_labels,
-            status_selected,
-            move |ix, window, cx| on_status(&ix, window, cx),
-        );
 
-        components::card()
-            .gap_3()
+        let time_open = self.open_filter_popover == Some(FilterPopover::Time);
+        let mut quick_ranges = div().flex().flex_row().flex_wrap().gap_2();
+        for (ix, (range, label)) in UsageRange::all().iter().enumerate() {
+            let range = *range;
+            quick_ranges = quick_ranges.child(
+                quick_range_button(
+                    ElementId::Name(format!("usage-quick-range-{ix}").into()),
+                    *label,
+                    self.range == range,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.open_filter_popover = None;
+                    this.active_datetime_picker = None;
+                    this.set_range(range, cx);
+                })),
+            );
+        }
+
+        let start_picker_open = self.active_datetime_picker == Some(RangeEndpoint::Start);
+        let start_datetime_control = div()
+            .relative()
+            .w_full()
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("范围与口径"),
+                datetime_filter_field(
+                    "usage-start-datetime-field",
+                    "开始时间",
+                    self.range_start_input.clone(),
+                    start_picker_open,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        if start_picker_open {
+                            this.active_datetime_picker = None;
+                            cx.notify();
+                        } else {
+                            this.toggle_datetime_picker(RangeEndpoint::Start, cx);
+                        }
+                    }),
+                ),
+            )
+            .when(start_picker_open, |s| {
+                s.child(
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopLeft)
+                            .offset(point(px(0.), px(DATETIME_PICKER_GAP)))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(self.render_datetime_picker(RangeEndpoint::Start, cx)),
                     )
-                    .child(
+                    .priority(20),
+                )
+            });
+
+        let end_picker_open = self.active_datetime_picker == Some(RangeEndpoint::End);
+        let end_datetime_control = div()
+            .relative()
+            .w_full()
+            .child(
+                datetime_filter_field(
+                    "usage-end-datetime-field",
+                    "结束时间",
+                    self.range_end_input.clone(),
+                    end_picker_open,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        if end_picker_open {
+                            this.active_datetime_picker = None;
+                            cx.notify();
+                        } else {
+                            this.toggle_datetime_picker(RangeEndpoint::End, cx);
+                        }
+                    }),
+                ),
+            )
+            .when(end_picker_open, |s| {
+                s.child(
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopLeft)
+                            .offset(point(px(0.), px(DATETIME_PICKER_GAP)))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(self.render_datetime_picker(RangeEndpoint::End, cx)),
+                    )
+                    .priority(20),
+                )
+            });
+
+        let time_popover = filter_popover_panel("usage-time-popover", 300.)
+            .gap_3()
+            .p_3()
+            .child(filter_section_label("快捷选择"))
+            .child(quick_ranges)
+            .child(div().w_full().h(px(1.)).bg(theme::border()))
+            .child(filter_section_label("自定义范围"))
+            .child(start_datetime_control)
+            .child(end_datetime_control)
+            .child(
+                components::button(
+                    "usage-apply-range",
+                    "确定",
+                    ButtonTone::Primary,
+                    ButtonSize::Md,
+                )
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.apply_custom_range(cx);
+                })),
+            )
+            .when(self.active_datetime_picker.is_none(), |s| {
+                s.on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
+                    if this.open_filter_popover == Some(FilterPopover::Time) {
+                        this.open_filter_popover = None;
+                        this.active_datetime_picker = None;
+                        cx.notify();
+                    }
+                }))
+            });
+        let time_control = div()
+            .relative()
+            .flex_none()
+            .child(
+                filter_trigger(
+                    "usage-time-filter",
+                    range_filter_label(self.range),
+                    IconName::Calendar,
+                    time_open,
+                    300.,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        if time_open {
+                            this.open_filter_popover = None;
+                            this.active_datetime_picker = None;
+                            cx.notify();
+                        } else {
+                            this.toggle_filter_popover(FilterPopover::Time, cx);
+                        }
+                    }),
+                ),
+            )
+            .when(time_open, |s| {
+                s.child(
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopLeft)
+                            .offset(point(px(0.), px(40.)))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(time_popover),
+                    )
+                    .priority(10),
+                )
+            });
+
+        let provider_open = self.open_filter_popover == Some(FilterPopover::Provider);
+        let mut provider_popover = filter_popover_panel("usage-provider-popover", 240.)
+            .p_1()
+            .max_h(px(280.))
+            .overflow_y_scroll()
+            .child(
+                dropdown_option(
+                    "usage-provider-all",
+                    "全部 Provider",
+                    self.provider_filter.is_none(),
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.open_filter_popover = None;
+                    this.set_provider_filter(None, cx);
+                })),
+            );
+        for (ix, provider) in self.provider_options.iter().enumerate() {
+            let selected = self.provider_filter.as_deref() == Some(provider.as_str());
+            let provider_for_click = provider.clone();
+            provider_popover = provider_popover.child(
+                dropdown_option(
+                    ElementId::Name(format!("usage-provider-option-{ix}").into()),
+                    provider.clone(),
+                    selected,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.open_filter_popover = None;
+                    this.set_provider_filter(Some(provider_for_click.clone()), cx);
+                })),
+            );
+        }
+        if self.provider_options.is_empty() {
+            provider_popover = provider_popover.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child("当前时间范围内暂无 Provider"),
+            );
+        }
+        provider_popover =
+            provider_popover.on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
+                if this.open_filter_popover == Some(FilterPopover::Provider) {
+                    this.open_filter_popover = None;
+                    cx.notify();
+                }
+            }));
+        let provider_control = div()
+            .relative()
+            .flex_none()
+            .child(
+                filter_trigger(
+                    "usage-provider-filter",
+                    self.provider_filter
+                        .clone()
+                        .unwrap_or_else(|| "全部 Provider".to_string()),
+                    IconName::Cloud,
+                    provider_open,
+                    180.,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        if provider_open {
+                            this.open_filter_popover = None;
+                            cx.notify();
+                        } else {
+                            this.toggle_filter_popover(FilterPopover::Provider, cx);
+                        }
+                    }),
+                ),
+            )
+            .when(provider_open, |s| {
+                s.child(
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopLeft)
+                            .offset(point(px(0.), px(40.)))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(provider_popover),
+                    )
+                    .priority(10),
+                )
+            });
+
+        let model_open = self.open_filter_popover == Some(FilterPopover::Model);
+        let mut model_popover = filter_popover_panel("usage-model-popover", 240.)
+            .p_1()
+            .max_h(px(280.))
+            .overflow_y_scroll()
+            .child(
+                dropdown_option("usage-model-all", "全部模型", self.model_filter.is_none())
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.open_filter_popover = None;
+                        this.set_model_filter(None, cx);
+                    })),
+            );
+        for (ix, model) in self.model_options.iter().enumerate() {
+            let selected = self.model_filter.as_deref() == Some(model.as_str());
+            let model_for_click = model.clone();
+            model_popover = model_popover.child(
+                dropdown_option(
+                    ElementId::Name(format!("usage-model-option-{ix}").into()),
+                    model.clone(),
+                    selected,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.open_filter_popover = None;
+                    this.set_model_filter(Some(model_for_click.clone()), cx);
+                })),
+            );
+        }
+        if self.model_options.is_empty() {
+            model_popover = model_popover.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child("当前时间范围内暂无模型"),
+            );
+        }
+        model_popover =
+            model_popover.on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
+                if this.open_filter_popover == Some(FilterPopover::Model) {
+                    this.open_filter_popover = None;
+                    cx.notify();
+                }
+            }));
+        let model_control = div()
+            .relative()
+            .flex_none()
+            .child(
+                filter_trigger(
+                    "usage-model-filter",
+                    self.model_filter
+                        .clone()
+                        .unwrap_or_else(|| "全部模型".to_string()),
+                    IconName::Layers,
+                    model_open,
+                    180.,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        if model_open {
+                            this.open_filter_popover = None;
+                            cx.notify();
+                        } else {
+                            this.toggle_filter_popover(FilterPopover::Model, cx);
+                        }
+                    }),
+                ),
+            )
+            .when(model_open, |s| {
+                s.child(
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopLeft)
+                            .offset(point(px(0.), px(40.)))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(model_popover),
+                    )
+                    .priority(10),
+                )
+            });
+
+        let status_open = self.open_filter_popover == Some(FilterPopover::Status);
+        let mut status_popover = filter_popover_panel("usage-status-popover", 148.).p_1();
+        for (ix, (status, label)) in STATUS_FILTERS.iter().enumerate() {
+            let status = *status;
+            status_popover = status_popover.child(
+                dropdown_option(
+                    ElementId::Name(format!("usage-status-option-{ix}").into()),
+                    *label,
+                    self.status_filter == status,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.open_filter_popover = None;
+                    this.set_status_filter(status, cx);
+                })),
+            );
+        }
+        status_popover =
+            status_popover.on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
+                if this.open_filter_popover == Some(FilterPopover::Status) {
+                    this.open_filter_popover = None;
+                    cx.notify();
+                }
+            }));
+        let status_label = STATUS_FILTERS
+            .iter()
+            .find_map(|(status, label)| (self.status_filter == *status).then_some(*label))
+            .unwrap_or("全部状态");
+        let status_control = div()
+            .relative()
+            .flex_none()
+            .child(
+                filter_trigger(
+                    "usage-status-filter",
+                    status_label,
+                    IconName::Check,
+                    status_open,
+                    136.,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        if status_open {
+                            this.open_filter_popover = None;
+                            cx.notify();
+                        } else {
+                            this.toggle_filter_popover(FilterPopover::Status, cx);
+                        }
+                    }),
+                ),
+            )
+            .when(status_open, |s| {
+                s.child(
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopLeft)
+                            .offset(point(px(0.), px(40.)))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(status_popover),
+                    )
+                    .priority(10),
+                )
+            });
+
+        let has_active_filters = self.range != UsageRange::Today
+            || self.app_filter.is_some()
+            || self.provider_filter.is_some()
+            || self.model_filter.is_some()
+            || self.status_filter.is_some();
+
+        components::card().p_3().gap_2().child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .flex_wrap()
+                .gap_2()
+                .child(time_control)
+                .child(provider_control)
+                .child(model_control)
+                .child(status_control)
+                .when(has_active_filters, |s| {
+                    s.child(
                         components::button(
                             "usage-clear-filters",
                             "重置",
-                            ButtonTone::Neutral,
+                            ButtonTone::Ghost,
                             ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
@@ -672,60 +1639,19 @@ impl UsageView {
                                 this.provider_filter = None;
                                 this.model_filter = None;
                                 this.status_filter = None;
+                                this.range = UsageRange::Today;
+                                this.open_filter_popover = None;
+                                this.active_datetime_picker = None;
+                                set_input(&this.range_start_input, "", cx);
+                                set_input(&this.range_end_input, "", cx);
                                 this.reset_log_page();
-                                this.reload();
+                                this.reload(cx);
                                 cx.notify();
                             },
                         )),
-                    ),
-            )
-            .child(range_segmented)
-            .child(app_segmented)
-            .child(status_segmented)
-            .when(
-                self.provider_filter.is_some() || self.model_filter.is_some(),
-                |s| {
-                    s.child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap_2()
-                            .when_some(self.provider_filter.clone(), |s, provider| {
-                                let clear_label = format!("Provider: {provider} ×");
-                                s.child(
-                                    filter_chip(
-                                        "usage-active-provider",
-                                        clear_label,
-                                        true,
-                                        Some(IconName::Proxy),
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _event, _window, cx| {
-                                            this.set_provider_filter(None, cx);
-                                        },
-                                    )),
-                                )
-                            })
-                            .when_some(self.model_filter.clone(), |s, model| {
-                                let clear_label = format!("模型: {model} ×");
-                                s.child(
-                                    filter_chip(
-                                        "usage-active-model",
-                                        clear_label,
-                                        true,
-                                        Some(IconName::Layers),
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _event, _window, cx| {
-                                            this.set_model_filter(None, cx);
-                                        },
-                                    )),
-                                )
-                            }),
                     )
-                },
-            )
+                }),
+        )
     }
 
     fn render_data_sources(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -769,6 +1695,7 @@ impl UsageView {
             .flex_col()
             .items_start()
             .gap_3()
+            .w_full()
             .p_3()
             .rounded_lg()
             .bg(theme::surface_hover())
@@ -851,6 +1778,7 @@ impl UsageView {
             .flex()
             .flex_col()
             .gap_3()
+            .w_full()
             .when_some(cards, |s, cards| s.child(cards))
             .child(self.render_app_breakdown())
     }
@@ -868,8 +1796,9 @@ impl UsageView {
             .iter()
             .take(6)
             .map(|item| {
-                let width = ((item.summary.real_total_tokens as f64 / max_tokens as f64) * 240.0)
-                    .max(8.0) as f32;
+                // 相对轨道宽度的占比，最短保留 2% 以保证条可见。
+                let ratio = ((item.summary.real_total_tokens as f64 / max_tokens as f64) as f32)
+                    .clamp(0.02, 1.0);
                 div()
                     .flex()
                     .flex_col()
@@ -903,7 +1832,7 @@ impl UsageView {
                             .bg(theme::surface_hover())
                             .child(
                                 div()
-                                    .w(px(width))
+                                    .w(relative(ratio))
                                     .h(px(8.))
                                     .rounded_md()
                                     .bg(app_tone(&item.app_type)),
@@ -916,6 +1845,7 @@ impl UsageView {
             .flex()
             .flex_col()
             .gap_3()
+            .w_full()
             .p_4()
             .rounded_lg()
             .bg(theme::surface())
@@ -946,7 +1876,7 @@ impl UsageView {
             .children(rows)
     }
 
-    fn render_trend(&self) -> impl IntoElement {
+    fn render_trend(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // Oldest → newest, capped so dense ranges stay legible.
         let visible = {
             let mut v = self.daily.iter().rev().take(30).collect::<Vec<_>>();
@@ -956,6 +1886,18 @@ impl UsageView {
         let values: Vec<f32> = visible
             .iter()
             .map(|stat| stat.total_cost.parse::<f32>().unwrap_or(0.0))
+            .collect();
+        // 悬停提示：每个时间桶一条 “时间 · $成本 · N 次”。
+        let hover_labels: Vec<SharedString> = visible
+            .iter()
+            .map(|stat| {
+                SharedString::from(format!(
+                    "{} · ${} · {} 次",
+                    trend_bucket_label(&stat.date),
+                    format_money(&stat.total_cost, 4),
+                    stat.request_count
+                ))
+            })
             .collect();
         let total_cost: f32 = values.iter().copied().sum();
         let peak_cost = values.iter().copied().fold(0.0_f32, f32::max);
@@ -978,6 +1920,7 @@ impl UsageView {
             .flex()
             .flex_col()
             .gap_4()
+            .w_full()
             .p_4()
             .rounded_lg()
             .bg(theme::surface())
@@ -1036,13 +1979,27 @@ impl UsageView {
                         )),
                 )
                 .child(
-                    crate::chart::AreaChart::new(values)
-                        .height(176.)
-                        .with_animation(
-                            anim_id,
-                            Animation::new(std::time::Duration::from_millis(720))
-                                .with_easing(ease_out_quint()),
-                            |chart, delta| chart.progress(delta),
+                    // Hover 需要逐帧读取鼠标位置：进入/离开和移动时 notify 触发
+                    // 重绘，canvas 在 paint 阶段自行画十字线和 tooltip。
+                    div()
+                        .id("usage-trend-hotspot")
+                        .w_full()
+                        .on_mouse_move(cx.listener(|_this, _event, _window, cx| {
+                            cx.notify();
+                        }))
+                        .on_hover(cx.listener(|_this, _hovered, _window, cx| {
+                            cx.notify();
+                        }))
+                        .child(
+                            crate::chart::AreaChart::new(values)
+                                .hover_labels(hover_labels)
+                                .height(176.)
+                                .with_animation(
+                                    anim_id,
+                                    Animation::new(std::time::Duration::from_millis(720))
+                                        .with_easing(ease_out_quint()),
+                                    |chart, delta| chart.progress(delta),
+                                ),
                         ),
                 )
                 .child(
@@ -1160,7 +2117,7 @@ impl UsageView {
             ]))
             .when(rows.is_empty(), |s| {
                 s.child(components::empty_state(
-                    IconName::Proxy,
+                    IconName::Cloud,
                     "暂无数据",
                     "当前筛选范围内没有 Provider 统计。",
                     None,
@@ -1304,27 +2261,17 @@ impl UsageView {
             })
             .collect::<Vec<_>>();
 
-        let prev = components::button(
-            "usage-prev-page",
-            "上一页",
-            ButtonTone::Neutral,
-            ButtonSize::Sm,
-        )
-        .on_click(cx.listener(move |this, _event, _window, cx| {
-            let next = this.log_page.saturating_sub(1);
-            this.set_log_page(next, cx);
-        }));
-        let next = components::button(
-            "usage-next-page",
-            "下一页",
-            ButtonTone::Neutral,
-            ButtonSize::Sm,
-        )
-        .on_click(cx.listener(move |this, _event, _window, cx| {
-            let total_pages = this.log_total.div_ceil(LOG_PAGE_SIZE).max(1);
-            let next = (this.log_page + 1).min(total_pages - 1);
-            this.set_log_page(next, cx);
-        }));
+        let go = cx.listener(|this, page: &u32, _window, cx| {
+            this.set_log_page(*page, cx);
+        });
+        let pagination = components::pagination_bar(
+            "usage-log-pages",
+            page,
+            total_pages,
+            Some(self.log_total as u64),
+            &self.log_page_input,
+            move |page, window, cx| go(&page, window, cx),
+        );
 
         div()
             .flex()
@@ -1359,11 +2306,7 @@ impl UsageView {
                     })
                     .children(rows),
             )
-            .child(components::pagination(
-                prev.into_any_element(),
-                format!("第 {} / {} 页", page + 1, total_pages),
-                next.into_any_element(),
-            ))
+            .child(pagination)
             .when_some(self.selected_log.clone(), |s, log| {
                 s.child(Self::render_request_detail(log))
             })
@@ -1449,7 +2392,7 @@ impl UsageView {
                     div()
                         .p_3()
                         .rounded_md()
-                        .bg(theme::c(0xffeef0))
+                        .bg(theme::error_surface())
                         .border_1()
                         .border_color(theme::red())
                         .text_color(theme::red())
@@ -1470,7 +2413,7 @@ impl UsageView {
                     ElementId::Name(format!("usage-provider-option-{name}").into()),
                     name.clone(),
                     self.provider_filter.as_deref() == Some(name.as_str()),
-                    Some(IconName::Proxy),
+                    Some(IconName::Cloud),
                 )
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.set_provider_filter(Some(name.clone()), cx);
@@ -1499,6 +2442,7 @@ impl UsageView {
             .flex()
             .flex_col()
             .gap_3()
+            .w_full()
             .p_4()
             .rounded_lg()
             .bg(theme::surface())
@@ -1579,22 +2523,26 @@ impl UsageView {
         components::card()
             .gap_4()
             .child(section_label("计费默认配置"))
+            .child(Self::pricing_defaults_header())
             .children(
                 PRICING_APPS
                     .iter()
                     .map(|app| self.render_pricing_default_row(app, cx)),
             )
+            // 按钮包一层 row 保持内容宽——card 是纵列，直接放会被交叉轴拉满。
             .child(
-                components::icon_button_tone(
-                    "usage-save-pricing-defaults",
-                    "保存计费默认配置",
-                    IconName::Check,
-                    ButtonTone::Primary,
-                    ButtonSize::Sm,
-                )
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.save_pricing_defaults(cx);
-                })),
+                div().flex().flex_row().child(
+                    components::icon_button_tone(
+                        "usage-save-pricing-defaults",
+                        "保存计费默认配置",
+                        IconName::Check,
+                        ButtonTone::Primary,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.save_pricing_defaults(cx);
+                    })),
+                ),
             )
             .child(section_label("模型定价表"))
             .child(
@@ -1640,16 +2588,18 @@ impl UsageView {
                     )),
             )
             .child(
-                components::icon_button_tone(
-                    "usage-save-pricing",
-                    "保存模型定价",
-                    IconName::Check,
-                    ButtonTone::Primary,
-                    ButtonSize::Sm,
-                )
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.save_pricing(cx);
-                })),
+                div().flex().flex_row().child(
+                    components::icon_button_tone(
+                        "usage-save-pricing",
+                        "保存模型定价",
+                        IconName::Check,
+                        ButtonTone::Primary,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.save_pricing(cx);
+                    })),
+                ),
             )
             .child(
                 components::card()
@@ -1680,6 +2630,26 @@ impl UsageView {
             )
     }
 
+    /// 计费默认配置的列标签行：标签只出现一次（表头式），下方每行不再重复。
+    /// 列宽与 [`Self::render_pricing_default_row`] 保持一致。
+    fn pricing_defaults_header() -> impl IntoElement {
+        let header_cell = |label: &'static str| {
+            div()
+                .text_color(theme::subtext())
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .child(label)
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .child(header_cell("应用").w(px(100.)))
+            .child(header_cell("默认倍率").w(px(96.)))
+            .child(header_cell("计价模型来源"))
+    }
+
     fn render_pricing_default_row(
         &self,
         app: &'static str,
@@ -1700,6 +2670,7 @@ impl UsageView {
             this.set_pricing_source(app, if *ix == 0 { "response" } else { "request" }, cx);
         });
 
+        // 无标签的整齐三列（列标签在 pricing_defaults_header），行内元素同高居中。
         div()
             .flex()
             .flex_row()
@@ -1710,11 +2681,11 @@ impl UsageView {
                     .w(px(100.))
                     .min_w_0()
                     .text_color(theme::text())
-                    .text_xs()
+                    .text_sm()
                     .truncate()
                     .child(SharedString::from(app_label(app))),
             )
-            .child(components::field("默认倍率", false, None, input))
+            .child(div().w(px(96.)).child(input))
             .child(components::segmented(
                 SharedString::from(format!("pricing-source-{app}")),
                 &["按响应模型计费", "按请求模型计费"],
@@ -1760,17 +2731,129 @@ impl UsageView {
                     )),
             )
             .child(
-                components::icon_button_tone(
-                    "usage-save-stream-config",
-                    "保存检测参数",
-                    IconName::Check,
-                    ButtonTone::Primary,
-                    ButtonSize::Sm,
-                )
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.save_stream_config(cx);
-                })),
+                div().flex().flex_row().child(
+                    components::icon_button_tone(
+                        "usage-save-stream-config",
+                        "保存检测参数",
+                        IconName::Check,
+                        ButtonTone::Primary,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.save_stream_config(cx);
+                    })),
+                ),
             )
+    }
+
+    /// Render one top-level page block as a virtualized list item. Only the
+    /// on-screen blocks (plus overdraw) are built each frame — see
+    /// [`crate::layout::wide_virtual_body`]. Each item carries its own bottom
+    /// spacing (the list draws no inter-item gap).
+    fn render_block(
+        &mut self,
+        ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let block = div().w_full().pb_4();
+        match ix {
+            0 => block.child(self.render_filters(cx)).into_any_element(),
+            1 => block.child(self.render_data_sources(cx)).into_any_element(),
+            2 => block.child(self.render_summary()).into_any_element(),
+            3 => block
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    components::disclosure(
+                        "usage-trend-toggle",
+                        "趋势图",
+                        format!("{} 个时间桶 · Token 与成本变化", self.daily.len()),
+                        self.show_trend,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_trend = !this.show_trend;
+                        this.list_state.remeasure();
+                        cx.notify();
+                    })),
+                )
+                .when(self.show_trend, |s| s.child(self.render_trend(cx)))
+                .into_any_element(),
+            4 => block
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    components::disclosure(
+                        "usage-scope-toggle",
+                        "Provider / 模型候选",
+                        "从当前范围内真实有数据的条目里快速筛选。",
+                        self.show_scope_options,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_scope_options = !this.show_scope_options;
+                        this.list_state.remeasure();
+                        cx.notify();
+                    })),
+                )
+                .when(self.show_scope_options, |s| {
+                    s.child(self.render_scope_options(cx))
+                })
+                .into_any_element(),
+            5 => block.child(self.render_section_tabs(cx)).into_any_element(),
+            6 => block
+                .child(self.render_active_section(cx))
+                .into_any_element(),
+            7 => block
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    components::disclosure(
+                        "usage-pricing-toggle",
+                        "模型定价配置",
+                        format!("{} 条定价 · 支持默认倍率和计价模型来源", self.pricing.len()),
+                        self.show_pricing,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_pricing = !this.show_pricing;
+                        this.list_state.remeasure();
+                        cx.notify();
+                    })),
+                )
+                .when(self.show_pricing, |s| {
+                    s.child(self.render_pricing_config(cx))
+                })
+                .into_any_element(),
+            8 => block
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    components::disclosure(
+                        "usage-stream-toggle",
+                        "模型检测参数",
+                        format!(
+                            "超时 {}s · 重试 {} · 降级阈值 {}ms",
+                            self.stream_config.timeout_secs,
+                            self.stream_config.max_retries,
+                            self.stream_config.degraded_threshold_ms
+                        ),
+                        self.show_stream_config,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_stream_config = !this.show_stream_config;
+                        this.list_state.remeasure();
+                        cx.notify();
+                    })),
+                )
+                .when(self.show_stream_config, |s| {
+                    s.child(self.render_stream_config(cx))
+                })
+                .into_any_element(),
+            _ => gpui::Empty.into_any_element(),
+        }
     }
 }
 
@@ -1792,93 +2875,14 @@ impl Render for UsageView {
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.reload();
-                        cx.notify();
+                        this.reload(cx);
                     })),
                 ),
             )
-            .child(components::status_footer(self.status.clone()))
-            .child(layout::scroll_body(
-                "usage-body",
-                layout::wide_column()
-                    .gap_4()
-                    .child(self.render_filters(cx))
-                    .child(self.render_data_sources(cx))
-                    .child(self.render_summary())
-                    .child(
-                        components::disclosure(
-                            "usage-trend-toggle",
-                            "趋势图",
-                            format!("{} 个时间桶 · Token 与成本变化", self.daily.len()),
-                            self.show_trend,
-                        )
-                        .on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                this.show_trend = !this.show_trend;
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .when(self.show_trend, |s| s.child(self.render_trend()))
-                    .child(
-                        components::disclosure(
-                            "usage-scope-toggle",
-                            "Provider / 模型候选",
-                            "从当前范围内真实有数据的条目里快速筛选。",
-                            self.show_scope_options,
-                        )
-                        .on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                this.show_scope_options = !this.show_scope_options;
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .when(self.show_scope_options, |s| {
-                        s.child(self.render_scope_options(cx))
-                    })
-                    .child(self.render_section_tabs(cx))
-                    .child(self.render_active_section(cx))
-                    .child(
-                        components::disclosure(
-                            "usage-pricing-toggle",
-                            "模型定价配置",
-                            format!("{} 条定价 · 支持默认倍率和计价模型来源", self.pricing.len()),
-                            self.show_pricing,
-                        )
-                        .on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                this.show_pricing = !this.show_pricing;
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .when(self.show_pricing, |s| {
-                        s.child(self.render_pricing_config(cx))
-                    })
-                    .child(
-                        components::disclosure(
-                            "usage-stream-toggle",
-                            "模型检测参数",
-                            format!(
-                                "超时 {}s · 重试 {} · 降级阈值 {}ms",
-                                self.stream_config.timeout_secs,
-                                self.stream_config.max_retries,
-                                self.stream_config.degraded_threshold_ms
-                            ),
-                            self.show_stream_config,
-                        )
-                        .on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                this.show_stream_config = !this.show_stream_config;
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .when(self.show_stream_config, |s| {
-                        s.child(self.render_stream_config(cx))
-                    }),
-            ))
+            .child(layout::wide_virtual_body(gpui::list(
+                self.list_state.clone(),
+                cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
+            )))
             .when_some(self.confirm_delete_pricing.clone(), |root, model_id| {
                 root.child(components::modal_overlay(
                     components::modal_card()
@@ -1918,6 +2922,373 @@ impl Render for UsageView {
                         ])),
                 ))
             })
+    }
+}
+
+fn range_filter_label(range: UsageRange) -> String {
+    let (Some(start), Some(end)) = range.bounds() else {
+        return range.label().to_string();
+    };
+    format!(
+        "{} ~ {}",
+        format_local_timestamp(start, false),
+        format_local_timestamp(end, false)
+    )
+}
+
+fn shifted_year_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
+    let absolute_month = year * 12 + month as i32 - 1 + delta;
+    (
+        absolute_month.div_euclid(12),
+        absolute_month.rem_euclid(12) as u32 + 1,
+    )
+}
+
+fn format_local_timestamp(timestamp: i64, with_seconds: bool) -> String {
+    let pattern = if with_seconds {
+        "%Y/%m/%d %H:%M:%S"
+    } else {
+        "%Y-%m-%d %H:%M"
+    };
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|time| time.format(pattern).to_string())
+        .unwrap_or_else(|| "时间无效".to_string())
+}
+
+fn parse_local_timestamp(value: &str, end_of_day: bool) -> Option<i64> {
+    let normalized = value.trim().replace('/', "-");
+    for pattern in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+    ] {
+        if let Ok(value) = NaiveDateTime::parse_from_str(&normalized, pattern) {
+            return Local
+                .from_local_datetime(&value)
+                .earliest()
+                .map(|time| time.timestamp());
+        }
+    }
+
+    let date = components::parse_jump_date(&normalized)?;
+    let value = if end_of_day {
+        date.and_hms_opt(23, 59, 59)?
+    } else {
+        date.and_hms_opt(0, 0, 0)?
+    };
+    Local
+        .from_local_datetime(&value)
+        .earliest()
+        .map(|time| time.timestamp())
+}
+
+fn filter_trigger(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    icon_name: IconName,
+    expanded: bool,
+    width: f32,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .aria_expanded(expanded)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .w(px(width))
+        .h(px(36.))
+        .px_3()
+        .rounded_lg()
+        .border_1()
+        .border_color(if expanded {
+            theme::accent()
+        } else {
+            theme::border_strong()
+        })
+        .bg(theme::surface())
+        .cursor_pointer()
+        .text_sm()
+        .text_color(theme::text())
+        .hover(|s| s.border_color(theme::accent()).bg(theme::panel()))
+        .child(icon(icon_name, theme::muted(), 15.))
+        .child(div().min_w_0().flex_1().truncate().child(label))
+        .child(icon(IconName::ChevronDown, theme::muted(), 13.))
+}
+
+fn filter_popover_panel(id: &'static str, width: f32) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .w(px(width))
+        .rounded_lg()
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::overlay())
+        .shadow(theme::shadow_popover())
+        .occlude()
+}
+
+fn filter_section_label(label: &'static str) -> gpui::Div {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme::muted())
+        .child(label)
+}
+
+fn quick_range_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    let button = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .aria_selected(selected)
+        .h(px(34.))
+        .px_3()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .cursor_pointer()
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .child(label);
+    if selected {
+        button.bg(theme::accent_soft()).text_color(theme::accent())
+    } else {
+        button
+            .bg(theme::panel())
+            .text_color(theme::subtext())
+            .hover(|s| s.bg(theme::surface_hover()).text_color(theme::text()))
+    }
+}
+
+fn calendar_nav_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    icon_name: IconName,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::surface_hover()))
+        .child(icon(icon_name, theme::subtext(), 14.))
+}
+
+fn calendar_day_button(
+    id: impl Into<ElementId>,
+    date: NaiveDate,
+    in_current_month: bool,
+    selected: bool,
+    today: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let day = date.day();
+    let mut button = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(SharedString::from(format!(
+            "{}年{}月{}日",
+            date.year(),
+            date.month(),
+            day
+        )))
+        .aria_selected(selected)
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .border_1()
+        .border_color(theme::surface().alpha(0.))
+        .cursor_pointer()
+        .text_sm()
+        .child(SharedString::from(day.to_string()));
+    if selected {
+        button = button
+            .bg(theme::accent_fill())
+            .border_color(theme::accent())
+            .text_color(theme::accent_text())
+            .font_weight(FontWeight::SEMIBOLD);
+    } else if today {
+        button = button
+            .border_color(theme::accent())
+            .text_color(theme::accent())
+            .font_weight(FontWeight::MEDIUM)
+            .hover(|s| s.bg(theme::accent_soft()));
+    } else if in_current_month {
+        button = button
+            .text_color(theme::text())
+            .hover(|s| s.bg(theme::surface_hover()));
+    } else {
+        button = button
+            .text_color(theme::muted())
+            .hover(|s| s.bg(theme::surface_hover()).text_color(theme::subtext()));
+    }
+    button
+}
+
+fn calendar_footer_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .px_1()
+        .py_1()
+        .rounded_md()
+        .cursor_pointer()
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme::accent())
+        .hover(|s| s.bg(theme::accent_soft()))
+        .child(label)
+}
+
+fn time_column_label(label: &'static str) -> gpui::Div {
+    div()
+        .h(px(42.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme::muted())
+        .child(label)
+}
+
+fn time_value_button(
+    id: impl Into<ElementId>,
+    value: u32,
+    selected: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let button = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(SharedString::from(format!("{value:02}")))
+        .aria_selected(selected)
+        .w_full()
+        .h(px(34.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_sm()
+        .child(SharedString::from(format!("{value:02}")));
+    if selected {
+        button
+            .bg(theme::accent_fill())
+            .text_color(theme::accent_text())
+            .font_weight(FontWeight::SEMIBOLD)
+    } else {
+        button
+            .text_color(theme::text())
+            .hover(|s| s.bg(theme::surface_hover()))
+    }
+}
+
+fn datetime_filter_field(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    input: Entity<TextInput>,
+    expanded: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .aria_label(label)
+        .aria_expanded(expanded)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .cursor_pointer()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme::subtext())
+                .child(label),
+        )
+        .child(
+            div().relative().w_full().child(input).child(
+                div()
+                    .absolute()
+                    .right(px(10.))
+                    .top(px(10.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme::surface())
+                    .child(icon(
+                        IconName::Calendar,
+                        if expanded {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        },
+                        15.,
+                    )),
+            ),
+        )
+}
+
+fn dropdown_option(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    let option = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .aria_selected(selected)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .min_h(px(34.))
+        .px_3()
+        .py_1p5()
+        .rounded_md()
+        .cursor_pointer()
+        .text_sm()
+        .child(div().min_w_0().flex_1().truncate().child(label));
+    if selected {
+        option
+            .bg(theme::accent_soft())
+            .text_color(theme::accent())
+            .font_weight(FontWeight::MEDIUM)
+            .child(icon(IconName::Check, theme::accent(), 13.))
+    } else {
+        option
+            .text_color(theme::subtext())
+            .hover(|s| s.bg(theme::surface_hover()).text_color(theme::text()))
     }
 }
 
@@ -2075,6 +3446,16 @@ fn format_money(value: &str, digits: usize) -> String {
         .unwrap_or_else(|_| value.to_string())
 }
 
+/// 悬停提示里的时间桶标签：小时桶（RFC3339）显示 “MM-DD HH:00”，天桶显示 “MM-DD”。
+fn trend_bucket_label(value: &str) -> String {
+    match value.split_once('T') {
+        Some((date, time)) if time.len() >= 2 => {
+            format!("{} {}:00", short_date_label(date), &time[..2])
+        }
+        _ => short_date_label(value),
+    }
+}
+
 fn short_date_label(value: &str) -> String {
     value
         .split('T')
@@ -2123,7 +3504,8 @@ fn app_tone(app_type: &str) -> gpui::Rgba {
 
 fn data_source_label(source: &str) -> String {
     match source {
-        "proxy" => "代理请求",
+        "gateway" => "网关请求",
+        "proxy" => "旧版本地请求",
         "session_log" => "Claude 会话",
         "codex_db" => "Codex 数据库",
         "codex_session" => "Codex 会话",
@@ -2136,7 +3518,7 @@ fn data_source_label(source: &str) -> String {
 
 fn data_source_icon(source: &str) -> IconName {
     match source {
-        "proxy" | "codex_db" => IconName::Cloud,
+        "gateway" | "proxy" | "codex_db" => IconName::Cloud,
         "session_log" | "codex_session" | "gemini_session" | "opencode_session" => IconName::Folder,
         _ => IconName::Blocks,
     }
@@ -2168,3 +3550,49 @@ fn effective_model_label(log: &RequestLogDetail) -> String {
         _ => log.model.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{format_local_timestamp, parse_local_timestamp, shifted_year_month};
+
+    #[test]
+    fn parses_reference_datetime_formats() {
+        for value in [
+            "2026/07/21 18:19:00",
+            "2026-07-21 18:19:00",
+            "2026/07/21 18:19",
+            "2026-07-21T18:19",
+        ] {
+            let timestamp = parse_local_timestamp(value, false).expect("valid local timestamp");
+            assert_eq!(
+                format_local_timestamp(timestamp, true),
+                "2026/07/21 18:19:00"
+            );
+        }
+    }
+
+    #[test]
+    fn date_only_values_expand_to_day_boundaries() {
+        let start = parse_local_timestamp("2026-07-21", false).expect("valid start date");
+        let end = parse_local_timestamp("2026-07-21", true).expect("valid end date");
+
+        assert_eq!(format_local_timestamp(start, true), "2026/07/21 00:00:00");
+        assert_eq!(format_local_timestamp(end, true), "2026/07/21 23:59:59");
+        assert!(start < end);
+    }
+
+    #[test]
+    fn rejects_invalid_datetimes() {
+        assert!(parse_local_timestamp("2026-02-30 12:00:00", false).is_none());
+        assert!(parse_local_timestamp("not a time", false).is_none());
+    }
+
+    #[test]
+    fn month_navigation_crosses_year_boundaries() {
+        assert_eq!(shifted_year_month(2026, 1, -1), (2025, 12));
+        assert_eq!(shifted_year_month(2026, 12, 1), (2027, 1));
+        assert_eq!(shifted_year_month(2026, 7, 18), (2028, 1));
+    }
+}
+
+crate::notifications::impl_status_toasts!(UsageView);

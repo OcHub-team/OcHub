@@ -1,15 +1,18 @@
 //! Advanced utility panel for features that used to live as scattered Tauri
-//! commands: config folders, OMO files, OpenClaw workspace memory, Claude MCP,
-//! and app-level helper toggles.
+//! commands: config folders, OMO files, Claude MCP, and app-level helper
+//! toggles.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
-use gpui::{div, prelude::*, Context, Entity, FontWeight, SharedString, Window};
+use gpui::{
+    div, prelude::*, px, App, Context, Entity, Focusable, FontWeight, ListAlignment, ListState,
+    SharedString, Window,
+};
 use ochub_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
-use ochub_core::services::{OmoService, WorkspaceService};
+use ochub_core::services::OmoService;
 use ochub_core::{AppError, AppState, AppType};
 use serde_json::Value;
 
@@ -34,11 +37,10 @@ struct BackupRow {
     created_at: String,
 }
 
-/// 破坏性操作确认目标（删除记忆文件/数据库备份、恢复数据库、删除环境变量
-/// 冲突、导入 SQL、恢复 Codex 历史、禁用 OMO），`Some` 时展示确认模态。
+/// 破坏性操作确认目标（删除数据库备份、恢复数据库、删除环境变量冲突、
+/// 导入 SQL、恢复 Codex 历史、禁用 OMO），`Some` 时展示确认模态。
 #[derive(Clone)]
 enum ConfirmAction {
-    DeleteMemoryFile(String),
     RestoreDbBackup(String),
     DeleteDbBackup(String),
     DeleteEnvConflicts,
@@ -46,6 +48,11 @@ enum ConfirmAction {
     RestoreCodexHistory,
     DisableOmo { slim: bool },
 }
+
+/// Number of top-level blocks rendered by [`ToolsView::render_block`] into the
+/// virtualized list (stats, 配置目录, 应用辅助, CLI 工具维护, 环境变量冲突,
+/// 配置导入导出与数据库备份, 高级项目).
+const TOOLS_BLOCK_COUNT: usize = 7;
 
 pub struct ToolsView {
     app: Arc<AppState>,
@@ -59,17 +66,10 @@ pub struct ToolsView {
     db_backups: Vec<BackupRow>,
     show_all_backups: bool,
     show_advanced_tools: bool,
-    memory_files: Vec<ochub_core::services::DailyMemoryFileInfo>,
-    memory_results: Vec<ochub_core::services::DailyMemorySearchResult>,
     export_sql_path: Entity<TextInput>,
     import_sql_path: Entity<TextInput>,
     env_restore_path: Entity<TextInput>,
     backup_rename: Entity<TextInput>,
-    workspace_file: Entity<TextInput>,
-    workspace_content: Entity<TextInput>,
-    memory_file: Entity<TextInput>,
-    memory_content: Entity<TextInput>,
-    memory_query: Entity<TextInput>,
     mcp_command: Entity<TextInput>,
     openclaw_default_model_json: Entity<TextInput>,
     openclaw_env_json: Entity<TextInput>,
@@ -81,19 +81,45 @@ pub struct ToolsView {
     /// 待确认的破坏性操作；`Some` 时展示确认模态。
     confirm: Option<ConfirmAction>,
     status: Option<SharedString>,
+    /// Drives the virtualized page body (one item per top-level block).
+    list_state: ListState,
 }
 
 impl ToolsView {
+    pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm.is_some() {
+            window.play_system_bell();
+            return;
+        }
+        let focused = |input: &Entity<TextInput>, cx: &App| {
+            input.read(cx).focus_handle(cx).is_focused(window)
+        };
+        if focused(&self.openclaw_default_model_json, cx) {
+            self.save_openclaw_default_model(cx);
+        } else if focused(&self.openclaw_env_json, cx) {
+            self.save_openclaw_env(cx);
+        } else if focused(&self.openclaw_tools_json, cx) {
+            self.save_openclaw_tools(cx);
+        } else if focused(&self.hermes_model_json, cx) {
+            self.save_hermes_model(cx);
+        } else if focused(&self.hermes_memory_content, cx) {
+            self.save_hermes_memory(hermes::MemoryKind::Memory, cx);
+        } else if focused(&self.hermes_user_memory_content, cx) {
+            self.save_hermes_memory(hermes::MemoryKind::User, cx);
+        } else {
+            window.play_system_bell();
+        }
+    }
+
+    pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm.take().is_some() {
+            cx.notify();
+        } else {
+            window.play_system_bell();
+        }
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
-        let workspace_file = cx.new(|cx| {
-            let mut input = TextInput::new(cx, "AGENTS.md");
-            input.set_content("AGENTS.md", cx);
-            input
-        });
-        let workspace_content = cx.new(|cx| TextInput::new(cx, "文件内容"));
-        let memory_file = cx.new(|cx| TextInput::new(cx, "YYYY-MM-DD.md"));
-        let memory_content = cx.new(|cx| TextInput::new(cx, "记忆内容"));
-        let memory_query = cx.new(|cx| TextInput::new(cx, "搜索每日记忆"));
         let mcp_command = cx.new(|cx| TextInput::new(cx, "npx"));
         let openclaw_default_model_json = cx.new(|cx| {
             TextInput::new(cx, r#"{"primary":"anthropic/claude-sonnet-4"}"#).multiline(true)
@@ -132,17 +158,10 @@ impl ToolsView {
             db_backups: Vec::new(),
             show_all_backups: false,
             show_advanced_tools: false,
-            memory_files: Vec::new(),
-            memory_results: Vec::new(),
             export_sql_path,
             import_sql_path,
             env_restore_path,
             backup_rename,
-            workspace_file,
-            workspace_content,
-            memory_file,
-            memory_content,
-            memory_query,
             mcp_command,
             openclaw_default_model_json,
             openclaw_env_json,
@@ -153,6 +172,7 @@ impl ToolsView {
             hermes_limits: None,
             confirm: None,
             status: None,
+            list_state: ListState::new(TOOLS_BLOCK_COUNT, ListAlignment::Top, px(600.)),
         };
         this.reload();
         this.refresh_advanced_configs(cx);
@@ -182,7 +202,6 @@ impl ToolsView {
                     .map_err(|e| AppError::Message(e.to_string()))
             })
             .ok();
-        self.memory_files = WorkspaceService::list_daily_memory_files().unwrap_or_default();
         self.db_backups = load_db_backup_rows().unwrap_or_default();
     }
 
@@ -236,6 +255,7 @@ impl ToolsView {
 
     fn set_status(&mut self, msg: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.status = Some(msg.into());
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -262,6 +282,7 @@ impl ToolsView {
         }
         self.tool_busy = true;
         self.status = Some(SharedString::from("正在探测 CLI 工具版本..."));
+        self.list_state.remeasure();
         cx.notify();
 
         let task = cx.background_spawn(async move {
@@ -290,6 +311,7 @@ impl ToolsView {
                             Some(SharedString::from(format!("CLI 工具版本探测失败: {err}")));
                     }
                 }
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
@@ -322,6 +344,7 @@ impl ToolsView {
             "update" => "正在更新 CLI 工具...",
             _ => "正在执行 CLI 工具操作...",
         }));
+        self.list_state.remeasure();
         cx.notify();
 
         let tools = cli_tool_ids();
@@ -340,6 +363,7 @@ impl ToolsView {
                     },
                     Err(err) => format!("CLI 工具操作失败: {err}"),
                 }));
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
@@ -567,93 +591,6 @@ impl ToolsView {
         }
     }
 
-    fn load_workspace_file(&mut self, cx: &mut Context<Self>) {
-        let filename = self.workspace_file.read(cx).content().trim().to_string();
-        match WorkspaceService::read_workspace_file(&filename) {
-            Ok(Some(content)) => {
-                self.workspace_content
-                    .update(cx, |input, cx| input.set_content(content, cx));
-                self.set_status(format!("已读取 {filename}"), cx);
-            }
-            Ok(None) => self.set_status(format!("{filename} 尚不存在"), cx),
-            Err(err) => self.set_status(format!("读取工作区文件失败: {err}"), cx),
-        }
-    }
-
-    fn save_workspace_file(&mut self, cx: &mut Context<Self>) {
-        let filename = self.workspace_file.read(cx).content().trim().to_string();
-        let content = self.workspace_content.read(cx).content().to_string();
-        match WorkspaceService::write_workspace_file(&filename, &content) {
-            Ok(()) => self.set_status(format!("已保存 {filename}"), cx),
-            Err(err) => self.set_status(format!("保存工作区文件失败: {err}"), cx),
-        }
-    }
-
-    fn load_memory_file(&mut self, filename: Option<String>, cx: &mut Context<Self>) {
-        let filename =
-            filename.unwrap_or_else(|| self.memory_file.read(cx).content().trim().to_string());
-        if filename.is_empty() {
-            self.set_status("请输入每日记忆文件名", cx);
-            return;
-        }
-        match WorkspaceService::read_daily_memory_file(&filename) {
-            Ok(Some(content)) => {
-                self.memory_file
-                    .update(cx, |input, cx| input.set_content(filename.clone(), cx));
-                self.memory_content
-                    .update(cx, |input, cx| input.set_content(content, cx));
-                self.set_status(format!("已读取 {filename}"), cx);
-            }
-            Ok(None) => self.set_status(format!("{filename} 尚不存在"), cx),
-            Err(err) => self.set_status(format!("读取每日记忆失败: {err}"), cx),
-        }
-    }
-
-    fn save_memory_file(&mut self, cx: &mut Context<Self>) {
-        let filename = self.memory_file.read(cx).content().trim().to_string();
-        let content = self.memory_content.read(cx).content().to_string();
-        match WorkspaceService::write_daily_memory_file(&filename, &content) {
-            Ok(()) => {
-                self.memory_files = WorkspaceService::list_daily_memory_files().unwrap_or_default();
-                self.set_status(format!("已保存 {filename}"), cx);
-            }
-            Err(err) => self.set_status(format!("保存每日记忆失败: {err}"), cx),
-        }
-    }
-
-    fn delete_memory_file(&mut self, filename: String, cx: &mut Context<Self>) {
-        match WorkspaceService::delete_daily_memory_file(&filename) {
-            Ok(()) => {
-                self.memory_files = WorkspaceService::list_daily_memory_files().unwrap_or_default();
-                self.set_status(format!("已删除 {filename}"), cx);
-            }
-            Err(err) => self.set_status(format!("删除每日记忆失败: {err}"), cx),
-        }
-    }
-
-    fn search_memory(&mut self, cx: &mut Context<Self>) {
-        let query = self.memory_query.read(cx).content().trim().to_string();
-        match WorkspaceService::search_daily_memory_files(&query) {
-            Ok(results) => {
-                let count = results.len();
-                self.memory_results = results;
-                self.set_status(format!("找到 {count} 个结果"), cx);
-            }
-            Err(err) => self.set_status(format!("搜索失败: {err}"), cx),
-        }
-    }
-
-    fn open_workspace_dir(&mut self, memory: bool, cx: &mut Context<Self>) {
-        match WorkspaceService::ensure_directory_for_subdir(if memory {
-            "memory"
-        } else {
-            "workspace"
-        }) {
-            Ok(path) => self.open_path_action(path, cx),
-            Err(err) => self.set_status(format!("打开工作区失败: {err}"), cx),
-        }
-    }
-
     fn validate_mcp_command(&mut self, cx: &mut Context<Self>) {
         let cmd = self.mcp_command.read(cx).content().trim().to_string();
         match ochub_core::mcp::validate_command_in_path(&cmd) {
@@ -871,11 +808,13 @@ impl ToolsView {
 
     fn toggle_advanced_tools(&mut self, cx: &mut Context<Self>) {
         self.show_advanced_tools = !self.show_advanced_tools;
+        self.list_state.remeasure();
         cx.notify();
     }
 
     fn toggle_all_backups(&mut self, cx: &mut Context<Self>) {
         self.show_all_backups = !self.show_all_backups;
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -958,78 +897,6 @@ impl ToolsView {
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.open_config_dir(app, cx);
-                            },
-                        )),
-                    ),
-            )
-    }
-
-    fn render_memory_row(
-        &self,
-        file: &ochub_core::services::DailyMemoryFileInfo,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let read_name = file.filename.clone();
-        let confirm_target = ConfirmAction::DeleteMemoryFile(file.filename.clone());
-        components::card()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .p_3()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(file.filename.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(SharedString::from(format!(
-                                "{} 字节 · {}",
-                                file.size_bytes, file.preview
-                            ))),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .flex_shrink_0()
-                    .child(
-                        components::button(
-                            format!("memory-read-{}", file.filename),
-                            "读取",
-                            ButtonTone::Neutral,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.load_memory_file(Some(read_name.clone()), cx);
-                            },
-                        )),
-                    )
-                    .child(
-                        components::button(
-                            format!("memory-delete-{}", file.filename),
-                            "删除",
-                            ButtonTone::Danger,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.confirm = Some(confirm_target.clone());
-                                cx.notify();
                             },
                         )),
                     ),
@@ -1245,91 +1112,1058 @@ impl ToolsView {
                     ),
             )
     }
+
+    /// Render one top-level page block as a virtualized list item. Only the
+    /// on-screen blocks (plus overdraw) are built each frame — see
+    /// [`crate::layout::wide_virtual_body`]. Each item carries its own bottom
+    /// spacing (the list draws no inter-item gap).
+    fn render_block(
+        &mut self,
+        ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let block = div().w_full().pb_4();
+        match ix {
+            0 => {
+                let configured_count = self.config_rows.iter().filter(|row| row.exists).count();
+                let total_configs = self.config_rows.len();
+                let backup_count = self.db_backups.len();
+                let env_conflict_count = self.env_conflicts.len();
+                let env_app_name = env_app_label(self.env_app);
+                block
+                    .child(
+                        div()
+                            .grid()
+                            .grid_cols(3)
+                            .gap_3()
+                            .w_full()
+                            .child(components::stat_tile(
+                                None,
+                                theme::accent(),
+                                "配置目录",
+                                format!("{configured_count}/{total_configs}"),
+                                "已初始化应用",
+                            ))
+                            .child(components::stat_tile(
+                                None,
+                                theme::green(),
+                                "数据库备份",
+                                backup_count.to_string(),
+                                "可恢复快照",
+                            ))
+                            .child(components::stat_tile(
+                                None,
+                                if env_conflict_count == 0 {
+                                    theme::teal()
+                                } else {
+                                    theme::yellow()
+                                },
+                                "环境冲突",
+                                env_conflict_count.to_string(),
+                                env_app_name,
+                            )),
+                    )
+                    .into_any_element()
+            }
+            1 => {
+                let config_rows: Vec<_> = self
+                    .config_rows
+                    .iter()
+                    .map(|row| self.render_config_row(row, cx))
+                    .collect();
+                block
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .w_full()
+                            .child(layout::section_header(
+                                "配置目录",
+                                "各应用配置目录的初始化状态，可直接打开对应目录。",
+                            ))
+                            .children(config_rows),
+                    )
+                    .into_any_element()
+            }
+            2 => block
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .w_full()
+                        .child(layout::section_header(
+                            "应用辅助",
+                            "应用级辅助开关与 OCHUB 数据目录。",
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(
+                                    components::button(
+                                        "auto-launch",
+                                        if self.auto_launch.unwrap_or(false) {
+                                            "关闭开机自启"
+                                        } else {
+                                            "启用开机自启"
+                                        },
+                                        ButtonTone::Primary,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.toggle_auto_launch(cx);
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    components::button(
+                                        "open-app-config",
+                                        "打开 OCHUB 数据目录",
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.open_path_action(
+                                                ochub_core::paths::get_app_config_dir(),
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+            3 => {
+                let tool_version_rows: Vec<_> = self
+                    .tool_versions
+                    .iter()
+                    .map(Self::render_tool_version_row)
+                    .collect();
+                let tool_install_rows: Vec<_> = self
+                    .tool_installations
+                    .iter()
+                    .map(Self::render_install_report_row)
+                    .collect();
+                block
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .w_full()
+                            .child(layout::section_header(
+                                "CLI 工具维护",
+                                "探测 CLI 工具版本与安装分布，执行安装与更新。",
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(
+                                        components::button(
+                                            "cli-refresh-versions",
+                                            if self.tool_busy {
+                                                "处理中..."
+                                            } else {
+                                                "刷新版本"
+                                            },
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.refresh_tool_versions(cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        components::button(
+                                            "cli-probe-installations",
+                                            "扫描安装位置",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.probe_cli_installations(cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        components::button(
+                                            "cli-install-tools",
+                                            "安装缺失工具",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.run_cli_lifecycle("install", cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        components::button(
+                                            "cli-update-tools",
+                                            "更新全部工具",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.run_cli_lifecycle("update", cx);
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .when(self.tool_versions.is_empty(), |s| {
+                                s.child(components::empty_state(
+                                    IconName::Terminal,
+                                    "尚未刷新 CLI 版本",
+                                    "点击“刷新版本”探测各 CLI 工具的本地与最新版本。",
+                                    None,
+                                ))
+                            })
+                            .children(tool_version_rows)
+                            .when(self.tool_installations.is_empty(), |s| {
+                                s.child(components::empty_state(
+                                    IconName::Search,
+                                    "尚未扫描安装位置",
+                                    "点击“扫描安装位置”查看 CLI 安装分布与冲突。",
+                                    None,
+                                ))
+                            })
+                            .children(tool_install_rows),
+                    )
+                    .into_any_element()
+            }
+            4 => {
+                let env_rows: Vec<_> = self
+                    .env_conflicts
+                    .iter()
+                    .map(Self::render_env_conflict_row)
+                    .collect();
+                let env_selected = match self.env_app {
+                    AppType::Codex => 1,
+                    AppType::Gemini => 2,
+                    _ => 0,
+                };
+                let on_env_select = cx.listener(|this, ix: &usize, _window, cx| {
+                    let app = match ix {
+                        1 => AppType::Codex,
+                        2 => AppType::Gemini,
+                        _ => AppType::Claude,
+                    };
+                    this.select_env_app(app, cx);
+                });
+                block
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .w_full()
+                            .child(layout::section_header(
+                                "环境变量冲突",
+                                "按应用扫描环境变量冲突；删除前会自动备份，可从备份恢复。",
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(components::segmented(
+                                        "tools-env-app",
+                                        &["Claude", "Codex", "Gemini"],
+                                        env_selected,
+                                        move |ix, window, cx| on_env_select(&ix, window, cx),
+                                    ))
+                                    .child(
+                                        components::button(
+                                            "env-scan",
+                                            "扫描冲突",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.scan_env_conflicts(cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        components::button(
+                                            "env-delete",
+                                            "删除并备份",
+                                            ButtonTone::Danger,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.confirm =
+                                                    Some(ConfirmAction::DeleteEnvConflicts);
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .when(self.env_conflicts.is_empty(), |s| {
+                                s.child(components::empty_state(
+                                    IconName::Check,
+                                    "当前没有已扫描出的冲突",
+                                    "选择应用后点击“扫描冲突”检查环境变量。",
+                                    None,
+                                ))
+                            })
+                            .children(env_rows)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_2()
+                                    .child(self.env_restore_path.clone())
+                                    .child(
+                                        components::button(
+                                            "env-restore",
+                                            "恢复备份",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.restore_env_backup(cx);
+                                            }),
+                                        ),
+                                    ),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            5 => {
+                let backup_count = self.db_backups.len();
+                let visible_backup_limit = if self.show_all_backups {
+                    backup_count
+                } else {
+                    backup_count.min(3)
+                };
+                let hidden_backup_count = backup_count.saturating_sub(visible_backup_limit);
+                let backup_rows: Vec<_> = self
+                    .db_backups
+                    .iter()
+                    .take(visible_backup_limit)
+                    .map(|backup| self.render_backup_row(backup, cx))
+                    .collect();
+                block
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .w_full()
+                            .child(layout::section_header(
+                                "配置导入导出与数据库备份",
+                                "SQL 导入导出，以及数据库快照的创建、恢复、重命名与删除。",
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_2()
+                                    .child(self.export_sql_path.clone())
+                                    .child(
+                                        components::button(
+                                            "config-export-sql",
+                                            "导出 SQL",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.export_sql(cx);
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_2()
+                                    .child(self.import_sql_path.clone())
+                                    .child(
+                                        components::button(
+                                            "config-import-sql",
+                                            "导入 SQL",
+                                            ButtonTone::Danger,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.confirm = Some(ConfirmAction::ImportSql);
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(
+                                        components::button(
+                                            "db-backup-refresh",
+                                            "刷新备份",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.refresh_db_backups(cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        components::button(
+                                            "db-backup-create",
+                                            "创建备份",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.create_db_backup(cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(self.backup_rename.clone()),
+                            )
+                            .when(self.db_backups.is_empty(), |s| {
+                                s.child(components::empty_state(
+                                    IconName::Archive,
+                                    "暂无数据库备份",
+                                    "点击“创建备份”生成第一个数据库快照。",
+                                    None,
+                                ))
+                            })
+                            .children(backup_rows)
+                            .when(hidden_backup_count > 0, |s| {
+                                s.child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap_3()
+                                        .w_full()
+                                        .child(div().text_color(theme::muted()).text_xs().child(
+                                            SharedString::from(format!(
+                                                "还有 {hidden_backup_count} 个历史备份已收起。"
+                                            )),
+                                        ))
+                                        .child(
+                                            components::button(
+                                                "db-backup-show-all",
+                                                "显示全部备份",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _event, _window, cx| {
+                                                    this.toggle_all_backups(cx);
+                                                }),
+                                            ),
+                                        ),
+                                )
+                            })
+                            .when(self.show_all_backups && backup_count > 3, |s| {
+                                s.child(
+                                    div().flex().w_full().justify_end().child(
+                                        components::button(
+                                            "db-backup-collapse",
+                                            "收起历史备份",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.toggle_all_backups(cx);
+                                            }),
+                                        ),
+                                    ),
+                                )
+                            }),
+                    )
+                    .into_any_element()
+            }
+            6 => {
+                block
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        components::card().child(
+                            components::disclosure(
+                                "tools-advanced",
+                                "高级项目",
+                                "同步、Codex 历史、OMO、MCP 与 JSON 配置。",
+                                self.show_advanced_tools,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.toggle_advanced_tools(cx);
+                            })),
+                        ),
+                    )
+                    .when(self.show_advanced_tools, |s| {
+                        s.child(
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("同步状态"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "sync-webdav-status",
+                                                "刷新 WebDAV 状态",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.refresh_sync_status(false, cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "sync-s3-status",
+                                                "刷新 S3 状态",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.refresh_sync_status(true, cx);
+                                                },
+                                            )),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Codex 历史"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "codex-unify-backup-check",
+                                                "检查统一历史备份",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.check_codex_unify_backup(cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "codex-unify-restore",
+                                                "恢复官方历史备份",
+                                                ButtonTone::Danger,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.confirm =
+                                                        Some(ConfirmAction::RestoreCodexHistory);
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("OMO"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "omo-read",
+                                                "读取 OMO",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.read_omo(false, cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "omo-disable",
+                                                "禁用 OMO",
+                                                ButtonTone::Danger,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.confirm =
+                                                        Some(ConfirmAction::DisableOmo {
+                                                            slim: false,
+                                                        });
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "omo-slim-read",
+                                                "读取 OMO Slim",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.read_omo(true, cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "omo-slim-disable",
+                                                "禁用 OMO Slim",
+                                                ButtonTone::Danger,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.confirm =
+                                                        Some(ConfirmAction::DisableOmo {
+                                                            slim: true,
+                                                        });
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Claude MCP 与插件"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_2()
+                                        .child(self.mcp_command.clone())
+                                        .child(
+                                            components::button(
+                                                "mcp-validate",
+                                                "校验命令",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.validate_mcp_command(cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "mcp-read",
+                                                "读取 MCP 配置",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.read_claude_mcp(cx);
+                                                },
+                                            )),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "claude-plugin-apply",
+                                                "应用 OCHUB 插件",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.apply_claude_plugin(false, cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "claude-plugin-clear",
+                                                "恢复官方 Claude 配置",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.apply_claude_plugin(true, cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "claude-onboarding-skip",
+                                                "跳过 Claude 引导",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.mark_claude_onboarding(true, cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "claude-onboarding-clear",
+                                                "恢复 Claude 引导",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.mark_claude_onboarding(false, cx);
+                                                },
+                                            )),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("OpenClaw 高级配置"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "openclaw-health",
+                                                "检查 OpenClaw 配置",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.openclaw_health(cx);
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "openclaw-refresh-advanced",
+                                                "重读 OpenClaw/Hermes",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.refresh_advanced_configs(cx);
+                                                    this.set_status("已重读高级配置", cx);
+                                                },
+                                            )),
+                                        ),
+                                )
+                                .child(components::card().child(components::field(
+                                    "默认模型 JSON",
+                                    false,
+                                    Some(
+                                        "agents.defaults.model；支持 primary、fallbacks 和额外字段。"
+                                            .into(),
+                                    ),
+                                    self.openclaw_default_model_json.clone(),
+                                )))
+                                .child(
+                                    div().flex().flex_row().justify_end().child(
+                                        components::button(
+                                            "openclaw-save-default-model",
+                                            "保存默认模型",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(
+                                            |this, _event, _window, cx| {
+                                                this.save_openclaw_default_model(cx);
+                                            },
+                                        )),
+                                    ),
+                                )
+                                .child(components::card().child(components::field(
+                                    "环境变量 JSON",
+                                    false,
+                                    Some("openclaw.json 的 env 节点；对象键会原样写入。".into()),
+                                    self.openclaw_env_json.clone(),
+                                )))
+                                .child(
+                                    div().flex().flex_row().justify_end().child(
+                                        components::button(
+                                            "openclaw-save-env",
+                                            "保存环境变量",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(
+                                            |this, _event, _window, cx| {
+                                                this.save_openclaw_env(cx);
+                                            },
+                                        )),
+                                    ),
+                                )
+                                .child(components::card().child(components::field(
+                                    "工具配置 JSON",
+                                    false,
+                                    Some(
+                                        "tools 节点；支持 profile、allow、deny 和额外字段。".into(),
+                                    ),
+                                    self.openclaw_tools_json.clone(),
+                                )))
+                                .child(
+                                    div().flex().flex_row().justify_end().child(
+                                        components::button(
+                                            "openclaw-save-tools",
+                                            "保存工具配置",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(
+                                            |this, _event, _window, cx| {
+                                                this.save_openclaw_tools(cx);
+                                            },
+                                        )),
+                                    ),
+                                ),
+                        )
+                        .child(
+                            components::card()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Hermes 模型与记忆"),
+                                )
+                                .child(
+                                    div().flex().flex_row().flex_wrap().gap_2().child(
+                                        components::button(
+                                            "hermes-summary",
+                                            "读取 Hermes 模型配置",
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(
+                                            |this, _event, _window, cx| {
+                                                this.hermes_summary(cx);
+                                            },
+                                        )),
+                                    ),
+                                )
+                                .child(components::card().child(components::field(
+                                    "模型配置 JSON",
+                                    false,
+                                    Some("Hermes config.yaml 的 model 节点。".into()),
+                                    self.hermes_model_json.clone(),
+                                )))
+                                .child(
+                                    div().flex().flex_row().justify_end().child(
+                                        components::button(
+                                            "hermes-save-model",
+                                            "保存模型配置",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(
+                                            |this, _event, _window, cx| {
+                                                this.save_hermes_model(cx);
+                                            },
+                                        )),
+                                    ),
+                                )
+                                .child(Self::hermes_limits_row(self.hermes_limits.clone()))
+                                .child(components::card().child(components::field(
+                                    "MEMORY.md",
+                                    false,
+                                    Some("Hermes agent 记忆内容。".into()),
+                                    self.hermes_memory_content.clone(),
+                                )))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "hermes-save-memory",
+                                                "保存 MEMORY",
+                                                ButtonTone::Primary,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.save_hermes_memory(
+                                                        hermes::MemoryKind::Memory,
+                                                        cx,
+                                                    );
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "hermes-toggle-memory",
+                                                "切换 MEMORY 启用",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.toggle_hermes_memory(
+                                                        hermes::MemoryKind::Memory,
+                                                        cx,
+                                                    );
+                                                },
+                                            )),
+                                        ),
+                                )
+                                .child(components::card().child(components::field(
+                                    "USER.md",
+                                    false,
+                                    Some("Hermes user profile 记忆内容。".into()),
+                                    self.hermes_user_memory_content.clone(),
+                                )))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .gap_2()
+                                        .child(
+                                            components::button(
+                                                "hermes-save-user-memory",
+                                                "保存 USER",
+                                                ButtonTone::Primary,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.save_hermes_memory(
+                                                        hermes::MemoryKind::User,
+                                                        cx,
+                                                    );
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            components::button(
+                                                "hermes-toggle-user-memory",
+                                                "切换 USER 启用",
+                                                ButtonTone::Neutral,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _event, _window, cx| {
+                                                    this.toggle_hermes_memory(
+                                                        hermes::MemoryKind::User,
+                                                        cx,
+                                                    );
+                                                },
+                                            )),
+                                        ),
+                                ),
+                        )
+                    })
+                    .into_any_element()
+            }
+            _ => gpui::Empty.into_any_element(),
+        }
+    }
 }
 
 impl Render for ToolsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let configured_count = self.config_rows.iter().filter(|row| row.exists).count();
-        let total_configs = self.config_rows.len();
-        let backup_count = self.db_backups.len();
-        let visible_backup_limit = if self.show_all_backups {
-            backup_count
-        } else {
-            backup_count.min(3)
-        };
-        let hidden_backup_count = backup_count.saturating_sub(visible_backup_limit);
+        // Only what the confirm modal (rendered on the page root, outside the
+        // virtualized list) needs; every section builds its own data inside
+        // `render_block`.
         let env_conflict_count = self.env_conflicts.len();
-        let memory_count = self.memory_files.len();
-        let config_rows: Vec<_> = self
-            .config_rows
-            .iter()
-            .map(|row| self.render_config_row(row, cx))
-            .collect();
-        let memory_rows: Vec<_> = self
-            .memory_files
-            .iter()
-            .map(|file| self.render_memory_row(file, cx))
-            .collect();
-        let search_rows: Vec<_> = self
-            .memory_results
-            .iter()
-            .map(|result| {
-                components::card()
-                    .gap_1()
-                    .p_3()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(format!(
-                                "{} · {} 次",
-                                result.filename, result.match_count
-                            ))),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(SharedString::from(result.snippet.clone())),
-                    )
-            })
-            .collect();
-        let tool_version_rows: Vec<_> = self
-            .tool_versions
-            .iter()
-            .map(Self::render_tool_version_row)
-            .collect();
-        let tool_install_rows: Vec<_> = self
-            .tool_installations
-            .iter()
-            .map(Self::render_install_report_row)
-            .collect();
-        let env_rows: Vec<_> = self
-            .env_conflicts
-            .iter()
-            .map(Self::render_env_conflict_row)
-            .collect();
-        let backup_rows: Vec<_> = self
-            .db_backups
-            .iter()
-            .take(visible_backup_limit)
-            .map(|backup| self.render_backup_row(backup, cx))
-            .collect();
         let env_app_name = env_app_label(self.env_app);
-        let env_selected = match self.env_app {
-            AppType::Codex => 1,
-            AppType::Gemini => 2,
-            _ => 0,
-        };
-        let on_env_select = cx.listener(|this, ix: &usize, _window, cx| {
-            let app = match ix {
-                1 => AppType::Codex,
-                2 => AppType::Gemini,
-                _ => AppType::Claude,
-            };
-            this.select_env_app(app, cx);
-        });
 
         layout::page()
             .relative()
@@ -1353,1104 +2187,12 @@ impl Render for ToolsView {
                     })),
                 ),
             )
-            .child(components::status_footer(self.status.clone()))
-            .child(
-                layout::scroll_body(
-                    "tools-body",
-                    layout::wide_column()
-                        .gap_4()
-                        .child(
-                            div()
-                                .grid()
-                                .grid_cols(4)
-                                .gap_3()
-                                .w_full()
-                                .child(components::stat_tile(
-                                    None,
-                                    theme::accent(),
-                                    "配置目录",
-                                    format!("{configured_count}/{total_configs}"),
-                                    "已初始化应用",
-                                ))
-                                .child(components::stat_tile(
-                                    None,
-                                    theme::green(),
-                                    "数据库备份",
-                                    backup_count.to_string(),
-                                    "可恢复快照",
-                                ))
-                                .child(components::stat_tile(
-                                    None,
-                                    if env_conflict_count == 0 {
-                                        theme::teal()
-                                    } else {
-                                        theme::yellow()
-                                    },
-                                    "环境冲突",
-                                    env_conflict_count.to_string(),
-                                    env_app_name,
-                                ))
-                                .child(components::stat_tile(
-                                    None,
-                                    theme::mauve(),
-                                    "每日记忆",
-                                    memory_count.to_string(),
-                                    "工作区文件",
-                                )),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .w_full()
-                                .child(layout::section_header(
-                                    "配置目录",
-                                    "各应用配置目录的初始化状态，可直接打开对应目录。",
-                                ))
-                                .children(config_rows),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .w_full()
-                                .child(layout::section_header(
-                                    "应用辅助",
-                                    "应用级辅助开关与 OCHUB 数据目录。",
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .flex_wrap()
-                                        .gap_2()
-                                        .child(
-                                            components::button(
-                                                "auto-launch",
-                                                if self.auto_launch.unwrap_or(false) {
-                                                    "关闭开机自启"
-                                                } else {
-                                                    "启用开机自启"
-                                                },
-                                                ButtonTone::Primary,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.toggle_auto_launch(cx);
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            components::button(
-                                                "open-app-config",
-                                                "打开 OCHUB 数据目录",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.open_path_action(
-                                                        ochub_core::paths::get_app_config_dir(),
-                                                        cx,
-                                                    );
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .w_full()
-                                .child(layout::section_header(
-                                    "CLI 工具维护",
-                                    "探测 CLI 工具版本与安装分布，执行安装与更新。",
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .flex_wrap()
-                                        .gap_2()
-                                        .child(
-                                            components::button(
-                                                "cli-refresh-versions",
-                                                if self.tool_busy {
-                                                    "处理中..."
-                                                } else {
-                                                    "刷新版本"
-                                                },
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.refresh_tool_versions(cx);
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            components::button(
-                                                "cli-probe-installations",
-                                                "扫描安装位置",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.probe_cli_installations(cx);
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            components::button(
-                                                "cli-install-tools",
-                                                "安装缺失工具",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.run_cli_lifecycle("install", cx);
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            components::button(
-                                                "cli-update-tools",
-                                                "更新全部工具",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.run_cli_lifecycle("update", cx);
-                                                }),
-                                            ),
-                                        ),
-                                )
-                                .when(self.tool_versions.is_empty(), |s| {
-                                    s.child(components::empty_state(
-                                        IconName::Terminal,
-                                        "尚未刷新 CLI 版本",
-                                        "点击“刷新版本”探测各 CLI 工具的本地与最新版本。",
-                                        None,
-                                    ))
-                                })
-                                .children(tool_version_rows)
-                                .when(self.tool_installations.is_empty(), |s| {
-                                    s.child(components::empty_state(
-                                        IconName::Search,
-                                        "尚未扫描安装位置",
-                                        "点击“扫描安装位置”查看 CLI 安装分布与冲突。",
-                                        None,
-                                    ))
-                                })
-                                .children(tool_install_rows),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .w_full()
-                                .child(layout::section_header(
-                                    "环境变量冲突",
-                                    "按应用扫描环境变量冲突；删除前会自动备份，可从备份恢复。",
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .flex_wrap()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(components::segmented(
-                                            "tools-env-app",
-                                            &["Claude", "Codex", "Gemini"],
-                                            env_selected,
-                                            move |ix, window, cx| {
-                                                on_env_select(&ix, window, cx)
-                                            },
-                                        ))
-                                        .child(
-                                            components::button(
-                                                "env-scan",
-                                                "扫描冲突",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.scan_env_conflicts(cx);
-                                            })),
-                                        )
-                                        .child(
-                                            components::button(
-                                                "env-delete",
-                                                "删除并备份",
-                                                ButtonTone::Danger,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.confirm = Some(ConfirmAction::DeleteEnvConflicts);
-                                                cx.notify();
-                                            })),
-                                        ),
-                                )
-                                .when(self.env_conflicts.is_empty(), |s| {
-                                    s.child(components::empty_state(
-                                        IconName::Check,
-                                        "当前没有已扫描出的冲突",
-                                        "选择应用后点击“扫描冲突”检查环境变量。",
-                                        None,
-                                    ))
-                                })
-                                .children(env_rows)
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .gap_2()
-                                        .child(self.env_restore_path.clone())
-                                        .child(
-                                            components::button(
-                                                "env-restore",
-                                                "恢复备份",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.restore_env_backup(cx);
-                                            })),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .w_full()
-                                .child(layout::section_header(
-                                    "配置导入导出与数据库备份",
-                                    "SQL 导入导出，以及数据库快照的创建、恢复、重命名与删除。",
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .gap_2()
-                                        .child(self.export_sql_path.clone())
-                                        .child(
-                                            components::button(
-                                                "config-export-sql",
-                                                "导出 SQL",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.export_sql(cx);
-                                            })),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .gap_2()
-                                        .child(self.import_sql_path.clone())
-                                        .child(
-                                            components::button(
-                                                "config-import-sql",
-                                                "导入 SQL",
-                                                ButtonTone::Danger,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.confirm = Some(ConfirmAction::ImportSql);
-                                                cx.notify();
-                                            })),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .flex_wrap()
-                                        .gap_2()
-                                        .child(
-                                            components::button(
-                                                "db-backup-refresh",
-                                                "刷新备份",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.refresh_db_backups(cx);
-                                            })),
-                                        )
-                                        .child(
-                                            components::button(
-                                                "db-backup-create",
-                                                "创建备份",
-                                                ButtonTone::Primary,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.create_db_backup(cx);
-                                            })),
-                                        )
-                                        .child(self.backup_rename.clone()),
-                                )
-                                .when(self.db_backups.is_empty(), |s| {
-                                    s.child(components::empty_state(
-                                        IconName::Archive,
-                                        "暂无数据库备份",
-                                        "点击“创建备份”生成第一个数据库快照。",
-                                        None,
-                                    ))
-                                })
-                                .children(backup_rows)
-                                .when(hidden_backup_count > 0, |s| {
-                                    s.child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .justify_between()
-                                            .gap_3()
-                                            .w_full()
-                                            .child(div().text_color(theme::muted()).text_xs().child(
-                                                SharedString::from(format!(
-                                                    "还有 {hidden_backup_count} 个历史备份已收起。"
-                                                )),
-                                            ))
-                                            .child(
-                                                components::button(
-                                                    "db-backup-show-all",
-                                                    "显示全部备份",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.toggle_all_backups(cx);
-                                                    }),
-                                                ),
-                                            ),
-                                    )
-                                })
-                                .when(self.show_all_backups && backup_count > 3, |s| {
-                                    s.child(
-                                        div().flex().w_full().justify_end().child(
-                                            components::button(
-                                                "db-backup-collapse",
-                                                "收起历史备份",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.toggle_all_backups(cx);
-                                                }),
-                                            ),
-                                        ),
-                                    )
-                                }),
-                        )
-                        .child(
-                            components::card().child(
-                                components::disclosure(
-                                    "tools-advanced",
-                                    "高级项目",
-                                    "同步、Codex 历史、OMO、工作区、记忆、MCP 与 JSON 配置。",
-                                    self.show_advanced_tools,
-                                )
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.toggle_advanced_tools(cx);
-                                })),
-                            ),
-                        )
-                        .when(self.show_advanced_tools, |s| {
-                            s.child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("同步状态"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .gap_2()
-                                            .child(
-                                                components::button(
-                                                    "sync-webdav-status",
-                                                    "刷新 WebDAV 状态",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.refresh_sync_status(false, cx);
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "sync-s3-status",
-                                                    "刷新 S3 状态",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.refresh_sync_status(true, cx);
-                                                    }),
-                                                ),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Codex 历史"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .gap_2()
-                                            .child(
-                                                components::button(
-                                                    "codex-unify-backup-check",
-                                                    "检查统一历史备份",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.check_codex_unify_backup(cx);
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "codex-unify-restore",
-                                                    "恢复官方历史备份",
-                                                    ButtonTone::Danger,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.confirm = Some(
-                                                            ConfirmAction::RestoreCodexHistory,
-                                                        );
-                                                        cx.notify();
-                                                    }),
-                                                ),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("OMO"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .gap_2()
-                                            .child(
-                                                components::button(
-                                                    "omo-read",
-                                                    "读取 OMO",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.read_omo(false, cx);
-                                                    },
-                                                )),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "omo-disable",
-                                                    "禁用 OMO",
-                                                    ButtonTone::Danger,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.confirm =
-                                                            Some(ConfirmAction::DisableOmo {
-                                                                slim: false,
-                                                            });
-                                                        cx.notify();
-                                                    },
-                                                )),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "omo-slim-read",
-                                                    "读取 OMO Slim",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.read_omo(true, cx);
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "omo-slim-disable",
-                                                    "禁用 OMO Slim",
-                                                    ButtonTone::Danger,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.confirm =
-                                                            Some(ConfirmAction::DisableOmo {
-                                                                slim: true,
-                                                            });
-                                                        cx.notify();
-                                                    }),
-                                                ),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("OpenClaw 工作区"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap_2()
-                                            .child(self.workspace_file.clone())
-                                            .child(
-                                                components::button(
-                                                    "workspace-load",
-                                                    "读取",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.load_workspace_file(cx);
-                                                    },
-                                                )),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "workspace-save",
-                                                    "保存",
-                                                    ButtonTone::Primary,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.save_workspace_file(cx);
-                                                    },
-                                                )),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "workspace-open",
-                                                    "打开目录",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.open_workspace_dir(false, cx);
-                                                    }),
-                                                ),
-                                            ),
-                                    )
-                                    .child(self.workspace_content.clone()),
-                            )
-                            .child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("每日记忆"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap_2()
-                                            .child(self.memory_file.clone())
-                                            .child(
-                                                components::button(
-                                                    "memory-load",
-                                                    "读取",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.load_memory_file(None, cx);
-                                                    },
-                                                )),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "memory-save",
-                                                    "保存",
-                                                    ButtonTone::Primary,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.save_memory_file(cx);
-                                                    },
-                                                )),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "memory-open",
-                                                    "打开目录",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.open_workspace_dir(true, cx);
-                                                    },
-                                                )),
-                                            ),
-                                    )
-                                    .child(self.memory_content.clone())
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap_2()
-                                            .child(self.memory_query.clone())
-                                            .child(
-                                                components::button(
-                                                    "memory-search",
-                                                    "搜索",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.search_memory(cx);
-                                                    },
-                                                )),
-                                            ),
-                                    )
-                                    .children(memory_rows)
-                                    .children(search_rows),
-                            )
-                            .child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Claude MCP 与插件"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap_2()
-                                            .child(self.mcp_command.clone())
-                                            .child(
-                                                components::button(
-                                                    "mcp-validate",
-                                                    "校验命令",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.validate_mcp_command(cx);
-                                                    },
-                                                )),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "mcp-read",
-                                                    "读取 MCP 配置",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _event, _window, cx| {
-                                                        this.read_claude_mcp(cx);
-                                                    },
-                                                )),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .gap_2()
-                                            .child(
-                                                components::button(
-                                                    "claude-plugin-apply",
-                                                    "应用 OCHUB 插件",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.apply_claude_plugin(false, cx);
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "claude-plugin-clear",
-                                                    "恢复官方 Claude 配置",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.apply_claude_plugin(true, cx);
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "claude-onboarding-skip",
-                                                    "跳过 Claude 引导",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.mark_claude_onboarding(true, cx);
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "claude-onboarding-clear",
-                                                    "恢复 Claude 引导",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.mark_claude_onboarding(false, cx);
-                                                    }),
-                                                ),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("OpenClaw 高级配置"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .gap_2()
-                                            .child(
-                                                components::button(
-                                                    "openclaw-health",
-                                                    "检查 OpenClaw 配置",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.openclaw_health(cx);
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "openclaw-refresh-advanced",
-                                                    "重读 OpenClaw/Hermes",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.refresh_advanced_configs(cx);
-                                                        this.set_status("已重读高级配置", cx);
-                                                    }),
-                                                ),
-                                            ),
-                                    )
-                                    .child(components::card().child(components::field(
-                                        "默认模型 JSON",
-                                        false,
-                                        Some(
-                                            "agents.defaults.model；支持 primary、fallbacks 和额外字段。"
-                                                .into(),
-                                        ),
-                                        self.openclaw_default_model_json.clone(),
-                                    )))
-                                    .child(
-                                        div().flex().flex_row().justify_end().child(
-                                            components::button(
-                                                "openclaw-save-default-model",
-                                                "保存默认模型",
-                                                ButtonTone::Primary,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.save_openclaw_default_model(cx);
-                                                },
-                                            )),
-                                        ),
-                                    )
-                                    .child(components::card().child(components::field(
-                                        "环境变量 JSON",
-                                        false,
-                                        Some(
-                                            "openclaw.json 的 env 节点；对象键会原样写入。".into(),
-                                        ),
-                                        self.openclaw_env_json.clone(),
-                                    )))
-                                    .child(
-                                        div().flex().flex_row().justify_end().child(
-                                            components::button(
-                                                "openclaw-save-env",
-                                                "保存环境变量",
-                                                ButtonTone::Primary,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.save_openclaw_env(cx);
-                                                },
-                                            )),
-                                        ),
-                                    )
-                                    .child(components::card().child(components::field(
-                                        "工具配置 JSON",
-                                        false,
-                                        Some(
-                                            "tools 节点；支持 profile、allow、deny 和额外字段。"
-                                                .into(),
-                                        ),
-                                        self.openclaw_tools_json.clone(),
-                                    )))
-                                    .child(
-                                        div().flex().flex_row().justify_end().child(
-                                            components::button(
-                                                "openclaw-save-tools",
-                                                "保存工具配置",
-                                                ButtonTone::Primary,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.save_openclaw_tools(cx);
-                                                },
-                                            )),
-                                        ),
-                                    ),
-                            )
-                            .child(
-                                components::card()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Hermes 模型与记忆"),
-                                    )
-                                    .child(
-                                        div().flex().flex_row().flex_wrap().gap_2().child(
-                                            components::button(
-                                                "hermes-summary",
-                                                "读取 Hermes 模型配置",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.hermes_summary(cx);
-                                                }),
-                                            ),
-                                        ),
-                                    )
-                                    .child(components::card().child(components::field(
-                                        "模型配置 JSON",
-                                        false,
-                                        Some("Hermes config.yaml 的 model 节点。".into()),
-                                        self.hermes_model_json.clone(),
-                                    )))
-                                    .child(
-                                        div().flex().flex_row().justify_end().child(
-                                            components::button(
-                                                "hermes-save-model",
-                                                "保存模型配置",
-                                                ButtonTone::Primary,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.save_hermes_model(cx);
-                                                },
-                                            )),
-                                        ),
-                                    )
-                                    .child(Self::hermes_limits_row(self.hermes_limits.clone()))
-                                    .child(components::card().child(components::field(
-                                        "MEMORY.md",
-                                        false,
-                                        Some("Hermes agent 记忆内容。".into()),
-                                        self.hermes_memory_content.clone(),
-                                    )))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .gap_2()
-                                            .child(
-                                                components::button(
-                                                    "hermes-save-memory",
-                                                    "保存 MEMORY",
-                                                    ButtonTone::Primary,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.save_hermes_memory(
-                                                            hermes::MemoryKind::Memory,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "hermes-toggle-memory",
-                                                    "切换 MEMORY 启用",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.toggle_hermes_memory(
-                                                            hermes::MemoryKind::Memory,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
-                                            ),
-                                    )
-                                    .child(components::card().child(components::field(
-                                        "USER.md",
-                                        false,
-                                        Some("Hermes user profile 记忆内容。".into()),
-                                        self.hermes_user_memory_content.clone(),
-                                    )))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .flex_wrap()
-                                            .gap_2()
-                                            .child(
-                                                components::button(
-                                                    "hermes-save-user-memory",
-                                                    "保存 USER",
-                                                    ButtonTone::Primary,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.save_hermes_memory(
-                                                            hermes::MemoryKind::User,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
-                                            )
-                                            .child(
-                                                components::button(
-                                                    "hermes-toggle-user-memory",
-                                                    "切换 USER 启用",
-                                                    ButtonTone::Neutral,
-                                                    ButtonSize::Sm,
-                                                )
-                                                .on_click(
-                                                    cx.listener(|this, _event, _window, cx| {
-                                                        this.toggle_hermes_memory(
-                                                            hermes::MemoryKind::User,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
-                                            ),
-                                    ),
-                            )
-                        }),
-                ),
-            )
+            .child(layout::wide_virtual_body(gpui::list(
+                self.list_state.clone(),
+                cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
+            )))
             .when_some(self.confirm.clone(), |root, action| {
                 let (title, message, confirm_label) = match &action {
-                    ConfirmAction::DeleteMemoryFile(name) => (
-                        "删除每日记忆",
-                        format!("确定删除每日记忆「{name}」吗？此操作不可撤销。"),
-                        "删除",
-                    ),
                     ConfirmAction::RestoreDbBackup(name) => (
                         "恢复数据库备份",
                         format!(
@@ -2523,9 +2265,6 @@ impl Render for ToolsView {
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.confirm = None;
                                 match &action {
-                                    ConfirmAction::DeleteMemoryFile(name) => {
-                                        this.delete_memory_file(name.clone(), cx)
-                                    }
                                     ConfirmAction::RestoreDbBackup(name) => {
                                         this.restore_db_backup(name.clone(), cx)
                                     }
@@ -2564,7 +2303,7 @@ fn config_status(app: &Arc<AppState>, app_type: AppType) -> Result<(bool, String
             (status.exists, status.path)
         }
         AppType::ClaudeDesktop => {
-            let status = claude_desktop::get_status(&app.db, false)?;
+            let status = claude_desktop::get_status(&app.db)?;
             (
                 status.configured,
                 status.config_library_path.unwrap_or_default(),
@@ -2783,3 +2522,5 @@ fn auto_launch_handle() -> Result<AutoLaunch, AppError> {
         .build()
         .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))
 }
+
+crate::notifications::impl_status_toasts!(ToolsView);

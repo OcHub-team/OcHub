@@ -36,6 +36,23 @@ pub enum SkillStorageLocation {
     Unified,
 }
 
+/// How the selected theme family chooses between its required light and dark palettes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    /// Follow the native window appearance.
+    #[default]
+    System,
+    /// Always use the family's light palette.
+    Light,
+    /// Always use the family's dark palette.
+    Dark,
+}
+
+fn default_theme_family() -> String {
+    "ochub".to_string()
+}
+
 /// Custom endpoint record (stored in `provider.meta.custom_endpoints`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -335,24 +352,16 @@ pub struct AppSettings {
     pub launch_on_startup: bool,
     #[serde(default)]
     pub silent_startup: bool,
-    #[serde(default)]
-    pub enable_local_proxy: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proxy_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_check_confirmed: Option<bool>,
-    #[serde(default)]
-    pub enable_failover_toggle: bool,
     #[serde(default)]
     pub preserve_codex_official_auth_on_switch: bool,
     #[serde(default)]
     pub unify_codex_session_history: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unify_codex_migrate_existing: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failover_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_run_notice_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,6 +370,10 @@ pub struct AppSettings {
     pub auto_sync_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    #[serde(default = "default_theme_family")]
+    pub theme_family: String,
+    #[serde(default)]
+    pub theme_mode: ThemeMode,
 
     /// Per-app enabled map keyed by app id. Missing key → the plugin's
     /// `enabled_by_default()`. Reads the legacy `visibleApps` object via alias.
@@ -440,19 +453,17 @@ impl Default for AppSettings {
             skip_claude_onboarding: false,
             launch_on_startup: false,
             silent_startup: false,
-            enable_local_proxy: false,
-            proxy_confirmed: None,
             usage_confirmed: None,
             stream_check_confirmed: None,
-            enable_failover_toggle: false,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
-            failover_confirmed: None,
             first_run_notice_confirmed: None,
             common_config_confirmed: None,
             auto_sync_confirmed: None,
             language: None,
+            theme_family: default_theme_family(),
+            theme_mode: ThemeMode::default(),
             enabled_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
@@ -1000,5 +1011,16 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.app_enabled("claude"), Some(false));
         assert_eq!(settings.app_enabled("my-app"), Some(true));
+    }
+
+    #[test]
+    fn legacy_settings_default_to_the_ochub_system_theme() {
+        let settings: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.theme_family, "ochub");
+        assert_eq!(settings.theme_mode, ThemeMode::System);
+
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains(r#""themeFamily":"ochub""#));
+        assert!(json.contains(r#""themeMode":"system""#));
     }
 }

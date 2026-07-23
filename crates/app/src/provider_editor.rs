@@ -7,15 +7,17 @@
 //! validation strip. Saving encodes the edited values back into both
 //! `settingsConfig` *and* `meta`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    div, prelude::*, px, Context, Entity, FontWeight, HighlightStyle, MouseButton, SharedString,
-    StyledText, Window,
+    div, prelude::*, px, uniform_list, Context, Entity, FontWeight, HighlightStyle, MouseButton,
+    SharedString, StyledText, Window,
 };
 use ochub_core::provider_config::{
-    self, bool_val, str_val, AppConfig, FieldKind, FormField, FormSection, FormValues,
+    self, bool_val, str_val, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues,
     GridCellKind, Language, Severity,
 };
 use ochub_core::services::provider::ProviderService;
@@ -24,12 +26,12 @@ use serde_json::{json, Map, Value};
 
 use crate::code_editor::CodeEditor;
 use crate::components;
-use crate::components::{BadgeTone, BannerTone, ButtonSize, ButtonTone};
-use crate::fold::fold_regions;
+use crate::components::{BadgeTone, ButtonSize, ButtonTone};
+use crate::fold::{fold_regions, FoldRegion};
 use crate::highlight::{self, Lang};
 use crate::icons::IconName;
 use crate::layout;
-use crate::text_input::TextInput;
+use crate::text_input::{TextInput, TextInputEvent};
 use crate::theme;
 
 /// Outcome of the editor, observed by the host view via `cx.subscribe`.
@@ -60,6 +62,39 @@ struct RawEdit {
     error: Option<SharedString>,
 }
 
+#[derive(Clone)]
+struct PreviewDocument {
+    filename: SharedString,
+    language_label: &'static str,
+    lang: Lang,
+    content: Arc<str>,
+    line_ranges: Arc<Vec<Range<usize>>>,
+    regions: Arc<Vec<FoldRegion>>,
+    region_headers: Arc<HashSet<usize>>,
+    visible_rows: Arc<Vec<usize>>,
+}
+
+impl PreviewDocument {
+    fn line(&self, index: usize) -> &str {
+        self.line_ranges
+            .get(index)
+            .and_then(|range| self.content.get(range.clone()))
+            .unwrap_or("")
+    }
+
+    fn line_count(&self) -> usize {
+        self.line_ranges.len()
+    }
+}
+
+#[derive(Clone, Default)]
+struct PreviewCache {
+    files: Vec<PreviewDocument>,
+    issues: Vec<ConfigIssue>,
+}
+
+const PREVIEW_REFRESH_DELAY: Duration = Duration::from_millis(140);
+
 pub struct ProviderEditor {
     app: Arc<AppState>,
     app_type: AppType,
@@ -88,7 +123,13 @@ pub struct ProviderEditor {
     selected_preset: Option<usize>,
     show_preview: bool,
     /// Collapsed fold regions in the preview pane: (file index, header line).
-    preview_collapsed: std::collections::HashSet<(usize, usize)>,
+    preview_collapsed: HashSet<(usize, usize)>,
+    /// Only the selected file is mounted; this keeps multi-file previews from
+    /// stacking several independent documents into one enormous page.
+    preview_active_file: usize,
+    preview_cache: PreviewCache,
+    preview_dirty: bool,
+    preview_refresh_epoch: usize,
     /// When `Some`, a modal code editor for one preview file is open.
     raw_edit: Option<RawEdit>,
     error: Option<SharedString>,
@@ -96,6 +137,22 @@ pub struct ProviderEditor {
 }
 
 impl ProviderEditor {
+    pub(crate) fn shortcut_save(&mut self, cx: &mut Context<Self>) {
+        if self.raw_edit.is_some() {
+            self.apply_raw_edit(cx);
+        } else {
+            self.do_save(cx);
+        }
+    }
+
+    pub(crate) fn shortcut_cancel(&mut self, cx: &mut Context<Self>) {
+        if self.raw_edit.is_some() {
+            self.close_raw_edit(cx);
+        } else {
+            cx.emit(EditorEvent::Cancelled);
+        }
+    }
+
     pub fn new_add(app: Arc<AppState>, app_type: AppType, cx: &mut Context<Self>) -> Self {
         let codec = provider_config::config_for(app_type)
             .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
@@ -166,7 +223,11 @@ impl ProviderEditor {
             next_row_id: 0,
             selected_preset: None,
             show_preview: true,
-            preview_collapsed: std::collections::HashSet::new(),
+            preview_collapsed: HashSet::new(),
+            preview_active_file: 0,
+            preview_cache: PreviewCache::default(),
+            preview_dirty: true,
+            preview_refresh_epoch: 0,
             raw_edit: None,
             error: None,
             status: None,
@@ -207,6 +268,7 @@ impl ProviderEditor {
                         input.set_content(content, cx);
                         input
                     });
+                    Self::observe_preview_input(&input, cx);
                     self.text_inputs.insert(field.id.clone(), input);
                 }
                 FieldKind::KeyValue { .. } => {
@@ -226,6 +288,8 @@ impl ProviderEditor {
                                 input.set_content(v, cx);
                                 input
                             });
+                            Self::observe_preview_input(&key, cx);
+                            Self::observe_preview_input(&value, cx);
                             rows.push(KvRow { id, key, value });
                         }
                     }
@@ -259,6 +323,7 @@ impl ProviderEditor {
                                             input.set_content(content, cx);
                                             input
                                         });
+                                        Self::observe_preview_input(&input, cx);
                                         cells.insert(col.key.clone(), input);
                                     }
                                     GridCellKind::Toggle => {
@@ -280,6 +345,114 @@ impl ProviderEditor {
         }
     }
 
+    fn observe_preview_input(input: &Entity<TextInput>, cx: &mut Context<Self>) {
+        cx.subscribe(input, |this, _input, _: &TextInputEvent, cx| {
+            this.schedule_preview_refresh(cx);
+        })
+        .detach();
+    }
+
+    /// Text fields can emit several changes in one typing burst. Keep the form
+    /// responsive immediately and rebuild the potentially multi-megabyte native
+    /// document only after the user pauses briefly.
+    fn schedule_preview_refresh(&mut self, cx: &mut Context<Self>) {
+        self.preview_dirty = true;
+        self.preview_refresh_epoch = self.preview_refresh_epoch.wrapping_add(1);
+        let epoch = self.preview_refresh_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(PREVIEW_REFRESH_DELAY).await;
+            this.update(cx, |this, cx| {
+                if this.preview_refresh_epoch == epoch && this.preview_dirty {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn invalidate_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_dirty = true;
+        self.preview_refresh_epoch = self.preview_refresh_epoch.wrapping_add(1);
+        cx.notify();
+    }
+
+    fn ensure_preview_current(&mut self, cx: &Context<Self>) {
+        if !self.preview_dirty {
+            return;
+        }
+        self.pull_values(cx);
+        self.rebuild_preview_cache();
+    }
+
+    fn rebuild_preview_cache(&mut self) {
+        let started = Instant::now();
+        let issues = self.codec.validate(&self.values);
+        let files = self.codec.preview(&self.values, &self.working_base);
+        let mut total_bytes = 0usize;
+        let mut total_lines = 0usize;
+        let documents = files
+            .into_iter()
+            .enumerate()
+            .map(|(file_index, file)| {
+                let lang = Lang::from_core(file.language);
+                let language_label = match file.language {
+                    Language::Toml => "TOML",
+                    Language::Json => "JSON",
+                    Language::Yaml => "YAML",
+                    Language::Env => "ENV",
+                };
+                let content: Arc<str> = Arc::from(file.content);
+                let line_ranges = Arc::new(preview_line_ranges(&content));
+                let regions = Arc::new(fold_regions(lang, &content));
+                let region_headers = Arc::new(
+                    regions
+                        .iter()
+                        .map(|region| region.header)
+                        .collect::<HashSet<_>>(),
+                );
+                let collapsed = self
+                    .preview_collapsed
+                    .iter()
+                    .filter_map(|(index, header)| (*index == file_index).then_some(*header))
+                    .collect::<HashSet<_>>();
+                let visible_rows = Arc::new(preview_visible_rows(
+                    line_ranges.len(),
+                    &regions,
+                    &collapsed,
+                ));
+                total_bytes += content.len();
+                total_lines += line_ranges.len();
+                PreviewDocument {
+                    filename: SharedString::from(file.filename),
+                    language_label,
+                    lang,
+                    content,
+                    line_ranges,
+                    regions,
+                    region_headers,
+                    visible_rows,
+                }
+            })
+            .collect();
+
+        self.preview_cache = PreviewCache {
+            files: documents,
+            issues,
+        };
+        self.preview_active_file = self
+            .preview_active_file
+            .min(self.preview_cache.files.len().saturating_sub(1));
+        self.preview_dirty = false;
+        log::debug!(
+            "provider preview cache rebuilt: {} files, {} lines, {} bytes in {:?}",
+            self.preview_cache.files.len(),
+            total_lines,
+            total_bytes,
+            started.elapsed()
+        );
+    }
+
     /// Apply a built-in preset: replace values and rebuild inputs.
     fn apply_preset(&mut self, index: usize, cx: &mut Context<Self>) {
         let presets = self.codec.presets();
@@ -290,18 +463,17 @@ impl ProviderEditor {
             self.grid_rows.clear();
             self.build_inputs(cx);
             self.selected_preset = Some(index);
-            cx.notify();
+            self.invalidate_preview(cx);
         }
     }
 
     /// Open the modal code editor for preview file `index`.
     fn open_raw_edit(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.pull_values(cx);
-        let files = self.codec.preview(&self.values, &self.working_base);
-        if let Some(file) = files.get(index) {
-            let content = file.content.clone();
-            let filename = SharedString::from(file.filename.clone());
-            let lang = Lang::from_core(file.language);
+        self.ensure_preview_current(cx);
+        if let Some(file) = self.preview_cache.files.get(index) {
+            let content = SharedString::from(file.content.to_string());
+            let filename = file.filename.clone();
+            let lang = file.lang;
             let input = cx.new(|cx| {
                 let mut input = CodeEditor::new(cx, lang, "");
                 input.set_content(content, cx);
@@ -329,17 +501,17 @@ impl ProviderEditor {
             Some(raw) => (raw.file_index, raw.input.read(cx).content().to_string()),
             None => return,
         };
-        self.pull_values(cx);
+        self.ensure_preview_current(cx);
         let prior_meta = self.original_provider.as_ref().and_then(|p| p.meta.clone());
         let cur_meta = self
             .codec
             .encode(&self.values, &self.working_base, prior_meta.as_ref())
             .meta;
         let mut contents: Vec<String> = self
-            .codec
-            .preview(&self.values, &self.working_base)
-            .into_iter()
-            .map(|f| f.content)
+            .preview_cache
+            .files
+            .iter()
+            .map(|file| file.content.to_string())
             .collect();
         if idx < contents.len() {
             contents[idx] = edited;
@@ -356,7 +528,7 @@ impl ProviderEditor {
                 self.build_inputs(cx);
                 self.raw_edit = None;
                 self.status = Some(SharedString::from("已应用文件编辑"));
-                cx.notify();
+                self.invalidate_preview(cx);
             }
             Err(e) => {
                 if let Some(raw) = self.raw_edit.as_mut() {
@@ -413,13 +585,13 @@ impl ProviderEditor {
 
     fn set_select(&mut self, field_id: String, value: String, cx: &mut Context<Self>) {
         self.values.insert(field_id, Value::String(value));
-        cx.notify();
+        self.invalidate_preview(cx);
     }
 
     fn toggle_bool(&mut self, field_id: String, cx: &mut Context<Self>) {
         let cur = bool_val(&self.values, &field_id);
         self.values.insert(field_id, Value::Bool(!cur));
-        cx.notify();
+        self.invalidate_preview(cx);
     }
 
     fn kv_add(&mut self, field_id: String, cx: &mut Context<Self>) {
@@ -428,17 +600,23 @@ impl ProviderEditor {
         let key = cx.new(|cx| TextInput::new(cx, "key"));
         let value = cx.new(|cx| TextInput::new(cx, "value"));
         self.kv_rows
-            .entry(field_id)
+            .entry(field_id.clone())
             .or_default()
             .push(KvRow { id, key, value });
-        cx.notify();
+        if let Some(rows) = self.kv_rows.get(&field_id) {
+            if let Some(row) = rows.last() {
+                Self::observe_preview_input(&row.key, cx);
+                Self::observe_preview_input(&row.value, cx);
+            }
+        }
+        self.invalidate_preview(cx);
     }
 
     fn kv_remove(&mut self, field_id: String, row_id: usize, cx: &mut Context<Self>) {
         if let Some(rows) = self.kv_rows.get_mut(&field_id) {
             rows.retain(|r| r.id != row_id);
         }
-        cx.notify();
+        self.invalidate_preview(cx);
     }
 
     fn grid_add(&mut self, field_id: String, cx: &mut Context<Self>) {
@@ -462,17 +640,24 @@ impl ProviderEditor {
             }
         }
         self.grid_rows
-            .entry(field_id)
+            .entry(field_id.clone())
             .or_default()
             .push(GridRow { id, cells, toggles });
-        cx.notify();
+        if let Some(rows) = self.grid_rows.get(&field_id) {
+            if let Some(row) = rows.last() {
+                for input in row.cells.values() {
+                    Self::observe_preview_input(input, cx);
+                }
+            }
+        }
+        self.invalidate_preview(cx);
     }
 
     fn grid_remove(&mut self, field_id: String, row_id: usize, cx: &mut Context<Self>) {
         if let Some(rows) = self.grid_rows.get_mut(&field_id) {
             rows.retain(|r| r.id != row_id);
         }
-        cx.notify();
+        self.invalidate_preview(cx);
     }
 
     fn grid_toggle(
@@ -488,7 +673,7 @@ impl ProviderEditor {
                 row.toggles.insert(col, !cur);
             }
         }
-        cx.notify();
+        self.invalidate_preview(cx);
     }
 
     fn columns_for(&self, field_id: &str) -> Vec<provider_config::GridColumn> {
@@ -715,18 +900,19 @@ impl ProviderEditor {
                         this.set_select(fid.clone(), value, cx);
                     }
                 });
-                let mut control =
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_start()
-                        .gap_1()
-                        .child(components::segmented(
-                            SharedString::from(format!("select-{}", field.id)),
-                            &labels,
-                            selected,
-                            move |ix, window, cx| on_select(&ix, window, cx),
-                        ));
+                let mut control = div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .child(components::segmented(
+                        SharedString::from(format!("select-{}", field.id)),
+                        &labels,
+                        selected,
+                        move |ix, window, cx| on_select(&ix, window, cx),
+                    ));
                 // The per-option hint (previously baked into each pill label)
                 // is shown for the selected option beneath the control.
                 if let Some(hint) = options.get(selected).and_then(|o| o.hint.as_ref()) {
@@ -767,7 +953,7 @@ impl ProviderEditor {
     }
 
     fn render_kv(&self, field_id: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut col = div().flex().flex_col().gap_2().w_full();
+        let mut col = div().flex().flex_col().gap_2().w_full().min_w_0();
         if let Some(rows) = self.kv_rows.get(field_id) {
             for row in rows {
                 let fid = field_id.to_string();
@@ -823,7 +1009,7 @@ impl ProviderEditor {
         // instead of a truncated table. Column slots: the first text column
         // (e.g. 角色) is fixed-width, the rest flex, toggles are pinned, and a
         // ghost icon button deletes the row.
-        let mut col = div().flex().flex_col().gap_2().w_full();
+        let mut col = div().flex().flex_col().gap_2().w_full().min_w_0();
 
         // Caption header aligned with the row cards below.
         let mut header = div().flex().flex_row().items_center().gap_2().px_3();
@@ -836,9 +1022,11 @@ impl ProviderEditor {
             header = header.child(match &c.kind {
                 GridCellKind::Text { .. } if first_text => {
                     first_text = false;
-                    div().w(px(96.)).flex_none().child(label)
+                    div().w(px(96.)).flex_none().overflow_hidden().child(label)
                 }
-                GridCellKind::Text { .. } => div().flex_1().min_w_0().child(label),
+                GridCellKind::Text { .. } => {
+                    div().flex_1().min_w_0().overflow_hidden().child(label)
+                }
                 GridCellKind::Toggle => div().w(px(64.)).flex_none().child(label),
             });
         }
@@ -851,6 +1039,8 @@ impl ProviderEditor {
                 let mut card = components::card()
                     .flex_row()
                     .items_center()
+                    .min_w_0()
+                    .overflow_hidden()
                     .gap_2()
                     .px_3()
                     .py_2();
@@ -865,9 +1055,9 @@ impl ProviderEditor {
                                 .unwrap_or_else(|| div().into_any_element());
                             let slot = if first_text {
                                 first_text = false;
-                                div().w(px(96.)).flex_none()
+                                div().w(px(96.)).flex_none().overflow_hidden()
                             } else {
-                                div().flex_1().min_w_0()
+                                div().flex_1().min_w_0().overflow_hidden()
                             };
                             card = card.child(slot.child(cell));
                         }
@@ -925,235 +1115,331 @@ impl ProviderEditor {
         )
     }
 
-    fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let files = self.codec.preview(&self.values, &self.working_base);
-        let issues = self.codec.validate(&self.values);
+    fn select_preview_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.preview_cache.files.len() {
+            self.preview_active_file = index;
+            cx.notify();
+        }
+    }
 
-        let mut col = components::card().p_0().w(px(420.)).flex_none().child(
+    fn toggle_preview_fold(&mut self, file_index: usize, header: usize, cx: &mut Context<Self>) {
+        let key = (file_index, header);
+        if !self.preview_collapsed.remove(&key) {
+            self.preview_collapsed.insert(key);
+        }
+
+        if let Some(document) = self.preview_cache.files.get_mut(file_index) {
+            let collapsed = self
+                .preview_collapsed
+                .iter()
+                .filter_map(|(index, header)| (*index == file_index).then_some(*header))
+                .collect::<HashSet<_>>();
+            document.visible_rows = Arc::new(preview_visible_rows(
+                document.line_count(),
+                &document.regions,
+                &collapsed,
+            ));
+        }
+        cx.notify();
+    }
+
+    fn render_preview_rows(
+        &mut self,
+        file_index: usize,
+        range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let Some(document) = self.preview_cache.files.get(file_index).cloned() else {
+            return Vec::new();
+        };
+
+        let mut rows = Vec::with_capacity(range.end.saturating_sub(range.start));
+        for visible_index in range {
+            let Some(&line_index) = document.visible_rows.get(visible_index) else {
+                continue;
+            };
+            let line = document.line(line_index);
+            let folded = document.region_headers.contains(&line_index)
+                && self.preview_collapsed.contains(&(file_index, line_index));
+            let display = if folded {
+                SharedString::from(format!("{line} ⋯"))
+            } else {
+                SharedString::from(line.to_string())
+            };
+
+            let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+            let mut offset = 0usize;
+            for (len, token) in highlight::line_spans(document.lang, line) {
+                if len > 0 && token != crate::highlight::Token::Plain {
+                    highlights.push((
+                        offset..offset + len,
+                        HighlightStyle {
+                            color: Some(token.color().into()),
+                            ..Default::default()
+                        },
+                    ));
+                }
+                offset += len;
+            }
+
+            let chevron: gpui::AnyElement = if document.region_headers.contains(&line_index) {
+                div()
+                    .w(px(14.))
+                    .flex_none()
+                    .cursor_pointer()
+                    .text_color(theme::muted())
+                    .child(if folded { "▸" } else { "▾" })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_preview_fold(file_index, line_index, cx);
+                        }),
+                    )
+                    .into_any_element()
+            } else {
+                div().w(px(14.)).flex_none().into_any_element()
+            };
+
+            rows.push(
+                div()
+                    .id(SharedString::from(format!(
+                        "preview-row-{file_index}-{line_index}"
+                    )))
+                    .flex()
+                    .flex_row()
+                    .flex_none()
+                    .items_center()
+                    .min_w_full()
+                    .h(px(18.))
+                    .px_4()
+                    .cursor_pointer()
+                    .child(chevron)
+                    .child(
+                        div()
+                            .flex_none()
+                            .child(StyledText::new(display).with_highlights(highlights)),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_raw_edit(file_index, cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+        rows
+    }
+
+    fn render_preview(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut pane = components::card()
+            .p_0()
+            .min_h_0()
+            .flex_none()
+            .overflow_hidden()
+            .when(compact, |pane| pane.w_full().h(px(320.)))
+            .when(!compact, |pane| pane.w(px(420.)).h_full())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px_4()
+                    .py_3()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_color(theme::text())
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("将写入的文件"),
+                    )
+                    .child(
+                        components::button(
+                            "editor-refresh-preview",
+                            "刷新",
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.invalidate_preview(cx);
+                            },
+                        )),
+                    ),
+            );
+
+        if self.preview_cache.files.is_empty() {
+            return pane
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme::muted())
+                        .text_sm()
+                        .child("没有可预览的文件"),
+                )
+                .into_any_element();
+        }
+
+        if self.preview_cache.files.len() > 1 {
+            let mut tabs = div()
+                .id("preview-file-tabs")
+                .flex()
+                .flex_row()
+                .flex_none()
+                .gap_1()
+                .px_3()
+                .py_2()
+                .overflow_x_scroll()
+                .border_b_1()
+                .border_color(theme::border());
+            tabs.style().restrict_scroll_to_axis = Some(true);
+            for (index, document) in self.preview_cache.files.iter().enumerate() {
+                tabs = tabs.child(
+                    components::button(
+                        SharedString::from(format!("preview-tab-{index}")),
+                        document.filename.clone(),
+                        if index == self.preview_active_file {
+                            ButtonTone::Neutral
+                        } else {
+                            ButtonTone::Ghost
+                        },
+                        ButtonSize::Sm,
+                    )
+                    .flex_none()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.select_preview_file(index, cx);
+                    })),
+                );
+            }
+            pane = pane.child(tabs);
+        }
+
+        let file_index = self
+            .preview_active_file
+            .min(self.preview_cache.files.len().saturating_sub(1));
+        let document = self.preview_cache.files[file_index].clone();
+        let visible_count = document.visible_rows.len();
+        let metadata = SharedString::from(format!(
+            "{} 行 · {}",
+            document.line_count(),
+            format_preview_bytes(document.content.len())
+        ));
+
+        pane = pane.child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .justify_between()
+                .gap_2()
                 .px_4()
                 .py_3()
+                .flex_none()
                 .border_b_1()
                 .border_color(theme::border())
                 .child(
                     div()
-                        .text_color(theme::text())
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("将写入的文件"),
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme::subtext())
+                        .text_xs()
+                        .font_family("Menlo")
+                        .child(document.filename.clone()),
                 )
                 .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme::muted())
+                        .text_xs()
+                        .child(metadata),
+                )
+                .child(components::badge(
+                    BadgeTone::Neutral,
+                    document.language_label,
+                ))
+                .child(
                     components::button(
-                        "editor-refresh-preview",
-                        "刷新",
+                        SharedString::from(format!("preview-edit-{file_index}")),
+                        "编辑",
                         ButtonTone::Ghost,
                         ButtonSize::Sm,
                     )
-                    .on_click(cx.listener(|_t, _e, _w, cx| cx.notify())),
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_raw_edit(file_index, cx);
+                    })),
                 ),
         );
 
-        for (idx, file) in files.into_iter().enumerate() {
-            let filename = file.filename;
-            let content = file.content;
-            let lang = match file.language {
-                Language::Toml => "TOML",
-                Language::Json => "JSON",
-                Language::Yaml => "YAML",
-                Language::Env => "ENV",
-            };
-            let hl_lang = Lang::from_core(file.language);
-            let regions = fold_regions(hl_lang, &content);
-            let line_count = content.split('\n').count();
-            // Only honor collapsed marks that still match a current region.
-            let collapsed: std::collections::HashSet<usize> = regions
-                .iter()
-                .filter(|r| self.preview_collapsed.contains(&(idx, r.header)))
-                .map(|r| r.header)
-                .collect();
-            let mut hidden = vec![false; line_count];
-            for region in &regions {
-                if collapsed.contains(&region.header) {
-                    for line in region.hidden() {
-                        if line < line_count {
-                            hidden[line] = true;
-                        }
-                    }
-                }
-            }
+        let preview_list = uniform_list(
+            SharedString::from(format!("preview-lines-{file_index}")),
+            visible_count,
+            cx.processor(move |this, range, _window, cx| {
+                this.render_preview_rows(file_index, range, cx)
+            }),
+        )
+        .flex_1()
+        .min_h_0()
+        .w_full();
 
-            let mut lines: Vec<gpui::AnyElement> = Vec::new();
-            for (i, l) in content.split('\n').enumerate() {
-                if hidden.get(i).copied().unwrap_or(false) {
-                    continue;
-                }
-                let is_folded = collapsed.contains(&i);
-                let display = if is_folded {
-                    format!("{l} ⋯")
-                } else {
-                    l.to_string()
-                };
-                let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
-                let mut offset = 0usize;
-                for (len, token) in highlight::line_spans(hl_lang, l) {
-                    if len > 0 && token != crate::highlight::Token::Plain {
-                        highlights.push((
-                            offset..offset + len,
-                            HighlightStyle {
-                                color: Some(token.color().into()),
-                                ..Default::default()
-                            },
-                        ));
-                    }
-                    offset += len;
-                }
+        pane = pane.child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .overflow_hidden()
+                .text_xs()
+                .font_family("Menlo")
+                .text_color(theme::text())
+                .child(preview_list),
+        );
 
-                let foldable = regions.iter().any(|r| r.header == i);
-                let chevron: gpui::AnyElement = if foldable {
-                    div()
-                        .w(px(14.))
-                        .flex_shrink_0()
-                        .cursor_pointer()
-                        .text_color(theme::muted())
-                        .child(if is_folded { "▸" } else { "▾" })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e, _w, cx| {
-                                cx.stop_propagation();
-                                let key = (idx, i);
-                                if !this.preview_collapsed.remove(&key) {
-                                    this.preview_collapsed.insert(key);
-                                }
-                                cx.notify();
-                            }),
-                        )
-                        .into_any_element()
-                } else {
-                    div().w(px(14.)).flex_shrink_0().into_any_element()
-                };
-
-                lines.push(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_start()
-                        .min_h(px(15.))
-                        .child(chevron)
-                        .child(
-                            div()
-                                .flex_1()
-                                .child(StyledText::new(display).with_highlights(highlights)),
-                        )
-                        .into_any_element(),
-                );
-            }
-            col = col.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .when(idx > 0, |s| s.border_t_1().border_color(theme::border()))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .px_4()
-                            .py_3()
-                            .border_b_1()
-                            .border_color(theme::border())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_color(theme::subtext())
-                                    .text_xs()
-                                    .font_family("Menlo")
-                                    .child(SharedString::from(filename)),
-                            )
-                            .child(components::badge(BadgeTone::Neutral, lang))
-                            .child(
-                                components::button(
-                                    SharedString::from(format!("preview-edit-{idx}")),
-                                    "编辑",
-                                    ButtonTone::Ghost,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(
-                                    cx.listener(move |this, _e, _w, cx| {
-                                        this.open_raw_edit(idx, cx)
-                                    }),
-                                ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("preview-file-{idx}")))
-                            .flex()
-                            .flex_col()
-                            .w_full()
-                            .px_4()
-                            .py_3()
-                            .cursor_pointer()
-                            .text_xs()
-                            .font_family("Menlo")
-                            .text_color(theme::text())
-                            .on_click(
-                                cx.listener(move |this, _e, _w, cx| this.open_raw_edit(idx, cx)),
-                            )
-                            .children(lines),
-                    ),
-            );
-        }
-
-        if !issues.is_empty() {
-            let mut list = div().flex().flex_col().gap_1();
-            for issue in issues {
+        if !self.preview_cache.issues.is_empty() {
+            let mut issues = div()
+                .id("preview-issues")
+                .flex()
+                .flex_col()
+                .flex_none()
+                .max_h(px(120.))
+                .overflow_y_scroll()
+                .gap_1()
+                .px_4()
+                .py_3()
+                .border_t_1()
+                .border_color(theme::border());
+            for issue in &self.preview_cache.issues {
                 let (color, tag) = match issue.severity {
                     Severity::Error => (theme::red(), "错误"),
                     Severity::Warning => (theme::yellow(), "警告"),
                     Severity::Info => (theme::subtext(), "提示"),
                 };
-                list = list.child(
+                issues = issues.child(
                     div()
                         .flex()
                         .flex_row()
+                        .min_w_0()
                         .gap_2()
                         .text_xs()
-                        .child(div().text_color(color).flex_shrink_0().child(tag))
+                        .child(div().text_color(color).flex_none().child(tag))
                         .child(
                             div()
+                                .min_w_0()
                                 .text_color(theme::subtext())
-                                .child(SharedString::from(issue.message)),
+                                .child(SharedString::from(issue.message.clone())),
                         ),
                 );
             }
-            col = col.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_4()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(theme::border())
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("校验"),
-                    )
-                    .child(list),
-            );
+            pane = pane.child(issues);
         }
-        col
-    }
 
+        pane.into_any_element()
+    }
     fn render_raw_modal(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let raw = self.raw_edit.as_ref()?;
         let card = components::modal_card()
@@ -1251,10 +1537,11 @@ impl ProviderEditor {
 }
 
 impl Render for ProviderEditor {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Keep `values` in sync with the inputs so preview/validation reflect the
-        // latest edits (refreshes on any interaction; a 刷新 button forces it).
-        self.pull_values(cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The cached native document is rebuilt only when form values changed;
+        // caret blinks and unrelated view updates reuse the existing line index.
+        self.ensure_preview_current(cx);
+        let compact_layout = window.viewport_size().width < px(1180.);
 
         let title = if self.is_editing() {
             "编辑供应商"
@@ -1309,12 +1596,10 @@ impl Render for ProviderEditor {
             })
             .collect();
         let preview = if self.show_preview {
-            Some(self.render_preview(cx).into_any_element())
+            Some(self.render_preview(compact_layout, cx).into_any_element())
         } else {
             None
         };
-        let error = self.error.clone();
-        let status = self.status.clone();
         let modal = self.render_raw_modal(cx);
 
         let actions = div()
@@ -1374,31 +1659,43 @@ impl Render for ProviderEditor {
                     ),
             );
 
+        let form_scroll = div()
+            .id("editor-form-scroll")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .pr_2()
+            .overflow_y_scroll()
+            .child(form_column.pb_6());
+
         let body = div()
             .flex()
-            .flex_row()
-            .items_start()
+            .items_stretch()
+            .flex_1()
+            .min_h_0()
             .gap_4()
             .w_full()
-            .child(form_column)
+            .when(compact_layout, |body| body.flex_col())
+            .when(!compact_layout, |body| body.flex_row())
+            .child(form_scroll)
             .when_some(preview, |s, preview| s.child(preview));
+
+        let editor_body = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .items_center()
+            .p_6()
+            .child(layout::wide_column().h_full().min_h_0().child(body));
 
         layout::page()
             .relative()
             .child(layout::page_header(title, Some(subtitle)).child(actions))
-            .when_some(error, |s, error| {
-                s.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .child(components::status_banner_tone(BannerTone::Error, error)),
-                )
-            })
-            .child(components::status_footer(status))
-            .child(layout::scroll_body(
-                "editor-body",
-                layout::wide_column().child(body),
-            ))
+            .child(editor_body)
             .when_some(modal, |s, modal| s.child(modal))
     }
 }
@@ -1416,6 +1713,65 @@ fn nonempty(value: String) -> Option<String> {
         None
     } else {
         Some(value)
+    }
+}
+
+fn preview_line_ranges(content: &str) -> Vec<Range<usize>> {
+    let estimated_lines = (content.len() / 48).clamp(1, 16_384);
+    let mut ranges = Vec::with_capacity(estimated_lines);
+    let mut start = 0usize;
+    for (index, byte) in content.bytes().enumerate() {
+        if byte == b'\n' {
+            ranges.push(start..index);
+            start = index + 1;
+        }
+    }
+    ranges.push(start..content.len());
+    ranges
+}
+
+fn preview_visible_rows(
+    line_count: usize,
+    regions: &[FoldRegion],
+    collapsed: &HashSet<usize>,
+) -> Vec<usize> {
+    if line_count == 0 {
+        return Vec::new();
+    }
+
+    // Difference marks make nested/overlapping folds linear in the document
+    // size instead of touching every hidden line once per collapsed region.
+    let mut hidden_delta = vec![0i32; line_count + 1];
+    for region in regions {
+        if !collapsed.contains(&region.header) {
+            continue;
+        }
+        let start = (region.header + 1).min(line_count);
+        let end = region.last.saturating_add(1).min(line_count);
+        if start < end {
+            hidden_delta[start] += 1;
+            hidden_delta[end] -= 1;
+        }
+    }
+
+    let mut depth = 0i32;
+    let mut rows = Vec::with_capacity(line_count);
+    for (line, delta) in hidden_delta.into_iter().take(line_count).enumerate() {
+        depth += delta;
+        if depth == 0 {
+            rows.push(line);
+        }
+    }
+    rows
+}
+
+fn format_preview_bytes(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 
@@ -1448,5 +1804,55 @@ fn format_usage_result(result: &UsageResult) -> String {
         "余额查询成功，但没有返回额度数据".to_string()
     } else {
         parts
+    }
+}
+
+impl crate::notifications::ToastSource for ProviderEditor {
+    fn take_toast(&mut self) -> Option<SharedString> {
+        self.error.take().or_else(|| self.status.take())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{preview_line_ranges, preview_visible_rows};
+    use crate::fold::FoldRegion;
+    use std::collections::HashSet;
+
+    #[test]
+    fn preview_line_index_preserves_empty_and_trailing_lines() {
+        let content = "first\n\nlast\n";
+        let ranges = preview_line_ranges(content);
+        let lines = ranges
+            .iter()
+            .map(|range| &content[range.clone()])
+            .collect::<Vec<_>>();
+        assert_eq!(lines, vec!["first", "", "last", ""]);
+    }
+
+    #[test]
+    fn preview_line_index_handles_a_hundred_thousand_lines() {
+        let content = "key = \"value\"\n".repeat(100_000);
+        let ranges = preview_line_ranges(&content);
+        assert_eq!(ranges.len(), 100_001);
+        assert_eq!(&content[ranges[99_999].clone()], "key = \"value\"");
+        assert_eq!(&content[ranges[100_000].clone()], "");
+    }
+
+    #[test]
+    fn preview_visible_rows_handles_nested_collapsed_regions() {
+        let regions = vec![
+            FoldRegion { header: 0, last: 8 },
+            FoldRegion { header: 2, last: 5 },
+            FoldRegion {
+                header: 10,
+                last: 12,
+            },
+        ];
+        let collapsed = HashSet::from([0, 2, 10]);
+        assert_eq!(
+            preview_visible_rows(14, &regions, &collapsed),
+            vec![0, 9, 10, 13]
+        );
     }
 }

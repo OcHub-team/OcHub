@@ -103,7 +103,7 @@ async fn channel_delete(
 }
 
 async fn channels_probe(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
-    s.app.gateway.probe_now().await;
+    s.app.gateway.probe_now().await?;
     to_value(s.app.gateway.health_snapshot().await)
 }
 

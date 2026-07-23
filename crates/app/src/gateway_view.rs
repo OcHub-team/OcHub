@@ -1,13 +1,17 @@
 //! 中转网关面板：网关启停与配置、上游渠道管理（方言/模型匹配/权重/优先级/健康）、
 //! 本地 API key 管理、以及“一键配置”把各应用指向本地网关。
 //!
-//! 后端调用模式与 `proxy_view` 一致：`Arc<AppState>` clone 进 `cx.spawn`，
+//! 后端调用通过 `Arc<AppState>` clone 进 `cx.spawn`，
 //! await 后经 weak handle 更新视图并 `cx.notify()`。
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use gpui::{div, prelude::*, ClipboardItem, Context, Entity, FontWeight, SharedString, Window};
+use gpui::{
+    div, prelude::*, px, ClipboardItem, Context, Entity, Focusable, FontWeight, ListAlignment,
+    ListState, SharedString, Window,
+};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
     ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey,
@@ -19,6 +23,21 @@ use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
+
+/// 虚拟化页面 body 中由 [`GatewayView::render_block`] 渲染的顶层区块数量
+/// （状态控制台、网关设置、开关行、渠道区、本地 keys、一键配置）。
+const GATEWAY_BLOCK_COUNT: usize = 6;
+
+/// 当前占用网关控制通道的异步操作。
+///
+/// 记录具体操作而不是单一 `busy` 布尔值，方便按钮准确表达启动、停止与探测状态。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GatewayOperation {
+    Starting,
+    Stopping,
+    Probing,
+    Applying,
+}
 
 /// 渠道编辑表单（新建与编辑共用）。
 struct ChannelEditor {
@@ -57,10 +76,40 @@ pub struct GatewayView {
     /// 待确认的删除目标；`Some` 时展示确认模态。
     confirm_delete: Option<ConfirmTarget>,
     status: Option<SharedString>,
-    busy: bool,
+    start_failed: bool,
+    operation: Option<GatewayOperation>,
+    /// Drives the virtualized page body (one item per top-level block).
+    list_state: ListState,
 }
 
 impl GatewayView {
+    pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_delete.is_some() {
+            window.play_system_bell();
+        } else if self.editor.is_some() {
+            self.save_editor(cx);
+        } else if self.port_input.read(cx).focus_handle(cx).is_focused(window)
+            || self
+                .health_interval_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        {
+            self.save_config(cx);
+        } else {
+            window.play_system_bell();
+        }
+    }
+
+    pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_delete.take().is_some() || self.editor.take().is_some() {
+            self.list_state.remeasure();
+            cx.notify();
+        } else {
+            window.play_system_bell();
+        }
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let config = GatewayConfig::default();
         let port_input = cx.new(|cx| text_input(cx, "4180", &config.port.to_string()));
@@ -81,7 +130,9 @@ impl GatewayView {
             editor: None,
             confirm_delete: None,
             status: None,
-            busy: false,
+            start_failed: false,
+            operation: None,
+            list_state: ListState::new(GATEWAY_BLOCK_COUNT, ListAlignment::Top, px(600.)),
         };
         this.reload(cx);
         this
@@ -90,14 +141,26 @@ impl GatewayView {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
-            let status = app.gateway.status().await;
-            let health = app.gateway.health_snapshot().await;
             let config = app.db.get_gateway_config();
+            let mut gateway_status = app.gateway.status().await;
+            // The app and its background service start concurrently. Give a
+            // configured autostart one short chance to settle so the first
+            // paint does not incorrectly remain on "未运行".
+            if config.as_ref().is_ok_and(|config| config.enabled) && !gateway_status.running {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                gateway_status = app.gateway.status().await;
+            }
+            let health = app.gateway.health_snapshot().await;
             let channels = app.db.get_gateway_channels();
             let keys = app.db.get_gateway_keys();
             this.update(cx, |this, cx| {
-                this.running = status.running;
-                this.base_url = status.base_url;
+                this.running = gateway_status.running;
+                this.base_url = gateway_status.base_url;
+                if gateway_status.running {
+                    this.start_failed = false;
+                }
                 this.health = health;
                 if let Ok(config) = config {
                     set_input(&this.port_input, config.port.to_string(), cx);
@@ -114,6 +177,7 @@ impl GatewayView {
                 if let Ok(keys) = keys {
                     this.keys = keys;
                 }
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
@@ -124,19 +188,39 @@ impl GatewayView {
     // -- 生命周期 -----------------------------------------------------------
 
     fn do_start(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.operation.is_some() {
             return;
         }
-        self.busy = true;
-        self.save_config_silent(cx);
+        let config = match self.config_from_inputs(cx) {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = Some(SharedString::from(err));
+                self.list_state.remeasure();
+                cx.notify();
+                return;
+            }
+        };
+        if let Err(err) = self.app.db.set_gateway_config(&config) {
+            self.status = Some(SharedString::from(format!("保存失败: {err}")));
+            self.list_state.remeasure();
+            cx.notify();
+            return;
+        }
+        self.config = config;
+        self.start_failed = false;
+        self.operation = Some(GatewayOperation::Starting);
+        self.status = Some(SharedString::from("正在后台启动网关..."));
+        self.list_state.remeasure();
+        cx.notify();
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let result = app.gateway.start().await;
             this.update(cx, |this, cx| {
-                this.busy = false;
+                this.operation = None;
                 match result {
                     Ok(status) => {
                         this.running = true;
+                        this.start_failed = false;
                         this.base_url = status.base_url.clone();
                         this.status = Some(SharedString::from(format!(
                             "网关已启动：{}",
@@ -144,9 +228,11 @@ impl GatewayView {
                         )));
                     }
                     Err(err) => {
+                        this.start_failed = true;
                         this.status = Some(SharedString::from(format!("启动失败: {err}")));
                     }
                 }
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
@@ -155,15 +241,18 @@ impl GatewayView {
     }
 
     fn do_stop(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.operation.is_some() {
             return;
         }
-        self.busy = true;
+        self.operation = Some(GatewayOperation::Stopping);
+        self.status = Some(SharedString::from("正在停止网关..."));
+        self.list_state.remeasure();
+        cx.notify();
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let result = app.gateway.stop().await;
             this.update(cx, |this, cx| {
-                this.busy = false;
+                this.operation = None;
                 match result {
                     Ok(()) => {
                         this.running = false;
@@ -172,6 +261,7 @@ impl GatewayView {
                     }
                     Err(err) => this.status = Some(SharedString::from(format!("停止失败: {err}"))),
                 }
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
@@ -199,13 +289,6 @@ impl GatewayView {
         })
     }
 
-    fn save_config_silent(&mut self, cx: &mut Context<Self>) {
-        if let Ok(config) = self.config_from_inputs(cx) {
-            let _ = self.app.db.set_gateway_config(&config);
-            self.config = config;
-        }
-    }
-
     fn save_config(&mut self, cx: &mut Context<Self>) {
         match self.config_from_inputs(cx) {
             Ok(config) => match self.app.db.set_gateway_config(&config) {
@@ -224,12 +307,84 @@ impl GatewayView {
             },
             Err(err) => self.status = Some(SharedString::from(err)),
         }
+        self.list_state.remeasure();
         cx.notify();
     }
 
     fn toggle_autostart(&mut self, cx: &mut Context<Self>) {
-        self.config.enabled = !self.config.enabled;
-        self.save_config(cx);
+        if self.operation.is_some() {
+            return;
+        }
+        let enabled = !self.config.enabled;
+        let mut config = match self.config_from_inputs(cx) {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = Some(SharedString::from(err));
+                self.list_state.remeasure();
+                cx.notify();
+                return;
+            }
+        };
+        config.enabled = enabled;
+        if let Err(err) = self.app.db.set_gateway_config(&config) {
+            self.status = Some(SharedString::from(format!("保存失败: {err}")));
+            self.list_state.remeasure();
+            cx.notify();
+            return;
+        }
+        self.config = config;
+
+        if !enabled {
+            self.status = Some(SharedString::from(if self.running {
+                "已关闭自动启动；当前网关继续在后台运行"
+            } else {
+                "已关闭自动启动"
+            }));
+            let app = self.app.clone();
+            cx.spawn(async move |_this, _cx| {
+                if let Err(err) = app.gateway.reload_config().await {
+                    log::warn!("failed to reload gateway config: {err}");
+                }
+            })
+            .detach();
+            self.list_state.remeasure();
+            cx.notify();
+            return;
+        }
+
+        self.start_failed = false;
+        self.operation = Some(GatewayOperation::Starting);
+        self.status = Some(SharedString::from("已开启自动启动，正在后台启动网关..."));
+        self.list_state.remeasure();
+        cx.notify();
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = app.gateway.start().await;
+            this.update(cx, |this, cx| {
+                this.operation = None;
+                match result {
+                    Ok(status) => {
+                        this.running = true;
+                        this.start_failed = false;
+                        this.base_url = status.base_url.clone();
+                        this.status = Some(SharedString::from(format!(
+                            "自动启动已开启，网关正在后台运行：{}",
+                            status.base_url
+                        )));
+                    }
+                    Err(err) => {
+                        this.start_failed = true;
+                        this.status = Some(SharedString::from(format!(
+                            "自动启动已保存，但网关启动失败: {err}"
+                        )));
+                    }
+                }
+                this.list_state.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn toggle_require_key(&mut self, cx: &mut Context<Self>) {
@@ -291,6 +446,7 @@ impl GatewayView {
             weight: cx.new(|cx| text_input(cx, "1", &weight)),
             enabled,
         });
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -302,6 +458,7 @@ impl GatewayView {
         let base_url = input_value(&editor.base_url, cx);
         if name.is_empty() || base_url.is_empty() {
             self.status = Some(SharedString::from("渠道名称与 Base URL 不能为空"));
+            self.list_state.remeasure();
             cx.notify();
             return;
         }
@@ -351,6 +508,7 @@ impl GatewayView {
             }
             Err(err) => self.status = Some(SharedString::from(format!("保存渠道失败: {err}"))),
         }
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -362,6 +520,7 @@ impl GatewayView {
             }
             Err(err) => self.status = Some(SharedString::from(format!("删除渠道失败: {err}"))),
         }
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -376,20 +535,25 @@ impl GatewayView {
     }
 
     fn probe_now(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.operation.is_some() {
             return;
         }
-        self.busy = true;
+        self.operation = Some(GatewayOperation::Probing);
         self.status = Some(SharedString::from("正在探测渠道健康..."));
+        self.list_state.remeasure();
         cx.notify();
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
-            app.gateway.probe_now().await;
+            let result = app.gateway.probe_now().await;
             let health = app.gateway.health_snapshot().await;
             this.update(cx, |this, cx| {
-                this.busy = false;
+                this.operation = None;
                 this.health = health;
-                this.status = Some(SharedString::from("健康探测完成"));
+                this.status = Some(SharedString::from(match result {
+                    Ok(()) => "健康探测完成".to_string(),
+                    Err(err) => format!("健康探测失败: {err}"),
+                }));
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
@@ -403,6 +567,7 @@ impl GatewayView {
         let name = input_value(&self.new_key_name, cx);
         if name.is_empty() {
             self.status = Some(SharedString::from("请先输入 key 名称"));
+            self.list_state.remeasure();
             cx.notify();
             return;
         }
@@ -421,6 +586,7 @@ impl GatewayView {
             }
             Err(err) => self.status = Some(SharedString::from(format!("创建 key 失败: {err}"))),
         }
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -432,6 +598,7 @@ impl GatewayView {
             }
             Err(err) => self.status = Some(SharedString::from(format!("删除 key 失败: {err}"))),
         }
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -444,7 +611,7 @@ impl GatewayView {
     // -- 一键配置 -----------------------------------------------------------
 
     fn apply_to_app(&mut self, app_type: AppType, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.operation.is_some() {
             return;
         }
         if !self.running {
@@ -452,7 +619,7 @@ impl GatewayView {
             cx.notify();
             return;
         }
-        self.busy = true;
+        self.operation = Some(GatewayOperation::Applying);
         self.status = Some(SharedString::from(format!(
             "正在配置 {}...",
             crate::app_meta::label(app_type)
@@ -468,7 +635,7 @@ impl GatewayView {
                     .await
             };
             this.update(cx, |this, cx| {
-                this.busy = false;
+                this.operation = None;
                 this.status = Some(SharedString::from(match result {
                     Ok(r) => format!(
                         "{} 已指向本地网关（key: {}）",
@@ -478,6 +645,7 @@ impl GatewayView {
                     Err(err) => format!("一键配置失败: {err}"),
                 }));
                 this.reload(cx);
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
@@ -646,6 +814,7 @@ impl GatewayView {
                     _ => Dialect::Messages,
                 };
             }
+            this.list_state.remeasure();
             cx.notify();
         });
         components::card()
@@ -755,6 +924,7 @@ impl GatewayView {
                         .on_click(cx.listener(
                             |this, _event, _window, cx| {
                                 this.editor = None;
+                                this.list_state.remeasure();
                                 cx.notify();
                             },
                         )),
@@ -854,32 +1024,430 @@ impl GatewayView {
             })
             .collect()
     }
+
+    /// Render one top-level page block as a virtualized list item. Only the
+    /// on-screen blocks (plus overdraw) are built each frame — see
+    /// [`crate::layout::wide_virtual_body`]. Each item carries its own bottom
+    /// spacing (the list draws no inter-item gap).
+    fn render_block(
+        &mut self,
+        ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let block = div().w_full().pb_4();
+        match ix {
+            // 状态控制台
+            0 => {
+                let running = self.running;
+                let channel_count = self.channels.len();
+                let enabled_count = self.channels.iter().filter(|c| c.enabled).count();
+                let key_count = self.keys.len();
+                let operation = self.operation;
+                let start_failed = self.start_failed;
+                let state_label = match operation {
+                    Some(GatewayOperation::Starting) => "启动中",
+                    Some(GatewayOperation::Stopping) => "停止中",
+                    _ if running => "运行中",
+                    _ => "未运行",
+                };
+                let state_tone = match operation {
+                    Some(GatewayOperation::Starting | GatewayOperation::Stopping) => {
+                        theme::yellow()
+                    }
+                    _ if running => theme::green(),
+                    _ => theme::muted(),
+                };
+                let state_detail = match operation {
+                    Some(GatewayOperation::Starting) => {
+                        format!("正在绑定本地监听端口 {}", self.config.port)
+                    }
+                    Some(GatewayOperation::Stopping) => "正在关闭本地监听与连接".to_string(),
+                    _ if running => self.base_url.clone(),
+                    _ if start_failed => "上次启动失败，请重试".to_string(),
+                    _ => format!("监听端口 {}", self.config.port),
+                };
+                let action_label = match operation {
+                    Some(GatewayOperation::Starting) => "正在启动…",
+                    Some(GatewayOperation::Stopping) => "正在停止…",
+                    _ if running => "停止网关",
+                    _ if start_failed => "重新启动",
+                    _ => "启动网关",
+                };
+                let action_tone = if running
+                    || matches!(operation, Some(GatewayOperation::Stopping))
+                {
+                    ButtonTone::Danger
+                } else {
+                    ButtonTone::Primary
+                };
+                let lifecycle_button = components::button(
+                    "gw-lifecycle",
+                    action_label,
+                    action_tone,
+                    ButtonSize::Md,
+                )
+                .min_w(px(112.))
+                .text_center();
+                let lifecycle_button = if operation.is_none() {
+                    lifecycle_button.on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            if running {
+                                this.do_stop(cx);
+                            } else {
+                                this.do_start(cx);
+                            }
+                        },
+                    ))
+                } else {
+                    lifecycle_button.cursor_not_allowed().opacity(0.58)
+                };
+                block
+                    .child(
+                        div()
+                            .grid()
+                            .grid_cols(4)
+                            .gap_3()
+                            .w_full()
+                            .child(
+                                components::card()
+                                    .col_span(2)
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_4()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .min_w(px(150.))
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_row()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(components::status_dot(state_tone))
+                                                    .child(
+                                                        div()
+                                                            .text_color(theme::muted())
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .child("运行状态"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(theme::text())
+                                                    .text_xl()
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .child(state_label),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(theme::subtext())
+                                                    .text_xs()
+                                                    .child(SharedString::from(state_detail)),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_none()
+                                            .child(lifecycle_button),
+                                    ),
+                            )
+                            .child(components::stat_tile(
+                                Some(IconName::Cloud),
+                                theme::accent(),
+                                "渠道",
+                                format!("{enabled_count}/{channel_count}"),
+                                "上游渠道",
+                            ))
+                            .child(components::stat_tile(
+                                Some(IconName::Key),
+                                theme::teal(),
+                                "API keys",
+                                key_count.to_string(),
+                                "本地推理密钥",
+                            )),
+                    )
+                    .into_any_element()
+            }
+            // 网关设置
+            1 => block
+                .child(
+                    components::card()
+                        .gap_3()
+                        .child(card_title(
+                            "网关设置",
+                            "本地 relay 的监听端口与上游健康探测间隔；端口变更需重启网关生效。",
+                        ))
+                        .child(
+                            div()
+                                .grid()
+                                .grid_cols(2)
+                                .gap_3()
+                                .child(components::field(
+                                    "监听端口",
+                                    false,
+                                    None,
+                                    self.port_input.clone(),
+                                ))
+                                .child(components::field(
+                                    "健康探测间隔（秒，0 关闭）",
+                                    false,
+                                    None,
+                                    self.health_interval_input.clone(),
+                                )),
+                        )
+                        .child(
+                            div().flex().flex_row().justify_end().child(
+                                components::button(
+                                    "gw-save-config",
+                                    "保存设置",
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.save_config(cx);
+                                })),
+                            ),
+                        ),
+                )
+                .into_any_element(),
+            // 开关行
+            2 => block
+                .child(layout::group(vec![
+                    components::field_row(
+                        "随应用后台启动",
+                        "OCHUB 启动后在应用内静默开启网关，不会重启应用或打开终端。",
+                        layout::toggle(self.config.enabled),
+                    )
+                    .id("gw-autostart")
+                    .role(gpui::Role::Switch)
+                    .aria_label("随应用后台启动")
+                    .aria_toggled(if self.config.enabled {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::inset()))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.toggle_autostart(cx);
+                    }))
+                    .into_any_element(),
+                    components::field_row(
+                        "要求 API key",
+                        "推理端点要求本地 key（Bearer / x-api-key），用量按 key 归因。",
+                        layout::toggle(self.config.require_key),
+                    )
+                    .id("gw-require-key")
+                    .role(gpui::Role::Switch)
+                    .aria_label("要求 API key")
+                    .aria_toggled(if self.config.require_key {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::inset()))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.toggle_require_key(cx);
+                    }))
+                    .into_any_element(),
+                ]))
+                .into_any_element(),
+            // 渠道：标题行 + 编辑器 + 渠道列表 + 空态
+            3 => {
+                let channel_count = self.channels.len();
+                let operation = self.operation;
+                let probe_label = if operation == Some(GatewayOperation::Probing) {
+                    "正在探测…"
+                } else {
+                    "探测健康"
+                };
+                let probe_button = components::icon_button_tone(
+                    "gw-probe",
+                    probe_label,
+                    IconName::Refresh,
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                );
+                let probe_button = if operation.is_none() {
+                    probe_button
+                        .on_click(cx.listener(|this, _event, _window, cx| this.probe_now(cx)))
+                } else {
+                    probe_button.cursor_not_allowed().opacity(0.58)
+                };
+                let channel_rows: Vec<gpui::AnyElement> = self
+                    .channels
+                    .clone()
+                    .iter()
+                    .map(|c| self.render_channel_row(c, cx))
+                    .collect();
+                let editor_el = self.editor.take().map(|editor| {
+                    let el = self.render_editor(&editor, cx);
+                    self.editor = Some(editor);
+                    el
+                });
+                block
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .w_full()
+                            .child(card_title(
+                                "上游渠道",
+                                "按模型匹配、优先级与权重把请求路由到上游方言端点。",
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .when(channel_count > 0, |actions| {
+                                        actions.child(probe_button)
+                                    })
+                                    .child(
+                                        components::button(
+                                            "gw-ch-add",
+                                            "新建渠道",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(
+                                            |this, _event, _window, cx| {
+                                                this.open_editor(None, cx);
+                                            },
+                                        )),
+                                    ),
+                            ),
+                    )
+                    .when_some(editor_el, |s, el| s.child(el))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .w_full()
+                            .children(channel_rows),
+                    )
+                    .when(channel_count == 0, |s| {
+                        s.child(components::empty_state(
+                            IconName::Cloud,
+                            "尚无渠道",
+                            "新建渠道并选择其上游方言（messages / chat / responses）。",
+                            Some(
+                                components::button(
+                                    "gw-ch-add-empty",
+                                    "新建渠道",
+                                    ButtonTone::Primary,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.open_editor(None, cx);
+                                }))
+                                .into_any_element(),
+                            ),
+                        ))
+                    })
+                    .into_any_element()
+            }
+            // 本地 API keys
+            4 => {
+                let key_rows: Vec<gpui::AnyElement> = self
+                    .keys
+                    .clone()
+                    .iter()
+                    .map(|k| self.render_key_row(k, cx))
+                    .collect();
+                block
+                    .child(
+                        components::card()
+                            .gap_3()
+                            .child(card_title(
+                                "本地 API keys",
+                                "推理端点的本地密钥（Bearer / x-api-key），用量按 key 归因。",
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_3()
+                                    .child(div().flex_1().child(self.new_key_name.clone()))
+                                    .child(
+                                        components::button(
+                                            "gw-key-create",
+                                            "创建 key",
+                                            ButtonTone::Primary,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(cx.listener(
+                                            |this, _event, _window, cx| {
+                                                this.create_key(cx);
+                                            },
+                                        )),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .w_full()
+                                    .children(key_rows),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            // 一键配置
+            5 => block
+                .child(
+                    components::card()
+                        .gap_3()
+                        .child(card_title(
+                            "一键配置应用",
+                            "为应用写入指向本地网关的供应商条目并切换；每个应用使用独立 key，用量单独归因。",
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap_3()
+                                .children(self.one_click_buttons(cx))
+                                .child(
+                                    components::button(
+                                        "gw-generic-info",
+                                        "复制通用客户端信息",
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.copy_generic_info(cx);
+                                    })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+            _ => gpui::Empty.into_any_element(),
+        }
+    }
 }
 
 impl Render for GatewayView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let running = self.running;
-        let channel_count = self.channels.len();
-        let enabled_count = self.channels.iter().filter(|c| c.enabled).count();
-        let key_count = self.keys.len();
-        let channel_rows: Vec<gpui::AnyElement> = self
-            .channels
-            .clone()
-            .iter()
-            .map(|c| self.render_channel_row(c, cx))
-            .collect();
-        let key_rows: Vec<gpui::AnyElement> = self
-            .keys
-            .clone()
-            .iter()
-            .map(|k| self.render_key_row(k, cx))
-            .collect();
-        let editor_el = self.editor.take().map(|editor| {
-            let el = self.render_editor(&editor, cx);
-            self.editor = Some(editor);
-            el
-        });
-
         layout::page()
             .relative()
             .child(
@@ -900,288 +1468,10 @@ impl Render for GatewayView {
                     })),
                 ),
             )
-            .child(components::status_footer(self.status.clone()))
-            .child(
-                layout::scroll_body(
-                    "gateway-body",
-                    layout::wide_column()
-                        .gap_4()
-                        // 状态仪表盘
-                        .child(
-                            div()
-                                .grid()
-                                .grid_cols(3)
-                                .gap_3()
-                                .w_full()
-                                .child(components::stat_tile(
-                                    None,
-                                    if running { theme::green() } else { theme::muted() },
-                                    "运行状态",
-                                    if running { "运行中" } else { "未运行" },
-                                    if running {
-                                        self.base_url.clone()
-                                    } else {
-                                        "网关未启动".to_string()
-                                    },
-                                ))
-                                .child(components::stat_tile(
-                                    Some(IconName::Cloud),
-                                    theme::accent(),
-                                    "渠道",
-                                    format!("{enabled_count}/{channel_count}"),
-                                    "上游渠道",
-                                ))
-                                .child(components::stat_tile(
-                                    Some(IconName::Key),
-                                    theme::teal(),
-                                    "API keys",
-                                    key_count.to_string(),
-                                    "本地推理密钥",
-                                )),
-                        )
-                        // 启停与探测
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .flex_wrap()
-                                .gap_3()
-                                .child(
-                                    components::button(
-                                        "gw-start",
-                                        "启动网关",
-                                        ButtonTone::Primary,
-                                        ButtonSize::Md,
-                                    )
-                                    .on_click(
-                                        cx.listener(|this, _event, _window, cx| this.do_start(cx)),
-                                    ),
-                                )
-                                .child(
-                                    components::button(
-                                        "gw-stop",
-                                        "停止",
-                                        ButtonTone::Neutral,
-                                        ButtonSize::Md,
-                                    )
-                                    .on_click(
-                                        cx.listener(|this, _event, _window, cx| this.do_stop(cx)),
-                                    ),
-                                )
-                                .child(
-                                    components::button(
-                                        "gw-probe",
-                                        "探测渠道健康",
-                                        ButtonTone::Neutral,
-                                        ButtonSize::Md,
-                                    )
-                                    .on_click(
-                                        cx.listener(|this, _event, _window, cx| this.probe_now(cx)),
-                                    ),
-                                ),
-                        )
-                        // 网关设置
-                        .child(
-                            components::card()
-                                .gap_3()
-                                .child(card_title(
-                                    "网关设置",
-                                    "本地 relay 的监听端口与上游健康探测间隔；端口变更需重启网关生效。",
-                                ))
-                                .child(
-                                    div()
-                                        .grid()
-                                        .grid_cols(2)
-                                        .gap_3()
-                                        .child(components::field(
-                                            "监听端口",
-                                            false,
-                                            None,
-                                            self.port_input.clone(),
-                                        ))
-                                        .child(components::field(
-                                            "健康探测间隔（秒，0 关闭）",
-                                            false,
-                                            None,
-                                            self.health_interval_input.clone(),
-                                        )),
-                                )
-                                .child(
-                                    div().flex().flex_row().justify_end().child(
-                                        components::button(
-                                            "gw-save-config",
-                                            "保存设置",
-                                            ButtonTone::Neutral,
-                                            ButtonSize::Sm,
-                                        )
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
-                                            this.save_config(cx);
-                                        })),
-                                    ),
-                                ),
-                        )
-                        // 开关行
-                        .child(layout::group(vec![
-                            components::field_row(
-                                "随应用自动启动",
-                                "启动 RouteDeck 时自动拉起网关（端点地址保持稳定）。",
-                                layout::toggle(self.config.enabled),
-                            )
-                            .id("gw-autostart")
-                            .role(gpui::Role::Switch)
-                            .aria_label("随应用自动启动")
-                            .aria_toggled(if self.config.enabled {
-                                gpui::Toggled::True
-                            } else {
-                                gpui::Toggled::False
-                            })
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme::inset()))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.toggle_autostart(cx);
-                            }))
-                            .into_any_element(),
-                            components::field_row(
-                                "要求 API key",
-                                "推理端点要求本地 key（Bearer / x-api-key），用量按 key 归因。",
-                                layout::toggle(self.config.require_key),
-                            )
-                            .id("gw-require-key")
-                            .role(gpui::Role::Switch)
-                            .aria_label("要求 API key")
-                            .aria_toggled(if self.config.require_key {
-                                gpui::Toggled::True
-                            } else {
-                                gpui::Toggled::False
-                            })
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme::inset()))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.toggle_require_key(cx);
-                            }))
-                            .into_any_element(),
-                        ]))
-                        // 渠道
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .justify_between()
-                                .w_full()
-                                .child(card_title(
-                                    "上游渠道",
-                                    "按模型匹配、优先级与权重把请求路由到上游方言端点。",
-                                ))
-                                .child(
-                                    components::button(
-                                        "gw-ch-add",
-                                        "新建渠道",
-                                        ButtonTone::Primary,
-                                        ButtonSize::Sm,
-                                    )
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.open_editor(None, cx);
-                                    })),
-                                ),
-                        )
-                        .when_some(editor_el, |s, el| s.child(el))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .w_full()
-                                .children(channel_rows),
-                        )
-                        .when(channel_count == 0, |s| {
-                            s.child(components::empty_state(
-                                IconName::Cloud,
-                                "尚无渠道",
-                                "新建渠道并选择其上游方言（messages / chat / responses）。",
-                                Some(
-                                    components::button(
-                                        "gw-ch-add-empty",
-                                        "新建渠道",
-                                        ButtonTone::Primary,
-                                        ButtonSize::Sm,
-                                    )
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.open_editor(None, cx);
-                                    }))
-                                    .into_any_element(),
-                                ),
-                            ))
-                        })
-                        // keys
-                        .child(
-                            components::card()
-                                .gap_3()
-                                .child(card_title(
-                                    "本地 API keys",
-                                    "推理端点的本地密钥（Bearer / x-api-key），用量按 key 归因。",
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .gap_3()
-                                        .child(div().flex_1().child(self.new_key_name.clone()))
-                                        .child(
-                                            components::button(
-                                                "gw-key-create",
-                                                "创建 key",
-                                                ButtonTone::Primary,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.create_key(cx);
-                                                },
-                                            )),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_2()
-                                        .w_full()
-                                        .children(key_rows),
-                                ),
-                        )
-                        // 一键配置
-                        .child(
-                            components::card()
-                                .gap_3()
-                                .child(card_title(
-                                    "一键配置应用",
-                                    "为应用写入指向本地网关的供应商条目并切换；每个应用使用独立 key，用量单独归因。",
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .flex_wrap()
-                                        .gap_3()
-                                        .children(self.one_click_buttons(cx))
-                                        .child(
-                                            components::button(
-                                                "gw-generic-info",
-                                                "复制通用客户端信息",
-                                                ButtonTone::Neutral,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(cx.listener(
-                                                |this, _event, _window, cx| {
-                                                    this.copy_generic_info(cx);
-                                                },
-                                            )),
-                                        ),
-                                ),
-                        ),
-                ),
-            )
+            .child(layout::wide_virtual_body(gpui::list(
+                self.list_state.clone(),
+                cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
+            )))
             .when_some(self.confirm_delete.clone(), |root, target| {
                 let (title, message, delete_id, is_channel) = match &target {
                     ConfirmTarget::Channel(id, name) => (
@@ -1280,3 +1570,5 @@ fn set_input(
 ) {
     input.update(cx, |input, cx| input.set_content(value, cx));
 }
+
+crate::notifications::impl_status_toasts!(GatewayView);

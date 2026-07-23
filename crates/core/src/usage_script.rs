@@ -3,7 +3,7 @@
 //! Ported faithfully from cc-switch `src/usage_script.rs`. Runs a provider's
 //! usage-query script (an rquickjs-evaluated JS object exposing a `request`
 //! config and an `extractor` function), performs the HTTP request via the
-//! shared proxy-aware client, and parses the result into a JSON `Value` that
+//! shared HTTP client, and parses the result into a JSON `Value` that
 //! the caller deserializes into `crate::model::UsageData` / `UsageResult`.
 
 use rquickjs::{Context, Function, Runtime};
@@ -229,8 +229,8 @@ struct RequestConfig {
 
 /// 发送 HTTP 请求
 async fn send_http_request(config: &RequestConfig, timeout_secs: u64) -> Result<String, AppError> {
-    // 使用全局 HTTP 客户端（已包含代理配置）
-    let client = crate::proxy::http_client::get();
+    // 使用全局 HTTP 客户端以复用连接池。
+    let client = crate::http_client::get();
     // 约束超时范围，防止异常配置导致长时间阻塞（最小 2 秒，最大 30 秒）
     let request_timeout = std::time::Duration::from_secs(timeout_secs.clamp(2, 30));
 

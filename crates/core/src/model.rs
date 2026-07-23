@@ -37,8 +37,6 @@ pub struct Provider {
     pub icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "iconColor")]
     pub icon_color: Option<String>,
-    #[serde(default, rename = "inFailoverQueue")]
-    pub in_failover_queue: bool,
 }
 
 impl Provider {
@@ -60,7 +58,6 @@ impl Provider {
             meta: None,
             icon: None,
             icon_color: None,
-            in_failover_queue: false,
         }
     }
 
@@ -211,15 +208,7 @@ pub struct AuthBinding {
     pub account_id: Option<String>,
 }
 
-/// Claude Desktop 3P write mode.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ClaudeDesktopMode {
-    Direct,
-    Proxy,
-}
-
-/// Claude Desktop safe model route exposed in proxy mode.
+/// Claude Desktop safe model entry exposed in its 3P profile.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeDesktopModelRoute {
@@ -258,8 +247,6 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub common_config_enabled: Option<bool>,
-    #[serde(rename = "claudeDesktopMode", skip_serializing_if = "Option::is_none")]
-    pub claude_desktop_mode: Option<ClaudeDesktopMode>,
     #[serde(
         default,
         rename = "claudeDesktopModelRoutes",

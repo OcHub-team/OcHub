@@ -1,7 +1,7 @@
 //! HTTP control API mirroring the cc-switch command surface.
 //!
 //! Phase 1 wires the provider CRUD/switch endpoints + device settings + config
-//! status. Further command groups (MCP, prompts, skills, proxy, usage, sync,
+//! status. Further command groups (MCP, skills, gateway, usage, sync,
 //! auth, sessions) are layered on in their respective phases.
 
 use axum::extract::{Path, State};
@@ -9,10 +9,8 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 use ochub_core::apps::claude_desktop;
-use ochub_core::model::{ClaudeDesktopMode, ClaudeDesktopModelRoute, ProviderMeta};
 use ochub_core::services::provider::{self, ProviderService, ProviderSortUpdate};
 use ochub_core::settings::AppSettings;
 use ochub_core::{AppError, AppType, Provider};
@@ -261,12 +259,7 @@ async fn endpoint_last_used(
 }
 
 async fn claude_desktop_status(State(state): State<ServerState>) -> ApiResult<Json<Value>> {
-    let proxy_running = state.app.proxy_service.is_running().await;
-    to_value(claude_desktop::get_status(&state.app.db, proxy_running)?)
-}
-
-async fn claude_desktop_default_routes() -> Json<Value> {
-    Json(json!(claude_desktop::default_proxy_routes()))
+    to_value(claude_desktop::get_status(&state.app.db)?)
 }
 
 async fn claude_desktop_ensure_official(
@@ -294,20 +287,10 @@ async fn claude_desktop_import_from_claude(
             continue;
         }
 
-        let mut desktop_provider = provider.clone();
-        desktop_provider.in_failover_queue = false;
-        let meta = desktop_provider
-            .meta
-            .get_or_insert_with(ProviderMeta::default);
-
-        if claude_desktop::is_compatible_direct_provider(provider)
-            && claude_provider_models_are_claude_safe(provider)
+        let desktop_provider = provider.clone();
+        if !claude_desktop::is_compatible_direct_provider(provider)
+            || !claude_provider_models_are_claude_safe(provider)
         {
-            meta.claude_desktop_mode = Some(ClaudeDesktopMode::Direct);
-        } else if let Some(routes) = suggested_claude_desktop_routes(provider) {
-            meta.claude_desktop_mode = Some(ClaudeDesktopMode::Proxy);
-            meta.claude_desktop_model_routes = routes;
-        } else {
             continue;
         }
 
@@ -457,122 +440,6 @@ fn claude_provider_models_are_claude_safe(provider: &Provider) -> bool {
     .all(claude_desktop::is_claude_safe_model_id)
 }
 
-fn suggested_claude_desktop_routes(
-    provider: &Provider,
-) -> Option<HashMap<String, ClaudeDesktopModelRoute>> {
-    let env = provider
-        .settings_config
-        .get("env")
-        .and_then(|value| value.as_object())?;
-    let mut routes = HashMap::new();
-    let supports_1m_default = !matches!(
-        provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.provider_type.as_deref()),
-        Some("github_copilot") | Some("codex_oauth")
-    );
-
-    fn add_route(
-        routes: &mut HashMap<String, ClaudeDesktopModelRoute>,
-        env: &serde_json::Map<String, Value>,
-        route_key: &str,
-        env_key: &str,
-        supports_1m_default: bool,
-    ) {
-        let Some(raw_model) = env
-            .get(env_key)
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return;
-        };
-
-        let marker = claude_desktop::ONE_M_CONTEXT_MARKER.as_bytes();
-        let raw_bytes = raw_model.as_bytes();
-        let has_1m_marker = raw_bytes.len() >= marker.len()
-            && raw_bytes[raw_bytes.len() - marker.len()..].eq_ignore_ascii_case(marker);
-        let stripped_model = if has_1m_marker {
-            raw_model[..raw_model.len() - marker.len()].trim_end()
-        } else {
-            raw_model
-        };
-        if stripped_model.is_empty() {
-            return;
-        }
-
-        let effective_supports_1m = supports_1m_default || has_1m_marker;
-        let explicit_label_override = env
-            .get(format!("{env_key}_NAME").as_str())
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let label_override = explicit_label_override.clone().or_else(|| {
-            (!claude_desktop::is_claude_safe_model_id(stripped_model))
-                .then(|| stripped_model.to_string())
-        });
-
-        let should_overwrite = |existing: Option<&str>| {
-            existing.is_none()
-                || explicit_label_override.is_some()
-                || existing == Some(stripped_model)
-        };
-
-        let merge_into = |existing: &mut ClaudeDesktopModelRoute| {
-            let merged = existing.supports_1m.unwrap_or(false) || effective_supports_1m;
-            existing.supports_1m = Some(merged);
-            if should_overwrite(existing.label_override.as_deref()) {
-                existing.label_override = label_override.clone();
-            }
-        };
-
-        if let Some(existing) = routes
-            .values_mut()
-            .find(|existing| existing.model == stripped_model)
-        {
-            merge_into(existing);
-            return;
-        }
-
-        routes
-            .entry(route_key.to_string())
-            .and_modify(merge_into)
-            .or_insert_with(|| ClaudeDesktopModelRoute {
-                model: stripped_model.to_string(),
-                label_override,
-                supports_1m: Some(effective_supports_1m),
-            });
-    }
-
-    for spec in claude_desktop::default_proxy_routes() {
-        add_route(
-            &mut routes,
-            env,
-            spec.route_id,
-            spec.env_key,
-            supports_1m_default,
-        );
-    }
-
-    if routes.is_empty() {
-        let primary_route = claude_desktop::default_proxy_routes()
-            .first()
-            .map(|route| route.route_id)
-            .unwrap_or("sonnet");
-        add_route(
-            &mut routes,
-            env,
-            primary_route,
-            "ANTHROPIC_MODEL",
-            supports_1m_default,
-        );
-    }
-
-    (!routes.is_empty()).then_some(routes)
-}
-
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "OCHUB" }))
 }
@@ -590,10 +457,6 @@ pub fn router() -> Router<ServerState> {
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/config/claude-status", get(claude_config_status))
         .route("/api/claude-desktop/status", get(claude_desktop_status))
-        .route(
-            "/api/claude-desktop/default-routes",
-            get(claude_desktop_default_routes),
-        )
         .route(
             "/api/claude-desktop/import-from-claude",
             post(claude_desktop_import_from_claude),

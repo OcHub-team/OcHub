@@ -1,35 +1,34 @@
 //! The OCHUB root view: an app switcher sidebar plus a main panel that
 //! can show the provider list, a provider editor, the settings panel, or the
-//! proxy panel, all wired to live `ochub-core` data via an in-process `AppState`.
+//! gateway panel, all wired to live `ochub-core` data via an in-process `AppState`.
 
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, App, Context, Entity, FontWeight, MouseButton, SharedString, Window,
+    div, prelude::*, px, App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton,
+    SharedString, Window,
 };
 use ochub_core::services::provider::{self, ProviderService};
 use ochub_core::{AppState, AppType, Provider};
 
 use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
-use crate::auth_view::AuthView;
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::gallery_view::GalleryView;
 use crate::gateway_view::GatewayView;
 use crate::icons::{icon, IconName};
 use crate::layout;
 use crate::mcp_view::McpView;
-use crate::notifications::{NotificationHost, NotificationLevel};
-use crate::prompts_view::PromptsView;
+use crate::notifications::{NotificationHost, NotificationLevel, ToastSource};
 use crate::provider_editor::{EditorEvent, ProviderEditor};
-use crate::proxy_view::ProxyView;
 use crate::sessions_view::SessionsView;
 use crate::settings_view::SettingsView;
 use crate::shell_menu;
+use crate::shortcuts::{Cancel, CloseWindow, Save};
 use crate::skills_view::SkillsView;
 use crate::theme;
+use crate::theme_view::ThemeView;
 use crate::tools_view::ToolsView;
 use crate::usage_view::UsageView;
-use crate::workspace_view::WorkspaceView;
 
 pub(crate) fn notify_open_roots(
     cx: &mut App,
@@ -61,15 +60,12 @@ pub(crate) fn notify_open_roots(
 enum Section {
     Providers,
     Mcp,
-    Prompts,
     Skills,
-    Auth,
     Usage,
     Sessions,
-    Workspace,
     Tools,
+    Themes,
     Settings,
-    Proxy,
     Gateway,
     /// Dev-only component gallery (visible with MS_GALLERY=1).
     Gallery,
@@ -83,15 +79,12 @@ impl Section {
             .as_str()
         {
             "mcp" => Self::Mcp,
-            "prompts" | "prompt" => Self::Prompts,
             "skills" | "skill" => Self::Skills,
-            "auth" | "oauth" | "accounts" => Self::Auth,
             "usage" => Self::Usage,
             "sessions" | "session" => Self::Sessions,
-            "workspace" | "workspaces" => Self::Workspace,
             "tools" | "tool" => Self::Tools,
+            "theme" | "themes" | "appearance" => Self::Themes,
             "settings" | "setting" => Self::Settings,
-            "proxy" => Self::Proxy,
             "gateway" => Self::Gateway,
             "gallery" => Self::Gallery,
             _ => Self::Providers,
@@ -105,44 +98,135 @@ pub struct AppRoot {
     section: Section,
     providers: Vec<Provider>,
     current: String,
-    status: Option<SharedString>,
     notifications: Entity<NotificationHost>,
     /// Active provider editor (add or edit); when `Some`, replaces the list.
     editor: Option<Entity<ProviderEditor>>,
     /// Provider pending deletion confirmation; when `Some`, a modal is shown.
     confirm_delete: Option<Provider>,
     settings_view: Entity<SettingsView>,
-    proxy_view: Entity<ProxyView>,
     gateway_view: Entity<GatewayView>,
     mcp_view: Entity<McpView>,
-    prompts_view: Entity<PromptsView>,
     skills_view: Entity<SkillsView>,
-    auth_view: Entity<AuthView>,
     usage_view: Entity<UsageView>,
     sessions_view: Entity<SessionsView>,
-    workspace_view: Entity<WorkspaceView>,
     tools_view: Entity<ToolsView>,
+    theme_view: Entity<ThemeView>,
     gallery_view: Entity<GalleryView>,
     /// Per-app settings panel (app-scoped toggles + config dir), shown over the
     /// provider list when `showing_app_settings` is set.
     app_settings_view: Entity<AppSettingsView>,
     showing_app_settings: bool,
+    /// Drives the virtualized provider list; row count follows the current
+    /// app's provider set, so it is `reset` whenever the plan length changes.
+    provider_list_state: ListState,
+}
+
+/// Row plan for the virtualized provider list. Rebuilt每帧并被 list 的
+/// processor 捕获，保证一帧内索引与内容一致。`Card` 存 `providers` 的下标。
+#[derive(Clone, Copy)]
+enum ProviderRow {
+    Hero,
+    OthersLabel,
+    EmptyState,
+    OthersEmptyHint,
+    Card(usize),
 }
 
 impl AppRoot {
+    fn save_active(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_delete.is_some() {
+            window.play_system_bell();
+            return;
+        }
+        match self.section {
+            Section::Providers if self.showing_app_settings => {
+                self.app_settings_view
+                    .update(cx, |view, cx| view.shortcut_save(window, cx));
+            }
+            Section::Providers => {
+                if let Some(editor) = &self.editor {
+                    editor.update(cx, |editor, cx| editor.shortcut_save(cx));
+                } else {
+                    window.play_system_bell();
+                }
+            }
+            Section::Gateway => self
+                .gateway_view
+                .update(cx, |view, cx| view.shortcut_save(window, cx)),
+            Section::Mcp => self
+                .mcp_view
+                .update(cx, |view, cx| view.shortcut_save(window, cx)),
+            Section::Tools => self
+                .tools_view
+                .update(cx, |view, cx| view.shortcut_save(window, cx)),
+            Section::Themes => self
+                .theme_view
+                .update(cx, |view, cx| view.shortcut_save(window, cx)),
+            Section::Settings => self
+                .settings_view
+                .update(cx, |view, cx| view.shortcut_save(window, cx)),
+            _ => window.play_system_bell(),
+        }
+    }
+
+    fn cancel_active(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_delete.take().is_some() {
+            cx.notify();
+            return;
+        }
+        match self.section {
+            Section::Providers if self.showing_app_settings => {
+                self.app_settings_view
+                    .update(cx, |view, cx| view.shortcut_cancel(cx));
+            }
+            Section::Providers => {
+                if let Some(editor) = &self.editor {
+                    editor.update(cx, |editor, cx| editor.shortcut_cancel(cx));
+                } else {
+                    window.play_system_bell();
+                }
+            }
+            Section::Gateway => self
+                .gateway_view
+                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
+            Section::Mcp => self
+                .mcp_view
+                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
+            Section::Tools => self
+                .tools_view
+                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
+            Section::Themes => self
+                .theme_view
+                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
+            Section::Settings => self
+                .settings_view
+                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
+            _ => window.play_system_bell(),
+        }
+    }
+
+    fn close_window(&mut self, _: &CloseWindow, _window: &mut Window, _cx: &mut Context<Self>) {
+        // OCHUB owns background gateway state, so keep the single root window
+        // alive. macOS can restore a hidden app from Dock; Windows/Linux keep
+        // an explicit taskbar/dock entry by minimizing instead.
+        #[cfg(target_os = "macos")]
+        _cx.hide();
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        _window.minimize_window();
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        _window.minimize_window();
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
-        let proxy_view = cx.new(|cx| ProxyView::new(app.clone(), cx));
         let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
         let mcp_view = cx.new(|cx| McpView::new(app.clone(), cx));
         let notifications = cx.new(|_| NotificationHost::new());
-        let prompts_view = cx.new(|cx| PromptsView::new(app.clone(), cx));
         let skills_view = cx.new(|cx| SkillsView::new(app.clone(), cx));
-        let auth_view = cx.new(|cx| AuthView::new(app.clone(), cx));
         let usage_view = cx.new(|cx| UsageView::new(app.clone(), cx));
         let sessions_view = cx.new(|cx| SessionsView::new(app.clone(), cx));
-        let workspace_view = cx.new(|cx| WorkspaceView::new(cx));
         let tools_view = cx.new(|cx| ToolsView::new(app.clone(), cx));
+        let theme_view = cx.new(ThemeView::new);
         let gallery_view = cx.new(|cx| GalleryView::new(cx));
         let initial_section = Section::from_env();
         let enabled = Self::visible_apps();
@@ -159,24 +243,21 @@ impl AppRoot {
             section: initial_section,
             providers: Vec::new(),
             current: String::new(),
-            status: None,
             notifications,
             editor: None,
             confirm_delete: None,
             settings_view,
-            proxy_view,
             gateway_view,
             mcp_view,
-            prompts_view,
             skills_view,
-            auth_view,
             usage_view,
             sessions_view,
-            workspace_view,
             tools_view,
+            theme_view,
             gallery_view,
             app_settings_view,
             showing_app_settings: false,
+            provider_list_state: ListState::new(0, ListAlignment::Top, px(512.)),
         };
         cx.subscribe(
             &this.app_settings_view,
@@ -195,7 +276,8 @@ impl AppRoot {
             }
         })
         .detach();
-        this.reload();
+        this.connect_toast_sources(cx);
+        this.reload(cx);
         if initial_section == Section::Providers
             && std::env::var("MS_START_EDITOR")
                 .map(|value| value.eq_ignore_ascii_case("add"))
@@ -212,17 +294,81 @@ impl AppRoot {
         }
         match initial_section {
             Section::Mcp => this.mcp_view.update(cx, |v, _| v.reload()),
-            Section::Prompts => this.prompts_view.update(cx, |v, _| v.reload()),
-            Section::Skills => this.skills_view.update(cx, |v, _| v.reload()),
-            Section::Auth => this.auth_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Skills => this.skills_view.update(cx, |v, cx| v.reload(cx)),
             Section::Gateway => this.gateway_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Usage => this.usage_view.update(cx, |v, _| v.reload()),
-            Section::Sessions => this.sessions_view.update(cx, |v, _| v.reload()),
-            Section::Workspace => this.workspace_view.update(cx, |v, _| v.reload()),
+            Section::Usage => this.usage_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Sessions => this.sessions_view.update(cx, |v, cx| v.reload(cx)),
             Section::Tools => this.tools_view.update(cx, |v, _| v.reload()),
             _ => {}
         }
+        this.flush_section_toast(initial_section, cx);
         this
+    }
+
+    fn observe_toasts<T: ToastSource + 'static>(
+        source: &Entity<T>,
+        notifications: &Entity<NotificationHost>,
+        cx: &mut Context<Self>,
+    ) {
+        let notifications = notifications.clone();
+        cx.observe(source, move |_this, source, cx| {
+            let message = source.update(cx, |source, _| source.take_toast());
+            if let Some(message) = message {
+                notifications.update(cx, |host, cx| {
+                    host.status(message, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn forward_toast<T: ToastSource + 'static>(
+        source: &Entity<T>,
+        notifications: &Entity<NotificationHost>,
+        cx: &mut Context<Self>,
+    ) {
+        let message = source.update(cx, |source, _| source.take_toast());
+        if let Some(message) = message {
+            notifications.update(cx, |host, cx| {
+                host.status(message, cx);
+            });
+        }
+    }
+
+    fn connect_toast_sources(&self, cx: &mut Context<Self>) {
+        Self::observe_toasts(&self.settings_view, &self.notifications, cx);
+        Self::observe_toasts(&self.gateway_view, &self.notifications, cx);
+        Self::observe_toasts(&self.mcp_view, &self.notifications, cx);
+        Self::observe_toasts(&self.skills_view, &self.notifications, cx);
+        Self::observe_toasts(&self.usage_view, &self.notifications, cx);
+        Self::observe_toasts(&self.sessions_view, &self.notifications, cx);
+        Self::observe_toasts(&self.tools_view, &self.notifications, cx);
+        Self::observe_toasts(&self.theme_view, &self.notifications, cx);
+        Self::observe_toasts(&self.app_settings_view, &self.notifications, cx);
+
+        Self::forward_toast(&self.settings_view, &self.notifications, cx);
+        Self::forward_toast(&self.gateway_view, &self.notifications, cx);
+        Self::forward_toast(&self.mcp_view, &self.notifications, cx);
+        Self::forward_toast(&self.skills_view, &self.notifications, cx);
+        Self::forward_toast(&self.usage_view, &self.notifications, cx);
+        Self::forward_toast(&self.sessions_view, &self.notifications, cx);
+        Self::forward_toast(&self.tools_view, &self.notifications, cx);
+        Self::forward_toast(&self.theme_view, &self.notifications, cx);
+        Self::forward_toast(&self.app_settings_view, &self.notifications, cx);
+    }
+
+    fn flush_section_toast(&self, section: Section, cx: &mut Context<Self>) {
+        match section {
+            Section::Settings => Self::forward_toast(&self.settings_view, &self.notifications, cx),
+            Section::Gateway => Self::forward_toast(&self.gateway_view, &self.notifications, cx),
+            Section::Mcp => Self::forward_toast(&self.mcp_view, &self.notifications, cx),
+            Section::Skills => Self::forward_toast(&self.skills_view, &self.notifications, cx),
+            Section::Usage => Self::forward_toast(&self.usage_view, &self.notifications, cx),
+            Section::Sessions => Self::forward_toast(&self.sessions_view, &self.notifications, cx),
+            Section::Tools => Self::forward_toast(&self.tools_view, &self.notifications, cx),
+            Section::Themes => Self::forward_toast(&self.theme_view, &self.notifications, cx),
+            Section::Providers | Section::Gallery => {}
+        }
     }
 
     fn visible_apps() -> Vec<AppType> {
@@ -293,9 +439,8 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if app_type == Some(self.selected_app) {
-            self.reload();
+            self.reload(cx);
         }
-        self.status = None;
         match level {
             NotificationLevel::Info => self.notify_info(title, cx),
             NotificationLevel::Success => self.notify_success(title, cx),
@@ -314,15 +459,12 @@ impl AppRoot {
     fn section_icon(section: Section) -> IconName {
         match section {
             Section::Mcp => IconName::Blocks,
-            Section::Prompts => IconName::Message,
             Section::Skills => IconName::Wrench,
-            Section::Auth => IconName::Key,
             Section::Usage => IconName::Chart,
             Section::Sessions => IconName::Clock,
-            Section::Workspace => IconName::Folder,
             Section::Tools => IconName::Tools,
+            Section::Themes => IconName::Palette,
             Section::Settings => IconName::Settings,
-            Section::Proxy => IconName::Proxy,
             Section::Gateway => IconName::Cloud,
             Section::Providers => IconName::Cloud,
             Section::Gallery => IconName::Layers,
@@ -330,15 +472,17 @@ impl AppRoot {
     }
 
     /// (Re)load providers + current id for the selected app from the store.
-    fn reload(&mut self) {
+    fn reload(&mut self, cx: &mut Context<Self>) {
         match ProviderService::list(&self.app, self.selected_app) {
             Ok(map) => self.providers = map.into_values().collect(),
             Err(err) => {
                 self.providers = Vec::new();
-                self.status = Some(SharedString::from(format!("加载供应商失败: {err}")));
+                self.notify_error("加载供应商失败", err.to_string(), cx);
             }
         }
         self.current = ProviderService::current(&self.app, self.selected_app).unwrap_or_default();
+        // 行数变化由 render 里的 reset 处理；这里只失效高度缓存。
+        self.provider_list_state.remeasure();
     }
 
     /// If the currently selected app got disabled (or unregistered), move the
@@ -354,8 +498,7 @@ impl AppRoot {
         self.selected_app = first;
         self.editor = None;
         self.showing_app_settings = false;
-        self.status = None;
-        self.reload();
+        self.reload(cx);
         cx.notify();
     }
 
@@ -369,8 +512,7 @@ impl AppRoot {
             self.section = Section::Providers;
             self.editor = None;
             self.showing_app_settings = false;
-            self.status = None;
-            self.reload();
+            self.reload(cx);
             cx.notify();
         }
     }
@@ -392,16 +534,15 @@ impl AppRoot {
             // Reload the destination view's data so it reflects current state.
             match section {
                 Section::Mcp => self.mcp_view.update(cx, |v, _| v.reload()),
-                Section::Prompts => self.prompts_view.update(cx, |v, _| v.reload()),
-                Section::Skills => self.skills_view.update(cx, |v, _| v.reload()),
-                Section::Auth => self.auth_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Skills => self.skills_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Gateway => self.gateway_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Usage => self.usage_view.update(cx, |v, _| v.reload()),
-                Section::Sessions => self.sessions_view.update(cx, |v, _| v.reload()),
-                Section::Workspace => self.workspace_view.update(cx, |v, _| v.reload()),
+                Section::Usage => self.usage_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Sessions => self.sessions_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Tools => self.tools_view.update(cx, |v, _| v.reload()),
+                Section::Themes => self.theme_view.update(cx, |v, cx| v.reload(cx)),
                 _ => {}
             }
+            self.flush_section_toast(section, cx);
             cx.notify();
         }
     }
@@ -409,7 +550,6 @@ impl AppRoot {
     fn do_switch(&mut self, id: String, cx: &mut Context<Self>) {
         match ProviderService::switch(&self.app, self.selected_app, &id) {
             Ok(result) => {
-                self.status = None;
                 if result.warnings.is_empty() {
                     self.notify_success(format!("已切换到 {id}"), cx);
                 } else {
@@ -424,7 +564,7 @@ impl AppRoot {
                 self.notify_error("切换供应商失败", err.to_string(), cx);
             }
         }
-        self.reload();
+        self.reload(cx);
         shell_menu::refresh(&self.app, cx);
         cx.notify();
     }
@@ -432,16 +572,14 @@ impl AppRoot {
     fn do_import_default(&mut self, cx: &mut Context<Self>) {
         match ProviderService::import_default_config(&self.app, self.selected_app) {
             Ok(true) => {
-                self.status = None;
                 self.notify_success("已从工具配置导入供应商", cx);
             }
             Ok(false) => {
-                self.status = None;
                 self.notify_info("没有可导入的工具配置", cx);
             }
             Err(err) => self.notify_error("导入工具配置失败", err.to_string(), cx),
         }
-        self.reload();
+        self.reload(cx);
         shell_menu::refresh(&self.app, cx);
         cx.notify();
     }
@@ -464,12 +602,11 @@ impl AppRoot {
 
         match imported {
             Ok(count) => {
-                self.status = None;
                 self.notify_success(format!("已从工具配置导入 {count} 个供应商"), cx);
             }
             Err(err) => self.notify_error("导入工具配置失败", err.to_string(), cx),
         }
-        self.reload();
+        self.reload(cx);
         shell_menu::refresh(&self.app, cx);
         cx.notify();
     }
@@ -477,12 +614,11 @@ impl AppRoot {
     fn do_remove_from_live(&mut self, id: String, cx: &mut Context<Self>) {
         match ProviderService::remove_from_live_config(&self.app, self.selected_app, &id) {
             Ok(()) => {
-                self.status = None;
                 self.notify_success("已从工具配置移除", cx);
             }
             Err(err) => self.notify_error("从工具配置移除失败", err.to_string(), cx),
         }
-        self.reload();
+        self.reload(cx);
         shell_menu::refresh(&self.app, cx);
         cx.notify();
     }
@@ -490,12 +626,11 @@ impl AppRoot {
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
         match ProviderService::delete(&self.app, self.selected_app, &id) {
             Ok(()) => {
-                self.status = None;
                 self.notify_success("供应商已删除", cx);
             }
             Err(err) => self.notify_error("删除供应商失败", err.to_string(), cx),
         }
-        self.reload();
+        self.reload(cx);
         shell_menu::refresh(&self.app, cx);
         cx.notify();
     }
@@ -506,7 +641,6 @@ impl AppRoot {
         let editor = cx.new(|cx| ProviderEditor::new_add(app, app_type, cx));
         self.subscribe_editor(&editor, cx);
         self.editor = Some(editor);
-        self.status = None;
         cx.notify();
     }
 
@@ -516,17 +650,17 @@ impl AppRoot {
         let editor = cx.new(|cx| ProviderEditor::new_edit(app, app_type, &provider, cx));
         self.subscribe_editor(&editor, cx);
         self.editor = Some(editor);
-        self.status = None;
         cx.notify();
     }
 
     fn subscribe_editor(&self, editor: &Entity<ProviderEditor>, cx: &mut Context<Self>) {
+        Self::observe_toasts(editor, &self.notifications, cx);
+        Self::forward_toast(editor, &self.notifications, cx);
         cx.subscribe(editor, |this, _editor, event, cx| match event {
             EditorEvent::Saved => {
                 this.editor = None;
-                this.status = None;
                 this.notify_success("供应商已保存", cx);
-                this.reload();
+                this.reload(cx);
                 shell_menu::refresh(&this.app, cx);
                 cx.notify();
             }
@@ -662,93 +796,45 @@ impl AppRoot {
             .child(label)
     }
 
-    fn section_title(&self) -> SharedString {
-        match self.section {
-            Section::Providers => Self::app_label(self.selected_app),
-            Section::Mcp => "MCP 服务器".into(),
-            Section::Prompts => "提示词".into(),
-            Section::Skills => "技能".into(),
-            Section::Auth => "认证中心".into(),
-            Section::Usage => "用量".into(),
-            Section::Sessions => "会话".into(),
-            Section::Workspace => "工作区".into(),
-            Section::Tools => "高级工具".into(),
-            Section::Settings => "设置".into(),
-            Section::Proxy => "代理".into(),
-            Section::Gateway => "中转网关".into(),
-            Section::Gallery => "组件画廊".into(),
-        }
-    }
-
-    /// Custom, draggable unified titlebar (the system titlebar is transparent).
-    fn render_titlebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Empty chrome keeps the native traffic lights embedded in the sidebar
+    /// while preserving a reliable drag target above the scrolling navigation.
+    fn render_sidebar_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id("titlebar")
-            .flex()
-            .flex_row()
-            .items_center()
+            .id("sidebar-window-drag-region")
             .w_full()
             .h(px(44.))
             .flex_shrink_0()
-            .pl(px(88.))
-            .pr_4()
-            .gap_3()
-            .bg(theme::header())
-            .border_b_1()
-            .border_color(theme::border())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _event, window, _cx| window.start_window_move()),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(20.))
-                            .h(px(20.))
-                            .rounded_md()
-                            .bg(theme::accent())
-                            .child(icon(IconName::Cloud, theme::accent_text(), 13.)),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .font_weight(FontWeight::BOLD)
-                            .text_sm()
-                            .child("OCHUB"),
-                    ),
-            )
-            .child(div().w(px(1.)).h(px(14.)).bg(theme::border()))
-            .child(
-                div()
-                    .text_color(theme::subtext())
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(SharedString::from(self.section_title())),
+    }
+
+    /// A shallow strip above page-header content makes the wider content pane
+    /// draggable without covering its title or trailing actions.
+    fn render_content_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("content-window-drag-region")
+            .absolute()
+            .top_0()
+            .left(px(252.))
+            .right_0()
+            .h(px(10.))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _event, window, _cx| window.start_window_move()),
             )
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("sidebar")
+        let navigation = div()
+            .id("sidebar-navigation")
             .flex()
             .flex_col()
-            .h_full()
-            .w(px(252.))
-            .flex_shrink_0()
-            .bg(theme::mantle().alpha(0.96))
-            .border_r_1()
-            .border_color(theme::border())
-            .shadow_xs()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
-            .child(div().h(px(10.)))
+            .pb_4()
             .child(Self::render_sidebar_group("应用"))
             .child(
                 div().flex().flex_col().gap_1().px_2().children(
@@ -765,12 +851,9 @@ impl AppRoot {
                     .gap_1()
                     .px_2()
                     .child(self.render_nav_item("nav-mcp", "MCP 服务器", Section::Mcp, cx))
-                    .child(self.render_nav_item("nav-prompts", "提示词", Section::Prompts, cx))
                     .child(self.render_nav_item("nav-skills", "技能", Section::Skills, cx))
-                    .child(self.render_nav_item("nav-auth", "认证中心", Section::Auth, cx))
                     .child(self.render_nav_item("nav-usage", "用量", Section::Usage, cx))
                     .child(self.render_nav_item("nav-sessions", "会话", Section::Sessions, cx))
-                    .child(self.render_nav_item("nav-workspace", "工作区", Section::Workspace, cx))
                     .child(self.render_nav_item("nav-tools", "高级工具", Section::Tools, cx)),
             )
             .child(Self::render_sidebar_group("网络"))
@@ -780,8 +863,7 @@ impl AppRoot {
                     .flex_col()
                     .gap_1()
                     .px_2()
-                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx))
-                    .child(self.render_nav_item("nav-proxy", "代理", Section::Proxy, cx)),
+                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx)),
             )
             .child(Self::render_sidebar_group("系统"))
             .child(
@@ -790,6 +872,7 @@ impl AppRoot {
                     .flex_col()
                     .gap_1()
                     .px_2()
+                    .child(self.render_nav_item("nav-themes", "主题", Section::Themes, cx))
                     .child(self.render_nav_item("nav-settings", "设置", Section::Settings, cx))
                     .when(std::env::var_os("MS_GALLERY").is_some(), |col| {
                         col.child(self.render_nav_item(
@@ -799,7 +882,21 @@ impl AppRoot {
                             cx,
                         ))
                     }),
-            )
+            );
+
+        div()
+            .id("sidebar")
+            .flex()
+            .flex_col()
+            .h_full()
+            .w(px(252.))
+            .flex_shrink_0()
+            .bg(theme::mantle().alpha(0.96))
+            .border_r_1()
+            .border_color(theme::border())
+            .shadow_xs()
+            .child(self.render_sidebar_drag_region(cx))
+            .child(navigation)
     }
 
     fn render_provider_card(
@@ -1124,14 +1221,33 @@ impl AppRoot {
 
         // In switch mode the live provider is surfaced in the hero, so the list below
         // shows only the switchable alternatives. Additive apps list everything.
-        let cards: Vec<_> = self
+        let card_ixs: Vec<usize> = self
             .providers
             .iter()
-            .filter(|p| !is_switch || p.id != self.current)
-            .map(|p| self.render_provider_card(p, cx))
+            .enumerate()
+            .filter(|(_, p)| !is_switch || p.id != self.current)
+            .map(|(ix, _)| ix)
             .collect();
         let no_providers = self.providers.is_empty();
-        let others_empty = cards.is_empty();
+        let others_empty = card_ixs.is_empty();
+
+        let mut plan: Vec<ProviderRow> = Vec::new();
+        if is_switch {
+            plan.push(ProviderRow::Hero);
+        }
+        if is_switch && !others_empty {
+            plan.push(ProviderRow::OthersLabel);
+        }
+        if no_providers {
+            plan.push(ProviderRow::EmptyState);
+        }
+        if is_switch && !no_providers && others_empty {
+            plan.push(ProviderRow::OthersEmptyHint);
+        }
+        plan.extend(card_ixs.into_iter().map(ProviderRow::Card));
+        if self.provider_list_state.item_count() != plan.len() {
+            self.provider_list_state.reset(plan.len());
+        }
 
         let mode = if app.is_additive_mode() {
             "累加模式"
@@ -1181,15 +1297,18 @@ impl AppRoot {
                 )
             });
 
-        layout::page()
-            .child(layout::page_header(Self::app_label(app), Some(subtitle)).child(actions))
-            .child(components::status_footer(self.status.clone()))
-            .child(layout::scroll_body(
-                "provider-list",
-                layout::wide_column()
-                    .when(is_switch, |s| s.child(self.render_active_hero(cx)))
-                    .when(is_switch && !others_empty, |s| {
-                        s.child(
+        let list = gpui::list(
+            self.provider_list_state.clone(),
+            cx.processor(move |this, ix: usize, _window, cx| {
+                // Each row carries its own bottom spacing (the list draws no
+                // inter-item gap); pb_3 mirrors wide_column's default gap.
+                let block = div().w_full().pb_3();
+                match plan.get(ix).copied() {
+                    Some(ProviderRow::Hero) => {
+                        block.child(this.render_active_hero(cx)).into_any_element()
+                    }
+                    Some(ProviderRow::OthersLabel) => block
+                        .child(
                             div()
                                 .pt_1()
                                 .text_color(theme::subtext())
@@ -1197,9 +1316,9 @@ impl AppRoot {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("切换到其他供应商"),
                         )
-                    })
-                    .when(no_providers, |s| {
-                        s.child(
+                        .into_any_element(),
+                    Some(ProviderRow::EmptyState) => block
+                        .child(
                             components::card().p_0().child(components::empty_state(
                                 IconName::Folder,
                                 "还没有供应商",
@@ -1218,32 +1337,42 @@ impl AppRoot {
                                 ),
                             )),
                         )
-                    })
-                    .when(is_switch && !no_providers && others_empty, |s| {
-                        s.child(
+                        .into_any_element(),
+                    Some(ProviderRow::OthersEmptyHint) => block
+                        .child(
                             div()
                                 .text_color(theme::muted())
                                 .text_xs()
                                 .child("暂无其他供应商，点击“新增”可添加更多。"),
                         )
-                    })
-                    .children(cards),
-            ))
+                        .into_any_element(),
+                    Some(ProviderRow::Card(pix)) => match this.providers.get(pix) {
+                        Some(provider) => {
+                            let card = this.render_provider_card(provider, cx);
+                            block.child(card).into_any_element()
+                        }
+                        None => gpui::Empty.into_any_element(),
+                    },
+                    None => gpui::Empty.into_any_element(),
+                }
+            }),
+        );
+
+        layout::page()
+            .child(layout::page_header(Self::app_label(app), Some(subtitle)).child(actions))
+            .child(layout::wide_virtual_body(list))
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.section {
             Section::Settings => self.settings_view.clone().into_any_element(),
-            Section::Proxy => self.proxy_view.clone().into_any_element(),
             Section::Gateway => self.gateway_view.clone().into_any_element(),
             Section::Mcp => self.mcp_view.clone().into_any_element(),
-            Section::Prompts => self.prompts_view.clone().into_any_element(),
             Section::Skills => self.skills_view.clone().into_any_element(),
-            Section::Auth => self.auth_view.clone().into_any_element(),
             Section::Usage => self.usage_view.clone().into_any_element(),
             Section::Sessions => self.sessions_view.clone().into_any_element(),
-            Section::Workspace => self.workspace_view.clone().into_any_element(),
             Section::Tools => self.tools_view.clone().into_any_element(),
+            Section::Themes => self.theme_view.clone().into_any_element(),
             Section::Gallery => self.gallery_view.clone().into_any_element(),
             Section::Providers => {
                 if self.showing_app_settings {
@@ -1261,6 +1390,7 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .id("app-root")
             .flex()
             .flex_col()
             .size_full()
@@ -1268,7 +1398,10 @@ impl Render for AppRoot {
             .text_color(theme::text())
             .font_family("Helvetica Neue")
             .relative()
-            .child(self.render_titlebar(cx))
+            .key_context("App")
+            .on_action(cx.listener(Self::save_active))
+            .on_action(cx.listener(Self::cancel_active))
+            .on_action(cx.listener(Self::close_window))
             .child(
                 div()
                     .flex()
@@ -1278,6 +1411,7 @@ impl Render for AppRoot {
                     .child(self.render_sidebar(cx))
                     .child(self.render_content(cx)),
             )
+            .child(self.render_content_drag_region(cx))
             .child(self.notifications.clone())
             .when_some(self.confirm_delete.clone(), |root, provider| {
                 let delete_id = provider.id.clone();

@@ -3,7 +3,10 @@
 
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, Context, Entity, FontWeight, SharedString, Window};
+use gpui::{
+    div, prelude::*, px, Context, Entity, FontWeight, ListAlignment, ListState, SharedString,
+    Window,
+};
 use ochub_core::db::legacy_json::{McpApps, McpServer};
 use ochub_core::services::McpService;
 use ochub_core::{AppState, AppType};
@@ -33,9 +36,36 @@ pub struct McpView {
     apps: McpApps,
     /// 待确认删除的服务器（id, 名称）；`Some` 时展示确认模态。
     confirm_delete: Option<(String, String)>,
+    list_state: ListState,
+}
+
+/// Row plan for the virtualized list. Rebuilt每帧并被 list 的 processor 捕获，
+/// 保证一帧内索引与内容一致。`Card` 存 `servers` 的下标。
+#[derive(Clone, Copy)]
+enum McpRow {
+    EmptyState,
+    Card(usize),
 }
 
 impl McpView {
+    pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_delete.is_some() || self.form_mode == FormMode::List {
+            window.play_system_bell();
+        } else {
+            self.do_save(cx);
+        }
+    }
+
+    pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_delete.take().is_some() {
+            cx.notify();
+        } else if self.form_mode == FormMode::List {
+            window.play_system_bell();
+        } else {
+            self.cancel_form(cx);
+        }
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let name = cx.new(|cx| TextInput::new(cx, "服务器名称"));
         let description = cx.new(|cx| TextInput::new(cx, "描述（可选）"));
@@ -52,6 +82,7 @@ impl McpView {
             spec_json,
             apps: McpApps::default(),
             confirm_delete: None,
+            list_state: ListState::new(0, ListAlignment::Top, px(512.)),
         };
         this.reload();
         this
@@ -65,6 +96,8 @@ impl McpView {
                 self.status = Some(SharedString::from(format!("加载服务器失败: {err}")));
             }
         }
+        // 行数变化由 render 里的 reset 处理；这里只失效高度缓存。
+        self.list_state.remeasure();
     }
 
     fn mcp_apps() -> Vec<AppType> {
@@ -453,7 +486,6 @@ impl McpView {
                     })),
                 ),
             )
-            .child(components::status_footer(self.status.clone()))
             .child(layout::scroll_body(
                 "mcp-form-body",
                 layout::content_column().child(
@@ -523,12 +555,52 @@ impl Render for McpView {
             return self.render_form(cx).into_any_element();
         }
 
-        let cards: Vec<_> = self
-            .servers
-            .iter()
-            .map(|s| self.render_card(s, cx))
-            .collect();
-        let is_empty = cards.is_empty();
+        let mut plan: Vec<McpRow> = Vec::new();
+        if self.servers.is_empty() {
+            plan.push(McpRow::EmptyState);
+        } else {
+            plan.extend((0..self.servers.len()).map(McpRow::Card));
+        }
+        if self.list_state.item_count() != plan.len() {
+            self.list_state.reset(plan.len());
+        }
+
+        let list = gpui::list(
+            self.list_state.clone(),
+            cx.processor(move |this, ix: usize, _window, cx| {
+                // 每行自带底部间距（list 不画行间 gap）；pb_3 对齐 content_column 的默认 gap。
+                let block = div().w_full().pb_3();
+                match plan.get(ix).copied() {
+                    Some(McpRow::EmptyState) => block
+                        .child(components::empty_state(
+                            IconName::Blocks,
+                            "还没有配置 MCP 服务器",
+                            "新增服务器，或从各应用现有配置一键导入。",
+                            Some(
+                                components::button(
+                                    "mcp-add-empty",
+                                    "新增服务器",
+                                    ButtonTone::Primary,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.start_add(cx);
+                                }))
+                                .into_any_element(),
+                            ),
+                        ))
+                        .into_any_element(),
+                    Some(McpRow::Card(pix)) => match this.servers.get(pix) {
+                        Some(server) => {
+                            let card = this.render_card(server, cx);
+                            block.child(card).into_any_element()
+                        }
+                        None => gpui::Empty.into_any_element(),
+                    },
+                    None => gpui::Empty.into_any_element(),
+                }
+            }),
+        );
 
         layout::page()
             .relative()
@@ -588,31 +660,7 @@ impl Render for McpView {
                         ),
                 ),
             )
-            .child(components::status_footer(self.status.clone()))
-            .child(layout::scroll_body(
-                "mcp-list",
-                layout::content_column()
-                    .when(is_empty, |s| {
-                        s.child(components::empty_state(
-                            IconName::Blocks,
-                            "还没有配置 MCP 服务器",
-                            "新增服务器，或从各应用现有配置一键导入。",
-                            Some(
-                                components::button(
-                                    "mcp-add-empty",
-                                    "新增服务器",
-                                    ButtonTone::Primary,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.start_add(cx);
-                                }))
-                                .into_any_element(),
-                            ),
-                        ))
-                    })
-                    .children(cards),
-            ))
+            .child(layout::virtual_body(list))
             .when_some(self.confirm_delete.clone(), |root, target| {
                 let (delete_id, name) = target;
                 root.child(components::modal_overlay(
@@ -656,3 +704,5 @@ impl Render for McpView {
             .into_any_element()
     }
 }
+
+crate::notifications::impl_status_toasts!(McpView);

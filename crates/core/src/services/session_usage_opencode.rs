@@ -8,18 +8,18 @@
 //!   → session 表获取所有会话
 //!   → message 表获取 assistant 消息
 //!   → 解析 data JSON 提取 tokens/cost/model
-//!   → proxy_request_logs 表
+//!   → usage_logs 表
 //! ```
 
 use crate::apps::opencode::get_opencode_db_path;
 use crate::db::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::CostCalculator;
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
+use crate::usage_tracking::calculator::CostCalculator;
+use crate::usage_tracking::parser::TokenUsage;
 use rust_decimal::Decimal;
 use std::fs;
 use std::time::SystemTime;
@@ -308,7 +308,7 @@ fn parse_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> 
     })
 }
 
-/// 插入单条 OpenCode 消息记录到 proxy_request_logs
+/// 插入单条 OpenCode 消息记录到 usage_logs
 fn insert_opencode_message(
     db: &Database,
     request_id: &str,
@@ -393,7 +393,7 @@ fn insert_opencode_message(
         };
 
     let inserted_rows = conn.execute(
-        "INSERT OR IGNORE INTO proxy_request_logs (
+        "INSERT OR IGNORE INTO usage_logs (
             request_id, provider_id, app_type, model, request_model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,

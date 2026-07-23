@@ -2,7 +2,6 @@
 
 use super::mcp::parse_mcp_apps;
 use super::parser::parse_deeplink_url;
-use super::prompt::import_prompt_from_deeplink;
 use super::provider::parse_and_merge_config;
 use super::utils::{infer_homepage_from_endpoint, validate_url};
 use super::DeepLinkImportRequest;
@@ -190,8 +189,6 @@ fn test_build_gemini_provider_with_model() {
         repo: None,
         directory: None,
         branch: None,
-        content: None,
-        description: None,
         enabled: None,
         usage_enabled: None,
         usage_script: None,
@@ -243,8 +240,6 @@ fn test_build_gemini_provider_without_model() {
         repo: None,
         directory: None,
         branch: None,
-        content: None,
-        description: None,
         enabled: None,
         usage_enabled: None,
         usage_script: None,
@@ -291,8 +286,6 @@ fn test_parse_and_merge_config_claude() {
         repo: None,
         directory: None,
         branch: None,
-        content: None,
-        description: None,
         enabled: None,
         usage_enabled: None,
         usage_script: None,
@@ -382,8 +375,6 @@ fn test_parse_and_merge_config_url_override() {
         repo: None,
         directory: None,
         branch: None,
-        content: None,
-        description: None,
         enabled: None,
         usage_enabled: None,
         usage_script: None,
@@ -445,8 +436,6 @@ fn test_build_claude_provider_preserves_custom_env_fields() {
         repo: None,
         directory: None,
         branch: None,
-        content: None,
-        description: None,
         enabled: None,
         usage_enabled: None,
         usage_script: None,
@@ -500,8 +489,6 @@ fn test_build_claude_provider_without_config_unchanged() {
         repo: None,
         directory: None,
         branch: None,
-        content: None,
-        description: None,
         enabled: None,
         usage_enabled: None,
         usage_script: None,
@@ -522,37 +509,6 @@ fn test_build_claude_provider_without_config_unchanged() {
 }
 
 // =============================================================================
-// Prompt Tests
-// =============================================================================
-
-// Integration-style unit test: prompt import reaches PromptService and resolves
-// live config file paths, so HOME must be isolated before it runs.
-//
-// PORT TODO: cc-switch annotated this with `#[serial_test::serial]`. `serial_test`
-// is not a workspace dependency in ochub-core, so the attribute is dropped;
-// `TestHomeGuard` still isolates HOME / OCHUB_TEST_HOME.
-#[test]
-fn test_import_prompt_allows_space_in_base64_content() {
-    let _test_home = TestHomeGuard::new();
-    let url = "ochub://v1/import?resource=prompt&app=codex&name=PromptPlus&content=Pj4+";
-    let request = parse_deeplink_url(url).unwrap();
-
-    // URL decoded content may have "+" become space
-    assert_eq!(request.content.as_deref(), Some("Pj4 "));
-
-    let db = Arc::new(Database::memory().expect("create memory db"));
-    let state = AppState::new(db.clone());
-
-    let prompt_id = import_prompt_from_deeplink(&state, request.clone()).expect("import prompt");
-
-    let prompts = state.db.get_prompts("codex").expect("get prompts");
-    let prompt = prompts.get(&prompt_id).expect("prompt saved");
-
-    assert_eq!(prompt.content, ">>>");
-    assert_eq!(prompt.name, request.name.unwrap());
-}
-
-// =============================================================================
 // MCP Tests
 // =============================================================================
 
@@ -570,24 +526,6 @@ fn test_parse_mcp_apps() {
 
     let err = parse_mcp_apps("invalid").unwrap_err();
     assert!(err.to_string().contains("Invalid app"));
-}
-
-#[test]
-fn test_parse_prompt_deeplink() {
-    let content = "Hello World";
-    let content_b64 = BASE64_STANDARD.encode(content);
-    let url = format!(
-        "ochub://v1/import?resource=prompt&app=claude&name=test&content={}&description=desc&enabled=true",
-        content_b64
-    );
-
-    let request = parse_deeplink_url(&url).unwrap();
-    assert_eq!(request.resource, "prompt");
-    assert_eq!(request.app.unwrap(), "claude");
-    assert_eq!(request.name.unwrap(), "test");
-    assert_eq!(request.content.unwrap(), content_b64);
-    assert_eq!(request.description.unwrap(), "desc");
-    assert!(request.enabled.unwrap());
 }
 
 #[test]

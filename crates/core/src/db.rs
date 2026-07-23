@@ -12,7 +12,6 @@
 //! ├── import_ccswitch.rs - cc-switch 数据库一次性导入
 //! ├── migration.rs     - JSON → SQLite 数据迁移
 //! ├── legacy_json.rs   - 旧版 config.json (MultiAppConfig) + 域结构
-//! ├── proxy_types.rs   - 代理相关配置/状态类型
 //! ├── stream_check_types.rs - 连通性检查类型
 //! └── dao/             - 数据访问对象
 //! ```
@@ -22,7 +21,6 @@ pub mod dao;
 pub mod import_ccswitch;
 pub mod legacy_json;
 pub mod migration;
-pub mod proxy_types;
 mod schema;
 pub mod stream_check_types;
 
@@ -30,19 +28,14 @@ pub mod stream_check_types;
 #[allow(unused_imports)]
 pub(crate) use dao::providers_seed::{is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
 #[allow(unused_imports)]
-pub(crate) use dao::proxy::{
+pub(crate) use dao::usage_config::{
     validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
     PRICING_SOURCE_RESPONSE,
 };
 
 pub use legacy_json::{
     CommonConfigSnippets, InstalledSkill, McpApps, McpConfig, McpRoot, McpServer, MultiAppConfig,
-    Prompt, PromptConfig, PromptRoot, SkillApps, SkillRepo, SkillState, SkillStore,
-};
-pub use proxy_types::{
-    ActiveTarget, AppProxyConfig, CircuitBreakerConfig, CopilotOptimizerConfig, GlobalProxyConfig,
-    LiveBackup, LogConfig, OptimizerConfig, ProviderHealth, ProxyConfig, ProxyServerInfo,
-    ProxyStatus, ProxyTakeoverStatus, RectifierConfig,
+    SkillApps, SkillRepo, SkillState, SkillStore,
 };
 pub use stream_check_types::{HealthStatus, StreamCheckConfig, StreamCheckResult};
 
@@ -53,7 +46,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号（OCHUB 自有版本线，与 cc-switch 的版本序列无关）
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 2;
+pub(crate) const SCHEMA_VERSION: i32 = 3;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -132,7 +125,7 @@ impl Database {
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
-        // WAL：代理高频写日志 + UI 并发读；busy_timeout 避免瞬时锁冲突直接报错
+        // WAL：网关写用量日志 + UI 并发读；busy_timeout 避免瞬时锁冲突直接报错
         conn.query_row("PRAGMA journal_mode = WAL;", [], |_| Ok(()))
             .map_err(|e| AppError::Database(format!("启用 WAL 失败: {e}")))?;
         conn.execute_batch("PRAGMA busy_timeout = 5000;")
@@ -297,15 +290,6 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM mcp_servers", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count == 0)
-    }
-
-    /// 检查提示词表是否为空
-    pub fn is_prompts_table_empty(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM prompts", [], |row| row.get(0))
             .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(count == 0)
     }

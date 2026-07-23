@@ -223,7 +223,7 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
     )
 }
 
-pub(crate) const SESSION_PROXY_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
+pub(crate) const SESSION_CAPTURE_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
 
 /// SQL 片段：把指定别名的 `data_source` 包成 COALESCE，NULL 视作 'proxy'。
 ///
@@ -238,7 +238,7 @@ fn data_source_expr(log_alias: &str) -> String {
 /// 上折叠进 `claude`，其余 app_type 原样返回。
 ///
 /// 背景：Desktop 网关流量在记账层按各自入口写为 `app_type='claude-desktop'`，
-/// 以保留路由接管的账单审计精度（不要回退这一点）。但 Dashboard 把它当作
+/// 以保留网关路由的账单审计精度（不要回退这一点）。但 Dashboard 把它当作
 /// Claude Code 呈现——它本质就是跑在 Desktop 壳里的内嵌 Claude Code 运行时，
 /// 且 Desktop 聊天用量永远不经过本软件，单列只会让用户误以为是“桌面版全部用量”。
 ///
@@ -247,14 +247,14 @@ fn data_source_expr(log_alias: &str) -> String {
 /// 而不改动任何已存储的行（详情面板仍读原始 `app_type`）。
 ///
 /// 注意：包裹后该列上的索引在此比较中失效，但这些都是已带时间过滤的聚合扫描，
-/// app_type 本就不是主访问路径，可接受。仅用于读侧；去重匹配（`has_matching_
-/// proxy_usage_log`）与额度检查（`check_provider_limits`）必须保留原始精确比较。
+/// app_type 本就不是主访问路径，可接受。仅用于读侧；去重匹配与额度检查必须
+/// 保留原始精确比较。
 fn folded_app_type_sql(column: &str) -> String {
     format!("CASE WHEN {column} = 'claude-desktop' THEN 'claude' ELSE {column} END")
 }
 
 /// SQL 片段：把日志/汇总行 LEFT JOIN 到 providers 表以取得供应商名称。
-/// `proxy_request_logs` 与 `usage_daily_rollups` 的 (provider_id, app_type)
+/// `usage_logs` 与 `usage_daily_rollups` 的 (provider_id, app_type)
 /// 形状相同，两者皆可作为 `log_alias`。providers 主键即 (id, app_type)，
 /// 连接至多 1:1，不会放大行数。
 fn providers_join(log_alias: &str, provider_alias: &str) -> String {
@@ -301,33 +301,33 @@ fn push_provider_model_filters(
 
 pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
     let data_source = data_source_expr(log_alias);
-    let proxy_data_source = data_source_expr("proxy_dedup");
+    let captured_data_source = data_source_expr("captured_dedup");
     format!(
         "NOT (
             {data_source} IN ('session_log', 'codex_session', 'gemini_session', 'opencode_session')
             AND EXISTS (
                 SELECT 1
-                FROM proxy_request_logs proxy_dedup
-                WHERE {proxy_data_source} = 'proxy'
-                  AND proxy_dedup.app_type = {log_alias}.app_type
-                  AND proxy_dedup.status_code >= 200
-                  AND proxy_dedup.status_code < 300
-                  AND proxy_dedup.input_tokens = {log_alias}.input_tokens
-                  AND proxy_dedup.output_tokens = {log_alias}.output_tokens
-                  AND proxy_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
+                FROM usage_logs captured_dedup
+                WHERE {captured_data_source} IN ('gateway', 'proxy')
+                  AND captured_dedup.app_type = {log_alias}.app_type
+                  AND captured_dedup.status_code >= 200
+                  AND captured_dedup.status_code < 300
+                  AND captured_dedup.input_tokens = {log_alias}.input_tokens
+                  AND captured_dedup.output_tokens = {log_alias}.output_tokens
+                  AND captured_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
                   AND (
-                      proxy_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
+                      captured_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
                       OR (
                           {log_alias}.cache_creation_tokens = 0
                           AND {data_source} IN ('codex_session', 'gemini_session', 'opencode_session')
                       )
                   )
-                  AND proxy_dedup.created_at BETWEEN
-                      {log_alias}.created_at - {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                      AND {log_alias}.created_at + {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
+                  AND captured_dedup.created_at BETWEEN
+                      {log_alias}.created_at - {SESSION_CAPTURE_DEDUP_WINDOW_SECONDS}
+                      AND {log_alias}.created_at + {SESSION_CAPTURE_DEDUP_WINDOW_SECONDS}
                   AND (
-                      LOWER(proxy_dedup.model) = LOWER({log_alias}.model)
-                      OR LOWER(proxy_dedup.model) = 'unknown'
+                      LOWER(captured_dedup.model) = LOWER({log_alias}.model)
+                      OR LOWER(captured_dedup.model) = 'unknown'
                       OR LOWER({log_alias}.model) = 'unknown'
                   )
             )
@@ -338,10 +338,11 @@ pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
 /// 跨源去重指纹键。
 ///
 /// `cache_creation_tokens`：Codex/Gemini session 日志不暴露该字段，调用方传 0
-/// 表示"未知"，匹配器会放行 proxy 侧任意 cache_creation_tokens 值。
+/// 表示"未知"，匹配器会放行网关采集侧任意 cache_creation_tokens 值。
 ///
 /// Used by the session usage importers to deduplicate local JSONL-derived rows
-/// against proxy-captured request logs.
+/// against gateway-captured request logs. The legacy `proxy` source is accepted
+/// so upgrades do not double-count existing history.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DedupKey<'a> {
     pub app_type: &'a str,
@@ -356,28 +357,28 @@ pub(crate) struct DedupKey<'a> {
 /// session 日志写入前的统一去重判定。
 ///
 /// 命中以下任一条件即跳过插入：① `request_id` 已存在；② 时间窗口内存在
-/// 与 `key` 匹配的 proxy 日志（指纹去重）。
+/// 与 `key` 匹配的网关采集日志（指纹去重）。
 pub(crate) fn should_skip_session_insert(
     conn: &Connection,
     request_id: &str,
     key: &DedupKey,
 ) -> Result<bool, AppError> {
-    if proxy_request_id_exists(conn, request_id)? {
+    if usage_request_id_exists(conn, request_id)? {
         return Ok(true);
     }
-    has_matching_proxy_usage_log(conn, key)
+    has_matching_captured_usage_log(conn, key)
 }
 
-fn proxy_request_id_exists(conn: &Connection, request_id: &str) -> Result<bool, AppError> {
+fn usage_request_id_exists(conn: &Connection, request_id: &str) -> Result<bool, AppError> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = ?1)",
+        "SELECT EXISTS(SELECT 1 FROM usage_logs WHERE request_id = ?1)",
         params![request_id],
         |row| row.get::<_, bool>(0),
     )
     .map_err(|e| AppError::Database(format!("查询 request_id 失败: {e}")))
 }
 
-pub(crate) fn has_matching_proxy_usage_log(
+pub(crate) fn has_matching_captured_usage_log(
     conn: &Connection,
     key: &DedupKey,
 ) -> Result<bool, AppError> {
@@ -388,8 +389,8 @@ pub(crate) fn has_matching_proxy_usage_log(
     let sql = format!(
         "SELECT EXISTS (
             SELECT 1
-            FROM proxy_request_logs l
-            WHERE {l_data_source} = 'proxy'
+            FROM usage_logs l
+            WHERE {l_data_source} IN ('gateway', 'proxy')
               AND l.app_type = ?1
               AND l.status_code >= 200
               AND l.status_code < 300
@@ -416,12 +417,12 @@ pub(crate) fn has_matching_proxy_usage_log(
             key.cache_read_tokens as i64,
             key.cache_creation_tokens as i64,
             key.created_at,
-            SESSION_PROXY_DEDUP_WINDOW_SECONDS,
+            SESSION_CAPTURE_DEDUP_WINDOW_SECONDS,
             allow_missing_cache_creation as i64,
         ],
         |row| row.get::<_, bool>(0),
     )
-    .map_err(|e| AppError::Database(format!("查询重复代理用量日志失败: {e}")))
+    .map_err(|e| AppError::Database(format!("查询重复网关用量日志失败: {e}")))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -725,7 +726,7 @@ impl Database {
                     COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens,
                     COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count
-                 FROM proxy_request_logs l {detail_join} {where_clause}) d,
+                 FROM usage_logs l {detail_join} {where_clause}) d,
                 (SELECT
                     COALESCE(SUM(r.request_count), 0) as total_requests,
                     COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0) as total_cost,
@@ -871,7 +872,7 @@ impl Database {
                     COALESCE(SUM(l.cache_creation_tokens), 0) as cache_create_t,
                     COALESCE(SUM(l.cache_read_tokens), 0) as cache_read_t,
                     COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count
-                FROM proxy_request_logs l {detail_join} {detail_where}
+                FROM usage_logs l {detail_join} {detail_where}
                 GROUP BY l.app_type
                 UNION ALL
                 SELECT {rollup_app_type} as app_type,
@@ -1015,7 +1016,7 @@ impl Database {
                     COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens
-                FROM proxy_request_logs l {detail_join}
+                FROM usage_logs l {detail_join}
                 WHERE l.created_at >= ?1 AND l.created_at <= ?2
                   AND {effective_filter} {extra_filter}
                 GROUP BY bucket_idx
@@ -1128,7 +1129,7 @@ impl Database {
                 COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                 COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
                 COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens
-            FROM proxy_request_logs l {detail_join}
+            FROM usage_logs l {detail_join}
             WHERE l.created_at >= ?1 AND l.created_at <= ?2
               AND {effective_filter} {extra_filter}
             GROUP BY bucket_date
@@ -1376,7 +1377,7 @@ impl Database {
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
                     COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
                     COALESCE(SUM(l.latency_ms), 0) as latency_sum
-                FROM proxy_request_logs l
+                FROM usage_logs l
                 LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
                 {detail_where}
                 GROUP BY l.provider_id, l.app_type
@@ -1511,7 +1512,7 @@ impl Database {
         //
         // 分组键用「有效计价模型」：pricing_model 非空时优先（成本就是按它的
         // 定价算的，金额与定价表自洽），NULL/'' 回落 model。默认 response 计价
-        // 模式下两者相同，行为不变；request 模式 + 路由接管下，钱挂在实际计价
+        // 模式下两者相同，行为不变；request 模式 + 网关路由下，钱挂在实际计价
         // 基准名下，而不是上游回显/客户端别名名下。
         let fresh_input_detail = fresh_input_sql("l");
         let fresh_input_rollup = fresh_input_sql("r");
@@ -1528,7 +1529,7 @@ impl Database {
                     COUNT(*) as request_count,
                     COALESCE(SUM({fresh_input_detail} + l.output_tokens), 0) as total_tokens,
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost
-                FROM proxy_request_logs l
+                FROM usage_logs l
                 {detail_join}
                 {detail_where}
                 GROUP BY {detail_model}
@@ -1592,7 +1593,7 @@ impl Database {
 
         if let Some(ref app_type) = filters.app_type {
             // 仅过滤口径折叠 claude-desktop→claude；行投影仍返回原始 app_type，
-            // 详情面板据此展示真实入口（路由接管账单审计需要）。
+            // 详情面板据此展示真实入口（网关路由账单审计需要）。
             conditions.push(format!("{} = ?", folded_app_type_sql("l.app_type")));
             params.push(Box::new(app_type.clone()));
         }
@@ -1627,7 +1628,7 @@ impl Database {
 
         // 获取总数
         let count_sql = format!(
-            "SELECT COUNT(*) FROM proxy_request_logs l
+            "SELECT COUNT(*) FROM usage_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              {where_clause}"
         );
@@ -1649,7 +1650,7 @@ impl Database {
                     l.input_cost_usd, l.output_cost_usd, l.cache_read_cost_usd, l.cache_creation_cost_usd, l.total_cost_usd,
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model
-             FROM proxy_request_logs l
+             FROM usage_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              {where_clause}
              ORDER BY l.created_at DESC
@@ -1691,8 +1692,8 @@ impl Database {
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                     is_streaming, latency_ms, first_token_ms, duration_ms,
-                    status_code, error_message, created_at, l.data_source, l.pricing_model
-             FROM proxy_request_logs l
+                    status_code, error_message, l.created_at, l.data_source, l.pricing_model
+             FROM usage_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              WHERE l.request_id = ?"
         );
@@ -1747,7 +1748,7 @@ impl Database {
             .query_row(
                 "SELECT COALESCE(SUM(cost), 0) FROM (
                     SELECT CAST(total_cost_usd AS REAL) as cost
-                    FROM proxy_request_logs
+                    FROM usage_logs
                     WHERE provider_id = ? AND app_type = ?
                       AND date(datetime(created_at, 'unixepoch', 'localtime')) = date('now', 'localtime')
                     UNION ALL
@@ -1766,7 +1767,7 @@ impl Database {
             .query_row(
                 "SELECT COALESCE(SUM(cost), 0) FROM (
                     SELECT CAST(total_cost_usd AS REAL) as cost
-                    FROM proxy_request_logs
+                    FROM usage_logs
                     WHERE provider_id = ? AND app_type = ?
                       AND strftime('%Y-%m', datetime(created_at, 'unixepoch', 'localtime')) = strftime('%Y-%m', 'now', 'localtime')
                     UNION ALL
@@ -1848,7 +1849,7 @@ impl Database {
                         cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
                         first_token_ms, duration_ms, status_code, error_message, created_at,
                         data_source, pricing_model
-             FROM proxy_request_logs
+             FROM usage_logs
              WHERE CAST(total_cost_usd AS REAL) <= 0
                AND (input_tokens > 0 OR output_tokens > 0
                     OR cache_read_tokens > 0 OR cache_creation_tokens > 0)";
@@ -1958,7 +1959,7 @@ impl Database {
         log.total_cost_usd = format!("{total_cost:.6}");
 
         conn.execute(
-            "UPDATE proxy_request_logs
+            "UPDATE usage_logs
              SET input_cost_usd = ?1,
                  output_cost_usd = ?2,
                  cache_read_cost_usd = ?3,
@@ -2014,7 +2015,7 @@ impl Database {
         log: &RequestLogDetail,
     ) -> Result<Option<PricingInfo>, AppError> {
         // 写入时的计价基准已落库（v11+）：回填只按它重算，找不到就保持 0 成本
-        // 等补价。不能换用 model/request_model 猜——路由接管 + request 计价模式下
+        // 等补价。不能换用 model/request_model 猜——网关路由 + request 计价模式下
         // 三者可能各不相同（model=上游回显、request_model=客户端别名、
         // pricing_model=实际出站模型），换基准会按错误价格永久固化。
         // 占位符（"" = 未计价错误行 / "unknown"）视同缺失，走历史行逻辑。
@@ -2032,7 +2033,7 @@ impl Database {
 
         // 仅当 model 列是占位符（解析失败留下的 ""/"unknown" 等）时才回退到
         // request_model 定价。model 是真实模型名但缺定价时必须保持 0 成本等待
-        // 补价：路由接管下 request_model 是客户端别名（如 claude-sonnet-4-6），
+        // 补价：网关路由下 request_model 是客户端别名（如 claude-sonnet-4-6），
         // 按别名回填会把真实上游模型的 tokens 按错误价格永久固化（行一旦有成本
         // 就不再进入回填范围）。
         if !is_placeholder_pricing_model(&log.model) {
@@ -2053,12 +2054,12 @@ impl Database {
 pub(crate) fn find_model_pricing(
     conn: &Connection,
     model_id: &str,
-) -> Option<crate::proxy::usage::calculator::ModelPricing> {
+) -> Option<crate::usage_tracking::calculator::ModelPricing> {
     find_model_pricing_row(conn, model_id)
         .ok()
         .flatten()
         .and_then(|(input, output, cache_read, cache_creation)| {
-            crate::proxy::usage::calculator::ModelPricing::from_strings(
+            crate::usage_tracking::calculator::ModelPricing::from_strings(
                 &input,
                 &output,
                 &cache_read,
@@ -2094,7 +2095,7 @@ pub(crate) fn find_model_pricing_row(
     Ok(None)
 }
 
-/// 按数据来源（proxy / *_session）拆分用量计数。
+/// 按数据来源（gateway / 旧版 proxy / *_session）拆分用量计数。
 ///
 /// Ported from cc-switch `services/session_usage.rs::get_data_source_breakdown`.
 /// Kept in this module because it reuses [`effective_usage_log_filter`].
@@ -2114,7 +2115,7 @@ pub fn get_data_source_breakdown(db: &Database) -> Result<Vec<DataSourceSummary>
     let sql = format!(
         "SELECT COALESCE(l.data_source, 'proxy') as ds, COUNT(*) as cnt,
                 COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as cost
-         FROM proxy_request_logs l
+         FROM usage_logs l
          WHERE {effective_filter}
          GROUP BY ds
          ORDER BY cnt DESC"
@@ -2446,7 +2447,7 @@ mod tests {
         total_cost_usd: &str,
     ) -> Result<(), AppError> {
         conn.execute(
-            "INSERT INTO proxy_request_logs (
+            "INSERT INTO usage_logs (
                 request_id, provider_id, app_type, model, request_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
@@ -2473,7 +2474,7 @@ mod tests {
 
     fn create_legacy_nullable_logs_table(conn: &Connection) -> Result<(), AppError> {
         conn.execute(
-            "CREATE TABLE proxy_request_logs (
+            "CREATE TABLE usage_logs (
                 request_id TEXT PRIMARY KEY,
                 app_type TEXT NOT NULL,
                 model TEXT NOT NULL,
@@ -2495,7 +2496,7 @@ mod tests {
         let conn = Connection::open_in_memory()?;
         create_legacy_nullable_logs_table(&conn)?;
         conn.execute(
-            "INSERT INTO proxy_request_logs (
+            "INSERT INTO usage_logs (
                 request_id, app_type, model, input_tokens, output_tokens,
                 cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
             ) VALUES ('legacy-proxy', 'codex', 'gpt-5.5', 10, 2, 1, 0, 200, 1000, NULL)",
@@ -2503,7 +2504,7 @@ mod tests {
         )?;
 
         let filter = effective_usage_log_filter("l");
-        let sql = format!("SELECT COUNT(*) FROM proxy_request_logs l WHERE {filter}");
+        let sql = format!("SELECT COUNT(*) FROM usage_logs l WHERE {filter}");
         let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
         assert_eq!(count, 1);
 
@@ -2515,7 +2516,7 @@ mod tests {
         let conn = Connection::open_in_memory()?;
         create_legacy_nullable_logs_table(&conn)?;
         conn.execute(
-            "INSERT INTO proxy_request_logs (
+            "INSERT INTO usage_logs (
                 request_id, app_type, model, input_tokens, output_tokens,
                 cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
             ) VALUES ('legacy-proxy', 'codex', 'gpt-5.5', 10, 2, 1, 0, 200, 1000, NULL)",
@@ -2531,7 +2532,7 @@ mod tests {
             cache_creation_tokens: 0,
             created_at: 1000,
         };
-        assert!(has_matching_proxy_usage_log(&conn, &key)?);
+        assert!(has_matching_captured_usage_log(&conn, &key)?);
 
         Ok(())
     }
@@ -2640,7 +2641,7 @@ mod tests {
         let conn = lock_conn!(db.conn);
         let (input_cost, output_cost, total_cost): (String, String, String) = conn.query_row(
             "SELECT input_cost_usd, output_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'codex-gpt-5-5-zero-cost'",
+             FROM usage_logs WHERE request_id = 'codex-gpt-5-5-zero-cost'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
@@ -2673,7 +2674,7 @@ mod tests {
                 "0",
             )?;
             conn.execute(
-                "UPDATE proxy_request_logs
+                "UPDATE usage_logs
                  SET cost_multiplier = '1.5'
                  WHERE request_id = 'codex-gpt-5-5-multiplier'",
                 [],
@@ -2685,7 +2686,7 @@ mod tests {
         let conn = lock_conn!(db.conn);
         let (input_cost, total_cost): (String, String) = conn.query_row(
             "SELECT input_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'codex-gpt-5-5-multiplier'",
+             FROM usage_logs WHERE request_id = 'codex-gpt-5-5-multiplier'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -2702,7 +2703,7 @@ mod tests {
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
@@ -2722,7 +2723,7 @@ mod tests {
         let conn = lock_conn!(db.conn);
         let total_cost: String = conn.query_row(
             "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'codex-request-model-fallback'",
+             FROM usage_logs WHERE request_id = 'codex-request-model-fallback'",
             [],
             |row| row.get(0),
         )?;
@@ -2738,10 +2739,10 @@ mod tests {
 
         {
             let conn = lock_conn!(db.conn);
-            // 路由接管场景：model 是上游回显的真实模型（缺定价），request_model
+            // 网关路由场景：model 是上游回显的真实模型（缺定价），request_model
             // 是客户端别名（有定价）。回填不得按别名定价，必须保持 0 成本等待补价。
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
@@ -2764,7 +2765,7 @@ mod tests {
             let conn = lock_conn!(db.conn);
             let total_cost: String = conn.query_row(
                 "SELECT total_cost_usd
-                 FROM proxy_request_logs WHERE request_id = 'takeover-unpriced-model'",
+                 FROM usage_logs WHERE request_id = 'takeover-unpriced-model'",
                 [],
                 |row| row.get(0),
             )?;
@@ -2783,7 +2784,7 @@ mod tests {
         let conn = lock_conn!(db.conn);
         let total_cost: String = conn.query_row(
             "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'takeover-unpriced-model'",
+             FROM usage_logs WHERE request_id = 'takeover-unpriced-model'",
             [],
             |row| row.get(0),
         )?;
@@ -2802,7 +2803,7 @@ mod tests {
             // 但上游回显了别名 → model/request_model 都是 claude-sonnet-4-6（有定价）。
             // 回填必须按落库的 pricing_model 重算，不得换用 model 列的别名价格。
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
@@ -2839,7 +2840,7 @@ mod tests {
         let conn = lock_conn!(db.conn);
         let total_cost: String = conn.query_row(
             "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'persisted-pricing-model'",
+             FROM usage_logs WHERE request_id = 'persisted-pricing-model'",
             [],
             |row| row.get(0),
         )?;
@@ -2894,7 +2895,7 @@ mod tests {
         let conn = lock_conn!(db.conn);
         let total_cost: String = conn.query_row(
             "SELECT total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'openrouter-alias-zero-cost'",
+             FROM usage_logs WHERE request_id = 'openrouter-alias-zero-cost'",
             [],
             |row| row.get(0),
         )?;
@@ -2931,7 +2932,7 @@ mod tests {
         let conn = lock_conn!(db.conn);
         let (input_cost, cache_read_cost, total_cost): (String, String, String) = conn.query_row(
             "SELECT input_cost_usd, cache_read_cost_usd, total_cost_usd
-             FROM proxy_request_logs WHERE request_id = 'claude-cache-fresh-input'",
+             FROM usage_logs WHERE request_id = 'claude-cache-fresh-input'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
@@ -2950,7 +2951,7 @@ mod tests {
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -2958,7 +2959,7 @@ mod tests {
                 params!["req1", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000],
             )?;
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -3132,7 +3133,7 @@ mod tests {
                 "0.3",
             )?;
             conn.execute(
-                "UPDATE proxy_request_logs SET pricing_model = 'real-model' WHERE request_id = 'a-2'",
+                "UPDATE usage_logs SET pricing_model = 'real-model' WHERE request_id = 'a-2'",
                 [],
             )?;
 
@@ -3653,7 +3654,7 @@ mod tests {
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -3688,7 +3689,7 @@ mod tests {
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -3696,7 +3697,7 @@ mod tests {
                 params!["old", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000],
             )?;
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -3834,7 +3835,7 @@ mod tests {
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -3871,7 +3872,7 @@ mod tests {
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -3890,7 +3891,7 @@ mod tests {
                 ],
             )?;
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at

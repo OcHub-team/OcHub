@@ -1,4 +1,4 @@
-//! Service layer: provider switching, the (stubbed) proxy, OMO config, the
+//! Service layer: provider switching, OMO config, the
 //! tray usage cache, cloud sync (WebDAV/S3), and provider network utilities.
 //! Ported from cc-switch `services/`.
 //!
@@ -16,9 +16,7 @@ pub mod env;
 pub mod mcp;
 pub mod model_fetch;
 pub mod omo;
-pub mod prompt;
 pub mod provider;
-pub mod proxy;
 pub mod s3;
 pub mod s3_auto_sync;
 pub mod s3_sync;
@@ -38,7 +36,6 @@ pub mod usage_stats;
 pub mod webdav;
 pub mod webdav_auto_sync;
 pub mod webdav_sync;
-pub mod workspace;
 
 pub use codex_history_migration::{
     has_codex_official_history_unify_backup,
@@ -56,9 +53,7 @@ pub use env::{
 pub use mcp::McpService;
 pub use model_fetch::{build_models_url_candidates, fetch_models, FetchedModel};
 pub use omo::OmoService;
-pub use prompt::PromptService;
 pub use provider::{ProviderService, ProviderSortUpdate, SwitchResult};
-pub use proxy::ProxyService;
 pub use skill::SkillService;
 pub use speedtest::{EndpointLatency, SpeedtestService};
 pub use stream_check::StreamCheckService;
@@ -68,4 +63,3 @@ pub use usage_stats::{
     DailyStats, LogFilters, ModelStats, PaginatedLogs, ProviderLimitStatus, ProviderStats,
     RequestLogDetail, UsageSummary, UsageSummaryByApp,
 };
-pub use workspace::{DailyMemoryFileInfo, DailyMemorySearchResult, WorkspaceService};

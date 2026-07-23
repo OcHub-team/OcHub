@@ -52,10 +52,7 @@ impl Database {
         // 2. 迁移 MCP Servers
         Self::migrate_mcp_servers(tx, config)?;
 
-        // 3. 迁移 Prompts
-        Self::migrate_prompts(tx, config)?;
-
-        // 4. 迁移 Skills
+        // 3. 迁移 Skills
         Self::migrate_skills(tx, config)?;
 
         // 5. 迁移 Common Config
@@ -145,45 +142,6 @@ impl Database {
                 .map_err(|e| AppError::Database(format!("Migrate mcp server failed: {e}")))?;
             }
         }
-        Ok(())
-    }
-
-    /// 迁移提示词数据
-    fn migrate_prompts(
-        tx: &rusqlite::Transaction<'_>,
-        config: &MultiAppConfig,
-    ) -> Result<(), AppError> {
-        let migrate_app_prompts = |prompts_map: &std::collections::HashMap<
-            String,
-            crate::db::legacy_json::Prompt,
-        >,
-                                   app_type: &str|
-         -> Result<(), AppError> {
-            for (id, prompt) in prompts_map {
-                tx.execute(
-                        "INSERT OR REPLACE INTO prompts (
-                            id, app_type, name, content, description, enabled, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        params![
-                            id,
-                            app_type,
-                            prompt.name,
-                            prompt.content,
-                            prompt.description,
-                            prompt.enabled,
-                            prompt.created_at,
-                            prompt.updated_at,
-                        ],
-                    )
-                    .map_err(|e| AppError::Database(format!("Migrate prompt failed: {e}")))?;
-            }
-            Ok(())
-        };
-
-        migrate_app_prompts(&config.prompts.claude.prompts, "claude")?;
-        migrate_app_prompts(&config.prompts.codex.prompts, "codex")?;
-        migrate_app_prompts(&config.prompts.gemini.prompts, "gemini")?;
-
         Ok(())
     }
 

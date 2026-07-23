@@ -6,7 +6,6 @@
 mod app_meta;
 mod app_settings_view;
 mod app_ui;
-mod auth_view;
 mod chart;
 mod code_editor;
 mod components;
@@ -18,23 +17,22 @@ mod icons;
 mod layout;
 mod mcp_view;
 mod notifications;
-mod prompts_view;
 mod provider_editor;
-mod proxy_view;
 mod sessions_view;
 mod settings_view;
 mod shell_menu;
+mod shortcuts;
 mod skills_view;
 mod text_input;
 mod theme;
+mod theme_view;
 mod tools_view;
 mod usage_view;
-mod workspace_view;
 
 use std::borrow::Cow;
 use std::fs;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -72,6 +70,50 @@ impl AssetSource for Assets {
                     .collect()
             })
             .map_err(Into::into)
+    }
+}
+
+/// Resolve assets from a macOS app bundle first so packaged debug builds do not
+/// reach back into a source checkout under a TCC-protected directory.
+fn assets_base() -> PathBuf {
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(bundled) = bundled_assets_path(&executable).filter(|path| path.is_dir()) {
+            return bundled;
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
+}
+
+fn bundled_assets_path(executable: &Path) -> Option<PathBuf> {
+    let macos = executable.parent()?;
+    if macos.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents = macos.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    Some(contents.join("Resources").join("assets"))
+}
+
+#[cfg(test)]
+mod asset_path_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_assets_inside_a_macos_app_bundle() {
+        assert_eq!(
+            bundled_assets_path(Path::new("/tmp/OCHUB-QA.app/Contents/MacOS/ochub")),
+            Some(PathBuf::from("/tmp/OCHUB-QA.app/Contents/Resources/assets"))
+        );
+    }
+
+    #[test]
+    fn ignores_a_bare_debug_executable() {
+        assert_eq!(
+            bundled_assets_path(Path::new("/workspace/target/debug/ochub")),
+            None
+        );
     }
 }
 
@@ -120,12 +162,19 @@ fn main() {
 
     application()
         .with_assets(Assets {
-            base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets"),
+            base: assets_base(),
         })
         .run(move |cx: &mut App| {
             text_input::bind_keys(cx);
             code_editor::bind_keys(cx);
+            shortcuts::bind_keys(cx);
             shell_menu::install(app_state.clone(), cx);
+            let appearance_settings = ochub_core::settings::get_settings();
+            theme::install_selected(
+                &appearance_settings.theme_family,
+                appearance_settings.theme_mode,
+                cx.window_appearance(),
+            );
             // Pin to the primary display (avoids landing on a secondary monitor)
             // and use a roomier default size for the denser, redesigned UI.
             let display_id = cx.primary_display().map(|display| display.id());
@@ -134,9 +183,9 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     titlebar: Some(TitlebarOptions {
-                        title: Some("OCHUB".into()),
-                        // Blend the titlebar into our own chrome (Surge-style unified
-                        // toolbar). We draw a custom draggable top bar in `app_ui`.
+                        title: None,
+                        // Content extends behind the native titlebar. Only the macOS
+                        // traffic lights remain, embedded directly in the sidebar.
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(18.), px(18.))),
                     }),
@@ -144,7 +193,22 @@ fn main() {
                 },
                 {
                     let app_state = app_state.clone();
-                    move |_, cx| cx.new(|cx| AppRoot::new(app_state.clone(), cx))
+                    move |window, cx| {
+                        window
+                            .observe_window_appearance(|window, cx| {
+                                let settings = ochub_core::settings::get_settings();
+                                if settings.theme_mode == ochub_core::settings::ThemeMode::System {
+                                    theme::install_selected(
+                                        &settings.theme_family,
+                                        settings.theme_mode,
+                                        window.appearance(),
+                                    );
+                                    cx.refresh_windows();
+                                }
+                            })
+                            .detach();
+                        cx.new(|cx| AppRoot::new(app_state.clone(), cx))
+                    }
                 },
             );
             if let Err(err) = window {

@@ -23,8 +23,8 @@ use tokio::sync::RwLock;
 use crate::db::Database;
 use crate::gateway::router::candidates_for_model;
 use crate::gateway::types::{ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey};
-use crate::proxy::usage::logger::UsageLogger;
-use crate::proxy::usage::parser::TokenUsage;
+use crate::usage_tracking::logger::UsageLogger;
+use crate::usage_tracking::parser::TokenUsage;
 
 /// Shared state for the gateway server + pipeline.
 #[derive(Clone)]
@@ -1010,7 +1010,7 @@ mod tests {
             logged = {
                 let conn = db.conn.lock().unwrap();
                 conn.query_row(
-                    "SELECT COUNT(*) FROM proxy_request_logs WHERE app_type = 'gateway'",
+                    "SELECT COUNT(*) FROM usage_logs WHERE app_type = 'gateway'",
                     [],
                     |row| row.get(0),
                 )

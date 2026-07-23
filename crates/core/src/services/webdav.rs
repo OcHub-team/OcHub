@@ -7,7 +7,7 @@ use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use std::time::Duration;
 
 use crate::error::AppError;
-use crate::proxy::http_client;
+use crate::http_client;
 use futures::StreamExt;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;

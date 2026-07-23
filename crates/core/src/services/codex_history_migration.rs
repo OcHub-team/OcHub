@@ -221,10 +221,10 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     }
     // live 必须已实际路由到共享 custom 桶才允许迁移：官方配置的注入可能被拒
     // （已有显式 model_provider / 形态冲突的 custom 表，见
-    // `inject_codex_unified_session_bucket`），代理接管期间的 live 也不带统一
+    // `inject_codex_unified_session_bucket`），历史 live 也可能不带统一
     // 路由（注入只进备份）。这些状态下新会话仍落 "openai" 桶，迁移只会把
     // 历史搬进当前 live 看不见的桶里。开关与迁移意愿保持不动，待 live 真正
-    // 统一后（下次切换 / 接管释放后的启动重试）再迁。
+    // 统一后（下次切换或启动重试）再迁。
     if !codex_config_text_routes_custom(&read_codex_config_text().unwrap_or_default()) {
         return Ok(CodexHistoryProviderBucketMigrationOutcome {
             skipped_reason: Some("live_not_unified".to_string()),
@@ -272,7 +272,7 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
 }
 
 /// live config.toml 是否路由到共享 custom 桶（会话分桶只看这个实态：
-/// base_url / 接管与否都不影响 session_meta 记录的 model_provider）。
+/// base_url / 路由方式都不影响 session_meta 记录的 model_provider）。
 fn codex_config_text_routes_custom(config_text: &str) -> bool {
     config_text
         .parse::<DocumentMut>()

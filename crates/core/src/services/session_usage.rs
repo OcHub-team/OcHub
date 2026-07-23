@@ -1,21 +1,21 @@
 //! Claude Code 会话日志使用追踪
 //!
 //! 从 ~/.claude/projects/ 下的 JSONL 会话文件中提取 token 使用数据，
-//! 实现无代理模式下的使用统计。
+//! 从本地会话记录补充使用统计。
 //!
 //! ## 数据流
 //! ```text
-//! ~/.claude/projects/*/*.jsonl → 增量解析 → 去重 → 费用计算 → proxy_request_logs 表
+//! ~/.claude/projects/*/*.jsonl → 增量解析 → 去重 → 费用计算 → usage_logs 表
 //! ```
 
 use crate::db::{lock_conn, Database};
 use crate::error::AppError;
 use crate::paths::get_claude_config_dir;
-use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
 };
+use crate::usage_tracking::calculator::{CostCalculator, ModelPricing};
+use crate::usage_tracking::parser::TokenUsage;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -336,7 +336,7 @@ fn sync_single_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppEr
 
         let request_id = format!(
             "{}{}",
-            crate::proxy::usage::parser::SESSION_REQUEST_ID_PREFIX,
+            crate::usage_tracking::parser::SESSION_REQUEST_ID_PREFIX,
             msg.message_id
         );
 
@@ -406,7 +406,7 @@ pub(crate) fn update_sync_state(
     Ok(())
 }
 
-/// 插入单条会话日志到 proxy_request_logs，返回是否成功插入 (true=新插入, false=已存在)
+/// 插入单条会话日志到 usage_logs，返回是否成功插入 (true=新插入, false=已存在)
 fn insert_session_log_entry(
     db: &Database,
     request_id: &str,
@@ -477,7 +477,7 @@ fn insert_session_log_entry(
 
     let inserted_rows = conn
         .execute(
-            "INSERT OR IGNORE INTO proxy_request_logs (
+            "INSERT OR IGNORE INTO usage_logs (
             request_id, provider_id, app_type, model, request_model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
@@ -537,7 +537,7 @@ pub fn get_data_source_breakdown(db: &Database) -> Result<Vec<DataSourceSummary>
     let sql = format!(
         "SELECT COALESCE(l.data_source, 'proxy') as ds, COUNT(*) as cnt,
                 COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as cost
-         FROM proxy_request_logs l
+         FROM usage_logs l
          WHERE {effective_filter}
          GROUP BY ds
          ORDER BY cnt DESC"
@@ -644,18 +644,18 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_claude_session_skips_matching_proxy_log() -> Result<(), AppError> {
+    fn test_insert_claude_session_skips_matching_captured_log() -> Result<(), AppError> {
         let db = Database::memory()?;
         {
             let conn = lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
-                    "proxy-different-id",
+                    "gateway-different-id",
                     "openai-compatible",
                     "claude",
                     "claude-sonnet-4-5",
@@ -668,7 +668,7 @@ mod tests {
                     100,
                     200,
                     1000,
-                    "proxy"
+                    "gateway"
                 ],
             )?;
         }
@@ -689,9 +689,7 @@ mod tests {
         assert!(!inserted);
 
         let conn = lock_conn!(db.conn);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM usage_logs", [], |row| row.get(0))?;
         assert_eq!(count, 1);
 
         Ok(())
@@ -779,13 +777,13 @@ mod tests {
 
         let conn = lock_conn!(db.conn);
         let cache_read: i64 = conn.query_row(
-            "SELECT cache_read_tokens FROM proxy_request_logs WHERE request_id = 'session:msg_nostop'",
+            "SELECT cache_read_tokens FROM usage_logs WHERE request_id = 'session:msg_nostop'",
             [],
             |row| row.get(0),
         )?;
         assert_eq!(cache_read, 48719, "cache_read 必须被完整记录");
         let empty_exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = 'session:msg_empty')",
+            "SELECT EXISTS(SELECT 1 FROM usage_logs WHERE request_id = 'session:msg_empty')",
             [],
             |row| row.get(0),
         )?;

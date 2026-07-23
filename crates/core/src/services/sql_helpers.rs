@@ -19,7 +19,7 @@
 const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini"];
 
 /// Build an SQL expression that returns the cache-normalized `input_tokens`
-/// for a single row in `proxy_request_logs` or `usage_daily_rollups`.
+/// for a single row in `usage_logs` or `usage_daily_rollups`.
 ///
 /// For rows whose `app_type` is in [`CACHE_INCLUSIVE_APP_TYPES`] and
 /// `input_tokens >= cache_read_tokens`, returns
@@ -54,7 +54,7 @@ mod tests {
     fn setup_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE proxy_request_logs (
+            "CREATE TABLE usage_logs (
                 request_id TEXT PRIMARY KEY,
                 app_type TEXT NOT NULL,
                 input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -88,28 +88,28 @@ mod tests {
         let conn = setup_conn();
         // Codex row: OpenAI semantics — input_tokens includes the 600 cached.
         conn.execute(
-            "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
+            "INSERT INTO usage_logs (request_id, app_type, input_tokens, cache_read_tokens)
              VALUES ('codex-1', 'codex', 1000, 600)",
             [],
         )
         .unwrap();
         // Gemini row: Google semantics — promptTokenCount includes cachedContentTokenCount.
         conn.execute(
-            "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
+            "INSERT INTO usage_logs (request_id, app_type, input_tokens, cache_read_tokens)
              VALUES ('gemini-1', 'gemini', 800, 300)",
             [],
         )
         .unwrap();
         // Claude row: Anthropic semantics — input_tokens already excludes cache.
         conn.execute(
-            "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
+            "INSERT INTO usage_logs (request_id, app_type, input_tokens, cache_read_tokens)
              VALUES ('claude-1', 'claude', 200, 5000)",
             [],
         )
         .unwrap();
 
         let expr = fresh_input_sql("l");
-        let sql = format!("SELECT COALESCE(SUM({expr}), 0) FROM proxy_request_logs l");
+        let sql = format!("SELECT COALESCE(SUM({expr}), 0) FROM usage_logs l");
         let total: i64 = conn.query_row(&sql, [], |r| r.get(0)).unwrap();
         // Codex: 1000-600=400; Gemini: 800-300=500; Claude: 200 unchanged.
         assert_eq!(total, 400 + 500 + 200);
@@ -121,13 +121,13 @@ mod tests {
         // we keep the original value rather than producing a negative number.
         let conn = setup_conn();
         conn.execute(
-            "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
+            "INSERT INTO usage_logs (request_id, app_type, input_tokens, cache_read_tokens)
              VALUES ('codex-broken', 'codex', 100, 999)",
             [],
         )
         .unwrap();
         let expr = fresh_input_sql("l");
-        let sql = format!("SELECT {expr} FROM proxy_request_logs l");
+        let sql = format!("SELECT {expr} FROM usage_logs l");
         let value: i64 = conn.query_row(&sql, [], |r| r.get(0)).unwrap();
         assert_eq!(value, 100);
     }

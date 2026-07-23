@@ -14,7 +14,6 @@ use crate::app_type::AppType;
 use crate::db::stream_check_types::{HealthStatus, StreamCheckConfig, StreamCheckResult};
 use crate::error::AppError;
 use crate::model::Provider;
-use crate::proxy::providers::{get_adapter, ClaudeAdapter, ProviderAdapter};
 
 pub struct StreamCheckService;
 
@@ -101,7 +100,7 @@ impl StreamCheckService {
             None => Self::resolve_base_url(app_type, provider)?,
         };
 
-        let client = crate::proxy::http_client::get();
+        let client = crate::http_client::get();
         let timeout = std::time::Duration::from_secs(config.timeout_secs);
         let user_agent = Self::custom_user_agent(provider);
 
@@ -122,13 +121,89 @@ impl StreamCheckService {
             }
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
             AppType::Hermes => Self::extract_hermes_base_url(provider),
-            AppType::ClaudeDesktop => ClaudeAdapter::new()
-                .extract_base_url(provider)
-                .map_err(|e| AppError::Message(format!("Failed to extract base_url: {e}"))),
-            _ => get_adapter(app_type)
-                .extract_base_url(provider)
-                .map_err(|e| AppError::Message(format!("Failed to extract base_url: {e}"))),
+            AppType::Claude | AppType::ClaudeDesktop => Self::extract_claude_base_url(provider),
+            AppType::Codex => Self::extract_codex_base_url(provider),
+            AppType::Gemini => Self::extract_gemini_base_url(provider),
         }
+    }
+
+    fn extract_claude_base_url(provider: &Provider) -> Result<String, AppError> {
+        if provider.is_codex_oauth() {
+            return Ok("https://chatgpt.com/backend-api/codex".to_string());
+        }
+        Self::first_non_empty([
+            provider
+                .settings_config
+                .pointer("/env/ANTHROPIC_BASE_URL")
+                .and_then(|value| value.as_str()),
+            provider
+                .settings_config
+                .get("base_url")
+                .and_then(|value| value.as_str()),
+            provider
+                .settings_config
+                .get("baseURL")
+                .and_then(|value| value.as_str()),
+            provider
+                .settings_config
+                .get("apiEndpoint")
+                .and_then(|value| value.as_str()),
+        ])
+        .ok_or_else(|| AppError::Config("Claude 供应商缺少 Base URL".to_string()))
+    }
+
+    fn extract_codex_base_url(provider: &Provider) -> Result<String, AppError> {
+        let direct = Self::first_non_empty([
+            provider
+                .settings_config
+                .get("base_url")
+                .and_then(|value| value.as_str()),
+            provider
+                .settings_config
+                .get("baseURL")
+                .and_then(|value| value.as_str()),
+            provider
+                .settings_config
+                .pointer("/config/base_url")
+                .and_then(|value| value.as_str()),
+        ]);
+        direct
+            .or_else(|| {
+                provider
+                    .settings_config
+                    .get("config")
+                    .and_then(|value| value.as_str())
+                    .and_then(crate::apps::codex::extract_codex_base_url)
+                    .map(|value| value.trim_end_matches('/').to_string())
+            })
+            .ok_or_else(|| AppError::Config("Codex 供应商缺少 Base URL".to_string()))
+    }
+
+    fn extract_gemini_base_url(provider: &Provider) -> Result<String, AppError> {
+        Self::first_non_empty([
+            provider
+                .settings_config
+                .pointer("/env/GOOGLE_GEMINI_BASE_URL")
+                .and_then(|value| value.as_str()),
+            provider
+                .settings_config
+                .get("base_url")
+                .and_then(|value| value.as_str()),
+            provider
+                .settings_config
+                .get("baseURL")
+                .and_then(|value| value.as_str()),
+        ])
+        .ok_or_else(|| AppError::Config("Gemini 供应商缺少 Base URL".to_string()))
+    }
+
+    fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
+        values
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .find(|value| !value.is_empty())
+            .map(|value| value.trim_end_matches('/').to_string())
     }
 
     async fn probe_reachability(

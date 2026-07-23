@@ -63,7 +63,7 @@ pub async fn fetch_models(
     }
 
     let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let mut last_err: Option<String> = None;
 
     for url in &candidates {
@@ -73,7 +73,7 @@ pub async fn fetch_models(
             .header("Authorization", format!("Bearer {api_key}"))
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS));
         // 自定义 User-Agent：部分 /models 端点同样有 UA 白名单（如 Kimi Coding Plan），
-        // 与转发 / 检测路径共用同一 UA，避免"代理可用但取模型失败"。
+        // 与网关转发 / 检测路径共用同一 UA，避免"调用可用但取模型失败"。
         if let Some(ua) = &user_agent {
             request = request.header(USER_AGENT, ua.clone());
         }

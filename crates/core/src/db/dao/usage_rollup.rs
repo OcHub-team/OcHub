@@ -1,6 +1,6 @@
 //! Usage rollup DAO
 //!
-//! Aggregates proxy_request_logs into daily rollups and prunes old detail rows.
+//! Aggregates usage_logs into daily rollups and prunes old detail rows.
 
 use crate::db::{lock_conn, Database};
 use crate::error::AppError;
@@ -9,7 +9,7 @@ use chrono::{Duration, Local, TimeZone};
 /// 跨源去重时间窗口（秒）。
 ///
 /// Ported from cc-switch `services/usage_stats.rs`.
-const SESSION_PROXY_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
+const SESSION_CAPTURE_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
 
 /// SQL 片段：把指定别名的 `data_source` 包成 COALESCE，NULL 视作 'proxy'。
 ///
@@ -18,38 +18,38 @@ fn data_source_expr(log_alias: &str) -> String {
     format!("COALESCE({log_alias}.data_source, 'proxy')")
 }
 
-/// 有效用量日志过滤片段（排除与 proxy 行重复的 session 行）。
+/// 有效用量日志过滤片段（排除与网关采集行重复的 session 行）。
 ///
 /// Ported from cc-switch `services/usage_stats.rs::effective_usage_log_filter`.
 fn effective_usage_log_filter(log_alias: &str) -> String {
     let data_source = data_source_expr(log_alias);
-    let proxy_data_source = data_source_expr("proxy_dedup");
+    let captured_data_source = data_source_expr("captured_dedup");
     format!(
         "NOT (
             {data_source} IN ('session_log', 'codex_session', 'gemini_session', 'opencode_session')
             AND EXISTS (
                 SELECT 1
-                FROM proxy_request_logs proxy_dedup
-                WHERE {proxy_data_source} = 'proxy'
-                  AND proxy_dedup.app_type = {log_alias}.app_type
-                  AND proxy_dedup.status_code >= 200
-                  AND proxy_dedup.status_code < 300
-                  AND proxy_dedup.input_tokens = {log_alias}.input_tokens
-                  AND proxy_dedup.output_tokens = {log_alias}.output_tokens
-                  AND proxy_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
+                FROM usage_logs captured_dedup
+                WHERE {captured_data_source} IN ('gateway', 'proxy')
+                  AND captured_dedup.app_type = {log_alias}.app_type
+                  AND captured_dedup.status_code >= 200
+                  AND captured_dedup.status_code < 300
+                  AND captured_dedup.input_tokens = {log_alias}.input_tokens
+                  AND captured_dedup.output_tokens = {log_alias}.output_tokens
+                  AND captured_dedup.cache_read_tokens = {log_alias}.cache_read_tokens
                   AND (
-                      proxy_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
+                      captured_dedup.cache_creation_tokens = {log_alias}.cache_creation_tokens
                       OR (
                           {log_alias}.cache_creation_tokens = 0
                           AND {data_source} IN ('codex_session', 'gemini_session', 'opencode_session')
                       )
                   )
-                  AND proxy_dedup.created_at BETWEEN
-                      {log_alias}.created_at - {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
-                      AND {log_alias}.created_at + {SESSION_PROXY_DEDUP_WINDOW_SECONDS}
+                  AND captured_dedup.created_at BETWEEN
+                      {log_alias}.created_at - {SESSION_CAPTURE_DEDUP_WINDOW_SECONDS}
+                      AND {log_alias}.created_at + {SESSION_CAPTURE_DEDUP_WINDOW_SECONDS}
                   AND (
-                      LOWER(proxy_dedup.model) = LOWER({log_alias}.model)
-                      OR LOWER(proxy_dedup.model) = 'unknown'
+                      LOWER(captured_dedup.model) = LOWER({log_alias}.model)
+                      OR LOWER(captured_dedup.model) = 'unknown'
                       OR LOWER({log_alias}.model) = 'unknown'
                   )
             )
@@ -60,7 +60,7 @@ fn effective_usage_log_filter(log_alias: &str) -> String {
 /// Compute the rollup/prune cutoff aligned to a local-day boundary.
 ///
 /// Anything strictly older than the returned timestamp will be aggregated into
-/// `usage_daily_rollups` and deleted from `proxy_request_logs`. Aligning to the
+/// `usage_daily_rollups` and deleted from `usage_logs`. Aligning to the
 /// next local midnight after `(now - retain_days)` guarantees that the youngest
 /// rollup row always represents a *complete* local day. Without this alignment
 /// the cutoff falls mid-day, leaving the day half-rolled-up and half-pruned —
@@ -105,7 +105,7 @@ fn compute_local_midnight_cutoff(
 }
 
 impl Database {
-    /// Aggregate proxy_request_logs older than `retain_days` into usage_daily_rollups,
+    /// Aggregate usage_logs older than `retain_days` into usage_daily_rollups,
     /// then delete the aggregated detail rows.
     /// Returns the number of deleted detail rows.
     pub fn rollup_and_prune(&self, retain_days: i64) -> Result<u64, AppError> {
@@ -115,7 +115,7 @@ impl Database {
         // Check if there are any rows to process
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM proxy_request_logs WHERE created_at < ?1",
+                "SELECT COUNT(*) FROM usage_logs WHERE created_at < ?1",
                 [cutoff],
                 |row| row.get(0),
             )
@@ -145,9 +145,7 @@ impl Database {
                 conn.execute("RELEASE rollup_prune;", [])
                     .map_err(|e| AppError::Database(e.to_string()))?;
                 if deleted > 0 {
-                    log::info!(
-                        "Rolled up and pruned {deleted} proxy_request_logs (retain={retain_days}d)"
-                    );
+                    log::info!("Rolled up and pruned {deleted} usage_logs (retain={retain_days}d)");
                     // 归档触发了表结构变化，前端 30 天前的统计可能跟着变，
                     // 通知一次让 UsageDashboard 重拉数据
                     // PORT TODO: cc-switch emitted a `usage_events::notify_log_recorded()`
@@ -168,7 +166,7 @@ impl Database {
     fn do_rollup_and_prune(conn: &rusqlite::Connection, cutoff: i64) -> Result<u64, AppError> {
         // Aggregate old logs, merging with any pre-existing rollup rows via LEFT JOIN.
         let effective_filter = effective_usage_log_filter("l");
-        // request_model 维度保留路由接管的「客户端别名 → 真实模型」映射，
+        // request_model 维度保留网关路由的「客户端别名 → 真实模型」映射，
         // pricing_model 维度保留写入时的计价基准（request 计价模式下与 model 分叉）；
         // 明细行的这两列可能为 NULL（历史/手工数据），归一为 ''。
         let aggregation_sql = format!(
@@ -206,7 +204,7 @@ impl Database {
                     COALESCE(SUM(l.cache_creation_tokens), 0) as new_cc,
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as new_cost,
                     COALESCE(AVG(l.latency_ms), 0) as new_lat
-                FROM proxy_request_logs l
+                FROM usage_logs l
                 WHERE l.created_at < ?1 AND {effective_filter}
                 GROUP BY d, a, p, m, rm, pm
             ) agg
@@ -222,10 +220,7 @@ impl Database {
         // INSERT uses the effective-log filter to exclude duplicate session rows.
         // DELETE intentionally prunes all old details so those duplicates are discarded.
         let deleted = conn
-            .execute(
-                "DELETE FROM proxy_request_logs WHERE created_at < ?1",
-                [cutoff],
-            )
+            .execute("DELETE FROM usage_logs WHERE created_at < ?1", [cutoff])
             .map_err(|e| AppError::Database(format!("Pruning old logs failed: {e}")))?;
 
         Ok(deleted as u64)
@@ -289,7 +284,7 @@ mod tests {
             let conn = crate::db::lock_conn!(db.conn);
             for i in 0..5 {
                 conn.execute(
-                    "INSERT INTO proxy_request_logs (
+                    "INSERT INTO usage_logs (
                         request_id, provider_id, app_type, model,
                         input_tokens, output_tokens, total_cost_usd,
                         latency_ms, status_code, created_at
@@ -299,7 +294,7 @@ mod tests {
             }
             for i in 0..3 {
                 conn.execute(
-                    "INSERT INTO proxy_request_logs (
+                    "INSERT INTO usage_logs (
                         request_id, provider_id, app_type, model,
                         input_tokens, output_tokens, total_cost_usd,
                         latency_ms, status_code, created_at
@@ -323,9 +318,7 @@ mod tests {
 
         // Verify recent logs untouched
         let remaining: i64 =
-            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-                row.get(0)
-            })?;
+            conn.query_row("SELECT COUNT(*) FROM usage_logs", [], |row| row.get(0))?;
         assert_eq!(remaining, 3);
         Ok(())
     }
@@ -339,15 +332,15 @@ mod tests {
         {
             let conn = crate::db::lock_conn!(db.conn);
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
-                ) VALUES (?1, 'openai', 'codex', 'gpt-5.4', 'gpt-5.4', 100, 20, 10, 0, '0.10', 100, 200, ?2, 'proxy')",
-                rusqlite::params!["codex-proxy-old", old_ts],
+                ) VALUES (?1, 'openai', 'codex', 'gpt-5.4', 'gpt-5.4', 100, 20, 10, 0, '0.10', 100, 200, ?2, 'gateway')",
+                rusqlite::params!["codex-gateway-old", old_ts],
             )?;
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     total_cost_usd, latency_ms, status_code, created_at, data_source
@@ -385,9 +378,7 @@ mod tests {
         assert_eq!(*cache_read_tokens, 10);
 
         let remaining: i64 =
-            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-                row.get(0)
-            })?;
+            conn.query_row("SELECT COUNT(*) FROM usage_logs", [], |row| row.get(0))?;
         assert_eq!(remaining, 0);
 
         Ok(())
@@ -401,7 +392,7 @@ mod tests {
 
         {
             let conn = crate::db::lock_conn!(db.conn);
-            // 路由接管行：model 是真实上游模型，request_model 是客户端别名。
+            // 网关路由行：model 是真实上游模型，request_model 是客户端别名。
             // 同 model 下两个不同别名必须各自成行，prune 后映射关系仍可审计。
             for (i, request_model) in [
                 ("a", "claude-sonnet-4-6"),
@@ -409,7 +400,7 @@ mod tests {
                 ("c", "claude-haiku-4-5"),
             ] {
                 conn.execute(
-                    "INSERT INTO proxy_request_logs (
+                    "INSERT INTO usage_logs (
                         request_id, provider_id, app_type, model, request_model,
                         input_tokens, output_tokens, total_cost_usd,
                         latency_ms, status_code, created_at
@@ -453,7 +444,7 @@ mod tests {
             let conn = crate::db::lock_conn!(db.conn);
             // request 计价模式下 pricing_model 与 model 分叉，必须各自成行
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -462,7 +453,7 @@ mod tests {
                 rusqlite::params![old_ts],
             )?;
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -506,7 +497,7 @@ mod tests {
             // >30 天的 0 成本行：pricing_model（gpt-5.5）在 seed 定价表中有价。
             // 剪枝是不可逆的，rollup 必须先回填再汇总，否则按 0 永久入账。
             conn.execute(
-                "INSERT INTO proxy_request_logs (
+                "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
@@ -564,7 +555,7 @@ mod tests {
             )?;
             for i in 0..3 {
                 conn.execute(
-                    "INSERT INTO proxy_request_logs (
+                    "INSERT INTO usage_logs (
                         request_id, provider_id, app_type, model,
                         input_tokens, output_tokens, total_cost_usd,
                         latency_ms, status_code, created_at

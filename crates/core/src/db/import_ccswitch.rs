@@ -25,8 +25,8 @@ const MAX_VERIFIED_SOURCE_VERSION: i32 = 16;
 /// （例如新版 cc-switch 的 grokbuild）。
 const KNOWN_APP_TYPES: &str = "('claude','claude-desktop','claude_desktop','claudeDesktop','codex','gemini','opencode','openclaw','hermes')";
 
-/// proxy_config 表受 CHECK 约束限制的 app_type 集合。
-const PROXY_CONFIG_APP_TYPES: &str = "('claude','codex','gemini')";
+/// 旧版 proxy_config 表受 CHECK 约束限制的 app_type 集合。
+const LEGACY_USAGE_CONFIG_APP_TYPES: &str = "('claude','codex','gemini')";
 
 /// 单表导入结果。
 #[derive(Debug, Clone, Serialize)]
@@ -52,29 +52,49 @@ impl ImportReport {
     }
 }
 
-/// 导入表清单：(表名, 行过滤 WHERE 子句, 冲突策略)。
+/// 导入表清单：(源表名, 目标表名, 行过滤 WHERE 子句, 冲突策略)。
 ///
 /// 明确排除：
 /// - `proxy_live_backup` — cc-switch 的运行时 live-config 接管状态，导入会让
 ///   OCHUB 误以为持有待恢复的备份；
 /// - `stream_check_logs` — 瞬态测速日志，无长期价值；
 /// - `sqlite_sequence` — SQLite 内部表。
-const IMPORT_TABLES: &[(&str, Option<&str>, &str)] = &[
-    ("providers", Some(KNOWN_APP_TYPES), "OR REPLACE"),
-    ("provider_endpoints", Some(KNOWN_APP_TYPES), "OR REPLACE"),
-    ("provider_health", Some(KNOWN_APP_TYPES), "OR REPLACE"),
-    ("mcp_servers", None, "OR REPLACE"),
-    ("prompts", Some(KNOWN_APP_TYPES), "OR REPLACE"),
-    ("skills", None, "OR REPLACE"),
-    ("skill_repos", None, "OR REPLACE"),
-    ("settings", None, "OR REPLACE"),
-    ("proxy_config", Some(PROXY_CONFIG_APP_TYPES), "OR REPLACE"),
+const IMPORT_TABLES: &[(&str, &str, Option<&str>, &str)] = &[
+    (
+        "providers",
+        "providers",
+        Some(KNOWN_APP_TYPES),
+        "OR REPLACE",
+    ),
+    (
+        "provider_endpoints",
+        "provider_endpoints",
+        Some(KNOWN_APP_TYPES),
+        "OR REPLACE",
+    ),
+    ("mcp_servers", "mcp_servers", None, "OR REPLACE"),
+    ("skills", "skills", None, "OR REPLACE"),
+    ("skill_repos", "skill_repos", None, "OR REPLACE"),
+    ("settings", "settings", None, "OR REPLACE"),
+    // Only usage pricing survives from the retired proxy configuration.
+    (
+        "proxy_config",
+        "usage_config",
+        Some(LEGACY_USAGE_CONFIG_APP_TYPES),
+        "OR REPLACE",
+    ),
     // model_pricing：REPLACE 覆盖内置种子 —— 源库可能带用户自定义定价与更新的价目
-    ("model_pricing", None, "OR REPLACE"),
-    ("proxy_request_logs", None, "OR REPLACE"),
-    ("usage_daily_rollups", None, "OR REPLACE"),
-    ("session_log_sync", None, "OR REPLACE"),
-    ("profiles", None, "OR REPLACE"),
+    ("model_pricing", "model_pricing", None, "OR REPLACE"),
+    // Preserve historical usage under the gateway-neutral target table name.
+    ("proxy_request_logs", "usage_logs", None, "OR REPLACE"),
+    (
+        "usage_daily_rollups",
+        "usage_daily_rollups",
+        None,
+        "OR REPLACE",
+    ),
+    ("session_log_sync", "session_log_sync", None, "OR REPLACE"),
+    ("profiles", "profiles", None, "OR REPLACE"),
 ];
 
 /// 随数据库一并导入的旁路文件（app 配置目录下）。
@@ -91,7 +111,7 @@ impl Database {
     ///
     /// 返回 `Ok(None)` 表示没有可导入的源（首次全新安装）。仅应在全新
     /// OCHUB 数据库上调用；所有插入使用 INSERT OR REPLACE，因此对种子
-    /// 数据（官方 provider、内置定价、proxy_config 三行）是覆盖语义。
+    /// 数据（官方 provider、内置定价、用量定价设置）是覆盖语义。
     pub fn import_from_ccswitch(&self) -> Result<Option<ImportReport>, AppError> {
         let source_path = crate::paths::get_legacy_ccswitch_database_path();
         if !source_path.exists() {
@@ -152,15 +172,15 @@ impl Database {
             let mut tables = Vec::new();
             let mut skipped = Vec::new();
 
-            for (table, row_filter, conflict) in IMPORT_TABLES {
-                if !Self::table_exists_in(conn, "ccswitch", table)? {
-                    skipped.push(format!("{table}（源库中不存在）"));
+            for (source_table, target_table, row_filter, conflict) in IMPORT_TABLES {
+                if !Self::table_exists_in(conn, "ccswitch", source_table)? {
+                    skipped.push(format!("{source_table}（源库中不存在）"));
                     continue;
                 }
 
-                let columns = Self::common_columns(conn, table)?;
+                let columns = Self::common_columns(conn, source_table, target_table)?;
                 if columns.is_empty() {
-                    skipped.push(format!("{table}（无共同列）"));
+                    skipped.push(format!("{source_table} → {target_table}（无共同列）"));
                     continue;
                 }
 
@@ -173,18 +193,34 @@ impl Database {
                     .map(|set| format!(" WHERE app_type IN {set}"))
                     .unwrap_or_default();
                 let sql = format!(
-                    "INSERT {conflict} INTO main.\"{table}\" ({column_list})
-                     SELECT {column_list} FROM ccswitch.\"{table}\"{where_clause}"
+                    "INSERT {conflict} INTO main.\"{target_table}\" ({column_list})
+                     SELECT {column_list} FROM ccswitch.\"{source_table}\"{where_clause}"
                 );
-                let rows = conn
-                    .execute(&sql, [])
-                    .map_err(|e| AppError::Database(format!("导入表 {table} 失败: {e}")))?;
+                let rows = conn.execute(&sql, []).map_err(|e| {
+                    AppError::Database(format!("导入表 {source_table} → {target_table} 失败: {e}"))
+                })?;
 
                 tables.push(TableImport {
-                    table: (*table).to_string(),
+                    table: (*target_table).to_string(),
                     rows,
                 });
             }
+
+            // Generic settings import intentionally carries unknown future keys, but the
+            // retired local-routing settings are known dead state and must not reappear.
+            conn.execute(
+                "DELETE FROM main.settings
+                 WHERE key = 'global_proxy_url'
+                    OR key LIKE 'proxy_takeover_%'
+                    OR key IN (
+                        'rectifier_config',
+                        'optimizer_config',
+                        'copilot_optimizer_config',
+                        'log_config'
+                    )",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("清理旧代理设置失败: {e}")))?;
 
             Ok((tables, skipped))
         })();
@@ -215,9 +251,13 @@ impl Database {
     }
 
     /// 目标表与源表（ccswitch attach）列名交集，按目标表列序。
-    fn common_columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
-        let target = Self::column_names(conn, "main", table)?;
-        let source = Self::column_names(conn, "ccswitch", table)?;
+    fn common_columns(
+        conn: &Connection,
+        source_table: &str,
+        target_table: &str,
+    ) -> Result<Vec<String>, AppError> {
+        let target = Self::column_names(conn, "main", target_table)?;
+        let source = Self::column_names(conn, "ccswitch", source_table)?;
         Ok(target.into_iter().filter(|c| source.contains(c)).collect())
     }
 
@@ -263,6 +303,7 @@ mod tests {
 
     /// 造一个模拟 cc-switch v13+ 源库：
     /// - providers 带 OCHUB 不认识的额外列（enabled_grokbuild）和 grokbuild 行
+    /// - 旧代理定价与请求日志要迁入中性的用量表
     /// - 一张 OCHUB 完全不认识的表（grok_things）
     /// - proxy_live_backup 带数据（必须被跳过）
     fn build_fake_ccswitch_db(path: &std::path::Path) {
@@ -279,6 +320,25 @@ mod tests {
              INSERT INTO providers VALUES ('p2', 'grokbuild', 'Grok', '{}', 0, 1);
              CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
              INSERT INTO settings VALUES ('language', 'zh');
+             INSERT INTO settings VALUES ('global_proxy_url', 'socks5://127.0.0.1:1080');
+             INSERT INTO settings VALUES ('proxy_takeover_claude', 'true');
+             CREATE TABLE proxy_config (
+                 app_type TEXT PRIMARY KEY,
+                 default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                 pricing_model_source TEXT NOT NULL DEFAULT 'response'
+             );
+             INSERT INTO proxy_config VALUES ('claude', '1.5', 'request');
+             CREATE TABLE proxy_request_logs (
+                 request_id TEXT PRIMARY KEY,
+                 provider_id TEXT NOT NULL,
+                 app_type TEXT NOT NULL,
+                 model TEXT NOT NULL,
+                 latency_ms INTEGER NOT NULL,
+                 status_code INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             INSERT INTO proxy_request_logs
+                 VALUES ('legacy-request', 'p1', 'claude', 'claude-test', 12, 200, 123);
              CREATE TABLE proxy_live_backup (
                  app_type TEXT PRIMARY KEY, original_config TEXT NOT NULL, backed_up_at TEXT NOT NULL
              );
@@ -318,12 +378,36 @@ mod tests {
             })
             .unwrap();
         assert_eq!(lang, "zh");
-
-        // proxy_live_backup 不在导入清单里，目标库保持为空
-        let backup_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM proxy_live_backup", [], |r| r.get(0))
+        let retired_settings: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings
+                 WHERE key = 'global_proxy_url' OR key LIKE 'proxy_takeover_%'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(backup_count, 0);
+        assert_eq!(retired_settings, 0);
+
+        // 旧定价和请求记录迁入新的用量结构。
+        let multiplier: String = conn
+            .query_row(
+                "SELECT default_cost_multiplier FROM usage_config WHERE app_type='claude'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(multiplier, "1.5");
+        let usage_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM usage_logs WHERE request_id='legacy-request'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(usage_count, 1);
+
+        // 运行时接管备份不属于网关数据，不能导入。
+        assert!(!Database::table_exists_in(&conn, "main", "proxy_live_backup").unwrap());
 
         // 源库中缺失的表记入 skipped
         assert!(report

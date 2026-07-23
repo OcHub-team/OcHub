@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use gpui::{actions, App, Menu, MenuItem, SharedString, SystemMenuType};
+use gpui::{actions, App, Menu, MenuItem, OsAction, SharedString, SystemMenuType};
 use ochub_core::services::provider::ProviderService;
 use ochub_core::services::subscription::{
     SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH, TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO,
@@ -16,6 +16,8 @@ use ochub_core::{settings, AppState, AppType, Provider, UsageResult};
 
 use crate::app_ui::notify_open_roots;
 use crate::notifications::NotificationLevel;
+use crate::shortcuts::{CloseWindow, Save};
+use crate::text_input::{Copy, Cut, Find, FindNext, FindPrevious, Paste, Redo, SelectAll, Undo};
 
 actions!(ochub, [OpenMainWindow, QuitApp, RefreshShellMenus]);
 
@@ -27,6 +29,11 @@ pub struct SwitchProviderFromMenu {
 }
 
 pub fn install(app: Arc<AppState>, cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([gpui::KeyBinding::new("cmd-q", QuitApp, None)]);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    cx.bind_keys([gpui::KeyBinding::new("ctrl-q", QuitApp, None)]);
+
     let switch_app = app.clone();
     cx.on_action(move |action: &SwitchProviderFromMenu, cx| {
         switch_provider_from_menu(switch_app.clone(), action, cx);
@@ -54,13 +61,33 @@ pub fn refresh(app: &Arc<AppState>, cx: &mut App) {
 fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
     let settings = settings::get_settings();
     let quick_switch_enabled = settings.show_in_tray;
-    let mut menus = vec![Menu::new("OCHUB").items([
-        MenuItem::action("打开主窗口", OpenMainWindow),
-        MenuItem::separator(),
-        MenuItem::os_submenu("服务", SystemMenuType::Services),
-        MenuItem::separator(),
-        MenuItem::action("退出 OCHUB", QuitApp),
-    ])];
+    let mut menus = vec![
+        Menu::new("OCHUB").items([
+            MenuItem::action("打开主窗口", OpenMainWindow),
+            MenuItem::separator(),
+            MenuItem::os_submenu("服务", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("退出 OCHUB", QuitApp),
+        ]),
+        Menu::new("文件").items([
+            MenuItem::action("保存", Save),
+            MenuItem::separator(),
+            MenuItem::action("关闭窗口", CloseWindow),
+        ]),
+        Menu::new("编辑").items([
+            MenuItem::os_action("撤销", Undo, OsAction::Undo),
+            MenuItem::os_action("重做", Redo, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action("剪切", Cut, OsAction::Cut),
+            MenuItem::os_action("复制", Copy, OsAction::Copy),
+            MenuItem::os_action("粘贴", Paste, OsAction::Paste),
+            MenuItem::os_action("全选", SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action("查找", Find),
+            MenuItem::action("查找下一个", FindNext),
+            MenuItem::action("查找上一个", FindPrevious),
+        ]),
+    ];
 
     if quick_switch_enabled {
         menus.push(Menu::new("供应商").items(provider_submenus(app)));

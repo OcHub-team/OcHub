@@ -18,7 +18,7 @@ use crate::error::AppError;
 use crate::model::Provider;
 use crate::provider_config::AppConfig;
 
-use super::capabilities::{LiveConfigOps, ProxySpec};
+use super::capabilities::LiveConfigOps;
 use super::hooks::HookRegistry;
 use super::manifest::{AppManifest, FileSpec, ManifestError, WriteMode};
 use super::manifest_codec::ManifestCodec;
@@ -133,20 +133,12 @@ impl AppPlugin for ManifestPlugin {
 
     // v1 manifest apps focus on switch-mode provider config; the optional
     // capabilities stay off.
-    fn prompt_filename(&self) -> Option<&str> {
-        None
-    }
-
     fn supports_mcp(&self) -> bool {
         false
     }
 
     fn supports_skills(&self) -> bool {
         false
-    }
-
-    fn proxy(&self) -> Option<ProxySpec> {
-        None
     }
 }
 

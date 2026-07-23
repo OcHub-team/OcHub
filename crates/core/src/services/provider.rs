@@ -36,7 +36,7 @@ pub(crate) use live::sanitize_claude_settings_for_live;
 pub(crate) use live::{
     build_effective_settings_with_common_config, normalize_provider_common_config_for_storage,
     provider_exists_in_live_config, strip_common_config_from_live_settings,
-    write_live_with_common_config, write_live_with_common_config_ungated,
+    write_live_with_common_config,
 };
 
 // Internal re-exports
@@ -59,24 +59,6 @@ pub fn reapply_current_codex_official_live(state: &AppState) -> Result<bool, App
     };
     if provider.category.as_deref() != Some("official") {
         return Ok(false);
-    }
-
-    let has_live_backup =
-        futures::executor::block_on(state.db.get_live_backup(AppType::Codex.as_str()))
-            .ok()
-            .flatten()
-            .is_some();
-    let live_taken_over = state
-        .proxy_service
-        .detect_takeover_in_live_config_for_app(&AppType::Codex);
-    if has_live_backup || live_taken_over {
-        futures::executor::block_on(
-            state
-                .proxy_service
-                .update_live_backup_from_provider(AppType::Codex.as_str(), provider),
-        )
-        .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
-        return Ok(true);
     }
 
     live::write_live_with_common_config(&state.db, &AppType::Codex, provider)?;
@@ -350,43 +332,8 @@ impl ProviderService {
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
         if is_current {
-            let has_live_backup =
-                futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
-                    .ok()
-                    .flatten()
-                    .is_some();
-            let live_taken_over = state
-                .proxy_service
-                .detect_takeover_in_live_config_for_app(&app_type);
-            let should_sync_via_proxy = has_live_backup || live_taken_over;
-
-            if should_sync_via_proxy {
-                if matches!(app_type, AppType::ClaudeDesktop) {
-                    write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
-                } else {
-                    futures::executor::block_on(
-                        state
-                            .proxy_service
-                            .update_live_backup_from_provider(app_type.as_str(), &provider),
-                    )
-                    .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
-                }
-
-                if matches!(app_type, AppType::Claude)
-                    && futures::executor::block_on(state.proxy_service.is_running())
-                {
-                    futures::executor::block_on(
-                        state
-                            .proxy_service
-                            .sync_claude_live_from_provider_while_proxy_active(&provider),
-                    )
-                    .map_err(|e| AppError::Message(format!("同步 Claude Live 配置失败: {e}")))?;
-                }
-            } else {
-                write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
-                // Sync MCP
-                crate::services::mcp::McpService::sync_all_enabled(state)?;
-            }
+            write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
+            crate::services::mcp::McpService::sync_all_enabled(state)?;
         }
 
         Ok(true)
@@ -530,58 +477,10 @@ impl ProviderService {
             return Self::switch_normal(state, app_type, id, &providers);
         }
 
-        let _switch_guard =
-            if matches!(app_type, AppType::Claude | AppType::Codex | AppType::Gemini) {
-                Some(futures::executor::block_on(
-                    state.proxy_service.lock_switch_for_app(app_type.as_str()),
-                ))
-            } else {
-                None
-            };
-
-        let is_app_taken_over =
-            futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
-                .ok()
-                .flatten()
-                .is_some();
-        let live_taken_over = state
-            .proxy_service
-            .detect_takeover_in_live_config_for_app(&app_type);
-
-        let should_hot_switch = is_app_taken_over || live_taken_over;
-
-        // Block switching to official providers when proxy takeover is active.
-        if should_hot_switch && _provider.category.as_deref() == Some("official") {
-            return Err(AppError::localized(
-                "switch.official_blocked_by_proxy",
-                "代理接管模式下不能切换到官方供应商，使用代理访问官方 API 可能导致账号被封禁。请先关闭代理接管，或选择第三方供应商。",
-                "Cannot switch to official provider while proxy takeover is active. Using proxy with official APIs may cause account bans.",
-            ));
-        }
-
-        if should_hot_switch {
-            // Proxy takeover mode: hot-switch without restoring upstream Live config.
-            log::info!(
-                "代理接管模式：热切换 {} 的目标供应商为 {}",
-                app_type.as_str(),
-                id
-            );
-
-            futures::executor::block_on(
-                state
-                    .proxy_service
-                    .hot_switch_provider_inner(app_type.as_str(), id),
-            )
-            .map_err(|e| AppError::Message(format!("热切换失败: {e}")))?;
-
-            return Ok(SwitchResult::default());
-        }
-
-        // Normal mode: full switch with Live config write
         Self::switch_normal(state, app_type, id, &providers)
     }
 
-    /// Normal switch flow (non-proxy mode)
+    /// Switch flow with a live-config write.
     fn switch_normal(
         state: &AppState,
         app_type: AppType,
@@ -714,46 +613,6 @@ impl ProviderService {
         state: &AppState,
         app_type: AppType,
     ) -> Result<(), AppError> {
-        if app_type.is_additive_mode() {
-            return sync_current_provider_for_app_to_live(state, &app_type);
-        }
-
-        let current_id =
-            match crate::settings::get_effective_current_provider(&state.db, &app_type)? {
-                Some(id) => id,
-                None => return Ok(()),
-            };
-
-        let providers = state.db.get_all_providers(app_type.as_str())?;
-        let Some(provider) = providers.get(&current_id) else {
-            return Ok(());
-        };
-
-        let has_live_backup =
-            futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
-                .ok()
-                .flatten()
-                .is_some();
-
-        let live_taken_over = state
-            .proxy_service
-            .detect_takeover_in_live_config_for_app(&app_type);
-
-        if has_live_backup || live_taken_over {
-            if matches!(app_type, AppType::ClaudeDesktop) {
-                write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
-                return Ok(());
-            }
-
-            futures::executor::block_on(
-                state
-                    .proxy_service
-                    .update_live_backup_from_provider(app_type.as_str(), provider),
-            )
-            .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
-            return Ok(());
-        }
-
         sync_current_provider_for_app_to_live(state, &app_type)
     }
 

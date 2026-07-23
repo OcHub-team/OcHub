@@ -1,7 +1,7 @@
 //! Minimal standalone port of the legacy `config.json` (`MultiAppConfig`) shape
 //! and the domain structs the DB layer reads/writes.
 //!
-//! cc-switch kept these in `app_config.rs`, `prompt.rs`, and `services/skill.rs`.
+//! cc-switch kept these in `app_config.rs` and `services/skill.rs`.
 //! Those modules pull in a lot of Tauri/service machinery that ochub-core does not
 //! need yet, so we re-define only the data structures required to:
 //!   * migrate a legacy `config.json` into SQLite (`db::migration`)
@@ -161,56 +161,6 @@ impl Default for McpRoot {
             hermes: McpConfig::default(),
         }
     }
-}
-
-// ============================================================================
-// Prompts
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Prompt {
-    pub id: String,
-    pub name: String,
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<i64>,
-    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<i64>,
-}
-
-/// Prompt 配置：单客户端维度
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PromptConfig {
-    #[serde(default)]
-    pub prompts: HashMap<String, Prompt>,
-}
-
-/// Prompt 根：按客户端分开维护
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PromptRoot {
-    #[serde(default)]
-    pub claude: PromptConfig,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claudeDesktop",
-        alias = "claude_desktop",
-        default
-    )]
-    pub claude_desktop: PromptConfig,
-    #[serde(default)]
-    pub codex: PromptConfig,
-    #[serde(default)]
-    pub gemini: PromptConfig,
-    #[serde(default)]
-    pub opencode: PromptConfig,
-    #[serde(default)]
-    pub openclaw: PromptConfig,
-    #[serde(default)]
-    pub hermes: PromptConfig,
 }
 
 // ============================================================================
@@ -452,8 +402,6 @@ pub struct MultiAppConfig {
     #[serde(default)]
     pub mcp: McpRoot,
     #[serde(default)]
-    pub prompts: PromptRoot,
-    #[serde(default)]
     pub skills: SkillStore,
     #[serde(default)]
     pub common_config_snippets: CommonConfigSnippets,
@@ -481,7 +429,6 @@ impl Default for MultiAppConfig {
             version: 2,
             apps,
             mcp: McpRoot::default(),
-            prompts: PromptRoot::default(),
             skills: SkillStore::default(),
             common_config_snippets: CommonConfigSnippets::default(),
             claude_common_config_snippet: None,

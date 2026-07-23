@@ -36,11 +36,6 @@ pub fn enabled_skill_apps() -> Vec<AppType> {
     enabled_apps_with(|p| p.supports_skills())
 }
 
-/// Enabled apps that support prompt files.
-pub fn enabled_prompt_apps() -> Vec<AppType> {
-    enabled_apps_with(|p| p.prompt_filename().is_some())
-}
-
 /// Display label from the registry (falls back to the raw id).
 pub fn label(app: AppType) -> SharedString {
     plugin::get_plugin(&app.app_id())

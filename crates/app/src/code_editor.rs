@@ -18,8 +18,8 @@ use gpui::{
     actions, div, fill, point, prelude::*, px, size, App, Bounds, ClipboardItem, Context,
     CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
     Focusable, GlobalElementId, Hitbox, HitboxBehavior, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style,
-    TextRun, UTF16Selection, UnderlineStyle, Window,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollHandle, ShapedLine, SharedString,
+    Style, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use zed_text::{Buffer as TextBuffer, BufferId, ReplicaId};
@@ -27,28 +27,41 @@ use zed_text::{Buffer as TextBuffer, BufferId, ReplicaId};
 use crate::fold::{fold_regions, FoldRegion};
 use crate::highlight::{self, Lang};
 use crate::text_input::{
-    Backspace, Copy, Cut, Delete, Down, End, Home, Left, Newline, Paste, Right, SelectAll,
-    SelectLeft, SelectRight, ShowCharacterPalette, Up,
+    closest_match, find_matches, render_find_bar, Backspace, CaretBlink, CloseFind, Copy, Cut,
+    Delete, Down, End, Find, FindNext, FindPrevious, Home, Left, Newline, Paste, Redo, Right,
+    SelectAll, SelectLeft, SelectRight, ShowCharacterPalette, TextInput, Undo, Up,
 };
 use crate::theme;
 
-actions!(code_editor, [Undo, Redo, IndentTab]);
+actions!(code_editor, [IndentTab]);
 
 /// Typing pauses longer than this start a new undo group.
 const UNDO_GROUP_INTERVAL: Duration = Duration::from_millis(300);
 
 /// Cursor blink half-period (visible / hidden phase length).
 const BLINK_INTERVAL: Duration = Duration::from_millis(500);
+const STRUCTURE_REFRESH_DELAY: Duration = Duration::from_millis(160);
+const SCROLLBAR_TRACK_WIDTH: f32 = 10.;
+const SCROLLBAR_TRACK_INSET: f32 = 4.;
+const SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.;
+
+#[derive(Clone, Copy, Debug)]
+struct VerticalScrollbarGeometry {
+    track_bounds: Bounds<Pixels>,
+    thumb_bounds: Bounds<Pixels>,
+    max_scroll: Pixels,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScrollbarDrag {
+    grab_offset: Pixels,
+}
 
 /// Register code-editor-specific key bindings (scoped to the CodeEditor key
 /// context so they never shadow global shortcuts). Call once from `main.rs`,
 /// after `text_input::bind_keys`.
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        gpui::KeyBinding::new("cmd-z", Undo, Some("CodeEditor")),
-        gpui::KeyBinding::new("cmd-shift-z", Redo, Some("CodeEditor")),
-        gpui::KeyBinding::new("tab", IndentTab, Some("CodeEditor")),
-    ]);
+    cx.bind_keys([gpui::KeyBinding::new("tab", IndentTab, Some("CodeEditor"))]);
 }
 
 pub struct CodeEditor {
@@ -63,13 +76,16 @@ pub struct CodeEditor {
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
     is_selecting: bool,
-    /// Shaped layouts for the currently *visible* rows (post-folding),
-    /// captured during the last paint; used for hit-testing and vertical
-    /// cursor movement.
+    /// Shaped layouts for only the rows currently inside the scroll viewport.
     lines: Vec<ShapedLine>,
-    /// Buffer-line index of each visible row (post-folding), same order as
-    /// `lines`.
+    /// Buffer-line index for each entry in `lines`.
     rows: Vec<usize>,
+    /// Index into `visible_rows_cache` represented by `lines[0]`.
+    painted_row_start: usize,
+    /// Byte offset for the start of every buffer line.
+    line_starts_cache: Vec<usize>,
+    /// Post-folding buffer-line indices. Rebuilt only when content/folds change.
+    visible_rows_cache: Vec<usize>,
     /// Foldable regions for the current content.
     regions: Vec<FoldRegion>,
     /// Header lines of currently collapsed regions.
@@ -78,11 +94,20 @@ pub struct CodeEditor {
     text_origin: Option<Point<Pixels>>,
     line_height: Pixels,
     last_bounds: Option<Bounds<Pixels>>,
-    /// Cursor blink state (Zed's BlinkManager pattern): an epoch counter
-    /// invalidates in-flight timers whenever the cursor moves or edits land,
-    /// so the cursor is always solid right after interaction.
-    blink_epoch: usize,
-    cursor_visible: bool,
+    /// Shared caret state invalidates stale timers whenever focus, cursor, or
+    /// content changes, so refocusing always starts from a visible caret.
+    caret_blink: CaretBlink,
+    scroll_handle: ScrollHandle,
+    /// Last painted scrollbar geometry, in window coordinates. Mouse events
+    /// use this exact geometry so the visible thumb and drag target cannot
+    /// drift apart after scrolling or resizing.
+    scrollbar_geometry: Option<VerticalScrollbarGeometry>,
+    scrollbar_drag: Option<ScrollbarDrag>,
+    find_input: Option<Entity<TextInput>>,
+    find_visible: bool,
+    find_matches: Vec<Range<usize>>,
+    find_active: Option<usize>,
+    structure_refresh_epoch: usize,
 }
 
 fn make_buffer(text: &str) -> TextBuffer {
@@ -109,13 +134,23 @@ impl CodeEditor {
             is_selecting: false,
             lines: Vec::new(),
             rows: Vec::new(),
+            painted_row_start: 0,
+            line_starts_cache: vec![0],
+            visible_rows_cache: vec![0],
             regions: Vec::new(),
             collapsed: HashSet::new(),
             text_origin: None,
             line_height: px(20.),
             last_bounds: None,
-            blink_epoch: 0,
-            cursor_visible: true,
+            caret_blink: CaretBlink::default(),
+            scroll_handle: ScrollHandle::new(),
+            scrollbar_geometry: None,
+            scrollbar_drag: None,
+            find_input: None,
+            find_visible: false,
+            find_matches: Vec::new(),
+            find_active: None,
+            structure_refresh_epoch: 0,
         }
     }
 
@@ -124,9 +159,15 @@ impl CodeEditor {
     /// Show the cursor solid and restart the blink cycle (called on every
     /// cursor move / edit, and once on first focus).
     fn reset_blink(&mut self, cx: &mut Context<Self>) {
-        self.cursor_visible = true;
-        self.blink_epoch += 1;
-        self.schedule_blink(self.blink_epoch, cx);
+        if let Some(epoch) = self.caret_blink.reset() {
+            self.schedule_blink(epoch, cx);
+        }
+    }
+
+    fn set_caret_focus(&mut self, focused: bool, cx: &mut Context<Self>) {
+        if let Some(epoch) = self.caret_blink.set_focused(focused) {
+            self.schedule_blink(epoch, cx);
+        }
     }
 
     fn schedule_blink(&mut self, epoch: usize, cx: &mut Context<Self>) {
@@ -135,8 +176,7 @@ impl CodeEditor {
             this.update(cx, |this, cx| {
                 // A newer epoch means the cursor moved meanwhile and owns a
                 // fresh timer chain; let this stale one die out.
-                if this.blink_epoch == epoch {
-                    this.cursor_visible = !this.cursor_visible;
+                if this.caret_blink.tick(epoch) {
                     cx.notify();
                     this.schedule_blink(epoch, cx);
                 }
@@ -160,51 +200,253 @@ impl CodeEditor {
         self.marked_range = None;
         self.collapsed.clear();
         self.refresh_regions();
+        self.refresh_find_matches(cx);
+        self.reset_blink(cx);
+        cx.notify();
+    }
+
+    fn refresh_find_matches(&mut self, cx: &mut Context<Self>) {
+        let query = self
+            .find_input
+            .as_ref()
+            .map(|input| input.read(cx).content().to_string())
+            .unwrap_or_default();
+        self.update_find_matches(&query, cx);
+    }
+
+    fn update_find_matches(&mut self, query: &str, cx: &mut Context<Self>) {
+        if !self.find_visible {
+            self.find_matches.clear();
+            self.find_active = None;
+            cx.notify();
+            return;
+        }
+        self.find_matches = find_matches(&self.content, query);
+        self.find_active = closest_match(&self.find_matches, self.cursor_offset());
+        self.select_active_match();
+        self.scroll_selection_into_view();
+        cx.notify();
+    }
+
+    fn select_active_match(&mut self) {
+        let Some(range) = self
+            .find_active
+            .and_then(|index| self.find_matches.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        self.ensure_offset_visible(range.start);
+        self.selected_range = range;
+        self.selection_reversed = false;
+    }
+
+    fn scroll_selection_into_view(&self) {
+        let (line, _) = self.line_index_for_offset(self.cursor_offset());
+        let Ok(row) = self.visible_rows().binary_search(&line) else {
+            return;
+        };
+        let row_top = self.line_height * row as f32;
+        let row_bottom = row_top + self.line_height;
+        let viewport_height = self.scroll_handle.bounds().size.height;
+        if viewport_height <= px(0.) {
+            return;
+        }
+        let current = self.scroll_handle.offset();
+        let current_top = -current.y;
+        let target_top = if row_top < current_top {
+            row_top
+        } else if row_bottom > current_top + viewport_height {
+            row_bottom - viewport_height
+        } else {
+            current_top
+        }
+        .clamp(px(0.), self.scroll_handle.max_offset().y);
+        self.scroll_handle.set_offset(point(current.x, -target_top));
+    }
+
+    fn open_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_input.is_none() {
+            let selected = if !self.selected_range.is_empty()
+                && self.selected_range.len() <= 200
+                && !self.content[self.selected_range.clone()].contains('\r')
+                && !self.content[self.selected_range.clone()].contains('\n')
+            {
+                self.content[self.selected_range.clone()].to_string()
+            } else {
+                String::new()
+            };
+            let input = cx.new(|cx| TextInput::new(cx, "查找").search_field());
+            if !selected.is_empty() {
+                input.update(cx, |input, cx| input.set_content(selected, cx));
+            }
+            cx.subscribe(&input, |this, input, _event, cx| {
+                let query = input.read(cx).content().to_string();
+                this.update_find_matches(&query, cx);
+            })
+            .detach();
+            self.find_input = Some(input);
+        }
+        self.find_visible = true;
+        self.refresh_find_matches(cx);
+        if let Some(input) = &self.find_input {
+            input.update(cx, |input, cx| input.select_all_content(cx));
+            input.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn find_next(&mut self, _: &FindNext, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.find_visible {
+            self.open_find(&Find, window, cx);
+            return;
+        }
+        if self.find_matches.is_empty() {
+            window.play_system_bell();
+            return;
+        }
+        self.find_active = Some(
+            self.find_active
+                .map(|index| (index + 1) % self.find_matches.len())
+                .unwrap_or(0),
+        );
+        self.select_active_match();
+        self.scroll_selection_into_view();
+        self.reset_blink(cx);
+        cx.notify();
+    }
+
+    fn find_previous(&mut self, _: &FindPrevious, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.find_visible {
+            self.open_find(&Find, window, cx);
+            return;
+        }
+        if self.find_matches.is_empty() {
+            window.play_system_bell();
+            return;
+        }
+        self.find_active = Some(
+            self.find_active
+                .map(|index| {
+                    if index == 0 {
+                        self.find_matches.len() - 1
+                    } else {
+                        index - 1
+                    }
+                })
+                .unwrap_or(self.find_matches.len() - 1),
+        );
+        self.select_active_match();
+        self.scroll_selection_into_view();
+        self.reset_blink(cx);
+        cx.notify();
+    }
+
+    fn close_find(&mut self, _: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_visible = false;
+        self.find_matches.clear();
+        self.find_active = None;
+        self.focus_handle.focus(window, cx);
+        self.reset_blink(cx);
         cx.notify();
     }
 
     /// Apply one edit through the buffer (grouped for undo) and refresh the
     /// mirror. `range` is a byte range into the current content.
-    fn edit(&mut self, range: Range<usize>, new_text: &str) {
+    fn edit(&mut self, range: Range<usize>, new_text: &str, cx: &mut Context<Self>) {
+        self.line_starts_cache = line_starts_after_edit(&self.line_starts_cache, &range, new_text);
         let now = Instant::now();
         self.buffer.start_transaction_at(now);
         self.buffer.edit([(range, new_text)]);
         self.buffer.end_transaction_at(now);
         self.content = self.buffer.snapshot().text().into();
-        self.refresh_regions();
+        // Folding is presentation-only. Clear stale fold coordinates now and
+        // rescan after the typing burst rather than parsing a huge file on
+        // every keystroke.
+        self.regions.clear();
+        self.collapsed.clear();
+        self.refresh_visible_rows();
+        self.schedule_structure_refresh(cx);
     }
 
     /// Recompute fold regions after any content change; drop collapsed marks
     /// whose region no longer exists.
     fn refresh_regions(&mut self) {
+        self.structure_refresh_epoch = self.structure_refresh_epoch.wrapping_add(1);
+        self.line_starts_cache.clear();
+        self.line_starts_cache.push(0);
+        self.line_starts_cache.extend(
+            self.content
+                .bytes()
+                .enumerate()
+                .filter_map(|(index, byte)| (byte == b'\n').then_some(index + 1)),
+        );
+        self.refresh_fold_regions();
+    }
+
+    fn refresh_fold_regions(&mut self) {
         self.regions = fold_regions(self.lang, &self.content);
         let regions = &self.regions;
         self.collapsed
             .retain(|h| regions.iter().any(|r| r.header == *h));
+        self.refresh_visible_rows();
+    }
+
+    fn schedule_structure_refresh(&mut self, cx: &mut Context<Self>) {
+        self.structure_refresh_epoch = self.structure_refresh_epoch.wrapping_add(1);
+        let epoch = self.structure_refresh_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(STRUCTURE_REFRESH_DELAY)
+                .await;
+            this.update(cx, |this, cx| {
+                if this.structure_refresh_epoch == epoch {
+                    this.refresh_fold_regions();
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ---- folding -------------------------------------------------------------
 
     /// Buffer-line index for each visible row, honoring collapsed regions.
-    fn visible_rows(&self) -> Vec<usize> {
-        let line_count = self.content.split('\n').count().max(1);
-        let mut hidden = vec![false; line_count];
+    fn refresh_visible_rows(&mut self) {
+        let line_count = self.line_starts_cache.len().max(1);
+        let mut hidden_delta = vec![0i32; line_count + 1];
         for region in &self.regions {
             if self.collapsed.contains(&region.header) {
-                for line in region.hidden() {
-                    if line < line_count {
-                        hidden[line] = true;
-                    }
+                let start = (region.header + 1).min(line_count);
+                let end = region.last.saturating_add(1).min(line_count);
+                if start < end {
+                    hidden_delta[start] += 1;
+                    hidden_delta[end] -= 1;
                 }
             }
         }
-        (0..line_count).filter(|&l| !hidden[l]).collect()
+        self.visible_rows_cache.clear();
+        self.visible_rows_cache.reserve(line_count);
+        let mut depth = 0i32;
+        for (line, delta) in hidden_delta.into_iter().take(line_count).enumerate() {
+            depth += delta;
+            if depth == 0 {
+                self.visible_rows_cache.push(line);
+            }
+        }
+    }
+
+    fn visible_rows(&self) -> &[usize] {
+        &self.visible_rows_cache
     }
 
     /// The fold region headed at `line`, if any (innermost = shortest).
     fn region_at(&self, line: usize) -> Option<FoldRegion> {
-        self.regions
+        let first = self.regions.partition_point(|region| region.header < line);
+        self.regions[first..]
             .iter()
+            .take_while(|region| region.header == line)
             .filter(|r| r.header == line)
             .min_by_key(|r| r.last)
             .copied()
@@ -225,12 +467,17 @@ impl CodeEditor {
             }
             self.collapsed.insert(header);
         }
+        self.refresh_visible_rows();
         cx.notify();
     }
 
     /// Expand any collapsed region hiding the line that contains `offset`.
     fn ensure_offset_visible(&mut self, offset: usize) {
+        if self.collapsed.is_empty() {
+            return;
+        }
         let (line, _) = self.line_index_for_offset(offset);
+        let mut changed = false;
         loop {
             let hiding: Vec<usize> = self
                 .regions
@@ -242,8 +489,11 @@ impl CodeEditor {
                 break;
             }
             for header in hiding {
-                self.collapsed.remove(&header);
+                changed |= self.collapsed.remove(&header);
             }
+        }
+        if changed {
+            self.refresh_visible_rows();
         }
     }
 
@@ -261,6 +511,8 @@ impl CodeEditor {
             self.clamp_selection();
             self.refresh_regions();
             self.ensure_offset_visible(self.cursor_offset());
+            self.refresh_find_matches(cx);
+            self.scroll_selection_into_view();
             self.reset_blink(cx);
             cx.notify();
         } else {
@@ -275,6 +527,8 @@ impl CodeEditor {
             self.clamp_selection();
             self.refresh_regions();
             self.ensure_offset_visible(self.cursor_offset());
+            self.refresh_find_matches(cx);
+            self.scroll_selection_into_view();
             self.reset_blink(cx);
             cx.notify();
         } else {
@@ -288,14 +542,8 @@ impl CodeEditor {
 
     // ---- line geometry (byte offsets over the content mirror) --------------
 
-    fn line_starts(&self) -> Vec<usize> {
-        let mut starts = vec![0usize];
-        for (idx, byte) in self.content.bytes().enumerate() {
-            if byte == b'\n' {
-                starts.push(idx + 1);
-            }
-        }
-        starts
+    fn line_starts(&self) -> &[usize] {
+        &self.line_starts_cache
     }
 
     fn line_len(&self, line: usize, starts: &[usize]) -> usize {
@@ -309,28 +557,33 @@ impl CodeEditor {
     }
 
     fn line_index_for_offset(&self, offset: usize) -> (usize, usize) {
+        let line = self
+            .line_starts_cache
+            .partition_point(|start| *start <= offset)
+            .saturating_sub(1)
+            .min(self.line_starts_cache.len().saturating_sub(1));
+        (line, offset.saturating_sub(self.line_starts_cache[line]))
+    }
+
+    fn line_text(&self, line: usize) -> &str {
         let starts = self.line_starts();
-        let mut line = 0;
-        for (idx, &start) in starts.iter().enumerate() {
-            if start <= offset {
-                line = idx;
-            } else {
-                break;
-            }
-        }
-        (line, offset.saturating_sub(starts[line]))
+        let Some(&start) = starts.get(line) else {
+            return "";
+        };
+        let len = self.line_len(line, starts);
+        &self.content[start..start + len]
     }
 
     /// Visible row index under a window-space y position.
     fn row_for_position(&self, position: Point<Pixels>) -> Option<usize> {
         let origin = self.text_origin?;
-        if self.lines.is_empty() {
+        if self.visible_rows_cache.is_empty() {
             return None;
         }
         let line_height = f32::from(self.line_height).max(1.0);
         let rel_y = f32::from(position.y - origin.y);
         let row = (rel_y / line_height).floor().max(0.0) as usize;
-        Some(row.min(self.lines.len() - 1))
+        Some(row.min(self.visible_rows_cache.len() - 1))
     }
 
     fn offset_for_position(&self, position: Point<Pixels>) -> usize {
@@ -340,13 +593,18 @@ impl CodeEditor {
         let Some(row) = self.row_for_position(position) else {
             return 0;
         };
-        let line = self.rows.get(row).copied().unwrap_or(row);
+        let line = self.visible_rows_cache.get(row).copied().unwrap_or(row);
         let starts = self.line_starts();
         if line >= starts.len() {
             return self.content.len();
         }
         let local_x = position.x - origin.x;
-        let col = self.lines[row].closest_index_for_x(local_x);
+        let painted = row.saturating_sub(self.painted_row_start);
+        let col = self
+            .lines
+            .get(painted)
+            .map(|line| line.closest_index_for_x(local_x))
+            .unwrap_or(0);
         let line_len = self.line_len(line, &starts);
         starts[line] + col.min(line_len)
     }
@@ -372,7 +630,7 @@ impl CodeEditor {
     /// Visible row of the cursor's buffer line (post-folding).
     fn cursor_row(&self) -> Option<usize> {
         let (line, _) = self.line_index_for_offset(self.cursor_offset());
-        self.rows.iter().position(|&l| l == line)
+        self.visible_rows_cache.binary_search(&line).ok()
     }
 
     /// Move vertically by one *visible* row, keeping the x position.
@@ -387,20 +645,22 @@ impl CodeEditor {
             self.move_to(0, cx);
             return;
         }
-        let Some(&target_line) = self.rows.get(target_row as usize) else {
+        let Some(&target_line) = self.visible_rows_cache.get(target_row as usize) else {
             self.move_to(self.content.len(), cx);
             return;
         };
+        let painted_row = row.checked_sub(self.painted_row_start);
+        let painted_target = (target_row as usize).checked_sub(self.painted_row_start);
         let x = self
             .lines
-            .get(row)
+            .get(painted_row.unwrap_or(usize::MAX))
             .map(|l| l.x_for_index(col))
             .unwrap_or(px(0.));
         let target_col = self
             .lines
-            .get(target_row as usize)
+            .get(painted_target.unwrap_or(usize::MAX))
             .map(|l| l.closest_index_for_x(x))
-            .unwrap_or(0);
+            .unwrap_or(col);
         let starts = self.line_starts();
         let offset = starts[target_line] + target_col.min(self.line_len(target_line, &starts));
         self.move_to(offset, cx);
@@ -515,11 +775,27 @@ impl CodeEditor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(scrollbar) = self
+            .scrollbar_geometry
+            .filter(|scrollbar| scrollbar.track_bounds.contains(&event.position))
+        {
+            let grab_offset = if scrollbar.thumb_bounds.contains(&event.position) {
+                event.position.y - scrollbar.thumb_bounds.top()
+            } else {
+                scrollbar.thumb_bounds.size.height * 0.5
+            };
+            self.is_selecting = false;
+            self.scrollbar_drag = Some(ScrollbarDrag { grab_offset });
+            self.drag_scrollbar_to(event.position.y, cx);
+            cx.stop_propagation();
+            return;
+        }
+
         // Clicks in the gutter toggle the fold region headed on that row.
         if let (Some(origin), Some(bounds)) = (self.text_origin, self.last_bounds) {
             if event.position.x < origin.x && event.position.x >= bounds.left() {
                 if let Some(row) = self.row_for_position(event.position) {
-                    if let Some(&line) = self.rows.get(row) {
+                    if let Some(&line) = self.visible_rows_cache.get(row) {
                         if self.region_at(line).is_some() {
                             self.toggle_fold(line, cx);
                             return;
@@ -536,19 +812,39 @@ impl CodeEditor {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.scrollbar_drag.take().is_some() {
+            cx.stop_propagation();
+            cx.notify();
+        }
         self.is_selecting = false;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.scrollbar_drag.is_some() {
+            self.drag_scrollbar_to(event.position.y, cx);
+            cx.stop_propagation();
+            return;
+        }
         if self.is_selecting {
             self.select_to(self.offset_for_position(event.position), cx);
         }
     }
 
+    fn drag_scrollbar_to(&mut self, pointer_y: Pixels, cx: &mut Context<Self>) {
+        let (Some(scrollbar), Some(drag)) = (self.scrollbar_geometry, self.scrollbar_drag) else {
+            return;
+        };
+        let scroll_y = scroll_amount_for_thumb_top(&scrollbar, pointer_y - drag.grab_offset);
+        let current = self.scroll_handle.offset();
+        self.scroll_handle.set_offset(point(current.x, -scroll_y));
+        cx.notify();
+    }
+
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
         self.ensure_offset_visible(offset);
+        self.scroll_selection_into_view();
         self.reset_blink(cx);
         cx.notify()
     }
@@ -572,6 +868,7 @@ impl CodeEditor {
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
         self.ensure_offset_visible(offset);
+        self.scroll_selection_into_view();
         self.reset_blink(cx);
         cx.notify()
     }
@@ -680,10 +977,13 @@ impl EntityInputHandler for CodeEditor {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.edit(range.clone(), new_text);
+        self.edit(range.clone(), new_text, cx);
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        self.selection_reversed = false;
         self.ensure_offset_visible(self.selected_range.start);
+        self.refresh_find_matches(cx);
+        self.scroll_selection_into_view();
         self.reset_blink(cx);
         cx.notify();
     }
@@ -702,7 +1002,7 @@ impl EntityInputHandler for CodeEditor {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.edit(range.clone(), new_text);
+        self.edit(range.clone(), new_text, cx);
         if !new_text.is_empty() {
             self.marked_range = Some(range.start..range.start + new_text.len());
         } else {
@@ -714,6 +1014,9 @@ impl EntityInputHandler for CodeEditor {
             .map(|new_range| new_range.start + range.start..new_range.end + range.end)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
+        self.selection_reversed = false;
+        self.refresh_find_matches(cx);
+        self.scroll_selection_into_view();
         self.reset_blink(cx);
         cx.notify();
     }
@@ -729,13 +1032,15 @@ impl EntityInputHandler for CodeEditor {
         let range = self.range_from_utf16(&range_utf16);
         let (line, col) = self.line_index_for_offset(range.start);
         let origin = self.text_origin?;
+        let visible_row = self.visible_rows_cache.binary_search(&line).ok()?;
+        let painted_row = visible_row.checked_sub(self.painted_row_start);
         let x = self
             .lines
-            .get(line)
+            .get(painted_row.unwrap_or(usize::MAX))
             .map(|l| l.x_for_index(col))
             .unwrap_or(px(0.));
         let _ = bounds;
-        let y = origin.y + self.line_height * line as f32;
+        let y = origin.y + self.line_height * visible_row as f32;
         Some(Bounds::new(
             point(origin.x + x, y),
             size(px(2.), self.line_height),
@@ -761,21 +1066,135 @@ struct CodeEditorElement {
 
 struct PrepaintState {
     lines: Vec<ShapedLine>,
-    /// Buffer-line index per visible row.
+    /// Buffer-line index per painted row.
     rows: Vec<usize>,
+    /// Post-folding row index represented by `lines[0]`.
+    first_row: usize,
     numbers: Vec<(ShapedLine, Pixels)>,
     /// Fold chevrons: (shaped glyph, x) per visible row, when foldable.
     chevrons: Vec<Option<(ShapedLine, Pixels)>>,
+    search_highlights: Vec<PaintQuad>,
     selections: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
     gutter: Pixels,
     line_height: Pixels,
     text_origin: Point<Pixels>,
+    paint_bounds: Bounds<Pixels>,
     /// Cursor-style regions: I-beam over text, arrow over the gutter,
     /// pointing hand over fold chevron rows.
     text_hitbox: Hitbox,
     gutter_hitbox: Hitbox,
     chevron_hitboxes: Vec<Hitbox>,
+    scrollbar: Option<ScrollbarPrepaintState>,
+}
+
+struct ScrollbarPrepaintState {
+    geometry: VerticalScrollbarGeometry,
+    hitbox: Hitbox,
+}
+
+fn line_starts_after_edit(starts: &[usize], replaced: &Range<usize>, inserted: &str) -> Vec<usize> {
+    let prefix_end = starts.partition_point(|start| *start <= replaced.start);
+    let suffix_start = starts.partition_point(|start| *start <= replaced.end);
+    let removed = replaced.end.saturating_sub(replaced.start);
+    let delta = inserted.len() as isize - removed as isize;
+    let inserted_lines = inserted.bytes().filter(|byte| *byte == b'\n').count();
+    let mut updated = Vec::with_capacity(prefix_end + inserted_lines + starts.len() - suffix_start);
+    updated.extend_from_slice(&starts[..prefix_end]);
+    for (index, byte) in inserted.bytes().enumerate() {
+        if byte == b'\n' {
+            updated.push(replaced.start + index + 1);
+        }
+    }
+    for &start in &starts[suffix_start..] {
+        let shifted = (start as isize + delta).max(0) as usize;
+        if updated.last().copied() != Some(shifted) {
+            updated.push(shifted);
+        }
+    }
+    if updated.first().copied() != Some(0) {
+        updated.insert(0, 0);
+    }
+    updated
+}
+
+fn painted_row_range(
+    content_bounds: Bounds<Pixels>,
+    viewport_bounds: Bounds<Pixels>,
+    line_height: Pixels,
+    row_count: usize,
+) -> Range<usize> {
+    if row_count == 0 {
+        return 0..0;
+    }
+    if viewport_bounds.size.height <= px(0.) || line_height <= px(0.) {
+        return 0..row_count.min(64);
+    }
+
+    const OVERDRAW: isize = 3;
+    let line_height = f32::from(line_height);
+    let first = (f32::from(viewport_bounds.top() - content_bounds.top()) / line_height).floor()
+        as isize
+        - OVERDRAW;
+    let last = (f32::from(viewport_bounds.bottom() - content_bounds.top()) / line_height).ceil()
+        as isize
+        + OVERDRAW;
+    let first = first.max(0) as usize;
+    let last = last.max(first as isize).min(row_count as isize) as usize;
+    first.min(row_count)..last
+}
+
+fn vertical_scrollbar_geometry(
+    viewport_bounds: Bounds<Pixels>,
+    scroll_offset: Pixels,
+    max_scroll: Pixels,
+) -> Option<VerticalScrollbarGeometry> {
+    let viewport_width = f32::from(viewport_bounds.size.width);
+    let viewport_height = f32::from(viewport_bounds.size.height);
+    let max_scroll = f32::from(max_scroll).max(0.);
+    let track_height = viewport_height - SCROLLBAR_TRACK_INSET * 2.;
+    if viewport_width <= SCROLLBAR_TRACK_WIDTH + SCROLLBAR_TRACK_INSET
+        || track_height <= 0.
+        || max_scroll <= 0.
+    {
+        return None;
+    }
+
+    let track_bounds = Bounds::new(
+        point(
+            viewport_bounds.right() - px(SCROLLBAR_TRACK_INSET + SCROLLBAR_TRACK_WIDTH),
+            viewport_bounds.top() + px(SCROLLBAR_TRACK_INSET),
+        ),
+        size(px(SCROLLBAR_TRACK_WIDTH), px(track_height)),
+    );
+    let content_height = viewport_height + max_scroll;
+    let thumb_height = (track_height * viewport_height / content_height)
+        .max(SCROLLBAR_MIN_THUMB_HEIGHT)
+        .min(track_height);
+    let thumb_travel = (track_height - thumb_height).max(0.);
+    let progress = (-f32::from(scroll_offset) / max_scroll).clamp(0., 1.);
+    let thumb_bounds = Bounds::new(
+        point(
+            track_bounds.left(),
+            track_bounds.top() + px(thumb_travel * progress),
+        ),
+        size(px(SCROLLBAR_TRACK_WIDTH), px(thumb_height)),
+    );
+
+    Some(VerticalScrollbarGeometry {
+        track_bounds,
+        thumb_bounds,
+        max_scroll: px(max_scroll),
+    })
+}
+
+fn scroll_amount_for_thumb_top(scrollbar: &VerticalScrollbarGeometry, thumb_top: Pixels) -> Pixels {
+    let travel = f32::from(scrollbar.track_bounds.size.height - scrollbar.thumb_bounds.size.height);
+    if travel <= 0. {
+        return px(0.);
+    }
+    let position = f32::from(thumb_top - scrollbar.track_bounds.top());
+    px(f32::from(scrollbar.max_scroll) * (position / travel).clamp(0., 1.))
 }
 
 impl IntoElement for CodeEditorElement {
@@ -834,13 +1253,27 @@ impl Element for CodeEditorElement {
         const FOLD_MARKER: &str = " ⋯";
 
         let empty = editor.content.is_empty();
-        let all_lines: Vec<&str> = editor.content.split('\n').collect();
-        let rows: Vec<usize> = if empty {
-            vec![0]
+        let line_count = editor.line_starts_cache.len().max(1);
+        let viewport_bounds = editor.scroll_handle.bounds();
+        let row_range = painted_row_range(
+            bounds,
+            viewport_bounds,
+            line_height,
+            editor.visible_rows().len(),
+        );
+        let first_row = row_range.start;
+        let rows = editor.visible_rows()[row_range].to_vec();
+        let paint_bounds = if viewport_bounds.size.height > px(0.) {
+            bounds.intersect(&viewport_bounds)
         } else {
-            editor.visible_rows()
+            Bounds::new(
+                bounds.origin,
+                size(
+                    bounds.size.width,
+                    (line_height * rows.len().max(1) as f32).min(bounds.size.height),
+                ),
+            )
         };
-        let line_count = all_lines.len();
         let digits = line_count.to_string().len().max(2);
         let gutter = px(30. + digits as f32 * 8.5);
         let text_origin = point(bounds.left() + gutter, bounds.top());
@@ -864,7 +1297,7 @@ impl Element for CodeEditorElement {
                 };
                 (text, vec![run])
             } else {
-                let text = all_lines.get(line_idx).copied().unwrap_or("");
+                let text = editor.line_text(line_idx);
                 let line_start = starts.get(line_idx).copied().unwrap_or(0);
                 let marked_local = marked.as_ref().and_then(|m| {
                     let line_end = line_start + text.len();
@@ -937,6 +1370,41 @@ impl Element for CodeEditorElement {
             chevrons.push(chevron);
         }
 
+        let mut search_highlights = Vec::new();
+        if !empty {
+            for (row, &line_idx) in rows.iter().enumerate() {
+                let line_start = starts[line_idx];
+                let line_end = line_start + editor.line_len(line_idx, starts);
+                let first = editor
+                    .find_matches
+                    .partition_point(|matched| matched.end <= line_start);
+                for matched in editor.find_matches[first..]
+                    .iter()
+                    .take_while(|matched| matched.start < line_end)
+                {
+                    let seg_start = matched.start.max(line_start);
+                    let seg_end = matched.end.min(line_end);
+                    if seg_end <= seg_start {
+                        continue;
+                    }
+                    let y = bounds.top() + line_height * (first_row + row) as f32;
+                    search_highlights.push(fill(
+                        Bounds::from_corners(
+                            point(
+                                text_origin.x + lines[row].x_for_index(seg_start - line_start),
+                                y,
+                            ),
+                            point(
+                                text_origin.x + lines[row].x_for_index(seg_end - line_start),
+                                y + line_height,
+                            ),
+                        ),
+                        theme::yellow_soft(),
+                    ));
+                }
+            }
+        }
+
         let mut selections = Vec::new();
         let selection = editor.selected_range.clone();
         if !selection.is_empty() && !empty {
@@ -956,19 +1424,19 @@ impl Element for CodeEditorElement {
                     x1 = x1 + px(6.);
                 }
                 if x1 > x0 {
-                    let y = bounds.top() + line_height * row as f32;
+                    let y = bounds.top() + line_height * (first_row + row) as f32;
                     selections.push(fill(
                         Bounds::from_corners(
                             point(text_origin.x + x0, y),
                             point(text_origin.x + x1, y + line_height),
                         ),
-                        gpui::rgba(0x89b4fa44),
+                        theme::selection(),
                     ));
                 }
             }
         }
 
-        let cursor = if !editor.cursor_visible {
+        let cursor = if !editor.caret_blink.visible() || !editor.selected_range.is_empty() {
             None
         } else if empty {
             Some(fill(
@@ -982,7 +1450,7 @@ impl Element for CodeEditorElement {
             let (line, col) = editor.line_index_for_offset(editor.cursor_offset());
             rows.iter().position(|&l| l == line).map(|row| {
                 let cursor_x = lines.get(row).map(|l| l.x_for_index(col)).unwrap_or(px(0.));
-                let y = bounds.top() + line_height * row as f32;
+                let y = bounds.top() + line_height * (first_row + row) as f32;
                 fill(
                     Bounds::new(
                         point(text_origin.x + cursor_x, y),
@@ -995,13 +1463,16 @@ impl Element for CodeEditorElement {
 
         // Cursor-style hitboxes: gutter (arrow), chevron rows (hand), text (I-beam).
         let gutter_hitbox = window.insert_hitbox(
-            Bounds::new(bounds.origin, size(gutter, bounds.size.height)),
+            Bounds::new(paint_bounds.origin, size(gutter, paint_bounds.size.height)),
             HitboxBehavior::Normal,
         );
         let text_hitbox = window.insert_hitbox(
             Bounds::new(
-                point(text_origin.x, bounds.top()),
-                size((bounds.size.width - gutter).max(px(0.)), bounds.size.height),
+                point(text_origin.x, paint_bounds.top()),
+                size(
+                    (paint_bounds.size.width - gutter).max(px(0.)),
+                    paint_bounds.size.height,
+                ),
             ),
             HitboxBehavior::Normal,
         );
@@ -1012,27 +1483,43 @@ impl Element for CodeEditorElement {
             .map(|(row, _)| {
                 window.insert_hitbox(
                     Bounds::new(
-                        point(bounds.left(), bounds.top() + line_height * row as f32),
+                        point(
+                            bounds.left(),
+                            bounds.top() + line_height * (first_row + row) as f32,
+                        ),
                         size(gutter, line_height),
                     ),
                     HitboxBehavior::Normal,
                 )
             })
             .collect();
+        let scrollbar = vertical_scrollbar_geometry(
+            viewport_bounds,
+            editor.scroll_handle.offset().y,
+            editor.scroll_handle.max_offset().y,
+        )
+        .map(|geometry| ScrollbarPrepaintState {
+            hitbox: window.insert_hitbox(geometry.track_bounds, HitboxBehavior::Normal),
+            geometry,
+        });
 
         PrepaintState {
             lines,
             rows,
+            first_row,
             numbers,
             chevrons,
+            search_highlights,
             selections,
             cursor,
             gutter,
             line_height,
             text_origin,
+            paint_bounds,
             text_hitbox,
             gutter_hitbox,
             chevron_hitboxes,
+            scrollbar,
         }
     }
 
@@ -1049,7 +1536,7 @@ impl Element for CodeEditorElement {
         let focus_handle = self.editor.read(cx).focus_handle.clone();
         window.handle_input(
             &focus_handle,
-            ElementInputHandler::new(bounds, self.editor.clone()),
+            ElementInputHandler::new(prepaint.paint_bounds, self.editor.clone()),
             cx,
         );
 
@@ -1063,12 +1550,15 @@ impl Element for CodeEditorElement {
         // Gutter background.
         window.paint_quad(fill(
             Bounds::new(
-                point(bounds.left(), bounds.top()),
-                size(prepaint.gutter, bounds.size.height),
+                point(bounds.left(), prepaint.paint_bounds.top()),
+                size(prepaint.gutter, prepaint.paint_bounds.size.height),
             ),
             theme::inset(),
         ));
 
+        for highlight in prepaint.search_highlights.drain(..) {
+            window.paint_quad(highlight);
+        }
         for selection in prepaint.selections.drain(..) {
             window.paint_quad(selection);
         }
@@ -1076,7 +1566,7 @@ impl Element for CodeEditorElement {
         let line_height = prepaint.line_height;
         let text_x = prepaint.text_origin.x;
         for (i, line) in prepaint.lines.iter().enumerate() {
-            let y = bounds.top() + line_height * i as f32;
+            let y = bounds.top() + line_height * (prepaint.first_row + i) as f32;
             if let Some((number, num_x)) = prepaint.numbers.get(i) {
                 number
                     .paint(
@@ -1118,15 +1608,49 @@ impl Element for CodeEditorElement {
             }
         }
 
+        if let Some(scrollbar) = &prepaint.scrollbar {
+            window.set_cursor_style(CursorStyle::Arrow, &scrollbar.hitbox);
+            let hovered = scrollbar.hitbox.is_hovered(window);
+            let dragging = self.editor.read(cx).scrollbar_drag.is_some();
+            window.paint_quad(
+                fill(
+                    scrollbar.geometry.track_bounds,
+                    theme::border().opacity(if hovered || dragging { 0.42 } else { 0.24 }),
+                )
+                .corner_radii(px(SCROLLBAR_TRACK_WIDTH * 0.5)),
+            );
+            window.paint_quad(
+                fill(
+                    scrollbar.geometry.thumb_bounds,
+                    theme::muted().opacity(if dragging {
+                        0.95
+                    } else if hovered {
+                        0.82
+                    } else {
+                        0.62
+                    }),
+                )
+                .corner_radii(px(SCROLLBAR_TRACK_WIDTH * 0.5)),
+            );
+        }
+
         let lines = std::mem::take(&mut prepaint.lines);
         let rows = std::mem::take(&mut prepaint.rows);
+        let painted_row_start = prepaint.first_row;
         let text_origin = prepaint.text_origin;
+        let paint_bounds = prepaint.paint_bounds;
+        let scrollbar_geometry = prepaint
+            .scrollbar
+            .as_ref()
+            .map(|scrollbar| scrollbar.geometry);
         self.editor.update(cx, |editor, _cx| {
             editor.lines = lines;
             editor.rows = rows;
+            editor.painted_row_start = painted_row_start;
             editor.text_origin = Some(text_origin);
             editor.line_height = line_height;
-            editor.last_bounds = Some(bounds);
+            editor.last_bounds = Some(paint_bounds);
+            editor.scrollbar_geometry = scrollbar_geometry;
         });
     }
 }
@@ -1201,11 +1725,12 @@ fn highlight_runs(
 impl Render for CodeEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus_handle.is_focused(window);
-        // Arm the blink cycle the first time we render focused (covers focus
-        // via tab / programmatic focus, before any mouse or key interaction).
-        if focused && self.blink_epoch == 0 {
-            self.reset_blink(cx);
-        }
+        self.set_caret_focus(focused, cx);
+        let find_bar = self
+            .find_visible
+            .then(|| self.find_input.clone())
+            .flatten()
+            .map(|input| render_find_bar(input, self.find_active, self.find_matches.len()));
         div()
             .id("code-editor")
             .role(gpui::Role::TextInput)
@@ -1213,6 +1738,7 @@ impl Render for CodeEditor {
             .focusable()
             .tab_stop(true)
             .flex()
+            .relative()
             .key_context("CodeEditor")
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::backspace))
@@ -1234,6 +1760,10 @@ impl Render for CodeEditor {
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::indent_tab))
+            .on_action(cx.listener(Self::open_find))
+            .on_action(cx.listener(Self::find_next))
+            .on_action(cx.listener(Self::find_previous))
+            .on_action(cx.listener(Self::close_find))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -1245,7 +1775,9 @@ impl Render for CodeEditor {
             .bg(theme::surface())
             .border_1()
             .border_color(if focused {
-                theme::accent()
+                // The caret/selection already communicate focus; a neutral
+                // frame avoids the distracting full-editor blue focus ring.
+                theme::border_strong()
             } else {
                 theme::border()
             })
@@ -1255,15 +1787,101 @@ impl Render for CodeEditor {
             .font_family("Menlo")
             .h(px(380.))
             .items_start()
-            .overflow_y_scroll()
-            .child(div().w_full().child(CodeEditorElement {
-                editor: cx.entity(),
-            }))
+            .overflow_hidden()
+            .child(
+                div()
+                    .id(("code-editor-scroll", cx.entity_id().as_u64()))
+                    .w_full()
+                    .h_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .child(div().w_full().child(CodeEditorElement {
+                        editor: cx.entity(),
+                    })),
+            )
+            .when_some(find_bar, |element, bar| element.child(bar))
     }
 }
 
 impl Focusable for CodeEditor {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        line_starts_after_edit, painted_row_range, scroll_amount_for_thumb_top,
+        vertical_scrollbar_geometry,
+    };
+    use gpui::{point, px, size, Bounds};
+
+    #[test]
+    fn editor_shapes_only_viewport_rows_with_small_overdraw() {
+        let content = Bounds::new(point(px(10.), px(100.)), size(px(600.), px(20_000_000.)));
+        let viewport = Bounds::new(point(px(10.), px(300.)), size(px(600.), px(200.)));
+        assert_eq!(
+            painted_row_range(content, viewport, px(20.), 1_000_000),
+            7..23
+        );
+    }
+
+    #[test]
+    fn editor_caps_first_layout_before_scroll_bounds_are_known() {
+        let content = Bounds::new(point(px(0.), px(0.)), size(px(600.), px(20_000.)));
+        assert_eq!(
+            painted_row_range(content, Bounds::default(), px(20.), 1_000),
+            0..64
+        );
+    }
+
+    #[test]
+    fn line_index_updates_incrementally_across_insert_replace_and_delete() {
+        let starts = vec![0, 2, 4]; // "a\nb\nc"
+        assert_eq!(line_starts_after_edit(&starts, &(2..2), "z"), vec![0, 2, 5]);
+        assert_eq!(
+            line_starts_after_edit(&starts, &(1..4), "\nxx\n"),
+            vec![0, 2, 5]
+        );
+        assert_eq!(line_starts_after_edit(&starts, &(0..2), ""), vec![0, 2]);
+    }
+
+    #[test]
+    fn scrollbar_thumb_maps_the_full_scroll_range() {
+        let viewport = Bounds::new(point(px(20.), px(40.)), size(px(600.), px(400.)));
+        let top = vertical_scrollbar_geometry(viewport, px(0.), px(1_600.)).unwrap();
+        let middle = vertical_scrollbar_geometry(viewport, px(-800.), px(1_600.)).unwrap();
+        let bottom = vertical_scrollbar_geometry(viewport, px(-1_600.), px(1_600.)).unwrap();
+        let travel = top.track_bounds.size.height - top.thumb_bounds.size.height;
+
+        assert!((f32::from(top.thumb_bounds.top() - top.track_bounds.top())).abs() < 0.01);
+        assert!(
+            (f32::from(middle.thumb_bounds.top() - middle.track_bounds.top())
+                - f32::from(travel) * 0.5)
+                .abs()
+                < 0.01
+        );
+        assert!(
+            (f32::from(bottom.thumb_bounds.top() - bottom.track_bounds.top()) - f32::from(travel))
+                .abs()
+                < 0.01
+        );
+        assert!(
+            f32::from(
+                scroll_amount_for_thumb_top(
+                    &top,
+                    top.track_bounds.bottom() - top.thumb_bounds.size.height,
+                ) - px(1_600.)
+            )
+            .abs()
+                < 0.01
+        );
+    }
+
+    #[test]
+    fn scrollbar_is_hidden_when_the_document_fits() {
+        let viewport = Bounds::new(point(px(0.), px(0.)), size(px(600.), px(400.)));
+        assert!(vertical_scrollbar_geometry(viewport, px(0.), px(0.)).is_none());
     }
 }

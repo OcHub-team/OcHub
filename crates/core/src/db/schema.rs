@@ -31,7 +31,6 @@ impl Database {
                 icon_color TEXT,
                 meta TEXT NOT NULL DEFAULT '{}',
                 is_current BOOLEAN NOT NULL DEFAULT 0,
-                in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
                 cost_multiplier TEXT NOT NULL DEFAULT '1.0',
                 limit_daily_usd TEXT,
                 limit_monthly_usd TEXT,
@@ -69,14 +68,7 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 4. Prompts 表
-        conn.execute("CREATE TABLE IF NOT EXISTS prompts (
-            id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL,
-            description TEXT, enabled BOOLEAN NOT NULL DEFAULT 1, created_at INTEGER, updated_at INTEGER,
-            PRIMARY KEY (id, app_type)
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 5. Skills 表（v3.10.0+ 统一结构）
+        // 4. Skills 表（v3.10.0+ 统一结构）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS skills (
             id TEXT PRIMARY KEY,
@@ -117,65 +109,10 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 8. Proxy Config 表（按 app_type 一行；开放 app id，无枚举约束）
-        conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
-            app_type TEXT PRIMARY KEY,
-            proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-            listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
-            enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-            max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-            streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
-            circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
-            circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
-            circuit_min_requests INTEGER NOT NULL DEFAULT 10,
-            default_cost_multiplier TEXT NOT NULL DEFAULT '1',
-            pricing_model_source TEXT NOT NULL DEFAULT 'response',
-            live_takeover_active INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 初始化三行数据（每应用不同默认值）
-        conn.execute(
-            "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-            streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-            circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-            circuit_error_rate_threshold, circuit_min_requests)
-            VALUES ('claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-            streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-            circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-            circuit_error_rate_threshold, circuit_min_requests)
-            VALUES ('codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-            streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-            circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-            circuit_error_rate_threshold, circuit_min_requests)
-            VALUES ('gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 9. Provider Health 表
-        conn.execute("CREATE TABLE IF NOT EXISTS provider_health (
-            provider_id TEXT NOT NULL, app_type TEXT NOT NULL, is_healthy INTEGER NOT NULL DEFAULT 1,
-            consecutive_failures INTEGER NOT NULL DEFAULT 0, last_success_at TEXT, last_failure_at TEXT,
-            last_error TEXT, updated_at TEXT NOT NULL,
-            PRIMARY KEY (provider_id, app_type),
-            FOREIGN KEY (provider_id, app_type) REFERENCES providers(id, app_type) ON DELETE CASCADE
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 10. Proxy Request Logs 表
+        // 8. Usage Logs 表
         // pricing_model = 写入时实际用于计价的模型名（pricing_model_source 解析结果），
         // 回填按它重算；NULL 表示 v11 之前的历史行，'' 表示未计价的错误行。
-        conn.execute("CREATE TABLE IF NOT EXISTS proxy_request_logs (
+        conn.execute("CREATE TABLE IF NOT EXISTS usage_logs (
             request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, app_type TEXT NOT NULL, model TEXT NOT NULL,
             request_model TEXT,
             pricing_model TEXT,
@@ -187,32 +124,35 @@ impl Database {
             duration_ms INTEGER, status_code INTEGER NOT NULL, error_message TEXT, session_id TEXT,
             provider_type TEXT, is_streaming INTEGER NOT NULL DEFAULT 0,
             cost_multiplier TEXT NOT NULL DEFAULT '1.0', created_at INTEGER NOT NULL,
-            data_source TEXT NOT NULL DEFAULT 'proxy',
+            data_source TEXT NOT NULL DEFAULT 'gateway',
             input_token_semantics INTEGER NOT NULL DEFAULT 0
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON proxy_request_logs(provider_id, app_type)", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON proxy_request_logs(created_at)", [])
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON usage_logs(provider_id, app_type)", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_model ON proxy_request_logs(model)",
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON usage_logs(created_at)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_session ON proxy_request_logs(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_model ON usage_logs(model)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_status ON proxy_request_logs(status_code)",
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_session ON usage_logs(session_id)",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_status ON usage_logs(status_code)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Self::create_request_logs_usage_indexes_if_supported(conn)?;
 
-        // 11. Model Pricing 表
+        // 9. Model Pricing 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS model_pricing (
             model_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
@@ -224,7 +164,7 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 12. Stream Check Logs 表
+        // 10. Stream Check Logs 表
         conn.execute("CREATE TABLE IF NOT EXISTS stream_check_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL, provider_name TEXT NOT NULL,
             app_type TEXT NOT NULL, status TEXT NOT NULL, success INTEGER NOT NULL, message TEXT NOT NULL,
@@ -239,19 +179,8 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 注意：circuit_breaker_config 已合并到 proxy_config 表中
-
-        // 16. Proxy Live Backup 表 (Live 配置备份)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS proxy_live_backup (
-            app_type TEXT PRIMARY KEY, original_config TEXT NOT NULL, backed_up_at TEXT NOT NULL
-        )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 17. Usage Daily Rollups 表 (日聚合统计)
-        // request_model 保留路由接管的「客户端别名 → 真实模型」映射维度，
+        // 11. Usage Daily Rollups 表 (日聚合统计)
+        // request_model 保留网关路由的「客户端别名 → 真实模型」映射维度，
         // pricing_model 保留写入时的计价基准（request 计价模式下与 model 分叉），
         // 否则明细被 prune 后接管计费不可审计；历史行迁移时填 ''（未知）。
         conn.execute(
@@ -304,14 +233,7 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 为故障转移队列创建索引（基于 providers 表）
-        let _ = conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_providers_failover
-             ON providers(app_type, in_failover_queue, sort_index)",
-            [],
-        );
-
-        // 20. Gateway 渠道表（本地中转网关的上游渠道）
+        // 14. Gateway 渠道表（本地中转网关的上游渠道）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS gateway_channels (
                 id TEXT PRIMARY KEY,
@@ -333,7 +255,7 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 21. Gateway 本地 API key 表（一键配置分发给各应用，按 key 归因用量）
+        // 15. Gateway 本地 API key 表（一键配置分发给各应用，按 key 归因用量）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS gateway_keys (
                 id TEXT PRIMARY KEY,
@@ -341,6 +263,17 @@ impl Database {
                 key TEXT NOT NULL UNIQUE,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // 16. Per-app usage pricing defaults.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS usage_config (
+                app_type TEXT PRIMARY KEY,
+                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                pricing_model_source TEXT NOT NULL DEFAULT 'response'
             )",
             [],
         )
@@ -409,6 +342,99 @@ impl Database {
                             AppError::Database(format!("proxy_config v1→v2 迁移失败: {e}"))
                         })?;
                         Self::set_user_version(conn, 2)?;
+                    }
+                    2 => {
+                        // v2 → v3: retire the local proxy runtime persistence.
+                        // Pricing defaults survive in their own usage domain.
+                        if Self::table_exists(conn, "proxy_request_logs")? {
+                            // `create_tables_on_conn` has already created the current target
+                            // schema. Copy the column intersection rather than renaming the old
+                            // table, so newly introduced columns receive their current defaults.
+                            let target_columns = [
+                                "request_id",
+                                "provider_id",
+                                "app_type",
+                                "model",
+                                "request_model",
+                                "pricing_model",
+                                "input_tokens",
+                                "output_tokens",
+                                "cache_read_tokens",
+                                "cache_creation_tokens",
+                                "input_cost_usd",
+                                "output_cost_usd",
+                                "cache_read_cost_usd",
+                                "cache_creation_cost_usd",
+                                "total_cost_usd",
+                                "latency_ms",
+                                "first_token_ms",
+                                "duration_ms",
+                                "status_code",
+                                "error_message",
+                                "session_id",
+                                "provider_type",
+                                "is_streaming",
+                                "cost_multiplier",
+                                "created_at",
+                                "data_source",
+                                "input_token_semantics",
+                            ];
+                            let mut common_columns = Vec::new();
+                            for column in target_columns {
+                                if Self::has_column(conn, "proxy_request_logs", column)? {
+                                    common_columns.push(column);
+                                }
+                            }
+                            if common_columns.is_empty() {
+                                return Err(AppError::Database(
+                                    "历史用量表没有可迁移字段".to_string(),
+                                ));
+                            }
+                            let column_list = common_columns.join(", ");
+                            let copy_sql = format!(
+                                "INSERT OR IGNORE INTO usage_logs ({column_list})
+                                 SELECT {column_list} FROM proxy_request_logs"
+                            );
+                            conn.execute(&copy_sql, []).map_err(|e| {
+                                AppError::Database(format!("迁移历史用量记录失败: {e}"))
+                            })?;
+                            conn.execute("DROP TABLE proxy_request_logs", [])
+                                .map_err(|e| {
+                                    AppError::Database(format!("清理历史用量表失败: {e}"))
+                                })?;
+                        }
+                        conn.execute_batch(
+                            "CREATE TABLE IF NOT EXISTS usage_config (
+                                app_type TEXT PRIMARY KEY,
+                                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                                pricing_model_source TEXT NOT NULL DEFAULT 'response'
+                             );
+                             INSERT OR REPLACE INTO usage_config (
+                                app_type, default_cost_multiplier, pricing_model_source
+                             )
+                             SELECT app_type, default_cost_multiplier, pricing_model_source
+                             FROM proxy_config;
+                             INSERT OR REPLACE INTO settings (key, value)
+                             SELECT 'legacy_proxy_cleanup_pending', 'true'
+                             WHERE EXISTS (SELECT 1 FROM proxy_live_backup)
+                                OR EXISTS (SELECT 1 FROM proxy_config WHERE enabled = 1);
+                             DELETE FROM settings
+                             WHERE key = 'global_proxy_url'
+                                OR key LIKE 'proxy_takeover_%'
+                                OR key IN (
+                                    'rectifier_config',
+                                    'optimizer_config',
+                                    'copilot_optimizer_config',
+                                    'log_config'
+                                );
+                             DROP TABLE IF EXISTS provider_health;
+                             DROP TABLE IF EXISTS proxy_live_backup;
+                             DROP TABLE IF EXISTS proxy_config;
+                             DROP INDEX IF EXISTS idx_providers_failover;",
+                        )
+                        .map_err(|e| AppError::Database(format!("移除旧代理数据结构失败: {e}")))?;
+                        Self::create_request_logs_usage_indexes_if_supported(conn)?;
+                        Self::set_user_version(conn, 3)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1608,16 +1634,16 @@ impl Database {
     }
 
     fn create_request_logs_usage_indexes_if_supported(conn: &Connection) -> Result<(), AppError> {
-        if !Self::table_exists(conn, "proxy_request_logs")? {
+        if !Self::table_exists(conn, "usage_logs")? {
             return Ok(());
         }
 
-        let has_app_type = Self::has_column(conn, "proxy_request_logs", "app_type")?;
-        let has_created_at = Self::has_column(conn, "proxy_request_logs", "created_at")?;
+        let has_app_type = Self::has_column(conn, "usage_logs", "app_type")?;
+        let has_created_at = Self::has_column(conn, "usage_logs", "created_at")?;
         if has_app_type && has_created_at {
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_request_logs_app_created_at
-                 ON proxy_request_logs(app_type, created_at DESC)",
+                 ON usage_logs(app_type, created_at DESC)",
                 [],
             )
             .map_err(|e| AppError::Database(format!("创建使用量应用时间索引失败: {e}")))?;
@@ -1633,7 +1659,7 @@ impl Database {
             "cache_creation_tokens",
         ];
         for column in required_columns {
-            if !Self::has_column(conn, "proxy_request_logs", column)? {
+            if !Self::has_column(conn, "usage_logs", column)? {
                 return Ok(());
             }
         }
@@ -1646,7 +1672,7 @@ impl Database {
         // 会让跨源去重子查询退化成大量扫描；表达式索引让 SQLite 能按同一表达式查找。
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_request_logs_dedup_lookup_expr
-             ON proxy_request_logs(app_type, COALESCE(data_source, 'proxy'), input_tokens,
+             ON usage_logs(app_type, COALESCE(data_source, 'proxy'), input_tokens,
                                    output_tokens, cache_read_tokens, created_at,
                                    cache_creation_tokens)",
             [],
@@ -1746,7 +1772,7 @@ mod schema_migration_tests {
     use super::super::Database;
     use rusqlite::Connection;
 
-    /// Build the v1 proxy_config table (with the CHECK constraint) + seed rows.
+    /// Build the minimal legacy v1 structures needed to exercise the full v1 → v3 path.
     fn v1_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -1765,8 +1791,28 @@ mod schema_migration_tests {
                 live_takeover_active INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
-            INSERT INTO proxy_config (app_type, max_retries, enabled) VALUES ('claude', 6, 1);
+            INSERT INTO proxy_config (
+                app_type, max_retries, enabled, default_cost_multiplier, pricing_model_source
+            ) VALUES ('claude', 6, 1, '1.25', 'request');
             INSERT INTO proxy_config (app_type, max_retries) VALUES ('codex', 3);
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+            INSERT INTO settings VALUES ('global_proxy_url', 'socks5://127.0.0.1:1080');
+            INSERT INTO settings VALUES ('proxy_takeover_claude', 'true');
+            INSERT INTO settings VALUES ('rectifier_config', '{}');
+            CREATE TABLE proxy_live_backup (
+                app_type TEXT PRIMARY KEY, original_config TEXT NOT NULL, backed_up_at TEXT NOT NULL
+            );
+            INSERT INTO proxy_live_backup VALUES ('claude', '{}', 'now');
+            CREATE TABLE proxy_request_logs (
+                request_id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                model TEXT NOT NULL,
+                latency_ms INTEGER NOT NULL,
+                status_code INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            INSERT INTO proxy_request_logs VALUES ('legacy-1', 'p1', 'claude', 'm1', 10, 200, 1);
             PRAGMA user_version = 1;",
         )
         .unwrap();
@@ -1774,32 +1820,67 @@ mod schema_migration_tests {
     }
 
     #[test]
-    fn migrates_proxy_config_v1_to_v2() {
+    fn migrates_legacy_proxy_data_to_gateway_usage_schema() {
         let conn = v1_conn();
         // v1 rejects unknown app ids
         assert!(conn
             .execute("INSERT INTO proxy_config (app_type) VALUES ('my-app')", [])
             .is_err());
 
+        Database::create_tables_on_conn(&conn).unwrap();
         Database::apply_schema_migrations_on_conn(&conn).unwrap();
-        assert_eq!(Database::get_user_version(&conn).unwrap(), 2);
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 3);
 
-        // Rows preserved
-        let (retries, enabled): (i64, i64) = conn
+        // Pricing preferences survive in the neutral usage domain.
+        let (multiplier, source): (String, String) = conn
             .query_row(
-                "SELECT max_retries, enabled FROM proxy_config WHERE app_type = 'claude'",
+                "SELECT default_cost_multiplier, pricing_model_source
+                 FROM usage_config WHERE app_type = 'claude'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!((retries, enabled), (6, 1));
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM proxy_config", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!((multiplier.as_str(), source.as_str()), ("1.25", "request"));
 
-        // v2 accepts arbitrary app ids
-        conn.execute("INSERT INTO proxy_config (app_type) VALUES ('my-app')", [])
+        // Historical request rows are retained under the gateway-neutral table name.
+        let request_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_logs", [], |row| row.get(0))
             .unwrap();
+        assert_eq!(request_count, 1);
+        let migrated_source: String = conn
+            .query_row(
+                "SELECT data_source FROM usage_logs WHERE request_id = 'legacy-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migrated_source, "gateway");
+
+        let cleanup_pending: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'legacy_proxy_cleanup_pending'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cleanup_pending, "true");
+
+        assert!(!Database::table_exists(&conn, "proxy_config").unwrap());
+        assert!(!Database::table_exists(&conn, "proxy_live_backup").unwrap());
+        assert!(!Database::table_exists(&conn, "proxy_request_logs").unwrap());
+        for key in [
+            "global_proxy_url",
+            "proxy_takeover_claude",
+            "rectifier_config",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM settings WHERE key = ?1",
+                    [key],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0, "retired setting {key} should be removed");
+        }
     }
 }
