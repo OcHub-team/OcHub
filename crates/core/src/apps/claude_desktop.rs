@@ -260,7 +260,7 @@ pub fn validate_direct_provider(provider: &Provider) -> Result<(), AppError> {
         ) {
             return Err(AppError::localized(
                 "claude_desktop.provider.type_unsupported",
-                "Claude Desktop 直连供应商不支持托管 OAuth；请将该上游配置为中转网关渠道",
+                "Claude Desktop 直连供应商不支持托管 OAuth；请将该服务配置为 OcHub 转发站",
                 "Claude Desktop direct providers do not support managed OAuth; configure this upstream as a gateway channel",
             ));
         }
@@ -315,7 +315,7 @@ fn direct_inference_model_specs(provider: &Provider) -> Result<Vec<InferenceMode
             return Err(AppError::localized(
                 "claude_desktop.provider.direct_mapping_unsupported",
                 format!(
-                    "Claude Desktop 直连模式不能映射模型: {route_id} -> {upstream_model}；请在中转网关配置任意模型路由"
+                    "Claude Desktop 直连模式不能映射模型: {route_id} -> {upstream_model}；请在 OcHub 转发站中配置模型映射"
                 ),
                 format!(
                     "Claude Desktop direct mode cannot map models: {route_id} -> {upstream_model}; configure arbitrary model routing in the gateway"

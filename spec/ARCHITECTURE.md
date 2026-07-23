@@ -57,7 +57,7 @@ points that merge common config and write the file.
 ## Command surface to expose via axum (≈250 commands)
 Grouped into axum routers: providers, claude-desktop, config status, MCP
 (claude + unified), skills (Vercel CLI-backed), gateway (lifecycle/config/
-channels/keys/apply), usage stats + pricing, sessions, sync (webdav/s3),
+upstreams/routes/keys/import/apply), usage stats + pricing, sessions, sync (webdav/s3),
 auth (managed accounts + copilot + codex oauth), OMO, OpenClaw, Hermes, env
 management, deeplink, settings, update/restart, lightweight mode.
 
@@ -65,8 +65,13 @@ management, deeplink, settings, update/restart, lightweight mode.
 
 1. SQLite under `~/.ochub/` is OcHub's source of truth; cc-switch data is imported
    once and never written back.
-2. The in-process relay gateway is the sole owner of local routing, protocol
-   conversion, failover, health checks, and gateway usage accounting.
+2. The product exposes one complete commercial relay station (address, key,
+   upstream API format, model aliases, and reasoning policy) as the user-facing
+   unit. The in-process service remains the sole owner of protocol conversion
+   and usage accounting. Each station maps internally to one channel and one
+   hidden route; supported applications are configured once with an app-specific
+   local key, so switching stations does not rewrite the application config.
+   Legacy unbound keys remain readable for migration but are not exposed in the UI.
 3. Skills are installed and linked by `npx -y skills`; SQLite retains catalog
    metadata and enabled-app state.
 4. Gemini CLI producers and live writers are removed. Historical Gemini usage

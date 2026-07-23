@@ -21,6 +21,17 @@ OpenCode/OpenClaw/Hermes directories — quit the
 original cc-switch app before switching providers from OcHub, or the two
 will overwrite each other's live configs.
 
+OcHub provides two connection paths:
+
+1. **Direct connection** — automatically discovers local tool configs and
+   switches the common provider fields in place.
+2. **Relay-station mode** — adds a complete commercial relay configuration
+   (for example New API or Sub2API) with its address, key, API format, model
+   aliases, and reasoning mapping. A station can be applied to supported CLIs
+   with one click; after that, switching stations takes effect without rewriting
+   the app config again. The local conversion service and route bindings stay
+   hidden as implementation details.
+
 ## Architecture
 
 A Cargo workspace with three crates:
@@ -68,12 +79,13 @@ A faithful, near-complete port. `ochub-core` compiles green (hundreds of tests
 passing) and contains the full cc-switch backend:
 
 - Domain model, config/paths, device settings
-- SQLite store — independent schema v3, backup/restore, legacy read-only import, and usage rollups
+- SQLite store — independent schema v4, backup/restore, legacy read-only import, and usage rollups
 - Provider switching + all 6 per-app live-config writers + first-launch seeding
 - MCP and common-config services
 - Skills management through the Vercel `npx -y skills` CLI
-- Relay gateway — silent in-process lifecycle, channel routing, health-aware failover,
-  protocol conversion, per-app keys, one-click app configuration, and usage accounting
+- Relay-station mode — station-centric configuration, silent in-process
+  lifecycle, hidden per-app bindings, model/reasoning mapping, protocol
+  conversion, one-click CLI configuration, and usage accounting
 - Usage statistics, session manager, environment management, deeplink import
 - Cloud sync (WebDAV + S3, both functional) + auto-sync
 - Model-fetch / speedtest / subscription / balance / coding-plan
@@ -81,10 +93,11 @@ passing) and contains the full cc-switch backend:
 
 `ochub-server` exposes the local control API. `ochub-app` is a working GPUI desktop UI
 (sidebar app-switcher, provider list with switch/import/add/edit/delete, a
-text-input component, settings panel, sessions browser, usage dashboard, and gateway panel).
+text-input component, settings panel, sessions browser, usage dashboard, and relay-station panel).
 
-**Verified end-to-end:** provider switching rewrites the live configs; the gateway
-starts silently in-process on its loopback port; official providers seed on first launch.
+**Verified end-to-end:** direct switching rewrites the live configs; relay-station
+mode starts its local service silently; hidden station bindings isolate the selected
+commercial relay and map models/reasoning; official providers seed on first launch.
 
 The former standalone proxy, live-config takeover, failover queue, circuit-breaker
 configuration, upstream-proxy settings, UI page, and control API have been removed.

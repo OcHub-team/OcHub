@@ -298,12 +298,54 @@ fn collect_text_len(v: &Value, acc: &mut usize) {
 /// OpenAI-style model list: exact model names + overrides from all enabled
 /// channels (wildcard patterns are skipped — they have no enumerable form).
 async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
-    if let Err(resp) = authorize(&state, &headers, Dialect::Chat).await {
-        return resp;
-    }
+    let key = match authorize(&state, &headers, Dialect::Chat).await {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
+    let route = match key.as_ref().and_then(|key| key.route_id.as_deref()) {
+        Some(route_id) => match state.db.get_gateway_route_by_id(route_id) {
+            Ok(Some(route)) if route.enabled => Some(route),
+            Ok(_) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(json!({
+                        "error": { "message": "client route is unavailable" }
+                    })),
+                )
+                    .into_response()
+            }
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(json!({
+                        "error": { "message": "failed to load client route" }
+                    })),
+                )
+                    .into_response()
+            }
+        },
+        None => None,
+    };
     let mut models: Vec<String> = Vec::new();
+    if let Some(route) = &route {
+        for rule in &route.model_rules {
+            if !rule.model.contains('*') && !models.contains(&rule.model) {
+                models.push(rule.model.clone());
+            }
+        }
+        if let Some(default_model) = &route.default_model {
+            if !models.contains(default_model) {
+                models.push(default_model.clone());
+            }
+        }
+    }
     if let Ok(channels) = state.db.get_gateway_channels() {
-        for c in channels.iter().filter(|c| c.enabled) {
+        for c in channels.iter().filter(|channel| {
+            channel.enabled
+                && route
+                    .as_ref()
+                    .is_none_or(|route| route.allows_channel(&channel.id))
+        }) {
             for m in &c.models {
                 if !m.contains('*') && !models.contains(m) {
                     models.push(m.clone());

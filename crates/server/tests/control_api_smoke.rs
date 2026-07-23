@@ -33,6 +33,7 @@ async fn control_api_smoke_covers_core_feature_groups() {
         "/api/gateway/status",
         "/api/gateway/config",
         "/api/gateway/channels",
+        "/api/gateway/routes",
         "/api/gateway/keys",
         "/api/gateway/supported-apps",
         "/api/mcp",

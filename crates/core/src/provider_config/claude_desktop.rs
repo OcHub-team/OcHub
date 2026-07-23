@@ -66,7 +66,7 @@ impl AppConfig for ClaudeDesktopConfig {
                             placeholder: "https://gateway.example.com".into(),
                         },
                     )
-                    .help("原生 Anthropic Messages 端点；跨格式上游请在中转网关中配置。")
+                    .help("原生 Anthropic Messages 端点；跨格式服务请在 OcHub 转发站中配置。")
                     .required(),
                     FormField::new(
                         "auth_field",
@@ -101,7 +101,9 @@ impl AppConfig for ClaudeDesktopConfig {
                         ],
                     },
                 )
-                .help("这里只接受对应角色的 Claude-safe 模型名；任意模型路由由中转网关负责。")],
+                .help(
+                    "这里只接受对应角色的 Claude-safe 模型名；任意模型映射请在 OcHub 转发站中配置。",
+                )],
             ),
         ]
     }
@@ -236,7 +238,7 @@ impl AppConfig for ClaudeDesktopConfig {
                 .trim();
             if !model.is_empty() && model != route_id {
                 issues.push(ConfigIssue::error(format!(
-                    "{route_id} 不能映射到 {model}；请在中转网关配置任意模型路由。"
+                    "{route_id} 不能映射到 {model}；请在 OcHub 转发站中配置模型映射。"
                 )));
             }
         }

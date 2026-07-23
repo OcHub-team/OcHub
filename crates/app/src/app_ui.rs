@@ -8,6 +8,8 @@ use gpui::{
     div, prelude::*, px, App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton,
     SharedString, Window,
 };
+use ochub_core::gateway::apply;
+use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
 use ochub_core::services::provider::{self, ProviderService};
 use ochub_core::{AppState, AppType, Provider};
 
@@ -98,6 +100,8 @@ pub struct AppRoot {
     section: Section,
     providers: Vec<Provider>,
     current: String,
+    gateway_routes: Vec<GatewayRoute>,
+    gateway_keys: Vec<GatewayKey>,
     notifications: Entity<NotificationHost>,
     /// Active provider editor (add or edit); when `Some`, replaces the list.
     editor: Option<Entity<ProviderEditor>>,
@@ -128,9 +132,11 @@ pub struct AppRoot {
 #[derive(Clone, Copy)]
 enum ProviderRow {
     Hero,
-    OthersLabel,
+    GatewayRoutes,
+    DirectLabel,
+    GatewayLabel,
+    GatewayCta,
     EmptyState,
-    OthersEmptyHint,
     Card(usize),
 }
 
@@ -249,6 +255,8 @@ impl AppRoot {
             section: initial_section,
             providers: Vec::new(),
             current: String::new(),
+            gateway_routes: Vec::new(),
+            gateway_keys: Vec::new(),
             notifications,
             editor: None,
             confirm_delete: None,
@@ -495,6 +503,8 @@ impl AppRoot {
             }
         }
         self.current = ProviderService::current(&self.app, self.selected_app).unwrap_or_default();
+        self.gateway_routes = self.app.db.get_gateway_routes().unwrap_or_default();
+        self.gateway_keys = self.app.db.get_gateway_keys().unwrap_or_default();
         // 行数变化由 render 里的 reset 处理；这里只失效高度缓存。
         self.provider_list_state.remeasure();
     }
@@ -562,6 +572,10 @@ impl AppRoot {
     }
 
     fn do_switch(&mut self, id: String, cx: &mut Context<Self>) {
+        if id == apply::GATEWAY_PROVIDER_ID {
+            self.connect_local_gateway(cx);
+            return;
+        }
         match ProviderService::switch(&self.app, self.selected_app, &id) {
             Ok(result) => {
                 if result.warnings.is_empty() {
@@ -580,6 +594,103 @@ impl AppRoot {
         }
         self.reload(cx);
         shell_menu::refresh(&self.app, cx);
+        cx.notify();
+    }
+
+    fn connect_local_gateway(&mut self, cx: &mut Context<Self>) {
+        let station_route_id = self
+            .gateway_keys
+            .iter()
+            .find(|key| key.name == self.selected_app.as_str() && key.enabled)
+            .and_then(|key| key.route_id.as_deref())
+            .filter(|route_id| route_id.starts_with(apply::STATION_ROUTE_PREFIX))
+            .filter(|route_id| {
+                self.gateway_routes
+                    .iter()
+                    .any(|route| route.id == **route_id && route.enabled)
+            });
+        if station_route_id.is_none() {
+            self.notify_warning(
+                "请先应用一个转发站",
+                "进入“转发站”页面，选择一个配置并应用到当前 CLI。",
+                cx,
+            );
+            self.select_section(Section::Gateway, cx);
+            return;
+        }
+        let mut config = match self.app.db.get_gateway_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.notify_error("读取转发站设置失败", err.to_string(), cx);
+                return;
+            }
+        };
+        if !config.enabled {
+            config.enabled = true;
+            if let Err(err) = self.app.db.set_gateway_config(&config) {
+                self.notify_error("启动转发服务失败", err.to_string(), cx);
+                return;
+            }
+        }
+        self.notify_info("正在切换到转发站模式", cx);
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let result = match app.gateway.start().await {
+                Ok(_) => {
+                    let app_for_switch = app.clone();
+                    cx.background_spawn(async move {
+                        ProviderService::switch(
+                            &app_for_switch,
+                            app_type,
+                            apply::GATEWAY_PROVIDER_ID,
+                        )
+                    })
+                    .await
+                }
+                Err(err) => Err(err),
+            };
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(result) if result.warnings.is_empty() => {
+                        this.notify_success("已切换到转发站模式", cx);
+                    }
+                    Ok(result) => {
+                        this.notify_warning(
+                            "已切换到转发站模式",
+                            format!("写入应用配置时返回 {} 个警告", result.warnings.len()),
+                            cx,
+                        );
+                    }
+                    Err(err) => {
+                        this.notify_error("切换到转发站模式失败", err.to_string(), cx);
+                    }
+                }
+                this.reload(cx);
+                shell_menu::refresh(&this.app, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn activate_gateway_route(&mut self, route_id: String, cx: &mut Context<Self>) {
+        match apply::activate_route_for_app(&self.app, self.selected_app, &route_id) {
+            Ok(_) => {
+                let route_name = self
+                    .gateway_routes
+                    .iter()
+                    .find(|route| route.id == route_id)
+                    .map(|route| route.name.clone())
+                    .unwrap_or(route_id);
+                self.notify_success(format!("已切换转发站为「{route_name}」"), cx);
+            }
+            Err(err) => {
+                self.notify_error("切换转发站失败", err.to_string(), cx);
+            }
+        }
+        self.reload(cx);
         cx.notify();
     }
 
@@ -889,7 +1000,7 @@ impl AppRoot {
                     .flex_col()
                     .gap_1()
                     .px_2()
-                    .child(self.render_nav_item("nav-gateway", "中转网关", Section::Gateway, cx)),
+                    .child(self.render_nav_item("nav-gateway", "转发站", Section::Gateway, cx)),
             )
             .child(Self::render_sidebar_group("系统"))
             .child(
@@ -931,6 +1042,7 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_current = !self.selected_app.is_additive_mode() && provider.id == self.current;
+        let is_gateway = provider.is_local_gateway();
         let id = provider.id.clone();
         let edit_provider = provider.clone();
         let confirm_provider = provider.clone();
@@ -941,10 +1053,14 @@ impl AppRoot {
         let visible_position = visible_ids
             .iter()
             .position(|provider_id| provider_id == &provider.id);
-        let can_move_up = visible_position.is_some_and(|position| position > 0);
-        let can_move_down =
-            visible_position.is_some_and(|position| position + 1 < visible_ids.len());
-        let base_url = self.provider_base_url(provider);
+        let can_move_up = !is_gateway && visible_position.is_some_and(|position| position > 0);
+        let can_move_down = !is_gateway
+            && visible_position.is_some_and(|position| position + 1 < visible_ids.len());
+        let base_url = if is_gateway {
+            "模型、格式与思考映射由所选转发站处理".to_string()
+        } else {
+            self.provider_base_url(provider)
+        };
         let is_additive = self.selected_app.is_additive_mode();
         let is_in_live = provider
             .meta
@@ -1001,6 +1117,8 @@ impl AppRoot {
                             .child(icon(
                                 if is_current {
                                     IconName::Check
+                                } else if is_gateway {
+                                    IconName::Layers
                                 } else {
                                     Self::app_icon(self.selected_app)
                                 },
@@ -1031,6 +1149,9 @@ impl AppRoot {
                                     )
                                     .when(is_current, |s| {
                                         s.child(components::badge(BadgeTone::Accent, "当前"))
+                                    })
+                                    .when(is_gateway, |s| {
+                                        s.child(components::badge(BadgeTone::Neutral, "转发站模式"))
                                     }),
                             )
                             .child(
@@ -1082,30 +1203,40 @@ impl AppRoot {
                     .child(
                         components::action_button(
                             SharedString::from(format!("edit-{}", provider.id)),
-                            "编辑",
+                            if is_gateway { "管理" } else { "编辑" },
                             false,
                         )
-                        .aria_label(SharedString::from(format!("编辑 {}", provider.name)))
+                        .aria_label(SharedString::from(format!(
+                            "{} {}",
+                            if is_gateway { "管理" } else { "编辑" },
+                            provider.name
+                        )))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.open_edit_editor(edit_provider.clone(), cx);
+                                if is_gateway {
+                                    this.select_section(Section::Gateway, cx);
+                                } else {
+                                    this.open_edit_editor(edit_provider.clone(), cx);
+                                }
                             },
                         )),
                     )
-                    .child(
-                        components::action_button_tone(
-                            SharedString::from(format!("delete-{}", provider.id)),
-                            "删除",
-                            ButtonTone::Danger,
+                    .when(!is_gateway, |row| {
+                        row.child(
+                            components::action_button_tone(
+                                SharedString::from(format!("delete-{}", provider.id)),
+                                "删除",
+                                ButtonTone::Danger,
+                            )
+                            .aria_label(SharedString::from(format!("删除 {}", provider.name)))
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    this.confirm_delete = Some(confirm_provider.clone());
+                                    cx.notify();
+                                },
+                            )),
                         )
-                        .aria_label(SharedString::from(format!("删除 {}", provider.name)))
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.confirm_delete = Some(confirm_provider.clone());
-                                cx.notify();
-                            },
-                        )),
-                    )
+                    })
                     .child(
                         components::action_button(
                             SharedString::from(format!("switch-{}", provider.id)),
@@ -1142,6 +1273,7 @@ impl AppRoot {
             .find(|p| p.id == self.current)
             .cloned();
         let has_current = current.is_some();
+        let is_gateway = current.as_ref().is_some_and(Provider::is_local_gateway);
 
         let icon_tile = div()
             .flex()
@@ -1158,7 +1290,11 @@ impl AppRoot {
             })
             .when(has_current, |s| s.shadow_xs())
             .child(icon(
-                Self::app_icon(app),
+                if is_gateway {
+                    IconName::Layers
+                } else {
+                    Self::app_icon(app)
+                },
                 if has_current {
                     theme::accent_text()
                 } else {
@@ -1187,9 +1323,20 @@ impl AppRoot {
                                     .text_color(theme::accent())
                                     .text_xs()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("当前生效"),
+                                    .child("当前连接"),
                             )
-                            .child(components::badge(BadgeTone::Success, "已启用")),
+                            .child(components::badge(
+                                if is_gateway {
+                                    BadgeTone::Accent
+                                } else {
+                                    BadgeTone::Success
+                                },
+                                if is_gateway {
+                                    "转发站模式"
+                                } else {
+                                    "直接连接"
+                                },
+                            )),
                     )
                     .child(
                         div()
@@ -1205,14 +1352,22 @@ impl AppRoot {
                             .flex_row()
                             .items_center()
                             .gap_1()
-                            .child(icon(IconName::Cloud, theme::muted(), 12.))
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .truncate()
-                                    .child(SharedString::from(base_url)),
-                            ),
+                            .child(icon(
+                                if is_gateway {
+                                    IconName::Layers
+                                } else {
+                                    IconName::Cloud
+                                },
+                                theme::muted(),
+                                12.,
+                            ))
+                            .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                                SharedString::from(if is_gateway {
+                                    "模型、格式与思考映射由所选转发站处理".to_string()
+                                } else {
+                                    base_url
+                                }),
+                            )),
                     )
             }
             None => div()
@@ -1226,20 +1381,20 @@ impl AppRoot {
                         .text_color(theme::muted())
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("当前生效"),
+                        .child("当前连接"),
                 )
                 .child(
                     div()
                         .text_color(theme::text())
                         .text_lg()
                         .font_weight(FontWeight::BOLD)
-                        .child("未选择供应商"),
+                        .child("尚未选择连接"),
                 )
                 .child(
                     div()
                         .text_color(theme::muted())
                         .text_xs()
-                        .child("从下方列表选择一个供应商以启用。"),
+                        .child("从下方选择直接连接或转发站模式。"),
                 ),
         };
 
@@ -1248,12 +1403,24 @@ impl AppRoot {
             div().flex().flex_row().items_center().gap_2().child(
                 components::action_button(
                     SharedString::from(format!("hero-edit-{}", provider.id)),
-                    "编辑",
+                    if is_gateway {
+                        "管理转发站"
+                    } else {
+                        "编辑"
+                    },
                     false,
                 )
-                .aria_label(SharedString::from(format!("编辑 {}", provider.name)))
+                .aria_label(SharedString::from(if is_gateway {
+                    "管理转发站".to_string()
+                } else {
+                    format!("编辑 {}", provider.name)
+                }))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.open_edit_editor(edit_provider.clone(), cx);
+                    if is_gateway {
+                        this.select_section(Section::Gateway, cx);
+                    } else {
+                        this.open_edit_editor(edit_provider.clone(), cx);
+                    }
                 })),
             )
         });
@@ -1280,54 +1447,303 @@ impl AppRoot {
         card
     }
 
+    fn render_gateway_cta(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        components::panel()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .w_full()
+            .px_4()
+            .py_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(32.))
+                            .h(px(32.))
+                            .rounded_md()
+                            .bg(theme::surface_hover())
+                            .child(icon(IconName::Layers, theme::subtext(), 16.)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_color(theme::text())
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("转发站模式"),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child("应用一次后，可直接在这里切换不同转发站。"),
+                            ),
+                    ),
+            )
+            .child(
+                components::button(
+                    "setup-local-gateway",
+                    "配置转发站",
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.select_section(Section::Gateway, cx);
+                })),
+            )
+    }
+
+    fn render_gateway_route_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let app = self.selected_app;
+        let active_route_id = self
+            .gateway_keys
+            .iter()
+            .find(|key| key.name == app.as_str() && key.enabled)
+            .and_then(|key| key.route_id.as_deref());
+        let routes: Vec<&GatewayRoute> = self
+            .gateway_routes
+            .iter()
+            .filter(|route| {
+                route.enabled
+                    && route.id.starts_with(apply::STATION_ROUTE_PREFIX)
+                    && route
+                        .app_type
+                        .as_deref()
+                        .is_none_or(|bound| bound == app.as_str())
+            })
+            .collect();
+
+        let manage_button = components::button(
+            "manage-relay-stations",
+            "管理转发站",
+            ButtonTone::Ghost,
+            ButtonSize::Sm,
+        )
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            this.select_section(Section::Gateway, cx);
+        }));
+
+        components::panel()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .p_4()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_color(theme::text())
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("当前转发站"),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child("切换后立即生效，不会再次修改应用配置。"),
+                            ),
+                    )
+                    .child(manage_button),
+            )
+            .when(routes.is_empty(), |panel| {
+                panel.child(
+                    div()
+                        .text_color(theme::muted())
+                        .text_sm()
+                        .child("还没有可用转发站，请先添加并应用一个转发站配置。"),
+                )
+            })
+            .children(routes.into_iter().map(|route| {
+                let route_id = route.id.clone();
+                let active = active_route_id == Some(route.id.as_str());
+                let model = route
+                    .default_model
+                    .as_deref()
+                    .map(|model| format!("默认模型 {model}"))
+                    .unwrap_or_else(|| {
+                        if route.model_rules.is_empty() {
+                            "模型名原样传递".to_string()
+                        } else {
+                            format!("{} 条模型映射", route.model_rules.len())
+                        }
+                    });
+                let button = components::button(
+                    SharedString::from(format!("quick-station-{}", route.id)),
+                    if active { "使用中" } else { "切换" },
+                    if active {
+                        ButtonTone::Neutral
+                    } else {
+                        ButtonTone::Primary
+                    },
+                    ButtonSize::Sm,
+                );
+                let button = if active {
+                    button.cursor_not_allowed().opacity(0.65)
+                } else {
+                    button.on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.activate_gateway_route(route_id.clone(), cx);
+                    }))
+                };
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(if active {
+                        theme::sidebar_selected()
+                    } else {
+                        theme::surface_hover()
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_color(theme::text())
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(SharedString::from(route.name.clone())),
+                                    )
+                                    .when(active, |row| {
+                                        row.child(components::badge(BadgeTone::Accent, "当前"))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child(SharedString::from(model)),
+                            ),
+                    )
+                    .child(button)
+            }))
+    }
+
     fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.selected_app;
         let is_switch = !app.is_additive_mode();
-
-        // In switch mode the live provider is surfaced in the hero, so the list below
-        // shows only the switchable alternatives. Additive apps list everything.
-        let card_ixs: Vec<usize> = self
+        let current_is_gateway = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == self.current)
+            .is_some_and(Provider::is_local_gateway);
+        let direct_ixs: Vec<usize> = self
             .providers
             .iter()
             .enumerate()
-            .filter(|(_, p)| !is_switch || p.id != self.current)
-            .map(|(ix, _)| ix)
+            .filter(|(_, provider)| {
+                !provider.is_local_gateway() && (!is_switch || provider.id != self.current)
+            })
+            .map(|(index, _)| index)
             .collect();
+        let gateway_ixs: Vec<usize> = self
+            .providers
+            .iter()
+            .enumerate()
+            .filter(|(_, provider)| {
+                provider.is_local_gateway() && (!is_switch || provider.id != self.current)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let supports_gateway = apply::supported_apps().contains(&app);
         let no_providers = self.providers.is_empty();
-        let others_empty = card_ixs.is_empty();
 
         let mut plan: Vec<ProviderRow> = Vec::new();
         if is_switch {
             plan.push(ProviderRow::Hero);
+            if current_is_gateway {
+                plan.push(ProviderRow::GatewayRoutes);
+            }
+            if !direct_ixs.is_empty() {
+                plan.push(ProviderRow::DirectLabel);
+                plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
+            }
+            if supports_gateway && !current_is_gateway {
+                plan.push(ProviderRow::GatewayLabel);
+                if gateway_ixs.is_empty() {
+                    plan.push(ProviderRow::GatewayCta);
+                } else {
+                    plan.extend(gateway_ixs.iter().copied().map(ProviderRow::Card));
+                }
+            }
+            if no_providers && !supports_gateway {
+                plan.push(ProviderRow::EmptyState);
+            }
+        } else {
+            if no_providers {
+                plan.push(ProviderRow::EmptyState);
+            }
+            plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
         }
-        if is_switch && !others_empty {
-            plan.push(ProviderRow::OthersLabel);
-        }
-        if no_providers {
-            plan.push(ProviderRow::EmptyState);
-        }
-        if is_switch && !no_providers && others_empty {
-            plan.push(ProviderRow::OthersEmptyHint);
-        }
-        plan.extend(card_ixs.into_iter().map(ProviderRow::Card));
         if self.provider_list_state.item_count() != plan.len() {
             self.provider_list_state.reset(plan.len());
         }
 
+        let direct_count = self
+            .providers
+            .iter()
+            .filter(|provider| !provider.is_local_gateway())
+            .count();
         let mode = if app.is_additive_mode() {
-            "累加模式"
+            "管理应用中的连接"
+        } else if current_is_gateway {
+            "当前：转发站模式"
         } else {
-            "切换模式"
+            "当前：直接连接"
         };
-        let subtitle = SharedString::from(format!("{mode} · {} 个供应商", self.providers.len()));
+        let subtitle = SharedString::from(format!("{mode} · {direct_count} 个直接连接"));
 
         let actions = div()
             .flex()
             .flex_row()
             .gap_2()
             .child(
-                components::icon_button("add-provider", "新增", IconName::Add, true)
-                    .aria_label("新增供应商")
+                components::icon_button("add-provider", "添加连接", IconName::Add, true)
+                    .aria_label("添加直接连接")
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.open_add_editor(cx);
                     })),
@@ -1357,26 +1773,42 @@ impl AppRoot {
                     Some(ProviderRow::Hero) => {
                         block.child(this.render_active_hero(cx)).into_any_element()
                     }
-                    Some(ProviderRow::OthersLabel) => block
+                    Some(ProviderRow::GatewayRoutes) => block
+                        .child(this.render_gateway_route_switcher(cx))
+                        .into_any_element(),
+                    Some(ProviderRow::DirectLabel) => block
                         .child(
                             div()
                                 .pt_1()
                                 .text_color(theme::subtext())
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("切换到其他供应商"),
+                                .child("直接连接"),
                         )
                         .into_any_element(),
+                    Some(ProviderRow::GatewayLabel) => block
+                        .child(
+                            div()
+                                .pt_1()
+                                .text_color(theme::subtext())
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("转发站模式"),
+                        )
+                        .into_any_element(),
+                    Some(ProviderRow::GatewayCta) => {
+                        block.child(this.render_gateway_cta(cx)).into_any_element()
+                    }
                     Some(ProviderRow::EmptyState) => block
                         .child(
                             components::card().p_0().child(components::empty_state(
                                 IconName::Folder,
-                                "还没有供应商",
-                                "已有工具配置会自动识别，也可以手动新增。",
+                                "还没有直接连接",
+                                "已有工具配置会自动识别，也可以手动添加。",
                                 Some(
                                     components::icon_button(
                                         "empty-add-provider",
-                                        "新增供应商",
+                                        "添加直接连接",
                                         IconName::Add,
                                         true,
                                     )
@@ -1386,14 +1818,6 @@ impl AppRoot {
                                     .into_any_element(),
                                 ),
                             )),
-                        )
-                        .into_any_element(),
-                    Some(ProviderRow::OthersEmptyHint) => block
-                        .child(
-                            div()
-                                .text_color(theme::muted())
-                                .text_xs()
-                                .child("暂无其他供应商，点击“新增”可添加更多。"),
                         )
                         .into_any_element(),
                     Some(ProviderRow::Card(pix)) => match this.providers.get(pix) {

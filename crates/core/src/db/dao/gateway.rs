@@ -2,7 +2,9 @@
 
 use crate::db::{lock_conn, to_json_string, Database};
 use crate::error::AppError;
-use crate::gateway::types::{Dialect, GatewayChannel, GatewayConfig, GatewayKey};
+use crate::gateway::types::{
+    Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayReasoningConfig, GatewayRoute,
+};
 use rusqlite::params;
 
 const GATEWAY_CONFIG_KEY: &str = "gateway_config";
@@ -29,6 +31,27 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayChannel> {
 
 const CHANNEL_COLUMNS: &str = "id, name, dialect, base_url, api_key, path_override, models, \
      model_override, priority, weight, enabled, extra_headers";
+
+fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
+    let channel_ids: String = row.get(3)?;
+    let model_rules: String = row.get(5)?;
+    let reasoning: String = row.get(6)?;
+    Ok(GatewayRoute {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        app_type: row.get(2)?,
+        channel_ids: serde_json::from_str(&channel_ids).unwrap_or_default(),
+        default_model: row.get(4)?,
+        model_rules: serde_json::from_str(&model_rules).unwrap_or_default(),
+        reasoning: serde_json::from_str(&reasoning)
+            .unwrap_or_else(|_| GatewayReasoningConfig::default()),
+        enabled: row.get(7)?,
+        created_at: row.get(8)?,
+    })
+}
+
+const ROUTE_COLUMNS: &str =
+    "id, name, app_type, channel_ids, default_model, model_rules, reasoning, enabled, created_at";
 
 impl Database {
     // -- settings blob ------------------------------------------------------
@@ -96,10 +119,146 @@ impl Database {
     }
 
     pub fn delete_gateway_channel(&self, id: &str) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let n = conn
+        let mut affected_routes = Vec::new();
+        for mut route in self.get_gateway_routes()? {
+            let before_channels = route.channel_ids.len();
+            let before_rules = route.model_rules.len();
+            route.channel_ids.retain(|channel_id| channel_id != id);
+            route
+                .model_rules
+                .retain(|rule| rule.channel_id.as_deref() != Some(id));
+            if route.channel_ids.len() != before_channels || route.model_rules.len() != before_rules
+            {
+                route.validate().map_err(AppError::InvalidInput)?;
+                affected_routes.push(route);
+            }
+        }
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        for route in affected_routes {
+            tx.execute(
+                "UPDATE gateway_routes
+                 SET channel_ids = ?1, model_rules = ?2
+                 WHERE id = ?3",
+                params![
+                    to_json_string(&route.channel_ids)?,
+                    to_json_string(&route.model_rules)?,
+                    route.id
+                ],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        let n = tx
             .execute("DELETE FROM gateway_channels WHERE id = ?1", params![id])
             .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(n > 0)
+    }
+
+    // -- routes -------------------------------------------------------------
+
+    pub fn get_gateway_routes(&self) -> Result<Vec<GatewayRoute>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {ROUTE_COLUMNS} FROM gateway_routes
+                 ORDER BY COALESCE(sort_index, 999999), created_at ASC, id ASC"
+            ))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], row_to_route)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))
+    }
+
+    pub fn get_gateway_route_by_id(&self, id: &str) -> Result<Option<GatewayRoute>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {ROUTE_COLUMNS} FROM gateway_routes WHERE id = ?1"
+            ))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut rows = stmt
+            .query_map(params![id], row_to_route)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        match rows.next() {
+            Some(Ok(route)) => Ok(Some(route)),
+            Some(Err(err)) => Err(AppError::Database(err.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_gateway_route_for_app(
+        &self,
+        app_type: &str,
+    ) -> Result<Option<GatewayRoute>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {ROUTE_COLUMNS} FROM gateway_routes
+                 WHERE app_type = ?1 AND enabled = 1
+                 ORDER BY COALESCE(sort_index, 999999), created_at ASC, id ASC
+                 LIMIT 1"
+            ))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut rows = stmt
+            .query_map(params![app_type], row_to_route)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        match rows.next() {
+            Some(Ok(route)) => Ok(Some(route)),
+            Some(Err(err)) => Err(AppError::Database(err.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_gateway_route(&self, route: &GatewayRoute) -> Result<(), AppError> {
+        route.validate().map_err(AppError::InvalidInput)?;
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "INSERT INTO gateway_routes (
+                id, name, app_type, channel_ids, default_model, model_rules,
+                reasoning, enabled, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name, app_type = excluded.app_type,
+                channel_ids = excluded.channel_ids,
+                default_model = excluded.default_model,
+                model_rules = excluded.model_rules,
+                reasoning = excluded.reasoning,
+                enabled = excluded.enabled",
+            params![
+                route.id,
+                route.name,
+                route.app_type,
+                to_json_string(&route.channel_ids)?,
+                route.default_model,
+                to_json_string(&route.model_rules)?,
+                to_json_string(&route.reasoning)?,
+                route.enabled,
+                route.created_at,
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn delete_gateway_route(&self, id: &str) -> Result<bool, AppError> {
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.execute(
+            "UPDATE gateway_keys SET route_id = NULL WHERE route_id = ?1",
+            params![id],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        let n = tx
+            .execute("DELETE FROM gateway_routes WHERE id = ?1", params![id])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
         Ok(n > 0)
     }
 
@@ -109,7 +268,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, key, enabled, created_at FROM gateway_keys
+                "SELECT id, name, key, route_id, enabled, created_at FROM gateway_keys
                  ORDER BY created_at ASC, id ASC",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -119,8 +278,9 @@ impl Database {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     key: row.get(2)?,
-                    enabled: row.get(3)?,
-                    created_at: row.get(4)?,
+                    route_id: row.get(3)?,
+                    enabled: row.get(4)?,
+                    created_at: row.get(5)?,
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -131,11 +291,19 @@ impl Database {
     pub fn upsert_gateway_key(&self, key: &GatewayKey) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "INSERT INTO gateway_keys (id, name, key, enabled, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO gateway_keys (id, name, key, route_id, enabled, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name, key = excluded.key, enabled = excluded.enabled",
-            params![key.id, key.name, key.key, key.enabled, key.created_at],
+                name = excluded.name, key = excluded.key,
+                route_id = excluded.route_id, enabled = excluded.enabled",
+            params![
+                key.id,
+                key.name,
+                key.key,
+                key.route_id,
+                key.enabled,
+                key.created_at
+            ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
@@ -154,7 +322,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, key, enabled, created_at FROM gateway_keys
+                "SELECT id, name, key, route_id, enabled, created_at FROM gateway_keys
                  WHERE key = ?1 AND enabled = 1",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -164,8 +332,9 @@ impl Database {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     key: row.get(2)?,
-                    enabled: row.get(3)?,
-                    created_at: row.get(4)?,
+                    route_id: row.get(3)?,
+                    enabled: row.get(4)?,
+                    created_at: row.get(5)?,
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -180,7 +349,10 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use crate::db::Database;
-    use crate::gateway::types::{Dialect, GatewayChannel, GatewayConfig, GatewayKey};
+    use crate::gateway::types::{
+        Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayModelRule,
+        GatewayReasoningConfig, GatewayRoute,
+    };
 
     fn channel(id: &str) -> GatewayChannel {
         GatewayChannel {
@@ -227,12 +399,49 @@ mod tests {
     }
 
     #[test]
+    fn deleting_channel_atomically_cleans_route_references() {
+        let db = Database::memory().unwrap();
+        db.upsert_gateway_channel(&channel("a")).unwrap();
+        db.upsert_gateway_channel(&channel("b")).unwrap();
+        db.upsert_gateway_route(&GatewayRoute {
+            id: "route".into(),
+            name: "route".into(),
+            app_type: Some("claude".into()),
+            channel_ids: vec!["a".into(), "b".into()],
+            default_model: None,
+            model_rules: vec![
+                GatewayModelRule {
+                    model: "a".into(),
+                    upstream_model: "model-a".into(),
+                    channel_id: Some("a".into()),
+                },
+                GatewayModelRule {
+                    model: "b".into(),
+                    upstream_model: "model-b".into(),
+                    channel_id: Some("b".into()),
+                },
+            ],
+            reasoning: GatewayReasoningConfig::default(),
+            enabled: true,
+            created_at: 1,
+        })
+        .unwrap();
+
+        assert!(db.delete_gateway_channel("a").unwrap());
+        let route = db.get_gateway_route_by_id("route").unwrap().unwrap();
+        assert_eq!(route.channel_ids, vec!["b"]);
+        assert_eq!(route.model_rules.len(), 1);
+        assert_eq!(route.model_rules[0].channel_id.as_deref(), Some("b"));
+    }
+
+    #[test]
     fn key_crud_and_lookup() {
         let db = Database::memory().unwrap();
         let key = GatewayKey {
             id: "k1".into(),
             name: "claude-code".into(),
             key: "rd-secret".into(),
+            route_id: None,
             enabled: true,
             created_at: 1,
         };
@@ -249,6 +458,44 @@ mod tests {
         assert!(db.find_gateway_key("rd-secret").unwrap().is_none());
 
         assert!(db.delete_gateway_key("k1").unwrap());
+    }
+
+    #[test]
+    fn route_crud_round_trips_and_clears_bound_keys() {
+        let db = Database::memory().unwrap();
+        let route = GatewayRoute {
+            id: "route-claude".into(),
+            name: "Claude Code 默认路由".into(),
+            app_type: Some("claude".into()),
+            channel_ids: vec!["a".into()],
+            default_model: Some("sonnet".into()),
+            model_rules: vec![GatewayModelRule {
+                model: "sonnet".into(),
+                upstream_model: "claude-sonnet-4-6".into(),
+                channel_id: Some("a".into()),
+            }],
+            reasoning: GatewayReasoningConfig::default(),
+            enabled: true,
+            created_at: 1,
+        };
+        db.upsert_gateway_route(&route).unwrap();
+
+        let got = db.get_gateway_route_for_app("claude").unwrap().unwrap();
+        assert_eq!(got.id, "route-claude");
+        assert_eq!(got.model_rules, route.model_rules);
+
+        let key = GatewayKey {
+            id: "k-route".into(),
+            name: "claude".into(),
+            key: "rd-route".into(),
+            route_id: Some(route.id.clone()),
+            enabled: true,
+            created_at: 1,
+        };
+        db.upsert_gateway_key(&key).unwrap();
+        assert!(db.delete_gateway_route(&route.id).unwrap());
+        let key = db.get_gateway_keys().unwrap().remove(0);
+        assert!(key.route_id.is_none());
     }
 
     #[test]
