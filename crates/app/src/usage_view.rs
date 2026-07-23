@@ -3488,7 +3488,7 @@ fn app_tone(app_type: &str) -> gpui::Rgba {
 
 fn data_source_label(source: &str) -> String {
     match source {
-        "gateway" => "网关请求",
+        "gateway" => "转发站请求",
         "proxy" => "旧版本地请求",
         "session_log" => "Claude 会话",
         "codex_db" => "Codex 数据库",

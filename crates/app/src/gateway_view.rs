@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, Context, Entity, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, px, ClipboardItem, Context, Entity, FontWeight, SharedString, Window};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
     Dialect, GatewayChannel, GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode,
@@ -71,6 +71,10 @@ pub struct GatewayView {
     show_imports: bool,
     applying: Option<(String, AppType)>,
     confirm_delete: Option<(String, String)>,
+    show_connection: bool,
+    connection_loading: bool,
+    connection_info: Option<apply::ApplyResult>,
+    reveal_connection_key: bool,
     status: Option<SharedString>,
 }
 
@@ -86,6 +90,10 @@ impl GatewayView {
             show_imports: false,
             applying: None,
             confirm_delete: None,
+            show_connection: false,
+            connection_loading: false,
+            connection_info: None,
+            reveal_connection_key: false,
             status: None,
         };
         view.reload(cx);
@@ -509,6 +517,18 @@ impl GatewayView {
             cx.notify();
             return;
         }
+        if !apply::dialect_compatible(station.channel.dialect, app_type) {
+            self.status = Some(
+                format!(
+                    "无法应用到 {}：「{}」是 OpenAI Chat 格式，暂不支持该工具",
+                    crate::app_meta::label(app_type),
+                    station.channel.name
+                )
+                .into(),
+            );
+            cx.notify();
+            return;
+        }
         if let Err(err) = self.app.db.upsert_gateway_route(&station.route) {
             self.status = Some(format!("准备转发站配置失败：{err}").into());
             cx.notify();
@@ -572,6 +592,60 @@ impl GatewayView {
             .ok();
         })
         .detach();
+    }
+
+    fn toggle_connection_panel(&mut self, cx: &mut Context<Self>) {
+        self.show_connection = !self.show_connection;
+        if self.show_connection && self.connection_info.is_none() {
+            self.load_connection_info(cx);
+        }
+        cx.notify();
+    }
+
+    fn load_connection_info(&mut self, cx: &mut Context<Self>) {
+        if self.connection_loading {
+            return;
+        }
+        self.connection_loading = true;
+        cx.notify();
+
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let mut config = app.db.get_gateway_config()?;
+                if !config.enabled {
+                    config.enabled = true;
+                    app.db.set_gateway_config(&config)?;
+                }
+                let status = app.gateway.start().await?;
+                let base_url = status.base_url;
+                let app_for_info = app.clone();
+                cx.background_spawn(async move { apply::generic_client_info(&app_for_info, &base_url) })
+                    .await
+            }
+            .await;
+            this.update(cx, |this, cx| {
+                this.connection_loading = false;
+                match result {
+                    Ok(info) => {
+                        this.connection_info = Some(info);
+                    }
+                    Err(err) => {
+                        this.show_connection = false;
+                        this.status = Some(format!("获取连接信息失败：{err}").into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn copy_to_clipboard(&mut self, value: String, done: &'static str, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(value));
+        self.status = Some(done.into());
+        cx.notify();
     }
 
     fn render_import_candidate(
@@ -643,6 +717,112 @@ impl GatewayView {
             .into_any_element()
     }
 
+    fn render_connection_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let panel = components::panel()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .p_4()
+            .child(section_title(
+                "其他工具接入",
+                "OpenCode、OpenClaw、Hermes 等使用 OpenAI Chat 接口的工具，填入以下本机地址和密钥即可接入。",
+            ));
+        let panel = match self.connection_info.clone() {
+            None => panel.child(div().text_color(theme::muted()).text_sm().child(
+                if self.connection_loading {
+                    "正在启动本地转发服务…"
+                } else {
+                    "连接信息暂不可用。"
+                },
+            )),
+            Some(info) => {
+                let url = info.base_url.clone();
+                let url_for_copy = url.clone();
+                let key = info.key_secret.clone();
+                let shown_key = if self.reveal_connection_key {
+                    key.clone()
+                } else {
+                    masked_secret(&key)
+                };
+                panel
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_color(theme::muted()).text_xs().w(px(40.)).child("地址"))
+                            .child(
+                                div()
+                                    .text_color(theme::text())
+                                    .text_sm()
+                                    .child(SharedString::from(url)),
+                            )
+                            .child(
+                                components::button(
+                                    "connection-copy-url",
+                                    "复制",
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.copy_to_clipboard(url_for_copy.clone(), "已复制地址", cx);
+                                })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_color(theme::muted()).text_xs().w(px(40.)).child("密钥"))
+                            .child(
+                                div()
+                                    .text_color(theme::text())
+                                    .text_sm()
+                                    .child(SharedString::from(shown_key)),
+                            )
+                            .child(
+                                components::button(
+                                    "connection-reveal-key",
+                                    if self.reveal_connection_key {
+                                        "隐藏"
+                                    } else {
+                                        "显示"
+                                    },
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.reveal_connection_key = !this.reveal_connection_key;
+                                    cx.notify();
+                                })),
+                            )
+                            .child(
+                                components::button(
+                                    "connection-copy-key",
+                                    "复制",
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.copy_to_clipboard(key.clone(), "已复制密钥", cx);
+                                })),
+                            ),
+                    )
+            }
+        };
+        panel
+            .child(div().text_color(theme::muted()).text_xs().child(
+                "此密钥由 OcHub 在本机生成和验证，仅本机有效，不能用于其他电脑或服务；请求会经由当前已启用的转发站转发。",
+            ))
+            .into_any_element()
+    }
+
     fn render_station(&self, station: &RelayStation, cx: &mut Context<Self>) -> gpui::AnyElement {
         let enabled = station.channel.enabled && station.route.enabled;
         let route_id = station.route.id.clone();
@@ -675,6 +855,7 @@ impl GatewayView {
                     .get(&app_type)
                     .is_some_and(|active_route| active_route == &station.route.id);
                 let busy = self.applying.is_some();
+                let compatible = apply::dialect_compatible(station.channel.dialect, app_type);
                 let button = components::button(
                     SharedString::from(format!(
                         "station-apply-{}-{}",
@@ -693,7 +874,7 @@ impl GatewayView {
                     },
                     ButtonSize::Sm,
                 );
-                if active || busy || !enabled {
+                if active || busy || !enabled || !compatible {
                     button.cursor_not_allowed().opacity(0.58).into_any_element()
                 } else {
                     let route_id = route_id.clone();
@@ -846,6 +1027,14 @@ impl GatewayView {
                     )
                     .children(app_buttons),
             )
+            .when(station.channel.dialect == Dialect::Chat, |panel| {
+                panel.child(
+                    div()
+                        .text_color(theme::yellow())
+                        .text_xs()
+                        .child("OpenAI Chat 格式暂不能应用到以上工具；兼容 OpenAI Chat 的其他工具可通过「其他工具接入」连接。"),
+                )
+            })
             .into_any_element()
     }
 
@@ -1021,7 +1210,7 @@ impl GatewayView {
             .child(components::field(
                 "转发站接口格式",
                 false,
-                Some("CLI 保持使用自己的格式，OcHub 会在本地自动完成兼容转换。".into()),
+                Some("选择转发站服务端使用的接口格式，可在转发站的文档中查到。".into()),
                 components::segmented(
                     "station-dialect",
                     &["Anthropic Messages", "OpenAI Chat", "OpenAI Responses"],
@@ -1029,6 +1218,14 @@ impl GatewayView {
                     move |index, window, cx| on_dialect_select(&index, window, cx),
                 ),
             ))
+            .when(editor.dialect == Dialect::Chat, |panel| {
+                panel.child(
+                    div()
+                        .text_color(theme::yellow())
+                        .text_xs()
+                        .child("OpenAI Chat 格式暂不能一键应用到 Claude Code、Claude Desktop 和 Codex；兼容 OpenAI Chat 的其他工具仍可通过「其他工具接入」连接。"),
+                )
+            })
             .child(section_title(
                 "模型",
                 "设置默认模型，或把 CLI 熟悉的模型名映射到转发站模型。",
@@ -1145,6 +1342,9 @@ impl Render for GatewayView {
             self.editor = Some(editor);
             element
         });
+        let connection_panel = self
+            .show_connection
+            .then(|| self.render_connection_panel(cx));
         let station_count = self.stations.len();
 
         let content = layout::wide_column()
@@ -1172,6 +1372,7 @@ impl Render for GatewayView {
                         .children(import_rows),
                 )
             })
+            .when_some(connection_panel, |column, panel| column.child(panel))
             .when_some(editor, |column, editor| column.child(editor))
             .when(station_count == 0 && self.editor.is_none(), |column| {
                 column.child(components::empty_state(
@@ -1199,7 +1400,10 @@ impl Render for GatewayView {
             .child(
                 layout::page_header(
                     "转发站",
-                    Some("统一配置商业转发站，并一键应用到支持的 CLI。".into()),
+                    Some(
+                        "集中管理转发站，一键应用到 Claude Code、Claude Desktop 和 Codex；其他工具可复制连接信息接入。"
+                            .into(),
+                    ),
                 )
                 .child(
                     div()
@@ -1207,6 +1411,23 @@ impl Render for GatewayView {
                         .flex_row()
                         .flex_wrap()
                         .gap_2()
+                        .child(
+                            components::button(
+                                "station-connection-toggle",
+                                if self.show_connection {
+                                    "收起接入信息"
+                                } else {
+                                    "其他工具接入"
+                                },
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.toggle_connection_panel(cx);
+                                },
+                            )),
+                        )
                         .child(
                             components::button(
                                 "station-import-toggle",
@@ -1301,6 +1522,11 @@ fn section_title(title: &'static str, description: &'static str) -> gpui::Div {
                 .text_xs()
                 .child(description),
         )
+}
+
+fn masked_secret(secret: &str) -> String {
+    let visible = secret.len().min(7);
+    format!("{}••••••••", &secret[..visible])
 }
 
 fn dialect_label(dialect: Dialect) -> &'static str {

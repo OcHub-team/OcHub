@@ -40,6 +40,22 @@ pub fn supported_apps() -> &'static [AppType] {
     &[AppType::Claude, AppType::ClaudeDesktop, AppType::Codex]
 }
 
+/// The inlet dialect each client speaks to the local gateway.
+pub fn client_dialect(app_type: AppType) -> Dialect {
+    match app_type {
+        AppType::Claude | AppType::ClaudeDesktop => Dialect::Messages,
+        AppType::Codex => Dialect::Responses,
+        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Dialect::Chat,
+    }
+}
+
+/// Can a station with this upstream dialect serve `app_type`? Single source of
+/// truth is the pipeline conversion matrix, so lifting a pipeline restriction
+/// automatically lifts the UI/apply guards built on this.
+pub fn dialect_compatible(dialect: Dialect, app_type: AppType) -> bool {
+    crate::gateway::pipeline::conversion_supported(client_dialect(app_type), dialect)
+}
+
 /// Ensure a gateway key named after `label` exists, creating it if needed.
 pub fn ensure_key(state: &AppState, label: &str) -> Result<GatewayKey, AppError> {
     if let Some(key) = state
@@ -247,12 +263,27 @@ pub fn apply_to_app(
             "请先添加并启用一个转发站".to_string(),
         ));
     }
-    let route = state
+    let mut station_routes: Vec<GatewayRoute> = state
         .db
         .get_gateway_routes()?
         .into_iter()
-        .find(|route| route.enabled && route.id.starts_with(STATION_ROUTE_PREFIX))
-        .ok_or_else(|| AppError::InvalidInput("请先添加并启用一个转发站".to_string()))?;
+        .filter(|route| route.enabled && route.id.starts_with(STATION_ROUTE_PREFIX))
+        .collect();
+    let route = match station_routes.len() {
+        0 => {
+            return Err(AppError::InvalidInput(
+                "请先添加并启用一个转发站".to_string(),
+            ))
+        }
+        1 => station_routes.remove(0),
+        // Refuse to pick one implicitly: which station wins would depend on DB
+        // ordering, and a silent wrong pick is worse than asking the user.
+        _ => {
+            return Err(AppError::InvalidInput(
+                "存在多个已启用的转发站，请在转发站页面选择要应用的一个".to_string(),
+            ))
+        }
+    };
     apply_route_to_app(state, app_type, base_url, route)
 }
 
@@ -276,14 +307,24 @@ pub fn apply_station_to_app(
         ));
     }
     let channels = state.db.get_gateway_channels()?;
-    if !route.channel_ids.iter().any(|channel_id| {
-        channels
-            .iter()
-            .any(|channel| channel.id == *channel_id && channel.enabled)
-    }) {
+    let enabled_channels: Vec<&GatewayChannel> = channels
+        .iter()
+        .filter(|channel| channel.enabled && route.channel_ids.contains(&channel.id))
+        .collect();
+    if enabled_channels.is_empty() {
         return Err(AppError::InvalidInput(
             "转发站没有可用的服务地址".to_string(),
         ));
+    }
+    if !enabled_channels
+        .iter()
+        .any(|channel| dialect_compatible(channel.dialect, app_type))
+    {
+        return Err(AppError::InvalidInput(format!(
+            "无法应用到 {}：「{}」是 OpenAI Chat 格式的转发站，暂不支持该应用",
+            app_label(app_type),
+            route.name
+        )));
     }
     apply_route_to_app(state, app_type, base_url, route)
 }
@@ -509,6 +550,61 @@ mod tests {
         assert_eq!(route.channel_ids, vec!["new-api-primary"]);
         assert_eq!(route.app_type, None);
         assert!(route.enabled);
+    }
+
+    #[test]
+    fn dialect_compatibility_mirrors_pipeline_matrix() {
+        for app in [AppType::Claude, AppType::ClaudeDesktop, AppType::Codex] {
+            assert!(dialect_compatible(Dialect::Messages, app));
+            assert!(dialect_compatible(Dialect::Responses, app));
+            assert!(!dialect_compatible(Dialect::Chat, app));
+        }
+        for app in [AppType::OpenCode, AppType::OpenClaw, AppType::Hermes] {
+            assert!(dialect_compatible(Dialect::Chat, app));
+            assert!(dialect_compatible(Dialect::Messages, app));
+            assert!(dialect_compatible(Dialect::Responses, app));
+        }
+    }
+
+    fn station_fixture(state: &AppState, id: &str, dialect: Dialect) -> GatewayRoute {
+        let channel = GatewayChannel {
+            id: id.into(),
+            name: format!("站点 {id}"),
+            dialect,
+            base_url: "https://relay.example.com".into(),
+            api_key: "sk-test".into(),
+            path_override: None,
+            models: Vec::new(),
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: Vec::new(),
+        };
+        state.db.upsert_gateway_channel(&channel).unwrap();
+        ensure_station_route(state, &channel).unwrap()
+    }
+
+    #[test]
+    fn applying_a_chat_station_to_non_chat_client_is_rejected() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = station_fixture(&state, "chat-only", Dialect::Chat);
+
+        let err = apply_station_to_app(&state, AppType::Claude, "http://127.0.0.1:4180", &route.id)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("OpenAI Chat"));
+    }
+
+    #[test]
+    fn implicit_apply_refuses_to_pick_between_multiple_stations() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        station_fixture(&state, "first", Dialect::Messages);
+        station_fixture(&state, "second", Dialect::Messages);
+
+        let err = apply_to_app(&state, AppType::Claude, "http://127.0.0.1:4180").unwrap_err();
+
+        assert!(err.to_string().contains("多个已启用的转发站"));
     }
 
     #[test]
