@@ -576,13 +576,19 @@ impl AppRoot {
             self.connect_local_gateway(cx);
             return;
         }
+        let name = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .map(|provider| provider.name.clone())
+            .unwrap_or_else(|| id.clone());
         match ProviderService::switch(&self.app, self.selected_app, &id) {
             Ok(result) => {
                 if result.warnings.is_empty() {
-                    self.notify_success(format!("已切换到 {id}"), cx);
+                    self.notify_success(format!("已切换到「{name}」"), cx);
                 } else {
                     self.notify_warning(
-                        format!("已切换到 {id}"),
+                        format!("已切换到「{name}」"),
                         format!("应用工具配置时返回 {} 个警告", result.warnings.len()),
                         cx,
                     );
@@ -1937,7 +1943,7 @@ impl Render for AppRoot {
                                 .gap_2()
                                 .text_color(theme::subtext())
                                 .text_sm()
-                                .child("OcHub 会直接读写各 AI 工具的配置，并在本地保存供应商与网关数据。")
+                                .child("OcHub 会直接读写各 AI 工具的配置，并在本地保存供应商与转发站数据。")
                                 .child("建议首次使用前备份现有配置；之后可在“设置”与各应用页面调整行为。"),
                         ))
                         .child(components::modal_footer(vec![
