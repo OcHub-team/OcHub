@@ -14,6 +14,10 @@ run:
 run-release:
     cargo run --release -p ochub-app
 
+# 构建固定的 computer-use 验收包（复用路径、Bundle ID 与包内 assets）
+qa-app:
+    ./scripts/package-qa-app.sh
+
 # 启动 headless 控制服务器（不需要 Xcode/Metal）
 server:
     cargo run -p ochub-server
