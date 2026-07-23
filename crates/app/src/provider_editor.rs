@@ -95,6 +95,9 @@ struct PreviewCache {
 }
 
 const PREVIEW_REFRESH_DELAY: Duration = Duration::from_millis(140);
+const EDITOR_MAX_WIDTH: f32 = 1320.;
+const EDITOR_SPLIT_MIN_WINDOW_WIDTH: f32 = 1500.;
+const EDITOR_STACK_GRID_MAX_WINDOW_WIDTH: f32 = 1050.;
 
 pub struct ProviderEditor {
     app: Arc<AppState>,
@@ -167,6 +170,7 @@ impl ProviderEditor {
         let schema = codec.schema();
         let values = codec.decode(&Value::Null, None);
         let mut this = Self::base(app, app_type, codec, schema, values, None, None, cx);
+        Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
         this
     }
@@ -192,6 +196,7 @@ impl ProviderEditor {
             cx,
         );
         this.set_identity(provider, cx);
+        Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
         this
     }
@@ -417,12 +422,13 @@ impl ProviderEditor {
             return;
         }
         self.pull_values(cx);
-        self.rebuild_preview_cache();
+        let category = self.category.read(cx).content().trim().to_string();
+        self.rebuild_preview_cache((!category.is_empty()).then_some(category.as_str()));
     }
 
-    fn rebuild_preview_cache(&mut self) {
+    fn rebuild_preview_cache(&mut self, category: Option<&str>) {
         let started = Instant::now();
-        let issues = self.codec.validate(&self.values);
+        let issues = self.codec.validate_for_category(&self.values, category);
         let files = self.codec.preview(&self.values, &self.working_base);
         let mut total_bytes = 0usize;
         let mut total_lines = 0usize;
@@ -732,8 +738,11 @@ impl ProviderEditor {
             return;
         }
         self.pull_values(cx);
+        let category = nonempty(self.category.read(cx).content().trim().to_string());
 
-        let issues = self.codec.validate(&self.values);
+        let issues = self
+            .codec
+            .validate_for_category(&self.values, category.as_deref());
         if let Some(err) = issues.iter().find(|i| i.severity == Severity::Error) {
             self.error = Some(SharedString::from(format!("配置无效：{}", err.message)));
             cx.notify();
@@ -770,7 +779,6 @@ impl ProviderEditor {
         }
 
         let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
-        let category = nonempty(self.category.read(cx).content().trim().to_string());
         let notes = nonempty(self.notes.read(cx).content().trim().to_string());
 
         let result = if let Some(original_id) = self.original_id.clone() {
@@ -1022,7 +1030,51 @@ impl ProviderEditor {
 
     // ---- rendering ----------------------------------------------------------
 
-    fn render_field(&self, field: &FormField, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn uses_official_login(&self, cx: &Context<Self>) -> bool {
+        matches!(
+            self.app_type,
+            AppType::Claude | AppType::ClaudeDesktop | AppType::Codex
+        ) && self.category.read(cx).content().trim() == "official"
+    }
+
+    fn render_official_auth_section(&self) -> gpui::AnyElement {
+        let app_label = crate::app_meta::label(self.app_type);
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .child(layout::section_header("登录与鉴权", "官方供应商"))
+            .child(
+                components::card()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_4()
+                    .py_3()
+                    .child(
+                        div()
+                            .text_color(theme::text())
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(SharedString::from(format!("使用 {app_label} 官方登录"))),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child("沿用工具自身的登录状态，不写入第三方 Base URL 或 API Key。"),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_field(
+        &self,
+        field: &FormField,
+        stack_grid: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let body = match &field.kind {
             FieldKind::Text { .. } | FieldKind::Secret { .. } => self
                 .text_inputs
@@ -1078,9 +1130,9 @@ impl ProviderEditor {
                     .into_any_element()
             }
             FieldKind::KeyValue { .. } => self.render_kv(&field.id, cx).into_any_element(),
-            FieldKind::ModelGrid { columns } => {
-                self.render_grid(&field.id, columns, cx).into_any_element()
-            }
+            FieldKind::ModelGrid { columns } => self
+                .render_grid(&field.id, columns, stack_grid, cx)
+                .into_any_element(),
         };
 
         components::field(
@@ -1143,6 +1195,7 @@ impl ProviderEditor {
         &self,
         field_id: &str,
         columns: &[provider_config::GridColumn],
+        stack_grid: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         // Row-card list (docs/ui-overhaul.md §7.2): one card per mapping row
@@ -1150,6 +1203,113 @@ impl ProviderEditor {
         // (e.g. 角色) is fixed-width, the rest flex, toggles are pinned, and a
         // ghost icon button deletes the row.
         let mut col = div().flex().flex_col().gap_2().w_full().min_w_0();
+
+        if stack_grid {
+            if let Some(rows) = self.grid_rows.get(field_id) {
+                for row in rows {
+                    let rid = row.id;
+                    let mut card = components::card()
+                        .flex_col()
+                        .items_stretch()
+                        .min_w_0()
+                        .gap_3()
+                        .px_3()
+                        .py_3();
+                    for column in columns {
+                        let label = SharedString::from(column.label.clone());
+                        match &column.kind {
+                            GridCellKind::Text { .. } => {
+                                let cell = row
+                                    .cells
+                                    .get(&column.key)
+                                    .map(|input| input.clone().into_any_element())
+                                    .unwrap_or_else(|| div().into_any_element());
+                                card = card.child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .min_w_0()
+                                        .gap_1()
+                                        .child(
+                                            div().text_color(theme::muted()).text_xs().child(label),
+                                        )
+                                        .child(cell),
+                                );
+                            }
+                            GridCellKind::Toggle => {
+                                let on = row.toggles.get(&column.key).copied().unwrap_or(false);
+                                let fid = field_id.to_string();
+                                let key = column.key.clone();
+                                card = card.child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .text_color(theme::subtext())
+                                                .text_xs()
+                                                .child(label),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "grid-tog-{field_id}-{rid}-{}",
+                                                    column.key
+                                                )))
+                                                .cursor_pointer()
+                                                .child(layout::toggle(on))
+                                                .on_click(cx.listener(
+                                                    move |this, _event, _window, cx| {
+                                                        this.grid_toggle(
+                                                            fid.clone(),
+                                                            rid,
+                                                            key.clone(),
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        ),
+                                );
+                            }
+                        }
+                    }
+                    let fid = field_id.to_string();
+                    card = card.child(
+                        div().flex().flex_row().justify_end().child(
+                            components::icon_button_tone(
+                                SharedString::from(format!("grid-del-{field_id}-{rid}")),
+                                "删除",
+                                IconName::Trash,
+                                ButtonTone::Ghost,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    this.grid_remove(fid.clone(), rid, cx);
+                                },
+                            )),
+                        ),
+                    );
+                    col = col.child(card);
+                }
+            }
+            let fid = field_id.to_string();
+            return col.child(
+                components::button(
+                    SharedString::from(format!("grid-add-{field_id}")),
+                    "+ 添加模型",
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                )
+                .w_full()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.grid_add(fid.clone(), cx);
+                })),
+            );
+        }
 
         // Caption header aligned with the row cards below.
         let mut header = div().flex().flex_row().items_center().gap_2().px_3();
@@ -1829,7 +1989,10 @@ impl Render for ProviderEditor {
         // The cached native document is rebuilt only when form values changed;
         // caret blinks and unrelated view updates reuse the existing line index.
         self.ensure_preview_current(cx);
-        let compact_layout = window.viewport_size().width < px(1180.);
+        let window_width = window.viewport_size().width;
+        let compact_layout = window_width < px(EDITOR_SPLIT_MIN_WINDOW_WIDTH);
+        let stack_grid = window_width < px(EDITOR_STACK_GRID_MAX_WINDOW_WIDTH);
+        let official_login = self.uses_official_login(cx);
 
         let title = if self.is_editing() {
             "编辑供应商"
@@ -1868,6 +2031,9 @@ impl Render for ProviderEditor {
             .clone()
             .into_iter()
             .map(|section| {
+                if official_login && section.title == "端点与鉴权" {
+                    return self.render_official_auth_section();
+                }
                 let caption = if section.advanced { "高级选项" } else { "" };
                 let mut col = div()
                     .flex()
@@ -1877,7 +2043,7 @@ impl Render for ProviderEditor {
                     .child(layout::section_header(section.title.clone(), caption));
                 for field in &section.fields {
                     if field.is_visible(&self.values) {
-                        col = col.child(self.render_field(field, cx));
+                        col = col.child(self.render_field(field, stack_grid, cx));
                     }
                 }
                 col.into_any_element()
@@ -1897,6 +2063,8 @@ impl Render for ProviderEditor {
         let actions = div()
             .flex()
             .flex_row()
+            .flex_wrap()
+            .justify_end()
             .gap_2()
             .child(
                 components::button(
@@ -1928,40 +2096,42 @@ impl Render for ProviderEditor {
             .child(identity)
             .children(sections)
             .when_some(common_config, |form, common| form.child(common))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(
-                        components::button(
-                            "editor-fetch-models",
-                            "拉取模型",
-                            ButtonTone::Neutral,
-                            ButtonSize::Sm,
+            .when(!official_login, |form| {
+                form.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            components::button(
+                                "editor-fetch-models",
+                                "拉取模型",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _e, _w, cx| this.fetch_models(cx))),
                         )
-                        .on_click(cx.listener(|this, _e, _w, cx| this.fetch_models(cx))),
-                    )
-                    .child(
-                        components::button(
-                            "editor-speedtest",
-                            "测试 URL",
-                            ButtonTone::Neutral,
-                            ButtonSize::Sm,
+                        .child(
+                            components::button(
+                                "editor-speedtest",
+                                "测试 URL",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _e, _w, cx| this.speedtest_base_url(cx))),
                         )
-                        .on_click(cx.listener(|this, _e, _w, cx| this.speedtest_base_url(cx))),
-                    )
-                    .child(
-                        components::button(
-                            "editor-balance",
-                            "查询余额",
-                            ButtonTone::Neutral,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(|this, _e, _w, cx| this.query_balance(cx))),
-                    ),
-            );
+                        .child(
+                            components::button(
+                                "editor-balance",
+                                "查询余额",
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _e, _w, cx| this.query_balance(cx))),
+                        ),
+                )
+            });
 
         let form_scroll = div()
             .id("editor-form-scroll")
@@ -1993,8 +2163,15 @@ impl Render for ProviderEditor {
             .min_h_0()
             .min_w_0()
             .items_center()
-            .p_6()
-            .child(layout::wide_column().h_full().min_h_0().child(body));
+            .when(stack_grid, |editor| editor.p_4())
+            .when(!stack_grid, |editor| editor.p_6())
+            .child(
+                layout::wide_column()
+                    .max_w(px(EDITOR_MAX_WIDTH))
+                    .h_full()
+                    .min_h_0()
+                    .child(body),
+            );
 
         layout::page()
             .relative()

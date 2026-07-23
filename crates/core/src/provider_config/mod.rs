@@ -311,6 +311,20 @@ pub trait AppConfig {
     /// Validate edited values.
     fn validate(&self, values: &FormValues) -> Vec<ConfigIssue>;
 
+    /// Validate edited values with provider-level context that is intentionally
+    /// not stored inside [`FormValues`].
+    ///
+    /// Most codecs do not need this distinction. Codecs with a first-party
+    /// login mode can override it so an `official` provider does not inherit
+    /// third-party endpoint/API-key requirements.
+    fn validate_for_category(
+        &self,
+        values: &FormValues,
+        _category: Option<&str>,
+    ) -> Vec<ConfigIssue> {
+        self.validate(values)
+    }
+
     /// Built-in one-click presets for common providers (empty by default).
     fn presets(&self) -> Vec<Preset> {
         Vec::new()

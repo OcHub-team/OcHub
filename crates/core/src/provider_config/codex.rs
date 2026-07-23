@@ -384,6 +384,23 @@ impl AppConfig for CodexConfig {
         issues
     }
 
+    fn validate_for_category(
+        &self,
+        values: &FormValues,
+        category: Option<&str>,
+    ) -> Vec<ConfigIssue> {
+        let mut issues = self.validate(values);
+        if category == Some("official") {
+            issues.retain(|issue| {
+                !matches!(
+                    issue.field.as_deref(),
+                    Some("base_url" | "api_key" | "auth_mode" | "env_key")
+                )
+            });
+        }
+        issues
+    }
+
     fn presets(&self) -> Vec<super::Preset> {
         vec![
             codex_preset(
@@ -709,6 +726,22 @@ mod tests {
             .iter()
             .any(|i| i.severity == super::super::Severity::Error
                 && i.field.as_deref() == Some("wire_api")));
+    }
+
+    #[test]
+    fn official_provider_uses_openai_login_without_api_key_warning() {
+        let mut values = deepseek_values();
+        set_str(&mut values, "auth_mode", AUTH_OPENAI_LOGIN);
+        set_str(&mut values, "api_key", "");
+
+        let issues = CodexConfig.validate_for_category(&values, Some("official"));
+
+        assert!(!issues.iter().any(|issue| {
+            matches!(
+                issue.field.as_deref(),
+                Some("base_url" | "api_key" | "auth_mode" | "env_key")
+            )
+        }));
     }
 
     #[test]

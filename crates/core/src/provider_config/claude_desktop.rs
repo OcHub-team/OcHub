@@ -242,6 +242,23 @@ impl AppConfig for ClaudeDesktopConfig {
         }
         issues
     }
+
+    fn validate_for_category(
+        &self,
+        values: &FormValues,
+        category: Option<&str>,
+    ) -> Vec<ConfigIssue> {
+        let mut issues = self.validate(values);
+        if category == Some("official") {
+            issues.retain(|issue| {
+                !matches!(
+                    issue.field.as_deref(),
+                    Some("base_url" | "api_key" | "auth_field")
+                )
+            });
+        }
+        issues
+    }
 }
 
 fn set_or_remove(map: &mut Map<String, Value>, key: &str, value: &str) {
@@ -354,5 +371,22 @@ mod tests {
             encoded.meta.unwrap().api_format.as_deref(),
             Some("anthropic")
         );
+    }
+
+    #[test]
+    fn official_provider_uses_desktop_login_without_gateway_credentials() {
+        let mut values = FormValues::new();
+        set_str(&mut values, "base_url", "");
+        set_str(&mut values, "api_key", "");
+        values.insert("routes".into(), Value::Array(Vec::new()));
+
+        let issues = ClaudeDesktopConfig.validate_for_category(&values, Some("official"));
+
+        assert!(!issues.iter().any(|issue| {
+            matches!(
+                issue.field.as_deref(),
+                Some("base_url" | "api_key" | "auth_field")
+            )
+        }));
     }
 }

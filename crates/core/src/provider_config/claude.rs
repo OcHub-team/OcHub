@@ -401,6 +401,23 @@ impl AppConfig for ClaudeConfig {
 
         issues
     }
+
+    fn validate_for_category(
+        &self,
+        values: &FormValues,
+        category: Option<&str>,
+    ) -> Vec<ConfigIssue> {
+        let mut issues = self.validate(values);
+        if category == Some("official") {
+            issues.retain(|issue| {
+                !matches!(
+                    issue.field.as_deref(),
+                    Some("base_url" | "api_key" | "auth_field")
+                )
+            });
+        }
+        issues
+    }
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -723,6 +740,22 @@ mod tests {
             .any(|i| i.severity == super::super::Severity::Error
                 && i.field.as_deref() == Some("base_url")));
         assert!(issues.iter().any(|i| i.message.contains("1M")));
+    }
+
+    #[test]
+    fn official_provider_uses_claude_login_without_endpoint_credentials() {
+        let mut values = sample_values();
+        set_str(&mut values, "base_url", "");
+        set_str(&mut values, "api_key", "");
+
+        let issues = ClaudeConfig.validate_for_category(&values, Some("official"));
+
+        assert!(!issues.iter().any(|issue| {
+            matches!(
+                issue.field.as_deref(),
+                Some("base_url" | "api_key" | "auth_field")
+            )
+        }));
     }
 
     #[test]
