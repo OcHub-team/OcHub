@@ -317,6 +317,10 @@ pub struct GatewayChannel {
     /// Extra headers to inject upstream (name → value).
     #[serde(default)]
     pub extra_headers: Vec<(String, String)>,
+    /// When the channel was imported from an existing direct connection, the
+    /// source as `"{app}:{provider_id}"`. Display-only; never auto-synced.
+    #[serde(default)]
+    pub imported_from: Option<String>,
 }
 
 fn default_weight() -> u32 {
@@ -396,6 +400,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         };
         assert!(ch.matches_model("claude-x"));
         assert!(!ch.matches_model("gpt-4"));

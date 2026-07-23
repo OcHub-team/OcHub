@@ -269,6 +269,25 @@ async fn generic_info(State(s): State<ServerState>) -> ApiResult<Json<Value>> {
     to_value(result)
 }
 
+#[derive(serde::Deserialize)]
+struct ProbeDialectBody {
+    base_url: String,
+    #[serde(default)]
+    api_key: String,
+}
+
+async fn probe_dialect(
+    State(s): State<ServerState>,
+    Json(body): Json<ProbeDialectBody>,
+) -> ApiResult<Json<Value>> {
+    let dialect = s
+        .app
+        .gateway
+        .detect_dialect(body.base_url, body.api_key)
+        .await?;
+    Ok(Json(json!({ "dialect": dialect })))
+}
+
 async fn supported_apps(State(_s): State<ServerState>) -> Json<Value> {
     Json(json!({
         "apps": apply::supported_apps()
@@ -315,5 +334,6 @@ pub fn router() -> Router<ServerState> {
             post(apply_station_app),
         )
         .route("/api/gateway/generic-info", get(generic_info))
+        .route("/api/gateway/probe-dialect", post(probe_dialect))
         .route("/api/gateway/supported-apps", get(supported_apps))
 }
