@@ -157,12 +157,12 @@ impl gpui::Render for GalleryView {
 
         let empty = components::card().p_0().child(components::empty_state(
             IconName::Folder,
-            "尚无渠道",
-            "新建渠道并选择其上游方言（messages / chat / responses）。",
+            "尚无上游",
+            "新建上游并选择接口格式（messages / chat / responses）。",
             Some(
                 components::button(
                     "g-empty-cta",
-                    "新建渠道",
+                    "新建上游",
                     ButtonTone::Primary,
                     ButtonSize::Sm,
                 )

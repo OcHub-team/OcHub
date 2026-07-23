@@ -22,7 +22,10 @@ use tokio::sync::RwLock;
 
 use crate::db::Database;
 use crate::gateway::router::candidates_for_model;
-use crate::gateway::types::{ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey};
+use crate::gateway::types::{
+    ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayReasoningConfig,
+    GatewayReasoningMode, GatewayRoute,
+};
 use crate::usage_tracking::logger::UsageLogger;
 use crate::usage_tracking::parser::TokenUsage;
 
@@ -122,37 +125,48 @@ fn prepare_request(
     channel: &GatewayChannel,
     body: &Value,
     client_model: &str,
+    route_model_override: Option<&str>,
+    reasoning: Option<&GatewayReasoningConfig>,
     client_stream: bool,
     signatures: &ochub_convert::MemorySignatureStore,
 ) -> Result<PreparedRequest, String> {
-    let upstream_model = channel
-        .model_override
-        .clone()
+    let upstream_model = route_model_override
+        .map(str::to_string)
+        .or_else(|| channel.model_override.clone())
         .unwrap_or_else(|| client_model.to_string());
+    let mut source = body.clone();
+    apply_reasoning_policy(&mut source, inlet, channel.dialect, reasoning);
+    let messages_options = MessagesRequestOptions {
+        default_thinking_budget: reasoning
+            .map(|config| config.medium_budget as i64)
+            .unwrap_or_else(|| MessagesRequestOptions::default().default_thinking_budget),
+        ..Default::default()
+    };
 
     let mut converted = match (inlet, channel.dialect) {
         // Same dialect: passthrough.
-        (a, b) if a == b => body.clone(),
+        (a, b) if a == b => source.clone(),
         (Dialect::Chat, Dialect::Messages) => {
-            conv_chat::request_to_messages(body, &MessagesRequestOptions::default())
-                .map_err(|e| e.to_string())?
+            conv_chat::request_to_messages(&source, &messages_options).map_err(|e| e.to_string())?
         }
         (Dialect::Responses, Dialect::Messages) => {
-            conv_responses::request_to_messages(body, &MessagesRequestOptions::default())
+            conv_responses::request_to_messages(&source, &messages_options)
                 .map_err(|e| e.to_string())?
         }
         (Dialect::Messages, Dialect::Responses) => {
             let opts = ResponsesRequestOptions {
+                reasoning_effort: reasoning_effort_for_messages(&source, reasoning),
                 force_stream: client_stream,
                 ..Default::default()
             };
-            conv_messages::request_to_responses(body, &opts).map_err(|e| e.to_string())?
+            conv_messages::request_to_responses(&source, &opts).map_err(|e| e.to_string())?
         }
         // chat → responses pivots through the messages dialect.
         (Dialect::Chat, Dialect::Responses) => {
-            let mid = conv_chat::request_to_messages(body, &MessagesRequestOptions::default())
+            let mid = conv_chat::request_to_messages(&source, &messages_options)
                 .map_err(|e| e.to_string())?;
             let opts = ResponsesRequestOptions {
+                reasoning_effort: reasoning_effort_for_messages(&mid, reasoning),
                 force_stream: client_stream,
                 ..Default::default()
             };
@@ -174,6 +188,71 @@ fn prepare_request(
         body: converted,
         upstream_model,
     })
+}
+
+fn apply_reasoning_policy(
+    body: &mut Value,
+    inlet: Dialect,
+    channel: Dialect,
+    reasoning: Option<&GatewayReasoningConfig>,
+) {
+    let Some(config) = reasoning else {
+        return;
+    };
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    match config.mode {
+        GatewayReasoningMode::Passthrough => {}
+        GatewayReasoningMode::Disabled => {
+            obj.remove("thinking");
+            obj.remove("reasoning");
+            obj.remove("reasoning_effort");
+        }
+        GatewayReasoningMode::Auto if inlet != channel && inlet != Dialect::Messages => {
+            let effort = obj
+                .get("reasoning_effort")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    obj.get("reasoning")
+                        .and_then(|value| value.get("effort"))
+                        .and_then(Value::as_str)
+                });
+            if let Some(effort) = effort {
+                match config.budget_for_effort(effort) {
+                    Some(budget) => {
+                        obj.insert(
+                            "thinking".into(),
+                            json!({ "type": "enabled", "budget_tokens": budget }),
+                        );
+                    }
+                    None => {
+                        obj.remove("thinking");
+                    }
+                }
+            }
+        }
+        GatewayReasoningMode::Auto => {}
+    }
+}
+
+fn reasoning_effort_for_messages(
+    body: &Value,
+    reasoning: Option<&GatewayReasoningConfig>,
+) -> Option<String> {
+    let config = reasoning?;
+    match config.mode {
+        GatewayReasoningMode::Disabled => None,
+        GatewayReasoningMode::Passthrough => None,
+        GatewayReasoningMode::Auto => body
+            .pointer("/thinking/budget_tokens")
+            .and_then(Value::as_u64)
+            .map(|budget| {
+                config
+                    .effort_for_budget(budget.min(u32::MAX as u64) as u32)
+                    .to_string()
+            }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +609,24 @@ pub async fn run(
             }
         }
     };
-    let meta = request_meta(inlet, &body);
+    let route = match route_for_key(&state.db, key.as_ref()) {
+        Ok(route) => route,
+        Err(message) => {
+            return PipelineOutcome::Json {
+                status: 503,
+                body: error_body(inlet, &message),
+            }
+        }
+    };
+    let mut meta = request_meta(inlet, &body);
+    if meta.model.is_empty() {
+        if let Some(default_model) = route
+            .as_ref()
+            .and_then(|route| route.default_model.as_deref())
+        {
+            meta.model = default_model.to_string();
+        }
+    }
     if meta.model.is_empty() {
         return PipelineOutcome::Json {
             status: 400,
@@ -547,19 +643,44 @@ pub async fn run(
             }
         }
     };
+    let rule = route
+        .as_ref()
+        .and_then(|route| route.rule_for_model(&meta.model))
+        .cloned();
+    let route_model_override = rule
+        .as_ref()
+        .map(|rule| rule.upstream_model.as_str())
+        .or_else(|| {
+            route
+                .as_ref()
+                .and_then(|route| route.default_model.as_deref())
+        });
     let convertible: Vec<GatewayChannel> = channels
         .into_iter()
-        .filter(|c| conversion_supported(inlet, c.dialect))
+        .filter(|channel| conversion_supported(inlet, channel.dialect))
+        .filter(|channel| {
+            route
+                .as_ref()
+                .is_none_or(|route| route.allows_channel(&channel.id))
+        })
+        .filter(|channel| {
+            rule.as_ref()
+                .and_then(|rule| rule.channel_id.as_deref())
+                .is_none_or(|channel_id| channel.id == channel_id)
+        })
         .collect();
 
     let health = state.health.read().await.clone();
     let unhealthy =
         |c: &GatewayChannel| matches!(health.get(&c.id), Some(ChannelHealth::Unhealthy(_)));
-    let mut candidates = candidates_for_model(&convertible, &meta.model, unhealthy, entropy);
+    // Upstream channel model filters describe the name that will actually be
+    // sent upstream, not the client-facing alias.
+    let routing_model = route_model_override.unwrap_or(&meta.model);
+    let mut candidates = candidates_for_model(&convertible, routing_model, unhealthy, entropy);
     if candidates.is_empty() {
         // All matching channels may be marked unhealthy — retry without the
         // health filter rather than failing outright.
-        candidates = candidates_for_model(&convertible, &meta.model, |_| false, entropy);
+        candidates = candidates_for_model(&convertible, routing_model, |_| false, entropy);
     }
     if candidates.is_empty() {
         return PipelineOutcome::Json {
@@ -580,6 +701,8 @@ pub async fn run(
             &channel,
             &body,
             &meta.model,
+            route_model_override,
+            route.as_ref().map(|route| &route.reasoning),
             meta.stream,
             &state.signatures,
         ) {
@@ -679,6 +802,18 @@ pub async fn run(
     PipelineOutcome::Json {
         status: 502,
         body: error_body(inlet, &last_error),
+    }
+}
+
+fn route_for_key(db: &Database, key: Option<&GatewayKey>) -> Result<Option<GatewayRoute>, String> {
+    let Some(route_id) = key.and_then(|key| key.route_id.as_deref()) else {
+        return Ok(None);
+    };
+    match db.get_gateway_route_by_id(route_id) {
+        Ok(Some(route)) if route.enabled => Ok(Some(route)),
+        Ok(Some(_)) => Err("当前绑定的转发站已停用".to_string()),
+        Ok(None) => Err("当前绑定的转发站不存在".to_string()),
+        Err(err) => Err(format!("读取转发站绑定失败: {err}")),
     }
 }
 
@@ -836,8 +971,17 @@ mod tests {
             extra_headers: vec![],
         };
         let body = json!({ "model": "client-m", "max_tokens": 5, "messages": [], "stream": false });
-        let p =
-            prepare_request(Dialect::Messages, &channel, &body, "client-m", true, &store).unwrap();
+        let p = prepare_request(
+            Dialect::Messages,
+            &channel,
+            &body,
+            "client-m",
+            None,
+            None,
+            true,
+            &store,
+        )
+        .unwrap();
         assert_eq!(p.body["model"], "upstream-m");
         assert_eq!(p.body["stream"], true);
         assert_eq!(p.upstream_model, "upstream-m");
@@ -868,7 +1012,17 @@ mod tests {
             ],
             "stream": true
         });
-        let p = prepare_request(Dialect::Chat, &channel, &body, "m", true, &store).unwrap();
+        let p = prepare_request(
+            Dialect::Chat,
+            &channel,
+            &body,
+            "m",
+            None,
+            None,
+            true,
+            &store,
+        )
+        .unwrap();
         assert_eq!(p.body["model"], "m");
         assert_eq!(p.body["instructions"], "sys");
         assert_eq!(p.body["input"][0]["content"][0]["type"], "input_text");
@@ -1022,6 +1176,125 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert_eq!(logged, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn route_isolates_upstream_and_maps_model_and_reasoning() {
+        let received = Arc::new(std::sync::Mutex::new(None::<Value>));
+        let received_for_handler = received.clone();
+        let app = axum::Router::new().route(
+            "/v1/messages",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let received = received_for_handler.clone();
+                async move {
+                    *received.lock().unwrap() = Some(body);
+                    axum::Json(json!({
+                        "id": "msg_route",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-6",
+                        "content": [{ "type": "text", "text": "routed" }],
+                        "stop_reason": "end_turn",
+                        "usage": { "input_tokens": 2, "output_tokens": 1 }
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "allowed".into(),
+            name: "allowed".into(),
+            dialect: Dialect::Messages,
+            base_url: format!("http://{addr}"),
+            api_key: "k".into(),
+            path_override: None,
+            // This deliberately matches only the mapped upstream model, not
+            // the client-facing alias.
+            models: vec!["claude-sonnet-*".into()],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+        })
+        .unwrap();
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "blocked".into(),
+            name: "blocked".into(),
+            dialect: Dialect::Messages,
+            base_url: "http://127.0.0.1:9".into(),
+            api_key: "k".into(),
+            path_override: None,
+            models: vec![],
+            model_override: None,
+            priority: -10,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+        })
+        .unwrap();
+        db.upsert_gateway_route(&GatewayRoute {
+            id: "route-test".into(),
+            name: "test".into(),
+            app_type: Some("claude".into()),
+            channel_ids: vec!["allowed".into()],
+            default_model: None,
+            model_rules: vec![crate::gateway::types::GatewayModelRule {
+                model: "sonnet".into(),
+                upstream_model: "claude-sonnet-4-6".into(),
+                channel_id: Some("allowed".into()),
+            }],
+            reasoning: GatewayReasoningConfig {
+                mode: GatewayReasoningMode::Auto,
+                low_budget: 7_777,
+                ..GatewayReasoningConfig::default()
+            },
+            enabled: true,
+            created_at: 1,
+        })
+        .unwrap();
+        let key = GatewayKey {
+            id: "key-route".into(),
+            name: "claude".into(),
+            key: "rd-route".into(),
+            route_id: Some("route-test".into()),
+            enabled: true,
+            created_at: 1,
+        };
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: Arc::new(RwLock::new(HashMap::new())),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        let request = json!({
+            "model": "sonnet",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "reasoning_effort": "low",
+            "stream": false
+        });
+        let outcome = run(
+            state,
+            Dialect::Chat,
+            bytes::Bytes::from(request.to_string()),
+            Some(key),
+        )
+        .await;
+        let PipelineOutcome::Json { status, body } = outcome else {
+            panic!("expected JSON response");
+        };
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["model"], "sonnet");
+        assert_eq!(body["choices"][0]["message"]["content"], "routed");
+
+        let upstream = received.lock().unwrap().clone().unwrap();
+        assert_eq!(upstream["model"], "claude-sonnet-4-6");
+        assert_eq!(upstream["thinking"]["budget_tokens"], 7_777);
     }
 
     #[test]

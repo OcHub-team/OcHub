@@ -255,12 +255,31 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 15. Gateway 本地 API key 表（一键配置分发给各应用，按 key 归因用量）
+        // 15. Gateway 路由方案（按应用/客户端隔离上游、模型与思考映射）
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS gateway_routes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                app_type TEXT,
+                channel_ids TEXT NOT NULL DEFAULT '[]',
+                default_model TEXT,
+                model_rules TEXT NOT NULL DEFAULT '[]',
+                reasoning TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                sort_index INTEGER
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // 16. Gateway 本地 API key 表（一键配置分发给各应用，按 key 归因用量）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS gateway_keys (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 key TEXT NOT NULL UNIQUE,
+                route_id TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL
             )",
@@ -435,6 +454,30 @@ impl Database {
                         .map_err(|e| AppError::Database(format!("移除旧代理数据结构失败: {e}")))?;
                         Self::create_request_logs_usage_indexes_if_supported(conn)?;
                         Self::set_user_version(conn, 3)?;
+                    }
+                    3 => {
+                        conn.execute_batch(
+                            "CREATE TABLE IF NOT EXISTS gateway_routes (
+                                id TEXT PRIMARY KEY,
+                                name TEXT NOT NULL,
+                                app_type TEXT,
+                                channel_ids TEXT NOT NULL DEFAULT '[]',
+                                default_model TEXT,
+                                model_rules TEXT NOT NULL DEFAULT '[]',
+                                reasoning TEXT NOT NULL DEFAULT '{}',
+                                enabled INTEGER NOT NULL DEFAULT 1,
+                                created_at INTEGER NOT NULL,
+                                sort_index INTEGER
+                             );",
+                        )
+                        .map_err(|e| AppError::Database(format!("创建网关路由方案表失败: {e}")))?;
+                        if !Self::has_column(conn, "gateway_keys", "route_id")? {
+                            conn.execute("ALTER TABLE gateway_keys ADD COLUMN route_id TEXT", [])
+                                .map_err(|e| {
+                                    AppError::Database(format!("为网关 key 添加路由关联失败: {e}"))
+                                })?;
+                        }
+                        Self::set_user_version(conn, 4)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1769,10 +1812,10 @@ impl Database {
 
 #[cfg(test)]
 mod schema_migration_tests {
-    use super::super::Database;
+    use super::super::{Database, SCHEMA_VERSION};
     use rusqlite::Connection;
 
-    /// Build the minimal legacy v1 structures needed to exercise the full v1 → v3 path.
+    /// Build the minimal legacy v1 structures needed to exercise the full v1 → v4 path.
     fn v1_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -1829,7 +1872,7 @@ mod schema_migration_tests {
 
         Database::create_tables_on_conn(&conn).unwrap();
         Database::apply_schema_migrations_on_conn(&conn).unwrap();
-        assert_eq!(Database::get_user_version(&conn).unwrap(), 3);
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
 
         // Pricing preferences survive in the neutral usage domain.
         let (multiplier, source): (String, String) = conn
@@ -1882,5 +1925,37 @@ mod schema_migration_tests {
                 .unwrap();
             assert_eq!(count, 0, "retired setting {key} should be removed");
         }
+    }
+
+    #[test]
+    fn migrates_v3_gateway_keys_to_route_profiles() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_keys (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                key TEXT NOT NULL UNIQUE,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL
+             );
+             INSERT INTO gateway_keys VALUES ('key-1', 'claude', 'rd-existing', 1, 10);
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert!(Database::table_exists(&conn, "gateway_routes").unwrap());
+        assert!(Database::has_column(&conn, "gateway_keys", "route_id").unwrap());
+        let (secret, route_id): (String, Option<String>) = conn
+            .query_row(
+                "SELECT key, route_id FROM gateway_keys WHERE id = 'key-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(secret, "rd-existing");
+        assert!(route_id.is_none());
     }
 }

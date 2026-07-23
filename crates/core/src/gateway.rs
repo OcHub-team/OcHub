@@ -25,7 +25,10 @@ pub mod service;
 pub mod types;
 
 pub use service::GatewayService;
-pub use types::{ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey};
+pub use types::{
+    ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayModelRule,
+    GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
+};
 
 /// Generate a fresh local API key secret (`rd-` + 32 hex chars).
 pub fn generate_key_secret() -> String {

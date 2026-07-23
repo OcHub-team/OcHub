@@ -102,6 +102,10 @@ impl Provider {
             .map(|s| s.enabled)
             .unwrap_or(false)
     }
+
+    pub fn is_local_gateway(&self) -> bool {
+        self.id == "local-gateway" || self.category.as_deref() == Some("gateway")
+    }
 }
 
 /// Manager of all providers for one app: id -> provider plus the current id.

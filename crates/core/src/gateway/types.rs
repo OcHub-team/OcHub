@@ -82,8 +82,207 @@ pub struct GatewayKey {
     pub name: String,
     /// The secret, `rd-` prefixed.
     pub key: String,
+    /// Optional route profile used to isolate this client's upstreams and
+    /// model/reasoning mappings. `None` preserves the legacy all-channels
+    /// behavior.
+    #[serde(default)]
+    pub route_id: Option<String>,
     pub created_at: i64,
     pub enabled: bool,
+}
+
+/// Model alias exposed to a client by one route profile.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GatewayModelRule {
+    /// Client-facing model name or wildcard pattern.
+    pub model: String,
+    /// Model name sent to the selected upstream.
+    pub upstream_model: String,
+    /// Optional hard binding to one upstream channel.
+    #[serde(default)]
+    pub channel_id: Option<String>,
+}
+
+impl GatewayModelRule {
+    pub fn matches_model(&self, model: &str) -> bool {
+        pattern_matches(&self.model, model)
+    }
+}
+
+/// How a route profile handles reasoning/thinking parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayReasoningMode {
+    /// Translate effort levels and token budgets between supported dialects.
+    #[default]
+    Auto,
+    /// Keep the source dialect's reasoning fields whenever possible.
+    Passthrough,
+    /// Remove reasoning/thinking parameters before forwarding.
+    Disabled,
+}
+
+/// Configurable effort-to-budget mapping used during protocol conversion.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GatewayReasoningConfig {
+    #[serde(default)]
+    pub mode: GatewayReasoningMode,
+    #[serde(default = "default_low_budget")]
+    pub low_budget: u32,
+    #[serde(default = "default_medium_budget")]
+    pub medium_budget: u32,
+    #[serde(default = "default_high_budget")]
+    pub high_budget: u32,
+    #[serde(default = "default_max_budget")]
+    pub max_budget: u32,
+}
+
+impl Default for GatewayReasoningConfig {
+    fn default() -> Self {
+        Self {
+            mode: GatewayReasoningMode::Auto,
+            low_budget: default_low_budget(),
+            medium_budget: default_medium_budget(),
+            high_budget: default_high_budget(),
+            max_budget: default_max_budget(),
+        }
+    }
+}
+
+impl GatewayReasoningConfig {
+    pub fn budget_for_effort(&self, effort: &str) -> Option<u32> {
+        match effort {
+            "minimal" | "none" => None,
+            "low" => Some(self.low_budget),
+            "medium" => Some(self.medium_budget),
+            "high" => Some(self.high_budget),
+            "max" | "xhigh" => Some(self.max_budget),
+            _ => Some(self.medium_budget),
+        }
+    }
+
+    pub fn effort_for_budget(&self, budget: u32) -> &'static str {
+        let low_mid = self.low_budget.saturating_add(self.medium_budget) / 2;
+        let medium_high = self.medium_budget.saturating_add(self.high_budget) / 2;
+        let high_max = self.high_budget.saturating_add(self.max_budget) / 2;
+        if budget <= low_mid {
+            "low"
+        } else if budget <= medium_high {
+            "medium"
+        } else if budget <= high_max {
+            "high"
+        } else {
+            "max"
+        }
+    }
+}
+
+fn default_low_budget() -> u32 {
+    4_096
+}
+
+fn default_medium_budget() -> u32 {
+    10_000
+}
+
+fn default_high_budget() -> u32 {
+    16_000
+}
+
+fn default_max_budget() -> u32 {
+    32_000
+}
+
+/// Per-client routing profile. App-managed profiles use `app_type`; generic
+/// clients may leave it empty and bind through a manually issued key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayRoute {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub app_type: Option<String>,
+    /// Empty means every enabled channel can participate.
+    #[serde(default)]
+    pub channel_ids: Vec<String>,
+    /// Fallback upstream model when no model rule matches. This lets a route
+    /// profile switch the active model without rewriting the client config.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub model_rules: Vec<GatewayModelRule>,
+    #[serde(default)]
+    pub reasoning: GatewayReasoningConfig,
+    pub enabled: bool,
+    pub created_at: i64,
+}
+
+impl GatewayRoute {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() {
+            return Err("路由方案 ID 不能为空".to_string());
+        }
+        if self.name.trim().is_empty() {
+            return Err("路由方案名称不能为空".to_string());
+        }
+        if self
+            .app_type
+            .as_deref()
+            .is_some_and(|app_type| app_type.trim().is_empty())
+        {
+            return Err("路由方案的应用类型不能为空字符串".to_string());
+        }
+        if self.reasoning.low_budget == 0
+            || self.reasoning.medium_budget == 0
+            || self.reasoning.high_budget == 0
+            || self.reasoning.max_budget == 0
+            || self.reasoning.low_budget > self.reasoning.medium_budget
+            || self.reasoning.medium_budget > self.reasoning.high_budget
+            || self.reasoning.high_budget > self.reasoning.max_budget
+        {
+            return Err("思考预算必须大于 0，并按 low、medium、high、max 递增".to_string());
+        }
+        if self
+            .default_model
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
+            return Err("默认模型不能为空字符串".to_string());
+        }
+        for (index, channel_id) in self.channel_ids.iter().enumerate() {
+            if channel_id.trim().is_empty() {
+                return Err("允许使用的上游 ID 不能为空".to_string());
+            }
+            if self.channel_ids[..index].contains(channel_id) {
+                return Err(format!("上游 {channel_id} 在路由方案中重复出现"));
+            }
+        }
+        for rule in &self.model_rules {
+            if rule.model.trim().is_empty() || rule.upstream_model.trim().is_empty() {
+                return Err("模型映射两端都不能为空".to_string());
+            }
+            if let Some(channel_id) = &rule.channel_id {
+                if channel_id.trim().is_empty() {
+                    return Err("模型映射指定的上游 ID 不能为空".to_string());
+                }
+                if !self.channel_ids.is_empty() && !self.channel_ids.contains(channel_id) {
+                    return Err(format!(
+                        "模型映射指定的上游 {channel_id} 不在路由允许列表中"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn rule_for_model(&self, model: &str) -> Option<&GatewayModelRule> {
+        self.model_rules
+            .iter()
+            .find(|rule| rule.matches_model(model))
+    }
+
+    pub fn allows_channel(&self, channel_id: &str) -> bool {
+        self.channel_ids.is_empty() || self.channel_ids.iter().any(|id| id == channel_id)
+    }
 }
 
 /// An upstream channel (provider) the gateway can route to.
@@ -201,5 +400,27 @@ mod tests {
         assert!(ch.matches_model("claude-x"));
         assert!(!ch.matches_model("gpt-4"));
         assert_eq!(ch.endpoint_url(), "https://api.example.com/v1/messages");
+    }
+
+    #[test]
+    fn route_validation_rejects_inconsistent_upstream_binding() {
+        let mut route = GatewayRoute {
+            id: "route".into(),
+            name: "route".into(),
+            app_type: Some("claude".into()),
+            channel_ids: vec!["allowed".into()],
+            default_model: None,
+            model_rules: vec![GatewayModelRule {
+                model: "sonnet".into(),
+                upstream_model: "claude-sonnet".into(),
+                channel_id: Some("other".into()),
+            }],
+            reasoning: GatewayReasoningConfig::default(),
+            enabled: true,
+            created_at: 1,
+        };
+        assert!(route.validate().is_err());
+        route.model_rules[0].channel_id = Some("allowed".into());
+        assert!(route.validate().is_ok());
     }
 }
