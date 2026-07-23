@@ -53,6 +53,27 @@ pub fn messages_usage_to_responses(usage: &Value) -> Value {
     })
 }
 
+/// chat usage → messages `usage` object.
+///
+/// chat `prompt_tokens` is a total (cached tokens included), so the
+/// messages-side (exclusive) input is `prompt - cached - cache_writes`,
+/// saturating at 0 against inconsistent upstream accounting.
+pub fn chat_usage_to_messages(usage: &Value) -> Value {
+    let prompt = u64_field(usage, "prompt_tokens");
+    let details = usage.get("prompt_tokens_details");
+    let cached = details.map(|d| u64_field(d, "cached_tokens")).unwrap_or(0);
+    let cache_creation = details
+        .map(|d| u64_field(d, "cache_creation_input_tokens"))
+        .unwrap_or(0);
+    json!({
+        "input_tokens": prompt.saturating_sub(cached + cache_creation),
+        "cache_creation_input_tokens": cache_creation,
+        "cache_read_input_tokens": cached,
+        "output_tokens": u64_field(usage, "completion_tokens"),
+        "service_tier": "standard"
+    })
+}
+
 /// responses usage → messages `usage` object.
 ///
 /// `input_tokens` here is a total, so the messages-side (exclusive) input is
@@ -118,6 +139,24 @@ mod tests {
         assert_eq!(chat["completion_tokens"], 5);
         assert_eq!(chat["total_tokens"], 65);
         assert_eq!(chat["prompt_tokens_details"]["cached_tokens"], 20);
+    }
+
+    #[test]
+    fn chat_usage_round_trips_to_messages() {
+        let chat = json!({
+            "prompt_tokens": 60,
+            "completion_tokens": 5,
+            "prompt_tokens_details": { "cached_tokens": 20, "cache_creation_input_tokens": 30 }
+        });
+        let messages = chat_usage_to_messages(&chat);
+        assert_eq!(messages["input_tokens"], 10);
+        assert_eq!(messages["cache_read_input_tokens"], 20);
+        assert_eq!(messages["cache_creation_input_tokens"], 30);
+        assert_eq!(messages["output_tokens"], 5);
+        // And back: totals reconstruct.
+        let back = messages_usage_to_chat(&messages);
+        assert_eq!(back["prompt_tokens"], 60);
+        assert_eq!(back["total_tokens"], 65);
     }
 
     #[test]

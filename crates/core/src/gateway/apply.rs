@@ -554,15 +554,19 @@ mod tests {
 
     #[test]
     fn dialect_compatibility_mirrors_pipeline_matrix() {
-        for app in [AppType::Claude, AppType::ClaudeDesktop, AppType::Codex] {
+        // With chat-upstream reverse conversion in place, every station dialect
+        // serves every client; the guard stays wired for future restrictions.
+        for app in [
+            AppType::Claude,
+            AppType::ClaudeDesktop,
+            AppType::Codex,
+            AppType::OpenCode,
+            AppType::OpenClaw,
+            AppType::Hermes,
+        ] {
             assert!(dialect_compatible(Dialect::Messages, app));
             assert!(dialect_compatible(Dialect::Responses, app));
-            assert!(!dialect_compatible(Dialect::Chat, app));
-        }
-        for app in [AppType::OpenCode, AppType::OpenClaw, AppType::Hermes] {
             assert!(dialect_compatible(Dialect::Chat, app));
-            assert!(dialect_compatible(Dialect::Messages, app));
-            assert!(dialect_compatible(Dialect::Responses, app));
         }
     }
 
@@ -583,17 +587,6 @@ mod tests {
         };
         state.db.upsert_gateway_channel(&channel).unwrap();
         ensure_station_route(state, &channel).unwrap()
-    }
-
-    #[test]
-    fn applying_a_chat_station_to_non_chat_client_is_rejected() {
-        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
-        let route = station_fixture(&state, "chat-only", Dialect::Chat);
-
-        let err = apply_station_to_app(&state, AppType::Claude, "http://127.0.0.1:4180", &route.id)
-            .unwrap_err();
-
-        assert!(err.to_string().contains("OpenAI Chat"));
     }
 
     #[test]

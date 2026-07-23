@@ -16,6 +16,11 @@
 //! | chat          | messages        | [`chat`] |
 //! | responses     | messages        | [`responses`] |
 //! | messages      | responses       | [`messages`] |
+//! | messages      | chat            | [`chat_upstream`] |
+//!
+//! A responses client with a chat upstream chains through the messages dialect
+//! ([`chat_upstream::ChatToMessagesStream`] → responses-side emitter), mirroring
+//! the existing chat-client + responses-upstream chain.
 //!
 //! Everything is *sans-io*: request converters are pure `Value -> Value` functions,
 //! and stream converters are push-based state machines ([`WireEvent`] in,
@@ -24,6 +29,7 @@
 
 pub mod aggregate;
 pub mod chat;
+pub mod chat_upstream;
 mod common;
 pub mod messages;
 pub mod responses;

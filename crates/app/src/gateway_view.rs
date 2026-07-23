@@ -1027,14 +1027,6 @@ impl GatewayView {
                     )
                     .children(app_buttons),
             )
-            .when(station.channel.dialect == Dialect::Chat, |panel| {
-                panel.child(
-                    div()
-                        .text_color(theme::yellow())
-                        .text_xs()
-                        .child("OpenAI Chat 格式暂不能应用到以上工具；兼容 OpenAI Chat 的其他工具可通过「其他工具接入」连接。"),
-                )
-            })
             .into_any_element()
     }
 
@@ -1223,7 +1215,7 @@ impl GatewayView {
                     div()
                         .text_color(theme::yellow())
                         .text_xs()
-                        .child("OpenAI Chat 格式暂不能一键应用到 Claude Code、Claude Desktop 和 Codex；兼容 OpenAI Chat 的其他工具仍可通过「其他工具接入」连接。"),
+                        .child("OpenAI Chat 格式不支持思考签名等高级能力，应用到 Claude Code 或 Codex 时会自动转换，思考内容不参与后续对话。"),
                 )
             })
             .child(section_title(
