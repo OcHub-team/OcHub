@@ -673,11 +673,11 @@ impl SkillsCli {
 fn resolve_ssot_dir(
     location: SkillStorageLocation,
     unified_dir: PathBuf,
-    ccswitch_dir: PathBuf,
+    ochub_dir: PathBuf,
 ) -> PathBuf {
     let (preferred, alternate) = match location {
-        SkillStorageLocation::CcSwitch => (ccswitch_dir, unified_dir),
-        SkillStorageLocation::Unified => (unified_dir, ccswitch_dir),
+        SkillStorageLocation::Ochub => (ochub_dir, unified_dir),
+        SkillStorageLocation::Unified => (unified_dir, ochub_dir),
     };
     if preferred.is_dir() {
         return preferred;
@@ -713,9 +713,9 @@ impl SkillService {
     /// 获取技能全局仓库目录（WebDAV/S3 同步会打包该目录）。
     ///
     /// 目录选择遵循持久化的 `SkillStorageLocation` 设置，避免同步快照在两个
-    /// 存储位置间意外漂移（否则 CcSwitch 用户的远端 skills.zip 会被近乎空的
+    /// 存储位置间意外漂移（否则 OCHub 用户的远端 skills.zip 会被近乎空的
     /// 新目录覆盖）：
-    /// - `SkillStorageLocation::CcSwitch` → `~/.cc-switch/skills/`
+    /// - `SkillStorageLocation::Ochub`   → `~/.ochub/skills/`
     /// - `SkillStorageLocation::Unified`  → `~/.agents/skills/`
     ///
     /// 仅当配置目录不存在、而另一目录已存在时才回退到另一目录；两者皆无则
@@ -727,9 +727,9 @@ impl SkillService {
             Some("checkPermission"),
         ))?;
         let unified_dir = home.join(".agents").join("skills");
-        let ccswitch_dir = get_app_config_dir().join("skills");
+        let ochub_dir = get_app_config_dir().join("skills");
         let location = crate::settings::get_settings().skill_storage_location;
-        let dir = resolve_ssot_dir(location, unified_dir, ccswitch_dir);
+        let dir = resolve_ssot_dir(location, unified_dir, ochub_dir);
         if !dir.is_dir() {
             fs::create_dir_all(&dir)?;
         }
@@ -1530,24 +1530,20 @@ mod tests {
     fn resolve_ssot_dir_honors_configured_location_when_present() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let unified = tmp.path().join("agents-skills");
-        let ccswitch = tmp.path().join("ccswitch-skills");
+        let ochub = tmp.path().join("ochub-skills");
         fs::create_dir_all(&unified).unwrap();
-        fs::create_dir_all(&ccswitch).unwrap();
+        fs::create_dir_all(&ochub).unwrap();
 
         // 两目录都存在时，各自遵循配置，不发生漂移
         assert_eq!(
-            resolve_ssot_dir(
-                SkillStorageLocation::CcSwitch,
-                unified.clone(),
-                ccswitch.clone()
-            ),
-            ccswitch
+            resolve_ssot_dir(SkillStorageLocation::Ochub, unified.clone(), ochub.clone()),
+            ochub
         );
         assert_eq!(
             resolve_ssot_dir(
                 SkillStorageLocation::Unified,
                 unified.clone(),
-                ccswitch.clone()
+                ochub.clone()
             ),
             unified
         );
@@ -1557,17 +1553,13 @@ mod tests {
     fn resolve_ssot_dir_falls_back_only_when_configured_absent() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let unified = tmp.path().join("agents-skills");
-        let ccswitch = tmp.path().join("ccswitch-skills");
+        let ochub = tmp.path().join("ochub-skills");
         // 仅 unified 存在
         fs::create_dir_all(&unified).unwrap();
 
-        // 配置为 CcSwitch 但其目录缺失，另一目录存在 → 回退到 unified
+        // 配置为 OCHub 但其目录缺失，另一目录存在 → 回退到 unified
         assert_eq!(
-            resolve_ssot_dir(
-                SkillStorageLocation::CcSwitch,
-                unified.clone(),
-                ccswitch.clone()
-            ),
+            resolve_ssot_dir(SkillStorageLocation::Ochub, unified.clone(), ochub.clone()),
             unified
         );
         // 配置为 Unified 且其目录存在 → 保持 unified
@@ -1575,7 +1567,7 @@ mod tests {
             resolve_ssot_dir(
                 SkillStorageLocation::Unified,
                 unified.clone(),
-                ccswitch.clone()
+                ochub.clone()
             ),
             unified
         );
@@ -1585,18 +1577,14 @@ mod tests {
     fn resolve_ssot_dir_returns_configured_when_neither_exists() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let unified = tmp.path().join("agents-skills");
-        let ccswitch = tmp.path().join("ccswitch-skills");
+        let ochub = tmp.path().join("ochub-skills");
         // 两者都不存在 → 返回配置目录（调用方负责创建）
         assert_eq!(
-            resolve_ssot_dir(
-                SkillStorageLocation::CcSwitch,
-                unified.clone(),
-                ccswitch.clone()
-            ),
-            ccswitch
+            resolve_ssot_dir(SkillStorageLocation::Ochub, unified.clone(), ochub.clone()),
+            ochub
         );
         assert_eq!(
-            resolve_ssot_dir(SkillStorageLocation::Unified, unified.clone(), ccswitch),
+            resolve_ssot_dir(SkillStorageLocation::Unified, unified.clone(), ochub),
             unified
         );
     }

@@ -1224,7 +1224,7 @@ impl GatewayView {
                 .child(layout::group(vec![
                     components::field_row(
                         "随应用后台启动",
-                        "OCHUB 启动后在应用内静默开启网关，不会重启应用或打开终端。",
+                        "OCHub 启动后在应用内静默开启网关，不会重启应用或打开终端。",
                         layout::toggle(self.config.enabled),
                     )
                     .id("gw-autostart")

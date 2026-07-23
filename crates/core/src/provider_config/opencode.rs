@@ -1,7 +1,7 @@
 //! OpenCode provider config codec.
 //!
 //! OpenCode is *additive*: it keeps one shared `~/.config/opencode/opencode.json`
-//! and OCHUB writes each provider under `provider.<id>`. The
+//! and OCHub writes each provider under `provider.<id>`. The
 //! `settingsConfig` we store **is** that per-provider object, shaped like an
 //! [`OpenCodeProviderConfig`](crate::model::OpenCodeProviderConfig):
 //!

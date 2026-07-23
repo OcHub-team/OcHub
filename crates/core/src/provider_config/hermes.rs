@@ -1,7 +1,7 @@
 //! Hermes provider config codec.
 //!
 //! Hermes (additive) stores every custom provider as one entry in the
-//! `custom_providers:` sequence of `~/.hermes/config.yaml`. OCHUB keeps
+//! `custom_providers:` sequence of `~/.hermes/config.yaml`. OCHub keeps
 //! each entry's `settingsConfig` in the *UI-friendly* shape that
 //! `apps::hermes::get_providers` denormalizes to:
 //!

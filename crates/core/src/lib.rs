@@ -1,10 +1,10 @@
-//! OCHUB core library.
+//! OCHub core library.
 //!
 //! A faithful Rust port of the cc-switch backend (`src-tauri/src`), restructured
 //! to be UI- and transport-agnostic: no Tauri, no GPUI. The axum `ochub-server`
 //! crate and the GPUI `ochub-app` crate both build on this.
 //!
-//! OCHUB owns an independent `~/.ochub/` database and performs a one-time,
+//! OCHub owns an independent `~/.ochub/` database and performs a one-time,
 //! read-only import from cc-switch. Supported live-config writers target Claude,
 //! Codex, OpenCode, OpenClaw, Hermes, and Claude Desktop.
 

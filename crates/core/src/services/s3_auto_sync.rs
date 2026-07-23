@@ -93,7 +93,7 @@ fn persist_auto_sync_error(settings: &mut S3SyncSettings, error: &AppError) {
     let _ = settings::update_s3_sync_status(settings.status.clone());
 }
 
-// cc-switch emitted a `s3-sync-status-updated` Tauri event here. OCHUB
+// cc-switch emitted a `s3-sync-status-updated` Tauri event here. OCHub
 // persists status in settings; GPUI and the HTTP API expose explicit refresh
 // actions instead of using a Tauri event bus.
 fn report_auto_sync_status(status: &str, error: Option<&str>) {

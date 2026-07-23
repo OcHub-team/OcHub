@@ -1,4 +1,4 @@
-//! Device-level settings (`~/.cc-switch/settings.json`). Not synced with the
+//! Device-level settings (`~/.ochub/settings.json`). Not synced with the
 //! database, so multiple devices operate independently under cloud sync.
 //! Ported from cc-switch `settings.rs`.
 
@@ -29,9 +29,10 @@ pub enum SyncMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillStorageLocation {
-    /// CC Switch managed dir (`~/.cc-switch/skills/`).
+    /// OCHub-managed directory (`~/.ochub/skills/`).
     #[default]
-    CcSwitch,
+    #[serde(rename = "ochub", alias = "cc_switch")]
+    Ochub,
     /// Unified Agent Skills dir (`~/.agents/skills/`).
     Unified,
 }
@@ -109,7 +110,7 @@ pub struct WebDavSyncStatus {
 }
 
 fn default_remote_root() -> String {
-    "cc-switch-sync".to_string()
+    "ochub-sync".to_string()
 }
 fn default_profile() -> String {
     "default".to_string()
@@ -1019,5 +1020,24 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains(r#""themeFamily":"ochub""#));
         assert!(json.contains(r#""themeMode":"system""#));
+    }
+
+    #[test]
+    fn skill_storage_location_rebrands_and_accepts_legacy_value() {
+        assert_eq!(SkillStorageLocation::default(), SkillStorageLocation::Ochub);
+        assert_eq!(
+            serde_json::to_string(&SkillStorageLocation::Ochub).unwrap(),
+            r#""ochub""#
+        );
+        assert_eq!(
+            serde_json::from_str::<SkillStorageLocation>(r#""cc_switch""#).unwrap(),
+            SkillStorageLocation::Ochub
+        );
+    }
+
+    #[test]
+    fn sync_defaults_use_ochub_remote_root() {
+        assert_eq!(WebDavSyncSettings::default().remote_root, "ochub-sync");
+        assert_eq!(S3SyncSettings::default().remote_root, "ochub-sync");
     }
 }

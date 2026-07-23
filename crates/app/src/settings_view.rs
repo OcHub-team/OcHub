@@ -140,7 +140,7 @@ impl SettingsView {
             input.set_content(webdav.password.clone(), cx);
             input
         });
-        let webdav_remote_root = cx.new(|cx| text_input(cx, "cc-switch-sync", &webdav.remote_root));
+        let webdav_remote_root = cx.new(|cx| text_input(cx, "ochub-sync", &webdav.remote_root));
         let webdav_profile = cx.new(|cx| text_input(cx, "default", &webdav.profile));
 
         let s3_region = cx.new(|cx| text_input(cx, "auto", &s3.region));
@@ -158,7 +158,7 @@ impl SettingsView {
                 &s3.endpoint,
             )
         });
-        let s3_remote_root = cx.new(|cx| text_input(cx, "cc-switch-sync", &s3.remote_root));
+        let s3_remote_root = cx.new(|cx| text_input(cx, "ochub-sync", &s3.remote_root));
         let s3_profile = cx.new(|cx| text_input(cx, "default", &s3.profile));
         let app_config_dir = cx.new(|cx| {
             text_input(
@@ -962,10 +962,10 @@ impl SettingsView {
             }
             2 => section_block(
                 "配置目录",
-                "覆盖 OCHUB 数据目录；各 CLI 的配置目录已移至对应应用的「应用设置」。",
+                "覆盖 OCHub 数据目录；各 CLI 的配置目录已移至对应应用的「应用设置」。",
                 vec![
                     Self::render_input_row(
-                        "OCHUB 数据目录",
+                        "OCHub 数据目录",
                         "数据库、备份和托管技能目录；保存后建议重启应用。",
                         self.app_config_dir.clone(),
                     )
@@ -1060,7 +1060,7 @@ impl SettingsView {
                         .into_any_element(),
                         Self::render_input_row(
                             "远端目录",
-                            "同步快照保存的根目录，默认 cc-switch-sync。",
+                            "同步快照保存的根目录，默认 ochub-sync。",
                             self.webdav_remote_root.clone(),
                         )
                         .into_any_element(),
@@ -1140,7 +1140,7 @@ impl SettingsView {
                         .into_any_element(),
                         Self::render_input_row(
                             "远端目录",
-                            "同步快照保存的根目录，默认 cc-switch-sync。",
+                            "同步快照保存的根目录，默认 ochub-sync。",
                             self.s3_remote_root.clone(),
                         )
                         .into_any_element(),

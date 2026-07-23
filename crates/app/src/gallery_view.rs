@@ -97,7 +97,7 @@ impl gpui::Render for GalleryView {
             ))
             .child(components::field_row(
                 "随应用自动启动",
-                "启动 OCHUB 时自动拉起网关（端点地址保持稳定）。",
+                "启动 OCHub 时自动拉起网关（端点地址保持稳定）。",
                 layout::toggle(true),
             ));
 
@@ -149,7 +149,7 @@ impl gpui::Render for GalleryView {
             layout::row()
                 .child(layout::row_label(
                     "随应用自动启动",
-                    "启动 OCHUB 时自动拉起网关（端点地址保持稳定）。",
+                    "启动 OCHub 时自动拉起网关（端点地址保持稳定）。",
                 ))
                 .child(layout::toggle(false))
                 .into_any_element(),

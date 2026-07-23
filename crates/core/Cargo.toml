@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "OCHUB core: domain model, config, SQLite store, and per-app live config writers"
+description = "OCHub core: domain model, config, SQLite store, and per-app live config writers"
 
 [lib]
 name = "ochub_core"

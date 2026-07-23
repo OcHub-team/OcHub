@@ -322,7 +322,7 @@ impl ThemeView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("导入 OCHUB 主题".into()),
+            prompt: Some("导入 OCHub 主题".into()),
         });
         cx.spawn(async move |this, cx| {
             let path = match receiver.await {

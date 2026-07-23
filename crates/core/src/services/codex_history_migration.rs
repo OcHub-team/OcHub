@@ -4,7 +4,7 @@
 //! 失败时不写标记，下一次启动自动重试。
 
 use crate::apps::codex::{
-    get_codex_config_dir, read_codex_config_text, CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+    get_codex_config_dir, read_codex_config_text, OCHUB_CODEX_MODEL_PROVIDER_ID,
 };
 use crate::db::{is_official_seed_id, Database};
 use crate::error::AppError;
@@ -126,7 +126,7 @@ pub fn maybe_migrate_codex_third_party_history_provider_bucket(
         crate::settings::mark_codex_third_party_history_provider_bucket_migrated(
             CodexThirdPartyHistoryProviderBucketMigration {
                 completed_at: Utc::now().to_rfc3339(),
-                target_provider_id: CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string(),
+                target_provider_id: OCHUB_CODEX_MODEL_PROVIDER_ID.to_string(),
                 source_provider_ids: Vec::new(),
                 migrated_jsonl_files: 0,
                 migrated_state_rows: 0,
@@ -150,7 +150,7 @@ pub fn maybe_migrate_codex_third_party_history_provider_bucket(
     crate::settings::mark_codex_third_party_history_provider_bucket_migrated(
         CodexThirdPartyHistoryProviderBucketMigration {
             completed_at: Utc::now().to_rfc3339(),
-            target_provider_id: CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string(),
+            target_provider_id: OCHUB_CODEX_MODEL_PROVIDER_ID.to_string(),
             source_provider_ids: source_provider_ids_vec.clone(),
             migrated_jsonl_files,
             migrated_state_rows,
@@ -255,7 +255,7 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     let marker_written = crate::settings::mark_codex_official_history_unify_migrated_if_enabled(
         CodexOfficialHistoryUnifyMigration {
             completed_at: Utc::now().to_rfc3339(),
-            target_provider_id: CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string(),
+            target_provider_id: OCHUB_CODEX_MODEL_PROVIDER_ID.to_string(),
             migrated_jsonl_files,
             migrated_state_rows,
             codex_config_dir: Some(codex_dir_key),
@@ -280,7 +280,7 @@ fn codex_config_text_routes_custom(config_text: &str) -> bool {
         .and_then(|doc| {
             doc.get("model_provider")
                 .and_then(|item| item.as_str())
-                .map(|id| id.trim() == CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+                .map(|id| id.trim() == OCHUB_CODEX_MODEL_PROVIDER_ID)
         })
         .unwrap_or(false)
 }
@@ -575,7 +575,7 @@ fn rewrite_codex_session_meta_line_for_restore(
         return None;
     }
     let payload = value.get_mut("payload")?.as_object_mut()?;
-    if payload.get("model_provider")?.as_str()? != CC_SWITCH_CODEX_MODEL_PROVIDER_ID {
+    if payload.get("model_provider")?.as_str()? != OCHUB_CODEX_MODEL_PROVIDER_ID {
         return None;
     }
     let session_id = payload.get("id")?.as_str()?;
@@ -618,7 +618,7 @@ fn restore_codex_state_db_official_threads(
             "SELECT COUNT(*) FROM threads WHERE model_provider = ? AND id IN ({placeholders})"
         );
         let mut values = Vec::with_capacity(chunk.len() + 1);
-        values.push(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string());
+        values.push(OCHUB_CODEX_MODEL_PROVIDER_ID.to_string());
         values.extend(chunk.iter().map(|id| (*id).clone()));
         let count: i64 = conn
             .query_row(&count_sql, params_from_iter(values.iter()), |row| {
@@ -644,7 +644,7 @@ fn restore_codex_state_db_official_threads(
         );
         let mut values = Vec::with_capacity(chunk.len() + 2);
         values.push(OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID.to_string());
-        values.push(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string());
+        values.push(OCHUB_CODEX_MODEL_PROVIDER_ID.to_string());
         values.extend(chunk.iter().map(|id| (*id).clone()));
         changed += tx
             .execute(&update_sql, params_from_iter(values.iter()))
@@ -764,7 +764,7 @@ fn legacy_codex_model_provider_id_from_normalized_config(config_text: &str) -> O
         .get("model_provider")
         .and_then(|item| item.as_str())
         .map(str::trim)?;
-    if provider_id != CC_SWITCH_CODEX_MODEL_PROVIDER_ID
+    if provider_id != OCHUB_CODEX_MODEL_PROVIDER_ID
         && provider_id != LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_ID
     {
         return None;
@@ -872,8 +872,7 @@ fn migrate_provider_config_template_to_custom(
         .filter(|provider_id| !provider_id.is_empty())
         .map(str::to_string);
 
-    let custom_table_exists =
-        config_defines_model_provider(&doc, CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+    let custom_table_exists = config_defines_model_provider(&doc, OCHUB_CODEX_MODEL_PROVIDER_ID);
     let source_provider_id_to_move = active_provider_id
         .as_deref()
         .filter(|provider_id| source_provider_ids.contains(*provider_id))
@@ -899,7 +898,7 @@ fn migrate_provider_config_template_to_custom(
         let Some(provider_table) = model_providers.remove(source_provider_id.as_str()) else {
             return Ok(None);
         };
-        model_providers[CC_SWITCH_CODEX_MODEL_PROVIDER_ID] = provider_table;
+        model_providers[OCHUB_CODEX_MODEL_PROVIDER_ID] = provider_table;
         changed = true;
     }
 
@@ -907,7 +906,7 @@ fn migrate_provider_config_template_to_custom(
         .as_deref()
         .is_some_and(|provider_id| source_provider_ids.contains(provider_id))
     {
-        doc["model_provider"] = toml_edit::value(CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+        doc["model_provider"] = toml_edit::value(OCHUB_CODEX_MODEL_PROVIDER_ID);
         changed = true;
     }
 
@@ -949,7 +948,7 @@ fn rewrite_legacy_provider_profile_refs(doc: &mut DocumentMut, source_provider_i
         if references_legacy {
             profile_table.insert(
                 "model_provider",
-                toml_edit::value(CC_SWITCH_CODEX_MODEL_PROVIDER_ID),
+                toml_edit::value(OCHUB_CODEX_MODEL_PROVIDER_ID),
             );
             changed = true;
         }
@@ -1092,7 +1091,7 @@ fn rewrite_codex_session_meta_line(
 
     payload.insert(
         "model_provider".to_string(),
-        Value::String(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string()),
+        Value::String(OCHUB_CODEX_MODEL_PROVIDER_ID.to_string()),
     );
     serde_json::to_string(&value).ok()
 }
@@ -1204,7 +1203,7 @@ fn migrate_codex_state_db_provider_bucket(
     let update_sql =
         format!("UPDATE threads SET model_provider = ? WHERE model_provider IN ({placeholders})");
     let mut values = Vec::with_capacity(source_provider_ids.len() + 1);
-    values.push(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string());
+    values.push(OCHUB_CODEX_MODEL_PROVIDER_ID.to_string());
     values.extend(source_provider_ids.iter().cloned());
     let tx = conn
         .transaction()

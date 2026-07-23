@@ -1,7 +1,7 @@
 //! OpenClaw provider config codec.
 //!
 //! OpenClaw is *additive*: every provider lives together inside one on-disk file
-//! `~/.openclaw/openclaw.json` (JSON5) under `models.providers.<id>`. OCHUB
+//! `~/.openclaw/openclaw.json` (JSON5) under `models.providers.<id>`. OCHub
 //! stores a single provider's slice as `settingsConfig`, shaped exactly like an
 //! [`OpenClawProviderConfig`]:
 //!

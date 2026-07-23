@@ -855,7 +855,7 @@ async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Op
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     match client
         .get(&url)
-        .header("User-Agent", "OCHUB")
+        .header("User-Agent", "OCHub")
         .header("Accept", "application/vnd.github+json")
         .send()
         .await

@@ -1,4 +1,4 @@
-//! OCHUB desktop application (GPUI).
+//! OCHub desktop application (GPUI).
 //!
 //! Initializes the `ochub-core` `AppState` (SQLite store + services), hosts the
 //! `ochub-server` axum control API in-process on loopback, and renders the GPUI UI.
@@ -157,7 +157,7 @@ fn main() {
     let _instance_lock = match shell_support::acquire_single_instance(port) {
         Ok(lock) => lock,
         Err(running_port) => {
-            println!("OCHUB 已在运行（控制 API 端口 {running_port}），本次启动已退出。");
+            println!("OCHub 已在运行（控制 API 端口 {running_port}），本次启动已退出。");
             return;
         }
     };

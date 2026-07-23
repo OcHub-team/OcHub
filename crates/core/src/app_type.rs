@@ -1,4 +1,4 @@
-//! The set of AI coding tools OCHUB can manage, and their switching
+//! The set of AI coding tools OCHub can manage, and their switching
 //! semantics. Ported from cc-switch `app_config.rs` `AppType`.
 
 use std::str::FromStr;

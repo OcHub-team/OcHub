@@ -1,4 +1,4 @@
-//! Headless OCHUB server entrypoint.
+//! Headless OCHub server entrypoint.
 //!
 //! Initializes the SQLite store and serves the control API on loopback. The
 //! GPUI app uses the library entrypoints instead (it owns `AppState`).

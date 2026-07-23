@@ -1,7 +1,7 @@
 # Plan: cc-switch parity + Gemini CLI removal + skills → `npx skills`
 
 > Historical upstream integration plan. Its Gemini-removal and Skills-CLI
-> workstreams are now integrated. The proxy workstream is superseded by OCHUB's
+> workstreams are now integrated. The proxy workstream is superseded by OCHub's
 > in-process relay gateway, which is the only active routing implementation.
 > Names and paths below are retained as implementation history.
 
@@ -85,7 +85,7 @@ Replace the SSOT engine inside `services/skill.rs` with a wrapper around
 `update [-y]`, `find`, `init`). Design:
 
 - **Registry of record stays SQLite** (`skills`, `skill_repos` tables, unchanged
-  schema): RouteDeck records id/name/description/source(owner/repo@branch)/apps
+  schema): OCHub records id/name/description/source(owner/repo@branch)/apps
   so per-app toggles, auto-sync watchers, and the UI keep working. File
   placement/symlinking is delegated entirely to the CLI.
 - App↔agent mapping probed at runtime (`claude→claude`, `codex→codex`,
@@ -159,8 +159,8 @@ destruction; DatabaseUpgrade recovery UI; byte-exact header casing.
 Machine sits behind mitmproxy — every network-touching cargo/git command needs:
 `CARGO_HTTP_CAINFO=$HOME/.mitmproxy/mitmproxy-ca-cert.pem GIT_SSL_CAINFO=$HOME/.mitmproxy/mitmproxy-ca-cert.pem CARGO_NET_GIT_FETCH_WITH_CLI=true`
 
-- Baseline (2026-07-04): `cargo check -p routedeck-core -p routedeck-server` green.
-- Gate each workstream on `cargo check`; final gate `cargo test -p routedeck-core
-  -p routedeck-server` vs the recorded baseline, plus `cargo check -p routedeck-app`
+- Baseline (2026-07-04): `cargo check -p ochub-core -p ochub-server` green.
+- Gate each workstream on `cargo check`; final gate `cargo test -p ochub-core
+  -p ochub-server` vs the recorded baseline, plus `cargo check -p ochub-app`
   if the Linux GPUI probe succeeds (in flight).
 - No commits without explicit ask; work lands as uncommitted diff on `main`.

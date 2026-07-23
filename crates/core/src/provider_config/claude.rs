@@ -1,7 +1,7 @@
 //! Claude Code provider config codec.
 //!
 //! Claude Code reads `~/.claude/settings.json`; the provider-relevant slice is
-//! the `env` object. OCHUB stores the whole settings document in one
+//! the `env` object. OCHub stores the whole settings document in one
 //! `settingsConfig`, shaped `{ "env": { … } }`. The interesting env keys are:
 //!
 //! - `ANTHROPIC_BASE_URL` — the endpoint.

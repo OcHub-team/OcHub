@@ -20,9 +20,10 @@ pub(crate) use super::webdav_sync::archive::{
 
 // ─── Protocol constants ──────────────────────────────────────
 
-/// Wire-format identifier stored in remote manifests.
-/// Retains historic "webdav" naming for backward compatibility with existing remotes.
-pub(crate) const PROTOCOL_FORMAT: &str = "cc-switch-webdav-sync";
+/// Wire-format identifier stored in newly written remote manifests.
+pub(crate) const PROTOCOL_FORMAT: &str = "ochub-sync";
+/// Accepted legacy identifier so existing remote snapshots remain restorable.
+const LEGACY_PROTOCOL_FORMAT: &str = "cc-switch-webdav-sync";
 pub(crate) const PROTOCOL_VERSION: u32 = 2;
 pub(crate) const DB_COMPAT_VERSION: u32 = 6;
 pub(crate) const LEGACY_DB_COMPAT_VERSION: u32 = 5;
@@ -185,7 +186,7 @@ pub(crate) fn validate_manifest_compat(
     manifest: &SyncManifest,
     layout: RemoteLayout,
 ) -> Result<(), AppError> {
-    if manifest.format != PROTOCOL_FORMAT {
+    if manifest.format != PROTOCOL_FORMAT && manifest.format != LEGACY_PROTOCOL_FORMAT {
         return Err(localized(
             "sync.manifest_format_incompatible",
             format!("远端 manifest 格式不兼容: {}", manifest.format),
@@ -350,10 +351,15 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn detect_system_device_name() -> Option<String> {
-    let env_name = ["CC_SWITCH_DEVICE_NAME", "COMPUTERNAME", "HOSTNAME"]
-        .iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .find_map(|value| normalize_device_name(&value));
+    let env_name = [
+        "OCHUB_DEVICE_NAME",
+        "CC_SWITCH_DEVICE_NAME",
+        "COMPUTERNAME",
+        "HOSTNAME",
+    ]
+    .iter()
+    .filter_map(|key| std::env::var(key).ok())
+    .find_map(|value| normalize_device_name(&value));
 
     if env_name.is_some() {
         return env_name;
@@ -501,6 +507,16 @@ mod tests {
     #[test]
     fn validate_manifest_compat_accepts_supported_manifest() {
         let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, Some(DB_COMPAT_VERSION));
+        assert!(validate_manifest_compat(&manifest, RemoteLayout::Current).is_ok());
+    }
+
+    #[test]
+    fn validate_manifest_compat_accepts_legacy_brand_format() {
+        let manifest = manifest_with(
+            LEGACY_PROTOCOL_FORMAT,
+            PROTOCOL_VERSION,
+            Some(DB_COMPAT_VERSION),
+        );
         assert!(validate_manifest_compat(&manifest, RemoteLayout::Current).is_ok());
     }
 

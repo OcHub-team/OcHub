@@ -642,8 +642,8 @@ pub fn ochub_family() -> ThemeFamily {
     ThemeFamily {
         schema_version: THEME_SCHEMA_VERSION,
         id: DEFAULT_THEME_FAMILY.to_string(),
-        name: "OCHUB".to_string(),
-        author: "OCHUB".to_string(),
+        name: "OCHub".to_string(),
+        author: "OCHub".to_string(),
         description: "克制的暖灰中性色与清晰蓝色强调。".to_string(),
         light: OCHUB_LIGHT,
         dark: OCHUB_DARK,
@@ -655,7 +655,7 @@ pub fn ember_family() -> ThemeFamily {
         schema_version: THEME_SCHEMA_VERSION,
         id: EMBER_THEME_FAMILY.to_string(),
         name: "Ember Orange".to_string(),
-        author: "OCHUB".to_string(),
+        author: "OCHub".to_string(),
         description: "象牙白与暖石墨表面，配以克制的余烬橙。".to_string(),
         light: EMBER_LIGHT,
         dark: EMBER_DARK,
@@ -967,7 +967,7 @@ pub fn install_family(family: &ThemeFamily, mode: ThemeMode, appearance: WindowA
     install(if dark { family.dark } else { family.light }, dark);
 }
 
-/// Install the requested family, falling back to OCHUB when the user file is
+/// Install the requested family, falling back to OCHub when the user file is
 /// missing or invalid. Returns the ID that was actually installed.
 pub fn install_selected(id: &str, mode: ThemeMode, appearance: WindowAppearance) -> String {
     let family = find_family(id).unwrap_or_else(ochub_family);

@@ -12,7 +12,7 @@
 //! The reference `services/config.rs` also had
 //! `sync_current_providers_to_live(&mut MultiAppConfig)` /
 //! `sync_current_provider_for_app(&mut MultiAppConfig, ...)` for the legacy JSON
-//! `MultiAppConfig`. OCHUB uses SQLite as SSOT and routes live writes
+//! `MultiAppConfig`. OCHub uses SQLite as SSOT and routes live writes
 //! through `ProviderService::sync_current_provider_for_app(state, app)` instead.
 
 use std::fs;

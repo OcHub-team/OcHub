@@ -4,7 +4,7 @@
 //!
 //! v3.10.0+ 统一管理架构：
 //! - Skills 使用统一的 id 主键，支持四应用启用标志
-//! - 实际文件存储在 ~/.cc-switch/skills/，同步到各应用目录
+//! - 实际文件存储在 ~/.ochub/skills/，同步到各应用目录
 
 use crate::db::legacy_json::SkillRepo;
 use crate::db::legacy_json::{InstalledSkill, SkillApps};

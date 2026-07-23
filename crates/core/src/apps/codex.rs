@@ -11,8 +11,9 @@ use serde_json::{json, Value};
 use std::fs;
 use toml_edit::DocumentMut;
 
-pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
-pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
+pub const OCHUB_CODEX_MODEL_PROVIDER_ID: &str = "custom";
+pub const OCHUB_CODEX_MODEL_CATALOG_FILENAME: &str = "ochub-model-catalog.json";
+const LEGACY_CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
 const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
 
 /// Reserved built-in provider IDs from OpenAI Codex's config/model-provider
@@ -47,7 +48,7 @@ pub fn get_codex_config_path() -> PathBuf {
 }
 
 pub fn get_codex_model_catalog_path() -> PathBuf {
-    get_codex_config_dir().join(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
+    get_codex_config_dir().join(OCHUB_CODEX_MODEL_CATALOG_FILENAME)
 }
 
 /// 获取 Codex 供应商配置文件路径
@@ -695,15 +696,17 @@ fn set_codex_model_catalog_json_field(
 
     match catalog_path {
         Some(_) => {
-            doc["model_catalog_json"] = toml_edit::value(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME);
+            doc["model_catalog_json"] = toml_edit::value(OCHUB_CODEX_MODEL_CATALOG_FILENAME);
         }
         None => {
             let should_remove = doc
                 .get("model_catalog_json")
                 .and_then(|item| item.as_str())
                 .map(|path| {
-                    Path::new(path).file_name().and_then(|name| name.to_str())
-                        == Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
+                    Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(is_ochub_catalog_filename)
                 })
                 .unwrap_or(false);
             if should_remove {
@@ -733,15 +736,16 @@ pub fn prepare_codex_config_text_with_model_catalog(
 }
 
 /// Reverse of `prepare_codex_config_text_with_model_catalog`: read the
-/// cc-switch–maintained catalog file referenced by `~/.codex/config.toml` and
+/// OCHub-maintained catalog file referenced by `~/.codex/config.toml` and
 /// convert it back into the simplified shape the frontend table uses:
 /// `{ "models": [{ "model", "displayName"?, "contextWindow"? }, ...] }`.
 ///
-/// We only reverse-parse catalogs whose `model_catalog_json` path is the
-/// cc-switch–generated file (identified by filename
-/// `cc-switch-model-catalog.json`). A user-managed external catalog file is
-/// left alone — surfacing its richer structure as the simplified table would
-/// be a downgrade we can't safely round-trip.
+/// We only reverse-parse catalogs whose `model_catalog_json` path is an
+/// OCHub-generated file. The current filename is `ochub-model-catalog.json`;
+/// the legacy cc-switch filename is accepted for a seamless one-time rebrand.
+/// A user-managed external catalog file is left alone — surfacing its richer
+/// structure as the simplified table would be a downgrade we can't safely
+/// round-trip.
 ///
 /// `displayName` and `contextWindow` are omitted from the returned entry when
 /// the on-disk value matches the fallback that
@@ -758,7 +762,7 @@ pub fn prepare_codex_config_text_with_model_catalog(
 pub fn read_codex_model_catalog_simplified_from_live() -> Result<Option<Value>, AppError> {
     let config_text = read_codex_config_text()?;
     let generated_path = get_codex_model_catalog_path();
-    let Some(catalog_path) = resolve_cc_switch_catalog_path(&config_text, &generated_path) else {
+    let Some(catalog_path) = resolve_ochub_catalog_path(&config_text, &generated_path) else {
         return Ok(None);
     };
     if !catalog_path.exists() {
@@ -773,10 +777,10 @@ pub fn read_codex_model_catalog_simplified_from_live() -> Result<Option<Value>, 
     ))
 }
 
-/// Given `config.toml` text, resolve the on-disk path of the cc-switch–owned
+/// Given `config.toml` text, resolve the on-disk path of an OCHub-owned
 /// catalog file (returns `None` if `model_catalog_json` is absent or points at
 /// a file we don't own). Relative paths fall back to `generated_path`.
-pub(crate) fn resolve_cc_switch_catalog_path(
+pub(crate) fn resolve_ochub_catalog_path(
     config_text: &str,
     generated_path: &Path,
 ) -> Option<PathBuf> {
@@ -791,17 +795,25 @@ pub(crate) fn resolve_cc_switch_catalog_path(
         .filter(|s| !s.is_empty())?;
 
     let referenced_path = Path::new(catalog_path_str);
-    let is_cc_switch_owned = referenced_path.file_name().and_then(|name| name.to_str())
-        == Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME);
-    if !is_cc_switch_owned {
+    let filename = referenced_path.file_name().and_then(|name| name.to_str())?;
+    if !is_ochub_catalog_filename(filename) {
         return None;
     }
 
     if referenced_path.is_absolute() {
         Some(referenced_path.to_path_buf())
+    } else if filename == LEGACY_CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME {
+        Some(generated_path.with_file_name(LEGACY_CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME))
     } else {
         Some(generated_path.to_path_buf())
     }
+}
+
+fn is_ochub_catalog_filename(filename: &str) -> bool {
+    matches!(
+        filename,
+        OCHUB_CODEX_MODEL_CATALOG_FILENAME | LEGACY_CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME
+    )
 }
 
 /// Pure reverse-parsing core: convert Codex catalog JSON text back into the
@@ -1066,7 +1078,7 @@ pub fn inject_codex_unified_session_bucket(config_text: &str) -> Result<String, 
     let existing_custom_conflicts = doc
         .get("model_providers")
         .and_then(|item| item.as_table())
-        .and_then(|providers| providers.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
+        .and_then(|providers| providers.get(OCHUB_CODEX_MODEL_PROVIDER_ID))
         .and_then(|item| item.as_table())
         .is_some_and(|table| !table_matches_codex_unified_official_provider(table));
     if existing_custom_conflicts {
@@ -1076,7 +1088,7 @@ pub fn inject_codex_unified_session_bucket(config_text: &str) -> Result<String, 
         return Ok(config_text.to_string());
     }
 
-    doc["model_provider"] = toml_edit::value(CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+    doc["model_provider"] = toml_edit::value(OCHUB_CODEX_MODEL_PROVIDER_ID);
 
     if doc.get("model_providers").is_none() {
         let mut parent = toml_edit::Table::new();
@@ -1084,9 +1096,9 @@ pub fn inject_codex_unified_session_bucket(config_text: &str) -> Result<String, 
         doc["model_providers"] = toml_edit::Item::Table(parent);
     }
     if let Some(providers) = doc["model_providers"].as_table_mut() {
-        if !providers.contains_key(CC_SWITCH_CODEX_MODEL_PROVIDER_ID) {
+        if !providers.contains_key(OCHUB_CODEX_MODEL_PROVIDER_ID) {
             providers.insert(
-                CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+                OCHUB_CODEX_MODEL_PROVIDER_ID,
                 toml_edit::Item::Table(codex_unified_official_provider_table()),
             );
         }
@@ -1107,14 +1119,14 @@ pub fn strip_codex_unified_session_bucket(config_text: &str) -> Result<String, A
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
 
     if doc.get("model_provider").and_then(|item| item.as_str())
-        != Some(CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+        != Some(OCHUB_CODEX_MODEL_PROVIDER_ID)
     {
         return Ok(config_text.to_string());
     }
     let matches_injected = doc
         .get("model_providers")
         .and_then(|item| item.as_table())
-        .and_then(|providers| providers.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
+        .and_then(|providers| providers.get(OCHUB_CODEX_MODEL_PROVIDER_ID))
         .and_then(|item| item.as_table())
         .is_some_and(table_matches_codex_unified_official_provider);
     if !matches_injected {
@@ -1125,7 +1137,7 @@ pub fn strip_codex_unified_session_bucket(config_text: &str) -> Result<String, A
     let providers_empty = doc["model_providers"]
         .as_table_mut()
         .map(|providers| {
-            providers.remove(CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+            providers.remove(OCHUB_CODEX_MODEL_PROVIDER_ID);
             providers.is_empty()
         })
         .unwrap_or(false);
@@ -1367,9 +1379,9 @@ mod tests {
 
         assert_eq!(
             doc.get("model_provider").and_then(|v| v.as_str()),
-            Some(CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+            Some(OCHUB_CODEX_MODEL_PROVIDER_ID)
         );
-        let custom = doc["model_providers"][CC_SWITCH_CODEX_MODEL_PROVIDER_ID]
+        let custom = doc["model_providers"][OCHUB_CODEX_MODEL_PROVIDER_ID]
             .as_table()
             .expect("custom provider table");
         assert_eq!(custom.get("name").and_then(|v| v.as_str()), Some("OpenAI"));
@@ -1389,7 +1401,7 @@ mod tests {
 
     #[test]
     fn unified_session_bucket_preserves_other_keys_and_explicit_routing() {
-        let with_catalog = "model_catalog_json = \"cc-switch-model-catalog.json\"\n";
+        let with_catalog = "model_catalog_json = \"ochub-model-catalog.json\"\n";
         let injected = inject_codex_unified_session_bucket(with_catalog).expect("inject");
         assert!(injected.contains("model_catalog_json"));
         assert!(injected.contains("model_provider = \"custom\""));
@@ -1423,7 +1435,7 @@ base_url = "https://relay.example/v1"
         let stripped = strip_codex_unified_session_bucket(&injected).expect("strip");
         assert_eq!(stripped.trim(), "");
 
-        let with_catalog = "model_catalog_json = \"cc-switch-model-catalog.json\"\n";
+        let with_catalog = "model_catalog_json = \"ochub-model-catalog.json\"\n";
         let injected = inject_codex_unified_session_bucket(with_catalog).expect("inject");
         let stripped = strip_codex_unified_session_bucket(&injected).expect("strip");
         assert_eq!(stripped, with_catalog);
@@ -2005,7 +2017,7 @@ model = "gpt-4"
 [model_providers.any]
 name = "any"
 "#;
-        let catalog_path = Path::new("/tmp/cc-switch-model-catalog.json");
+        let catalog_path = Path::new("/tmp/ochub-model-catalog.json");
 
         let result = set_codex_model_catalog_json_field(input, Some(catalog_path)).unwrap();
         let parsed: toml::Value = toml::from_str(&result).unwrap();
@@ -2013,7 +2025,7 @@ name = "any"
             parsed
                 .get("model_catalog_json")
                 .and_then(|value| value.as_str()),
-            Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
+            Some(OCHUB_CODEX_MODEL_CATALOG_FILENAME)
         );
         assert!(
             parsed
@@ -2027,30 +2039,42 @@ name = "any"
 
     #[test]
     fn resolve_catalog_path_returns_none_when_config_missing_field() {
-        let generated = PathBuf::from("/tmp/.codex/cc-switch-model-catalog.json");
-        assert!(resolve_cc_switch_catalog_path("", &generated).is_none());
+        let generated = PathBuf::from("/tmp/.codex/ochub-model-catalog.json");
+        assert!(resolve_ochub_catalog_path("", &generated).is_none());
         assert!(
-            resolve_cc_switch_catalog_path("model = \"gpt-5\"", &generated).is_none(),
+            resolve_ochub_catalog_path("model = \"gpt-5\"", &generated).is_none(),
             "no model_catalog_json field should yield None"
         );
     }
 
     #[test]
-    fn resolve_catalog_path_accepts_cc_switch_owned_file() {
-        let generated = PathBuf::from("/tmp/.codex/cc-switch-model-catalog.json");
-        let config = r#"model_catalog_json = "/tmp/.codex/cc-switch-model-catalog.json"
+    fn resolve_catalog_path_accepts_ochub_owned_file() {
+        let generated = PathBuf::from("/tmp/.codex/ochub-model-catalog.json");
+        let config = r#"model_catalog_json = "/tmp/.codex/ochub-model-catalog.json"
 "#;
-        let resolved = resolve_cc_switch_catalog_path(config, &generated).expect("path resolves");
+        let resolved = resolve_ochub_catalog_path(config, &generated).expect("path resolves");
         assert_eq!(resolved, generated);
     }
 
     #[test]
+    fn resolve_catalog_path_accepts_legacy_relative_filename() {
+        let generated = PathBuf::from("/tmp/.codex/ochub-model-catalog.json");
+        let config = r#"model_catalog_json = "cc-switch-model-catalog.json"
+"#;
+        let resolved = resolve_ochub_catalog_path(config, &generated).expect("path resolves");
+        assert_eq!(
+            resolved,
+            PathBuf::from("/tmp/.codex/cc-switch-model-catalog.json")
+        );
+    }
+
+    #[test]
     fn resolve_catalog_path_rejects_user_owned_external_file() {
-        let generated = PathBuf::from("/tmp/.codex/cc-switch-model-catalog.json");
+        let generated = PathBuf::from("/tmp/.codex/ochub-model-catalog.json");
         let config = r#"model_catalog_json = "/Users/me/.codex/my-handwritten-catalog.json"
 "#;
         assert!(
-            resolve_cc_switch_catalog_path(config, &generated).is_none(),
+            resolve_ochub_catalog_path(config, &generated).is_none(),
             "external catalog files should be left alone"
         );
     }
@@ -2244,7 +2268,7 @@ model = "glm-5"
         // Simulate a WSL UNC path as cc-switch would see it on Windows;
         // the function now writes just the relative filename.
         let unc_path =
-            Path::new(r"\\wsl.localhost\Ubuntu\home\user\.codex\cc-switch-model-catalog.json");
+            Path::new(r"\\wsl.localhost\Ubuntu\home\user\.codex\ochub-model-catalog.json");
 
         let result = set_codex_model_catalog_json_field(input, Some(unc_path)).unwrap();
         let parsed: toml::Value = toml::from_str(&result).unwrap();
@@ -2254,7 +2278,7 @@ model = "glm-5"
             .and_then(|v| v.as_str())
             .expect("model_catalog_json should be set");
         assert_eq!(
-            written_path, CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME,
+            written_path, OCHUB_CODEX_MODEL_CATALOG_FILENAME,
             "should write only the relative filename, not the UNC path"
         );
     }
@@ -2264,29 +2288,29 @@ model = "glm-5"
         let input = r#"model_provider = "custom"
 model = "glm-5"
 "#;
-        let regular_path = Path::new("/home/user/.codex/cc-switch-model-catalog.json");
+        let regular_path = Path::new("/home/user/.codex/ochub-model-catalog.json");
 
         let result = set_codex_model_catalog_json_field(input, Some(regular_path)).unwrap();
         let parsed: toml::Value = toml::from_str(&result).unwrap();
 
         assert_eq!(
             parsed.get("model_catalog_json").and_then(|v| v.as_str()),
-            Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME),
+            Some(OCHUB_CODEX_MODEL_CATALOG_FILENAME),
             "should write only the relative filename, not the full path"
         );
     }
 
     #[test]
-    fn set_catalog_json_none_removes_cc_switch_owned_by_filename() {
+    fn set_catalog_json_none_removes_ochub_owned_by_filename() {
         // After the WSL fix, TOML may contain a Linux-style path.
         // The None arm must still remove it (file_name match catches any format).
-        let input = r#"model_catalog_json = "/home/user/.codex/cc-switch-model-catalog.json"
+        let input = r#"model_catalog_json = "/home/user/.codex/ochub-model-catalog.json"
 "#;
         let result = set_codex_model_catalog_json_field(input, None).unwrap();
         let parsed: toml::Value = toml::from_str(&result).unwrap();
         assert!(
             parsed.get("model_catalog_json").is_none(),
-            "None arm should remove cc-switch-owned field regardless of path format"
+            "None arm should remove OCHub-owned field regardless of path format"
         );
     }
 
@@ -2306,10 +2330,10 @@ model = "glm-5"
     #[test]
     fn resolve_catalog_finds_relative_filename() {
         let config_text = r#"model_provider = "custom"
-model_catalog_json = "cc-switch-model-catalog.json"
+model_catalog_json = "ochub-model-catalog.json"
 "#;
-        let generated_path = PathBuf::from("/home/user/.codex/cc-switch-model-catalog.json");
-        let result = resolve_cc_switch_catalog_path(config_text, &generated_path);
+        let generated_path = PathBuf::from("/home/user/.codex/ochub-model-catalog.json");
+        let result = resolve_ochub_catalog_path(config_text, &generated_path);
         assert_eq!(
             result,
             Some(generated_path),
@@ -2321,23 +2345,23 @@ model_catalog_json = "cc-switch-model-catalog.json"
     fn resolve_catalog_ignores_user_owned_relative() {
         let config_text = r#"model_catalog_json = "my-custom-catalog.json"
 "#;
-        let generated_path = PathBuf::from("/home/user/.codex/cc-switch-model-catalog.json");
-        let result = resolve_cc_switch_catalog_path(config_text, &generated_path);
+        let generated_path = PathBuf::from("/home/user/.codex/ochub-model-catalog.json");
+        let result = resolve_ochub_catalog_path(config_text, &generated_path);
         assert_eq!(
             result, None,
-            "user-owned catalog should not be claimed by cc-switch"
+            "user-owned catalog should not be claimed by OCHub"
         );
     }
 
     #[test]
     fn set_catalog_json_none_removes_relative_path() {
-        let input = r#"model_catalog_json = "cc-switch-model-catalog.json"
+        let input = r#"model_catalog_json = "ochub-model-catalog.json"
 "#;
         let result = set_codex_model_catalog_json_field(input, None).unwrap();
         let parsed: toml::Value = toml::from_str(&result).unwrap();
         assert!(
             parsed.get("model_catalog_json").is_none(),
-            "None arm should remove relative cc-switch-owned field"
+            "None arm should remove relative OCHub-owned field"
         );
     }
 }

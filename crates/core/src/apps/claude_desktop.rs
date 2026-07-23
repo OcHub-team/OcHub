@@ -12,7 +12,7 @@ use crate::paths::get_home_dir;
 use crate::paths::{atomic_write, delete_file, read_json_file, write_json_file};
 
 pub const PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
-pub const PROFILE_NAME: &str = "CC Switch";
+pub const PROFILE_NAME: &str = "OCHub";
 
 #[cfg(any(target_os = "macos", windows, test))]
 const CONFIG_FILE: &str = "claude_desktop_config.json";
@@ -406,7 +406,7 @@ fn apply_provider_to_paths_inner(
 fn restore_official_at_paths_inner(paths: &ClaudeDesktopPaths) -> Result<(), AppError> {
     write_deployment_mode(&paths.normal_config_path, "1p")?;
     write_deployment_mode(&paths.threep_config_path, "1p")?;
-    remove_cc_switch_enterprise_config(&paths.threep_config_path)?;
+    remove_ochub_enterprise_config(&paths.threep_config_path)?;
 
     if paths.profile_path.exists() {
         delete_file(&paths.profile_path)?;
@@ -505,7 +505,7 @@ fn write_deployment_mode(path: &Path, mode: &str) -> Result<(), AppError> {
     write_json_file(path, &value)
 }
 
-fn remove_cc_switch_enterprise_config(path: &Path) -> Result<(), AppError> {
+fn remove_ochub_enterprise_config(path: &Path) -> Result<(), AppError> {
     if !path.exists() {
         return Ok(());
     }
