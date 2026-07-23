@@ -37,7 +37,14 @@ pub struct ApplyResult {
 
 /// Which apps support one-click gateway configuration.
 pub fn supported_apps() -> &'static [AppType] {
-    &[AppType::Claude, AppType::ClaudeDesktop, AppType::Codex]
+    &[
+        AppType::Claude,
+        AppType::ClaudeDesktop,
+        AppType::Codex,
+        AppType::OpenCode,
+        AppType::OpenClaw,
+        AppType::Hermes,
+    ]
 }
 
 /// The inlet dialect each client speaks to the local gateway.
@@ -205,10 +212,29 @@ fn app_label(app_type: AppType) -> &'static str {
     }
 }
 
+/// Client-facing model names declared on a route (mapping aliases + default),
+/// used to seed model lists for clients that require one (OpenCode/OpenClaw/
+/// Hermes pickers).
+fn route_client_models(route: &GatewayRoute) -> Vec<String> {
+    let mut models: Vec<String> = Vec::new();
+    for rule in &route.model_rules {
+        if !rule.model.trim().is_empty() && !models.contains(&rule.model) {
+            models.push(rule.model.clone());
+        }
+    }
+    if let Some(default) = &route.default_model {
+        if !default.trim().is_empty() && !models.contains(default) {
+            models.push(default.clone());
+        }
+    }
+    models
+}
+
 fn gateway_settings_for(
     app_type: AppType,
     base_url: &str,
     key: &str,
+    models: &[String],
 ) -> Result<serde_json::Value, AppError> {
     match app_type {
         AppType::Claude | AppType::ClaudeDesktop => Ok(json!({
@@ -238,10 +264,43 @@ fn gateway_settings_for(
                 "config": toml,
             }))
         }
-        other => Err(AppError::Config(format!(
-            "one-click gateway config is not supported for {}",
-            other.as_str()
-        ))),
+        AppType::OpenCode => {
+            let mut config = json!({
+                "npm": "@ai-sdk/openai-compatible",
+                "name": GATEWAY_PROVIDER_NAME,
+                "options": {
+                    "baseURL": format!("{base_url}/v1"),
+                    "apiKey": key,
+                },
+            });
+            if !models.is_empty() {
+                let mut map = serde_json::Map::new();
+                for model in models {
+                    map.insert(model.clone(), json!({ "name": model }));
+                }
+                config["models"] = serde_json::Value::Object(map);
+            }
+            Ok(config)
+        }
+        AppType::OpenClaw => Ok(json!({
+            "baseUrl": format!("{base_url}/v1"),
+            "apiKey": key,
+            "api": "openai-completions",
+            "models": models.iter().map(|m| json!({ "id": m })).collect::<Vec<_>>(),
+        })),
+        AppType::Hermes => {
+            let mut config = json!({
+                "name": GATEWAY_PROVIDER_ID,
+                "base_url": format!("{base_url}/v1"),
+                "api_key": key,
+                "api_mode": "chat_completions",
+                "models": models.iter().map(|m| json!({ "id": m })).collect::<Vec<_>>(),
+            });
+            if let Some(first) = models.first() {
+                config["model"] = json!(first);
+            }
+            Ok(config)
+        }
     }
 }
 
@@ -336,7 +395,7 @@ fn apply_route_to_app(
     route: GatewayRoute,
 ) -> Result<ApplyResult, AppError> {
     let key = ensure_key_for_route(state, app_type.as_str(), Some(&route.id))?;
-    let settings = gateway_settings_for(app_type, base_url, &key.key)?;
+    let settings = gateway_settings_for(app_type, base_url, &key.key, &route_client_models(&route))?;
 
     let provider = Provider {
         id: GATEWAY_PROVIDER_ID.to_string(),
@@ -475,19 +534,73 @@ mod tests {
 
     #[test]
     fn settings_shapes_per_app() {
-        let claude =
-            gateway_settings_for(AppType::Claude, "http://127.0.0.1:4180", "rd-k").unwrap();
-        assert_eq!(claude["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:4180");
+        let base = "http://127.0.0.1:4180";
+        let models = vec!["claude-sonnet-4-6".to_string()];
+
+        let claude = gateway_settings_for(AppType::Claude, base, "rd-k", &models).unwrap();
+        assert_eq!(claude["env"]["ANTHROPIC_BASE_URL"], base);
         assert_eq!(claude["env"]["ANTHROPIC_AUTH_TOKEN"], "rd-k");
 
-        let codex = gateway_settings_for(AppType::Codex, "http://127.0.0.1:4180", "rd-k").unwrap();
+        let codex = gateway_settings_for(AppType::Codex, base, "rd-k", &models).unwrap();
         assert_eq!(codex["auth"]["OPENAI_API_KEY"], "rd-k");
         let toml = codex["config"].as_str().unwrap();
         assert!(toml.contains("model_provider = \"local-gateway\""));
         assert!(toml.contains("base_url = \"http://127.0.0.1:4180/v1\""));
         assert!(toml.contains("wire_api = \"responses\""));
 
-        assert!(gateway_settings_for(AppType::OpenCode, "x", "y").is_err());
+        let opencode = gateway_settings_for(AppType::OpenCode, base, "rd-k", &models).unwrap();
+        assert_eq!(opencode["npm"], "@ai-sdk/openai-compatible");
+        assert_eq!(opencode["options"]["baseURL"], "http://127.0.0.1:4180/v1");
+        assert_eq!(opencode["options"]["apiKey"], "rd-k");
+        assert!(opencode["models"]["claude-sonnet-4-6"].is_object());
+
+        let openclaw = gateway_settings_for(AppType::OpenClaw, base, "rd-k", &models).unwrap();
+        assert_eq!(openclaw["api"], "openai-completions");
+        assert_eq!(openclaw["baseUrl"], "http://127.0.0.1:4180/v1");
+        assert_eq!(openclaw["models"][0]["id"], "claude-sonnet-4-6");
+
+        let hermes = gateway_settings_for(AppType::Hermes, base, "rd-k", &models).unwrap();
+        assert_eq!(hermes["api_mode"], "chat_completions");
+        assert_eq!(hermes["base_url"], "http://127.0.0.1:4180/v1");
+        assert_eq!(hermes["model"], "claude-sonnet-4-6");
+        assert_eq!(hermes["models"][0]["id"], "claude-sonnet-4-6");
+
+        // Without declared models, model-list fields stay absent/empty and the
+        // Hermes default model is omitted.
+        let opencode_bare = gateway_settings_for(AppType::OpenCode, base, "rd-k", &[]).unwrap();
+        assert!(opencode_bare.get("models").is_none());
+        let hermes_bare = gateway_settings_for(AppType::Hermes, base, "rd-k", &[]).unwrap();
+        assert!(hermes_bare.get("model").is_none());
+    }
+
+    #[test]
+    fn route_models_come_from_rules_then_default_without_duplicates() {
+        let route = GatewayRoute {
+            id: "station:x".into(),
+            name: "x".into(),
+            app_type: None,
+            channel_ids: vec!["x".into()],
+            default_model: Some("claude-sonnet-4-6".into()),
+            model_rules: vec![
+                crate::gateway::types::GatewayModelRule {
+                    model: "claude-sonnet-4-6".into(),
+                    upstream_model: "up-1".into(),
+                    channel_id: None,
+                },
+                crate::gateway::types::GatewayModelRule {
+                    model: "claude-haiku-4-5".into(),
+                    upstream_model: "up-2".into(),
+                    channel_id: None,
+                },
+            ],
+            reasoning: GatewayReasoningConfig::default(),
+            enabled: true,
+            created_at: 0,
+        };
+        assert_eq!(
+            route_client_models(&route),
+            vec!["claude-sonnet-4-6".to_string(), "claude-haiku-4-5".to_string()]
+        );
     }
 
     #[test]
