@@ -6,14 +6,14 @@ A native desktop manager for switching API providers across AI coding tools —
 This is a from-scratch rewrite of [`cc-switch`](https://github.com/farion1231/cc-switch)
 (originally Tauri + React) onto a new stack:
 
-- **[axum](https://github.com/tokio-rs/axum)** as the service backbone (control API + the local provider proxy), replacing Tauri's IPC/command layer.
+- **[axum](https://github.com/tokio-rs/axum)** as the service backbone (control API + the local relay gateway), replacing Tauri's IPC/command layer.
 - **[GPUI](https://www.gpui.rs/)** (Zed's GPU-accelerated UI framework) as the native UI, replacing the Tauri webview + React frontend.
 
 OCHUB owns its own data directory (`~/.ochub/`, with `ochub.db` on
 an independent schema line starting at v1). On first launch it performs a
 **one-time, read-only import** of existing cc-switch data
 (`~/.cc-switch/cc-switch.db`, tolerant of schema v11–v16+): providers, MCP
-servers, skills, prompts, usage history, settings, and managed OAuth accounts
+servers, skills, usage history, settings, and managed OAuth accounts
 all carry over, and `~/.cc-switch/` is never written to. It manages the same
 live config locations (`~/.claude`, `~/.codex`, `~/.gemini`, …) — quit the
 original cc-switch app before switching providers from OCHUB, or the two
@@ -25,8 +25,8 @@ A Cargo workspace with three crates:
 
 | Crate | Path | Role |
 |-------|------|------|
-| `ochub-core` | `crates/core` | UI/transport-agnostic core: domain model, config/paths, SQLite store, per-app live-config writers, provider switching, MCP/prompts/skills/sessions/sync/usage services. A faithful port of cc-switch's `src-tauri/src` minus Tauri. |
-| `ochub-server` | `crates/server` | axum HTTP/JSON control API exposing the command surface, plus the local streaming provider proxy (forwarding, failover, circuit breaker, transforms, usage accounting). |
+| `ochub-core` | `crates/core` | UI/transport-agnostic core: domain model, config/paths, SQLite store, per-app live-config writers, provider switching, MCP/skills/sessions/sync/usage services. A faithful port of cc-switch's `src-tauri/src` minus Tauri. |
+| `ochub-server` | `crates/server` | axum HTTP/JSON control API plus the in-process relay gateway (multi-dialect forwarding, channel routing, failover, health checks, and usage accounting). |
 | `ochub-app` | `crates/app` | GPUI desktop application. Embeds `ochub-core` and hosts `ochub-server` in-process. |
 
 The reference source (`cc-switch/`) and the GPUI source (`zed/`) live alongside
@@ -66,11 +66,11 @@ A faithful, near-complete port. `ochub-core` compiles green (hundreds of tests
 passing) and contains the full cc-switch backend:
 
 - Domain model, config/paths, device settings
-- SQLite store — schema v11, all 11 migrations, backup/restore, JSON migration, ~100 DAOs
+- SQLite store — independent schema v3, backup/restore, legacy read-only import, and usage rollups
 - Provider switching + all 7 per-app live-config writers + first-launch seeding
-- MCP / prompts / skills / common-config services (sync-on-switch wired)
-- Proxy server — lifecycle, live-config takeover/restore, hot-switch, passthrough
-  forwarding, circuit breaker (cross-format transforms are the remaining proxy work)
+- MCP / skills / common-config services (sync-on-switch wired)
+- Relay gateway — silent in-process lifecycle, channel routing, health-aware failover,
+  protocol conversion, per-app keys, one-click app configuration, and usage accounting
 - Usage statistics, session manager, environment management, deeplink import
 - Cloud sync (WebDAV + S3, both functional) + auto-sync
 - Model-fetch / speedtest / subscription / balance / coding-plan
@@ -78,15 +78,14 @@ passing) and contains the full cc-switch backend:
 
 `ochub-server` exposes ~47 control-API routes. `ochub-app` is a working GPUI desktop UI
 (sidebar app-switcher, provider list with switch/import/add/edit/delete, a
-text-input component, settings panel, and an async proxy panel).
+text-input component, settings panel, sessions browser, usage dashboard, and gateway panel).
 
-**Verified end-to-end:** provider switching rewrites the live configs; the proxy
-starts/stops on a loopback port; official providers seed on first launch.
+**Verified end-to-end:** provider switching rewrites the live configs; the gateway
+starts silently in-process on its loopback port; official providers seed on first launch.
 
-**Remaining (tracked):** proxy cross-format transforms (Claude↔OpenAI↔Gemini —
-passthrough works today), the rquickjs usage-script engine + tool-probing (in
-progress), and app-shell polish (tray, updater, auto-launch, single-instance,
-deeplink registration, a code-signed `.app` for distribution).
+The former standalone proxy, live-config takeover, failover queue, circuit-breaker
+configuration, upstream-proxy settings, UI page, and control API have been removed.
+Routing and protocol translation now have a single owner: the gateway.
 
 ## License
 

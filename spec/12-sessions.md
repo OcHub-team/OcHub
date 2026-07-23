@@ -6,7 +6,7 @@ This spec describes the complete behavior of the **session manager** subsystem i
 2. The per-provider **session source parsers** (claude, codex, gemini, hermes, openclaw, opencode).
 3. The **terminal launcher** (macOS-only resume support).
 4. The Tauri **commands** that expose all of the above to the frontend.
-5. The **session usage sync** services that scan provider transcript files / SQLite DBs and import token-usage rows into the `proxy_request_logs` table (`session_usage*.rs`).
+5. The **session usage sync** services that scan provider transcript files / SQLite DBs and import token-usage rows into the `usage_logs` table (`session_usage*.rs`).
 
 The rewrite target is Rust + GPUI + axum. There is **no real external HTTP** in this subsystem — all I/O is local filesystem and SQLite. The Tauri command layer becomes either GPUI actions or axum endpoints; `spawn_blocking` becomes a thread pool / `tokio::task::spawn_blocking`.
 
@@ -141,7 +141,7 @@ Tables `session(id, title, directory, time_created, time_updated)`, `message(id,
 Map keyed by arbitrary string (e.g. `"agent:main:main"`) → object `{ "sessionId": "...", "displayName": "...", "sessionFile": "..." }`. Used to resolve display titles and to prune on delete. Written back with `config::write_json_file`.
 
 ### 2.6 Usage-sync state table
-`session_log_sync(file_path TEXT PRIMARY KEY, last_modified INTEGER, last_line_offset INTEGER, last_synced_at INTEGER)`. `last_modified` stores file **mtime in nanoseconds** (new writes); legacy values may be seconds (harmlessly triggers one re-scan). Imports land in `proxy_request_logs` (24-column insert, see §5).
+`session_log_sync(file_path TEXT PRIMARY KEY, last_modified INTEGER, last_line_offset INTEGER, last_synced_at INTEGER)`. `last_modified` stores file **mtime in nanoseconds** (new writes); legacy values may be seconds (harmlessly triggers one re-scan). Imports land in `usage_logs` (24-column insert, see §5).
 
 ---
 
@@ -307,14 +307,14 @@ Note the global-setting terminal name normalization (`iterm2` vs session `iterm`
 
 ## 7. Behavior — session usage sync services
 
-These are **not** Tauri commands here; they are library functions invoked by a sync scheduler / usage commands elsewhere. They import token usage into `proxy_request_logs`. All share:
+These are **not** Tauri commands here; they are library functions invoked by a sync scheduler / usage commands elsewhere. They import token usage into `usage_logs`. All share:
 - `get_sync_state(db, file_path) -> (last_modified, last_offset)` (default `(0,0)`).
 - `metadata_modified_nanos(&Metadata) -> i64` (mtime ns).
 - `update_sync_state(db, file_path, last_modified, last_offset)` → `INSERT OR REPLACE` with `last_synced_at = now_secs`.
 - `should_skip_session_insert(conn, request_id, &DedupKey)` and `find_model_pricing(conn, model)` from `services::usage_stats`.
 - `CostCalculator::calculate(...)` / `calculate_for_app(app, usage, pricing, multiplier=Decimal(1))`.
 - `crate::usage_events::notify_log_recorded()` fired when a new row is written (frontend live-refresh).
-- `proxy_request_logs` 24-column insert (columns: `request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd, latency_ms, first_token_ms, status_code, error_message, session_id, provider_type, is_streaming, cost_multiplier, created_at, data_source`).
+- Inserts into `usage_logs` with a session-specific `data_source`; gateway-captured rows use `gateway`, while imported historical rows may retain `proxy`.
 
 ### 7.1 `sync_claude_session_logs(db) -> Result<SessionSyncResult, AppError>` (`session_usage.rs`)
 - Root `~/.claude/projects`. `collect_jsonl_files` (NON-recursive fixed depth): project dir `*.jsonl`; plus `SESSION_ID/subagents/*.jsonl`; plus `SESSION_ID/subagents/workflows/wf_*/*.jsonl`. (`journal.jsonl` collected but naturally yields 0 assistant rows.)
@@ -322,7 +322,7 @@ These are **not** Tauri commands here; they are library functions invoked by a s
 - **Dedup by `message.id`**: replace if new has stop_reason and old doesn't; if equal stop_reason presence, keep larger `output_tokens`; else keep old.
 - Insert each msg with **any billable token > 0** (input/output/cache_read/cache_creation). `request_id = SESSION_REQUEST_ID_PREFIX + message_id` (i.e. `"session:<id>"`). `INSERT OR IGNORE`. `provider_id="_session"`, `app_type="claude"`, `provider_type/data_source="session_log"`, `status_code=200`, `is_streaming=1`, `cost_multiplier="1.0"`. `created_at` = RFC3339 timestamp secs or now.
 - `update_sync_state(file, file_modified, line_offset)`.
-- `get_data_source_breakdown(db) -> Vec<DataSourceSummary>`: groups `proxy_request_logs` by `COALESCE(data_source,'proxy')` with the effective usage-log filter; returns `(data_source, count, total_cost "{:.6}")`.
+- `get_data_source_breakdown(db) -> Vec<DataSourceSummary>`: groups `usage_logs` by `COALESCE(data_source,'proxy')` with the effective usage-log filter; returns `(data_source, count, total_cost "{:.6}")`.
 
 ### 7.2 `sync_codex_usage(db)` (`session_usage_codex.rs`)
 - Files: `sessions/` recursive (max depth 3) + flat `archived_sessions/*.jsonl`.
@@ -353,7 +353,7 @@ These are **not** Tauri commands here; they are library functions invoked by a s
 - **No network calls.** Pure local FS + SQLite.
 - Crates: `serde`, `serde_json`, `rusqlite` (with `OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX`, `unchecked_transaction`), `chrono` (RFC3339 parsing), `regex` + `LazyLock` (codex UUID), `rust_decimal` (`Decimal`), `dirs` (home dir), `tempfile` (warp script + tests), `url` (warp deep-link), `log`.
 - OS integration: macOS `osascript` (Terminal/iTerm), `open -na/-a` for GUI terminals, `sh -c` for custom; threads via `std::thread::scope`; `XDG_DATA_HOME` / `SHELL` env vars.
-- DB: shared `Database` wrapper with `lock_conn!(db.conn)` macro; tables `proxy_request_logs`, `session_log_sync`, plus provider-owned `opencode.db`/`state.db` opened read-only.
+- DB: shared `Database` wrapper with `lock_conn!(db.conn)` macro; tables `usage_logs`, `session_log_sync`, plus provider-owned `opencode.db`/`state.db` opened read-only.
 
 ---
 
@@ -378,6 +378,6 @@ This subsystem has **no React screen of its own defined in the Rust files read h
 - `get_session_messages` → a transcript/detail view rendering `SessionMessage[]` with role styling (`user`/`assistant`/`tool`).
 - `launch_session_terminal` → "Resume" button (enabled only when `resumeCommand` present); passes `resumeCommand` as `command`, `projectDir` as `cwd`.
 - `delete_session` / `delete_sessions` → single + multi-select delete with per-item `DeleteSessionOutcome` feedback.
-- Usage data-source breakdown (`get_data_source_breakdown`) feeds the usage UI's "data source" chart (proxy vs session_log vs codex_session vs gemini_session vs opencode_session).
+- Usage data-source breakdown (`get_data_source_breakdown`) feeds the usage UI's "data source" chart (gateway vs session_log vs codex_session vs gemini_session vs opencode_session; legacy `proxy` remains readable).
 
 i18n note: user-facing English strings produced by **this** layer are the error messages returned in `Result<_, String>` (e.g. "Resume command is empty", "Terminal resume is only supported on macOS", "Session source path is outside provider roots", "Session was not deleted", "Unsupported terminal target: …"). These should be moved to i18n keys (e.g. `sessions.error.*`, `sessions.terminal.*`) in the rewrite rather than hard-coded English. Provider display names (`claude/codex/gemini/hermes/openclaw/opencode`) and role labels (`user/assistant/tool`) are additional translatable UI strings owned by the frontend.

@@ -4,15 +4,17 @@ Living notes that anchor the port. Source of truth is `cc-switch/src-tauri/src`.
 
 ## Crates
 - `ochub-core` (`crates/core`): domain + config + SQLite store + services. No Tauri/GPUI.
-- `ochub-server` (`crates/server`): axum control API + local proxy. Depends on `ochub-core`.
+- `ochub-server` (`crates/server`): axum control API + local relay gateway. Depends on `ochub-core`.
 - `ochub-app` (`crates/app`): GPUI UI. Depends on `ochub-core` (+ hosts `ochub-server`).
 
 ## Central state — `AppState` (from `store.rs`)
 ```rust
 pub struct AppState {
     pub db: Arc<Database>,
-    pub proxy_service: ProxyService,   // services/proxy.rs
+    pub gateway: Arc<GatewayService>,  // gateway/service.rs
     pub usage_cache: Arc<UsageCache>,  // services/usage_cache.rs
+    pub copilot_auth: Arc<RwLock<CopilotAuthManager>>,
+    pub codex_oauth: Arc<RwLock<CodexOAuthManager>>,
 }
 impl AppState { pub fn new(db: Arc<Database>) -> Self }
 ```
@@ -41,7 +43,7 @@ Key API (all take `&AppState`):
 ### Live-config write targets (per-app writer modules)
 - Claude → `~/.claude/settings.json` (+ `claude_plugin.rs` for `~/.claude/config.json`).
   settings_config is the settings.json body; common-config snippet merged on write.
-- Claude Desktop → `claude_desktop_config.rs` (direct vs proxy mode, model routes).
+- Claude Desktop → native direct profile writer; arbitrary model routing is configured in Gateway.
 - Codex → `codex_config.rs`: writes `~/.codex/auth.json` + `~/.codex/config.toml`
   from `settings_config.{auth, config}`; OAuth + session-history bucketing logic.
 - Gemini → `gemini_config.rs`: `~/.gemini/settings.json` (env-based).
@@ -53,18 +55,18 @@ Key API (all take `&AppState`):
 points that merge common config and write the file.
 
 ## Command surface to expose via axum (≈250 commands)
-Grouped in `lib.rs invoke_handler`: providers, claude-desktop, config status, MCP
-(claude + unified), prompts, skills (unified + legacy), proxy (start/stop/config/
-failover/circuit-breaker), usage stats + pricing, sessions, sync (webdav/s3),
-auth (managed accounts + copilot + codex oauth), OMO, OpenClaw, Hermes, workspace
-files, env management, deeplink, settings, update/restart, lightweight mode.
+Grouped into axum routers: providers, claude-desktop, config status, MCP
+(claude + unified), skills (unified + legacy), gateway (lifecycle/config/
+channels/keys/apply), usage stats + pricing, sessions, sync (webdav/s3),
+auth (managed accounts + copilot + codex oauth), OMO, OpenClaw, Hermes, env
+management, deeplink, settings, update/restart, lightweight mode.
 
 ## Port phases (each ends with `cargo check -p ochub-core` green)
 1. ✅ Foundation: error, app_type, model, settings, app_store, paths.
 2. ⏳ DB store: database/* → `crates/core/src/db/` (delegated).
-3. Per-app writers + ProviderService + AppState (+ minimal ProxyService/UsageCache).
+3. Per-app writers + ProviderService + AppState (+ GatewayService/UsageCache).
 4. axum server: control API routes calling services; in-process host from app.
 5. GPUI UI wired to live data (replace `demo_providers`): list/switch/add/edit/delete.
-6. Proxy server (forward/failover/circuit-breaker/transforms/usage).
-7. Remaining subsystems: MCP, prompts, skills, sessions, sync, auth, OMO/OpenClaw/
+6. Gateway (multi-dialect forward/routing/failover/health/usage).
+7. Remaining subsystems: MCP, skills, sessions, sync, auth, OMO/OpenClaw/
    Hermes specifics, deeplink, env, tray, updater, usage UI.

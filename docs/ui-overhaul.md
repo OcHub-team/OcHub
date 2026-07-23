@@ -88,10 +88,10 @@ pub fn bg() -> Rgba; pub fn text() -> Rgba; …           // 访问函数,内部
 
 | 版心 | 宽度 | 适用 |
 |---|---|---|
-| `content_column()` | 800 居中 | 表单/设置类：设置、认证、MCP、提示词、技能、会话、工作区、编辑供应商 |
-| `wide_column()`（新增） | 1080 居中 | 数据密集：用量、高级工具、代理、网关、供应商列表 |
+| `content_column()` | 800 居中 | 表单/设置类：设置、认证、MCP、提示词、技能、会话、编辑供应商 |
+| `wide_column()`（新增） | 1080 居中 | 数据密集：用量、高级工具、网关、供应商列表 |
 
-消灭 6 处手搓全宽 body（gateway/proxy/usage/tools/app_ui/provider_editor）与 5 处手搓 page_header。
+消灭多处手搓全宽 body（gateway/usage/tools/app_ui/provider_editor）与 5 处手搓 page_header。
 
 ## 6. 组件清单（Phase 2）
 
@@ -108,13 +108,13 @@ pub fn bg() -> Rgba; pub fn text() -> Rgba; …           // 访问函数,内部
 | C9 | `empty_state(icon, title, hint, cta?)` | 15 处纯文本 | 居中、MUTED 图标+标题+提示+可选按钮 |
 | C10 | `modal()` / `confirm_dialog()` | 1 模态 + 0 删除确认 | 从 raw modal 提炼；**为全部删除操作补确认** |
 | C11 | `disclosure(title, detail, expanded)` | 3 份折叠 | 卡式头 + chevron |
-| C12 | `stat_tile(icon?, label, value, detail?)` | 4 个变体 | 用于代理/工具/用量/网关状态 |
+| C12 | `stat_tile(icon?, label, value, detail?)` | 4 个变体 | 用于工具/用量/网关状态 |
 | C13 | `pagination()` | 2 套分页 | footer 式，统一会话与用量 |
 | C14 | 组件画廊 `gallery_view.rs` | — | dev-only（`MS_GALLERY=1` 时侧边栏出现入口），渲染全部组件全部状态 |
 
 ## 7. 信息架构决策
 
-1. **侧边栏分组**：应用 / 工具（MCP·提示词·技能·认证中心·用量·会话·工作区·高级工具）/ **网络（中转网关·代理，从系统组提升）** / 系统（设置）。
+1. **侧边栏分组**：应用 / 工具（MCP·技能·用量·会话·高级工具）/ **网络（中转网关）** / 系统（主题·设置）。
 2. **编辑供应商**：保持整页双栏（左表单、右文件预览），预览栏 sticky；表单分区用统一 `section_header`+`field`；鉴权变量二选一改 `segmented`；**角色模型映射由表格改为行卡片列表**（每行：角色徽标 + 模型 ID 全宽输入 + 显示名 + 1M 开关 + 删除），根治截断。
 3. **供应商列表（首页）**：迁入 page 骨架 + `wide_column`；hero 卡与供应商卡用统一 `card`/`badge`。
 4. **网关页**：状态区升级为 `stat_tile` 仪表盘行（运行状态/端点/渠道/密钥）；渠道列表卡片化；编辑器沿用内联卡但换统一 `field`/`segmented`。
@@ -127,7 +127,7 @@ pub fn bg() -> Rgba; pub fn text() -> Rgba; …           // 访问函数,内部
 2. **Phase 2** 组件库 + 画廊（每组件一 commit）
 3. **Phase 3** 外壳：titlebar/侧边栏/首页供应商列表
 4. **Phase 4** 编辑供应商（试点，验证组件库）
-5. **Phase 5** 铺开：网关 → 设置/应用设置 → 认证 → MCP/提示词/技能 → 会话/工作区 → 代理 → 工具 → 用量
+5. **Phase 5** 铺开：网关 → 设置/应用设置 → 认证 → MCP/提示词/技能 → 会话 → 工具 → 用量
 6. 每页：`just check` 通过 + 运行截图对比；只动 render 层。
 
 ## 9. 工程纪律
