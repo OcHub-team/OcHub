@@ -12,9 +12,9 @@ use std::time::Instant;
 use ochub_convert::aggregate;
 use ochub_convert::usage as conv_usage;
 use ochub_convert::{
-    chat as conv_chat, messages as conv_messages, responses as conv_responses,
-    MessagesRequestOptions, Output, ResponsesRequestOptions, SignatureCapture, SseParser,
-    WireEvent,
+    chat as conv_chat, chat_upstream as conv_chat_upstream, messages as conv_messages,
+    responses as conv_responses, MessagesRequestOptions, Output, ResponsesRequestOptions,
+    SignatureCapture, SseParser, WireEvent,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -55,14 +55,11 @@ pub enum PipelineOutcome {
 }
 
 /// Can requests of `inlet` dialect be served by a channel of `channel` dialect?
-/// Chat-dialect channels can only serve chat clients (there is no
-/// chat-upstream → messages/responses reverse converter).
-pub fn conversion_supported(inlet: Dialect, channel: Dialect) -> bool {
-    match (inlet, channel) {
-        (_, Dialect::Messages) | (_, Dialect::Responses) => true,
-        (Dialect::Chat, Dialect::Chat) => true,
-        (_, Dialect::Chat) => false,
-    }
+/// All nine pairs convert (chat-upstream reverse conversion is lossy: thinking
+/// signatures and cache markers have no chat representation). Kept as the single
+/// source of truth so UI/apply guards lift automatically with the matrix.
+pub fn conversion_supported(_inlet: Dialect, _channel: Dialect) -> bool {
+    true
 }
 
 fn error_body(inlet: Dialect, message: &str) -> Value {
@@ -172,8 +169,25 @@ fn prepare_request(
             };
             conv_messages::request_to_responses(&mid, &opts).map_err(|e| e.to_string())?
         }
-        // Only (inlet != chat) → chat channels remain; those are unsupported.
-        _ => return Err("unsupported conversion to chat upstream".to_string()),
+        (Dialect::Messages, Dialect::Chat) => {
+            let opts = conv_chat_upstream::ChatRequestOptions {
+                reasoning_effort: reasoning_effort_for_messages(&source, reasoning),
+                force_stream: client_stream,
+            };
+            conv_chat_upstream::request_to_chat(&source, &opts).map_err(|e| e.to_string())?
+        }
+        // responses → chat pivots through the messages dialect.
+        (Dialect::Responses, Dialect::Chat) => {
+            let mid = conv_responses::request_to_messages(&source, &messages_options)
+                .map_err(|e| e.to_string())?;
+            let opts = conv_chat_upstream::ChatRequestOptions {
+                reasoning_effort: reasoning_effort_for_messages(&mid, reasoning),
+                force_stream: client_stream,
+            };
+            conv_chat_upstream::request_to_chat(&mid, &opts).map_err(|e| e.to_string())?
+        }
+        // All (inlet, channel) pairs are handled above.
+        _ => unreachable!("conversion matrix is total"),
     };
 
     if let Some(obj) = converted.as_object_mut() {
@@ -273,6 +287,13 @@ enum StreamConverter {
         conv_messages::ResponsesToMessagesStream,
         conv_chat::MessagesToChatStream,
     ),
+    /// chat upstream → messages client.
+    ChatToMessages(conv_chat_upstream::ChatToMessagesStream),
+    /// chat upstream → responses client, chained through messages events.
+    ChatToResponses(
+        conv_chat_upstream::ChatToMessagesStream,
+        conv_responses::MessagesToResponsesStream,
+    ),
 }
 
 /// What a converter produced for one upstream event.
@@ -308,6 +329,13 @@ impl StreamConverter {
             (Dialect::Responses, Dialect::Chat) => Some(StreamConverter::ResponsesToChat(
                 conv_messages::ResponsesToMessagesStream::new(display_model),
                 conv_chat::MessagesToChatStream::new(display_model, include_usage),
+            )),
+            (Dialect::Chat, Dialect::Messages) => Some(StreamConverter::ChatToMessages(
+                conv_chat_upstream::ChatToMessagesStream::new(display_model),
+            )),
+            (Dialect::Chat, Dialect::Responses) => Some(StreamConverter::ChatToResponses(
+                conv_chat_upstream::ChatToMessagesStream::new(display_model),
+                conv_responses::MessagesToResponsesStream::new(display_model),
             )),
             _ => None,
         }
@@ -345,6 +373,21 @@ impl StreamConverter {
             StreamConverter::MessagesToResponses(c) => collect_outputs(c.push(ev), &mut out),
             StreamConverter::ResponsesToMessages(c) => collect_outputs(c.push(ev), &mut out),
             StreamConverter::ResponsesToChat(outer, inner) => {
+                for o in outer.push(ev) {
+                    match o {
+                        Output::Event(mid) => collect_outputs(inner.push(&mid), &mut out),
+                        Output::Usage(u) => out.usage = Some(u),
+                        Output::Error(e) => {
+                            out.errored = true;
+                            let _ = e;
+                        }
+                        // Done/Capture propagate from the inner converter.
+                        _ => {}
+                    }
+                }
+            }
+            StreamConverter::ChatToMessages(c) => collect_outputs(c.push(ev), &mut out),
+            StreamConverter::ChatToResponses(outer, inner) => {
                 for o in outer.push(ev) {
                     match o {
                         Output::Event(mid) => collect_outputs(inner.push(&mid), &mut out),
@@ -473,7 +516,6 @@ fn convert_nonstream(
             Ok((body, usage))
         }
         Dialect::Chat => {
-            // Only chat inlet reaches a chat channel (passthrough).
             let v: Value = serde_json::from_slice(raw)
                 .map_err(|_| "failed to parse upstream chat body".to_string())?;
             if let Some(err) = v.get("error") {
@@ -486,7 +528,17 @@ fn convert_nonstream(
                 }
             }
             let usage = v.get("usage").map(chat_usage_to_messages);
-            Ok((v, usage))
+            let body = match inlet {
+                Dialect::Chat => v,
+                Dialect::Messages => {
+                    conv_chat_upstream::response_from_completion(&v, display_model)
+                }
+                Dialect::Responses => {
+                    let msg = conv_chat_upstream::response_from_completion(&v, display_model);
+                    conv_responses::response_from_message(&msg, display_model)
+                }
+            };
+            Ok((body, usage))
         }
     }
 }
@@ -928,15 +980,11 @@ mod tests {
     #[test]
     fn conversion_matrix() {
         use Dialect::*;
-        assert!(conversion_supported(Messages, Messages));
-        assert!(conversion_supported(Messages, Responses));
-        assert!(!conversion_supported(Messages, Chat));
-        assert!(conversion_supported(Chat, Messages));
-        assert!(conversion_supported(Chat, Responses));
-        assert!(conversion_supported(Chat, Chat));
-        assert!(conversion_supported(Responses, Messages));
-        assert!(conversion_supported(Responses, Responses));
-        assert!(!conversion_supported(Responses, Chat));
+        for inlet in [Messages, Chat, Responses] {
+            for channel in [Messages, Chat, Responses] {
+                assert!(conversion_supported(inlet, channel));
+            }
+        }
     }
 
     #[test]
@@ -1026,6 +1074,168 @@ mod tests {
         assert_eq!(p.body["model"], "m");
         assert_eq!(p.body["instructions"], "sys");
         assert_eq!(p.body["input"][0]["content"][0]["type"], "input_text");
+    }
+
+    #[test]
+    fn prepare_request_messages_to_chat_converts_and_overrides() {
+        let store = ochub_convert::MemorySignatureStore::default();
+        let channel = GatewayChannel {
+            id: "c".into(),
+            name: "c".into(),
+            dialect: Dialect::Chat,
+            base_url: "https://x".into(),
+            api_key: String::new(),
+            path_override: None,
+            models: vec![],
+            model_override: Some("upstream-m".into()),
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+        };
+        let body = json!({
+            "model": "client-m",
+            "max_tokens": 100,
+            "system": [{"type": "text", "text": "sys"}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            "stream": true
+        });
+        let p = prepare_request(
+            Dialect::Messages,
+            &channel,
+            &body,
+            "client-m",
+            None,
+            None,
+            true,
+            &store,
+        )
+        .unwrap();
+        assert_eq!(p.body["model"], "upstream-m");
+        assert_eq!(p.body["messages"][0]["role"], "system");
+        assert_eq!(p.body["messages"][0]["content"], "sys");
+        assert_eq!(p.body["messages"][1]["content"], "hi");
+        assert_eq!(p.body["stream"], true);
+        assert_eq!(p.body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn prepare_request_responses_to_chat_pivots() {
+        let store = ochub_convert::MemorySignatureStore::default();
+        let channel = GatewayChannel {
+            id: "c".into(),
+            name: "c".into(),
+            dialect: Dialect::Chat,
+            base_url: "https://x".into(),
+            api_key: String::new(),
+            path_override: None,
+            models: vec![],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+        };
+        let body = json!({
+            "model": "m",
+            "instructions": "sys",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "hi"}]}],
+            "stream": true
+        });
+        let p = prepare_request(
+            Dialect::Responses,
+            &channel,
+            &body,
+            "m",
+            None,
+            None,
+            true,
+            &store,
+        )
+        .unwrap();
+        assert_eq!(p.body["model"], "m");
+        assert_eq!(p.body["messages"][0]["role"], "system");
+        assert_eq!(p.body["messages"][1]["role"], "user");
+        assert_eq!(p.body["messages"][1]["content"], "hi");
+    }
+
+    #[test]
+    fn chat_upstream_stream_reaches_messages_client() {
+        let mut conv =
+            StreamConverter::new(Dialect::Messages, Dialect::Chat, "display-x", true).unwrap();
+        let chunks = [
+            json!({"id":"chatcmpl-1","object":"chat.completion.chunk",
+                   "choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},
+                               "finish_reason":null}]})
+            .to_string(),
+            json!({"id":"chatcmpl-1","object":"chat.completion.chunk",
+                   "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]})
+            .to_string(),
+            json!({"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[],
+                   "usage":{"prompt_tokens":8,"completion_tokens":3}})
+            .to_string(),
+            "[DONE]".to_string(),
+        ];
+        let mut names: Vec<String> = Vec::new();
+        let mut usage = None;
+        let mut done = false;
+        for data in &chunks {
+            let out = conv.push(&WireEvent::data_only(data.clone()));
+            for frame in out.frames {
+                match frame {
+                    StreamFrame::Event(e) => names.push(e.event.unwrap_or_default()),
+                    StreamFrame::Done => done = true,
+                }
+            }
+            if let Some(u) = out.usage {
+                usage = Some(u);
+            }
+        }
+        assert!(done);
+        assert_eq!(
+            names,
+            vec![
+                "message_start",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "message_delta",
+                "message_stop",
+            ]
+        );
+        assert_eq!(usage.unwrap()["output_tokens"], 3);
+    }
+
+    #[test]
+    fn chat_upstream_stream_chains_to_responses_client() {
+        let mut conv =
+            StreamConverter::new(Dialect::Responses, Dialect::Chat, "display-x", true).unwrap();
+        let chunks = [
+            json!({"id":"chatcmpl-1","object":"chat.completion.chunk",
+                   "choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},
+                               "finish_reason":null}]})
+            .to_string(),
+            json!({"id":"chatcmpl-1","object":"chat.completion.chunk",
+                   "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]})
+            .to_string(),
+            "[DONE]".to_string(),
+        ];
+        let mut names: Vec<String> = Vec::new();
+        let mut done = false;
+        for data in &chunks {
+            let out = conv.push(&WireEvent::data_only(data.clone()));
+            for frame in out.frames {
+                match frame {
+                    StreamFrame::Event(e) => names.push(e.event.unwrap_or_default()),
+                    StreamFrame::Done => done = true,
+                }
+            }
+        }
+        assert!(done);
+        assert!(names.first().is_some_and(|n| n == "response.created"));
+        assert!(names.iter().any(|n| n == "response.output_text.delta"));
+        assert!(names.last().is_some_and(|n| n == "response.completed"));
     }
 
     #[test]
