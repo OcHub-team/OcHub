@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
 use anyhow::{anyhow, Context as _, Result};
-use gpui::{px, rgb, BoxShadow, Hsla, Rgba, WindowAppearance};
+use gpui::{px, rgb, BoxShadow, Hsla, Rgba, Window, WindowAppearance, WindowBackgroundAppearance};
 use ochub_core::settings::ThemeMode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tempfile::NamedTempFile;
@@ -21,6 +21,10 @@ pub const THEME_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_THEME_FAMILY: &str = "ochub";
 pub const EMBER_THEME_FAMILY: &str = "ember";
 const MAX_THEME_FILE_BYTES: u64 = 256 * 1024;
+pub const MIN_SURFACE_OPACITY_PERCENT: u8 = 0;
+pub const MAX_SURFACE_OPACITY_PERCENT: u8 = 100;
+pub const DEFAULT_SIDEBAR_OPACITY_PERCENT: u8 = 40;
+pub const DEFAULT_CONTENT_OPACITY_PERCENT: u8 = 100;
 
 /// A serialized RGB color. Theme files use readable `#RRGGBB` strings while
 /// GPUI receives the packed integer through [`ThemeColor::rgba`].
@@ -68,10 +72,67 @@ impl<'de> Deserialize<'de> for ThemeColor {
     }
 }
 
+/// System-provided background treatment underneath the GPUI scene.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeWindowBackground {
+    /// Use the platform's background blur. The exact blur radius and material
+    /// remain system-controlled.
+    #[default]
+    Blurred,
+    /// Render against a fully opaque native window.
+    Opaque,
+}
+
+impl ThemeWindowBackground {
+    pub const fn appearance(self) -> WindowBackgroundAppearance {
+        match self {
+            Self::Blurred => WindowBackgroundAppearance::Blurred,
+            Self::Opaque => WindowBackgroundAppearance::Opaque,
+        }
+    }
+}
+
+/// Non-color visual treatment stored alongside each light/dark palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeEffects {
+    #[serde(default)]
+    pub window_background: ThemeWindowBackground,
+    #[serde(default = "default_sidebar_opacity_percent")]
+    pub sidebar_opacity: u8,
+    #[serde(default = "default_content_opacity_percent")]
+    pub content_opacity: u8,
+}
+
+impl ThemeEffects {
+    pub const DEFAULT: Self = Self {
+        window_background: ThemeWindowBackground::Blurred,
+        sidebar_opacity: DEFAULT_SIDEBAR_OPACITY_PERCENT,
+        content_opacity: DEFAULT_CONTENT_OPACITY_PERCENT,
+    };
+}
+
+impl Default for ThemeEffects {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+const fn default_sidebar_opacity_percent() -> u8 {
+    DEFAULT_SIDEBAR_OPACITY_PERCENT
+}
+
+const fn default_content_opacity_percent() -> u8 {
+    DEFAULT_CONTENT_OPACITY_PERCENT
+}
+
 /// Complete semantic color palette consumed by every shared component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Theme {
+    #[serde(default)]
+    pub effects: ThemeEffects,
     pub bg: ThemeColor,
     pub mantle: ThemeColor,
     pub surface: ThemeColor,
@@ -487,6 +548,7 @@ macro_rules! tc {
 }
 
 pub const OCHUB_LIGHT: Theme = Theme {
+    effects: ThemeEffects::DEFAULT,
     bg: tc!(0xfcfcfb),
     mantle: tc!(0xf4f4f2),
     surface: tc!(0xfffefc),
@@ -525,6 +587,7 @@ pub const OCHUB_LIGHT: Theme = Theme {
 };
 
 pub const OCHUB_DARK: Theme = Theme {
+    effects: ThemeEffects::DEFAULT,
     bg: tc!(0x151613),
     mantle: tc!(0x1b1c18),
     surface: tc!(0x22231f),
@@ -563,6 +626,7 @@ pub const OCHUB_DARK: Theme = Theme {
 };
 
 pub const EMBER_LIGHT: Theme = Theme {
+    effects: ThemeEffects::DEFAULT,
     bg: tc!(0xfbf7f0),
     mantle: tc!(0xf2e8da),
     surface: tc!(0xfffcf7),
@@ -601,6 +665,7 @@ pub const EMBER_LIGHT: Theme = Theme {
 };
 
 pub const EMBER_DARK: Theme = Theme {
+    effects: ThemeEffects::DEFAULT,
     bg: tc!(0x18130f),
     mantle: tc!(0x201711),
     surface: tc!(0x291d15),
@@ -793,6 +858,17 @@ pub fn contrast_ratio(foreground: ThemeColor, background: ThemeColor) -> f32 {
 }
 
 fn validate_palette(label: &str, palette: &Theme) -> Result<()> {
+    for (name, value) in [
+        ("侧边栏不透明度", palette.effects.sidebar_opacity),
+        ("主界面不透明度", palette.effects.content_opacity),
+    ] {
+        if !(MIN_SURFACE_OPACITY_PERCENT..=MAX_SURFACE_OPACITY_PERCENT).contains(&value) {
+            return Err(anyhow!(
+                "{label}的{name}必须在 {MIN_SURFACE_OPACITY_PERCENT}–{MAX_SURFACE_OPACITY_PERCENT}% 之间"
+            ));
+        }
+    }
+
     for (pair, foreground, background) in [
         ("主文字/背景", palette.text, palette.bg),
         ("次级文字/表面", palette.subtext, palette.surface),
@@ -937,6 +1013,7 @@ pub fn delete_user_family(record: &ThemeRecord) -> Result<()> {
 
 static CURRENT: RwLock<Theme> = RwLock::new(OCHUB_LIGHT);
 static CURRENT_DARK: AtomicBool = AtomicBool::new(false);
+static PREVIEW_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub fn current() -> Theme {
     *CURRENT.read().expect("theme lock poisoned")
@@ -946,9 +1023,18 @@ pub fn is_dark() -> bool {
     CURRENT_DARK.load(Ordering::Relaxed)
 }
 
-pub fn install(theme: Theme, dark: bool) {
+fn install(theme: Theme, dark: bool) {
     *CURRENT.write().expect("theme lock poisoned") = theme;
     CURRENT_DARK.store(dark, Ordering::Relaxed);
+}
+
+pub fn install_preview(theme: Theme, dark: bool) {
+    PREVIEW_ACTIVE.store(true, Ordering::Relaxed);
+    install(theme, dark);
+}
+
+pub fn is_previewing() -> bool {
+    PREVIEW_ACTIVE.load(Ordering::Relaxed)
 }
 
 fn system_is_dark(appearance: WindowAppearance) -> bool {
@@ -965,6 +1051,7 @@ pub fn install_family(family: &ThemeFamily, mode: ThemeMode, appearance: WindowA
         ThemeMode::Dark => true,
     };
     install(if dark { family.dark } else { family.light }, dark);
+    PREVIEW_ACTIVE.store(false, Ordering::Relaxed);
 }
 
 /// Install the requested family, falling back to OcHub when the user file is
@@ -974,6 +1061,138 @@ pub fn install_selected(id: &str, mode: ThemeMode, appearance: WindowAppearance)
     let installed_id = family.id.clone();
     install_family(&family, mode, appearance);
     installed_id
+}
+
+#[inline]
+fn opacity_alpha(percent: u8) -> f32 {
+    f32::from(percent) / f32::from(MAX_SURFACE_OPACITY_PERCENT)
+}
+
+/// Native window treatment for the currently installed palette.
+#[inline]
+pub fn window_background_appearance() -> WindowBackgroundAppearance {
+    current().effects.window_background.appearance()
+}
+
+/// Keep the native window in sync after installing or previewing a palette.
+#[inline]
+pub fn apply_window_background(window: &Window) {
+    window.set_background_appearance(window_background_appearance());
+}
+
+/// The root only supplies a fallback color for opaque windows. Blurred windows
+/// must leave the root clear so translucent child surfaces can reveal the
+/// platform backdrop.
+#[inline]
+pub fn window_base_background() -> Rgba {
+    let palette = current();
+    let background = palette.bg.rgba();
+    match palette.effects.window_background {
+        ThemeWindowBackground::Blurred => background.alpha(0.),
+        ThemeWindowBackground::Opaque => background,
+    }
+}
+
+#[inline]
+pub fn sidebar_background() -> Rgba {
+    let palette = current();
+    palette
+        .mantle
+        .rgba()
+        .alpha(opacity_alpha(palette.effects.sidebar_opacity))
+}
+
+#[inline]
+pub fn content_background() -> Rgba {
+    let palette = current();
+    palette
+        .bg
+        .rgba()
+        .alpha(opacity_alpha(palette.effects.content_opacity))
+}
+
+fn composite_color(foreground: ThemeColor, background: ThemeColor, alpha: f32) -> ThemeColor {
+    fn channel(foreground: u32, background: u32, shift: u32, alpha: f32) -> u32 {
+        let foreground = ((foreground >> shift) & 0xff) as f32;
+        let background = ((background >> shift) & 0xff) as f32;
+        (foreground * alpha + background * (1. - alpha)).round() as u32
+    }
+
+    let red = channel(foreground.0, background.0, 16, alpha);
+    let green = channel(foreground.0, background.0, 8, alpha);
+    let blue = channel(foreground.0, background.0, 0, alpha);
+    ThemeColor::new((red << 16) | (green << 8) | blue)
+}
+
+fn adaptive_sidebar_foreground(
+    palette: &Theme,
+    preferred: ThemeColor,
+    fallback: ThemeColor,
+    appearance: WindowAppearance,
+    minimum_contrast: f32,
+) -> ThemeColor {
+    let backdrops = if system_is_dark(appearance) {
+        [ThemeColor::new(0x111111), ThemeColor::new(0xf7f7f7)]
+    } else {
+        [ThemeColor::new(0xf7f7f7), ThemeColor::new(0x111111)]
+    };
+    let alpha = if palette.effects.window_background == ThemeWindowBackground::Opaque {
+        1.
+    } else {
+        opacity_alpha(palette.effects.sidebar_opacity)
+    };
+    let backgrounds = backdrops.map(|backdrop| composite_color(palette.mantle, backdrop, alpha));
+    let minimum_ratio = |foreground| {
+        backgrounds
+            .iter()
+            .map(|background| contrast_ratio(foreground, *background))
+            .fold(f32::INFINITY, f32::min)
+    };
+    if minimum_ratio(preferred) >= minimum_contrast {
+        return preferred;
+    }
+
+    [
+        fallback,
+        ThemeColor::new(0x000000),
+        ThemeColor::new(0xffffff),
+    ]
+    .into_iter()
+    .max_by(|left, right| {
+        minimum_ratio(*left)
+            .partial_cmp(&minimum_ratio(*right))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+    .unwrap_or(preferred)
+}
+
+/// Sidebar foreground used over the native blurred backdrop. When a pinned or
+/// previewed palette does not match the native window appearance, preserve the
+/// configured color when possible and fall back to a readable neutral.
+#[inline]
+pub fn sidebar_glass_text(appearance: WindowAppearance) -> Rgba {
+    let palette = current();
+    adaptive_sidebar_foreground(
+        &palette,
+        palette.sidebar_text,
+        palette.text,
+        appearance,
+        4.5,
+    )
+    .rgba()
+}
+
+#[inline]
+pub fn sidebar_glass_muted(appearance: WindowAppearance) -> Rgba {
+    let palette = current();
+    adaptive_sidebar_foreground(
+        &palette,
+        palette.sidebar_muted,
+        palette.sidebar_text,
+        appearance,
+        3.,
+    )
+    .rgba()
 }
 
 macro_rules! token {
@@ -988,8 +1207,6 @@ macro_rules! token {
 }
 
 token!(
-    bg,
-    mantle,
     surface,
     overlay,
     surface_hover,
@@ -1017,7 +1234,6 @@ token!(
     peach,
     sidebar_selected,
     sidebar_text,
-    sidebar_muted,
     selection,
     error_surface,
     scrim,
@@ -1072,6 +1288,74 @@ mod tests {
             let decoded: ThemeFamily = serde_json::from_str(&json).expect("deserialize theme");
             assert_eq!(decoded, family);
         }
+    }
+
+    #[test]
+    fn old_theme_files_receive_default_effects() {
+        let mut value = serde_json::to_value(ochub_family()).expect("serialize theme value");
+        for variant in ["light", "dark"] {
+            value[variant]
+                .as_object_mut()
+                .expect("theme variant object")
+                .remove("effects");
+        }
+
+        let decoded: ThemeFamily = serde_json::from_value(value).expect("deserialize legacy theme");
+        assert_eq!(decoded.light.effects, ThemeEffects::DEFAULT);
+        assert_eq!(decoded.dark.effects, ThemeEffects::DEFAULT);
+    }
+
+    #[test]
+    fn surface_opacity_accepts_full_percentage_range() {
+        let mut family = ochub_family();
+        family.light.effects.sidebar_opacity = MIN_SURFACE_OPACITY_PERCENT;
+        assert!(validate_family(&family).is_ok());
+
+        family.dark.effects.content_opacity = MAX_SURFACE_OPACITY_PERCENT + 1;
+        assert!(validate_family(&family).is_err());
+    }
+
+    #[test]
+    fn glass_sidebar_foreground_stays_readable_across_backdrops() {
+        let mut palette = OCHUB_DARK;
+        palette.effects.sidebar_opacity = MIN_SURFACE_OPACITY_PERCENT;
+
+        let dark = adaptive_sidebar_foreground(
+            &palette,
+            palette.sidebar_text,
+            palette.text,
+            WindowAppearance::Dark,
+            4.5,
+        );
+        let light = adaptive_sidebar_foreground(
+            &palette,
+            palette.sidebar_text,
+            palette.text,
+            WindowAppearance::Light,
+            4.5,
+        );
+
+        assert_eq!(dark, light);
+        assert_ne!(dark, palette.sidebar_text);
+    }
+
+    #[test]
+    fn sidebar_foreground_tracks_custom_opaque_background() {
+        let mut palette = OCHUB_LIGHT;
+        palette.effects.window_background = ThemeWindowBackground::Opaque;
+        palette.mantle = ThemeColor::new(0xffffff);
+        palette.sidebar_text = ThemeColor::new(0xffffff);
+
+        let foreground = adaptive_sidebar_foreground(
+            &palette,
+            palette.sidebar_text,
+            palette.text,
+            WindowAppearance::Dark,
+            4.5,
+        );
+
+        assert_ne!(foreground, palette.sidebar_text);
+        assert!(contrast_ratio(foreground, palette.mantle) >= 4.5);
     }
 
     #[test]

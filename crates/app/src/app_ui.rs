@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use gpui::{
     div, prelude::*, px, App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton,
-    SharedString, Window,
+    SharedString, Window, WindowAppearance,
 };
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
@@ -334,8 +334,9 @@ impl AppRoot {
     ) {
         let notifications = notifications.clone();
         cx.observe(source, move |_this, source, cx| {
-            let (message, level) =
-                source.update(cx, |source, _| (source.take_toast(), source.take_toast_level()));
+            let (message, level) = source.update(cx, |source, _| {
+                (source.take_toast(), source.take_toast_level())
+            });
             if let Some(message) = message {
                 notifications.update(cx, |host, cx| {
                     host.status_leveled(level, message, cx);
@@ -350,8 +351,9 @@ impl AppRoot {
         notifications: &Entity<NotificationHost>,
         cx: &mut Context<Self>,
     ) {
-        let (message, level) =
-            source.update(cx, |source, _| (source.take_toast(), source.take_toast_level()));
+        let (message, level) = source.update(cx, |source, _| {
+            (source.take_toast(), source.take_toast_level())
+        });
         if let Some(message) = message {
             notifications.update(cx, |host, cx| {
                 host.status_leveled(level, message, cx);
@@ -572,7 +574,6 @@ impl AppRoot {
                 Section::Usage => self.usage_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Sessions => self.sessions_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Tools => self.tools_view.update(cx, |v, _| v.reload()),
-                Section::Themes => self.theme_view.update(cx, |v, cx| v.reload(cx)),
                 _ => {}
             }
             self.flush_section_toast(section, cx);
@@ -846,7 +847,12 @@ impl AppRoot {
         }
     }
 
-    fn render_sidebar_item(&self, app: AppType, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar_item(
+        &self,
+        app: AppType,
+        appearance: WindowAppearance,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let selected = self.selected_app == app && self.section == Section::Providers;
         let accent = Self::app_accent(app);
         div()
@@ -867,7 +873,7 @@ impl AppRoot {
             .text_color(if selected {
                 theme::sidebar_text()
             } else {
-                theme::sidebar_muted()
+                theme::sidebar_glass_muted(appearance)
             })
             .when(selected, |s| {
                 s.bg(theme::accent_soft()).font_weight(FontWeight::MEDIUM)
@@ -901,13 +907,14 @@ impl AppRoot {
         id: &'static str,
         label: &'static str,
         section: Section,
+        appearance: WindowAppearance,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.section == section;
         let fg = if selected {
             theme::accent()
         } else {
-            theme::sidebar_muted()
+            theme::sidebar_glass_muted(appearance)
         };
         div()
             .id(id)
@@ -950,12 +957,12 @@ impl AppRoot {
             }))
     }
 
-    fn render_sidebar_group(label: &'static str) -> impl IntoElement {
+    fn render_sidebar_group(label: &'static str, appearance: WindowAppearance) -> impl IntoElement {
         div()
             .mt_4()
             .mb_1()
             .px_3()
-            .text_color(theme::sidebar_muted())
+            .text_color(theme::sidebar_glass_muted(appearance))
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
             .child(label)
@@ -991,7 +998,11 @@ impl AppRoot {
             )
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar(
+        &self,
+        appearance: WindowAppearance,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let navigation = div()
             .id("sidebar-navigation")
             .flex()
@@ -1000,50 +1011,99 @@ impl AppRoot {
             .min_h_0()
             .overflow_y_scroll()
             .pb_4()
-            .child(Self::render_sidebar_group("应用"))
+            .child(Self::render_sidebar_group("应用", appearance))
             .child(
                 div().flex().flex_col().gap_1().px_2().children(
                     Self::visible_apps()
                         .into_iter()
-                        .map(|app| self.render_sidebar_item(app, cx)),
+                        .map(|app| self.render_sidebar_item(app, appearance, cx)),
                 ),
             )
-            .child(Self::render_sidebar_group("工具"))
+            .child(Self::render_sidebar_group("工具", appearance))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .px_2()
-                    .child(self.render_nav_item("nav-mcp", "MCP 服务器", Section::Mcp, cx))
-                    .child(self.render_nav_item("nav-skills", "技能", Section::Skills, cx))
-                    .child(self.render_nav_item("nav-usage", "用量", Section::Usage, cx))
-                    .child(self.render_nav_item("nav-sessions", "会话", Section::Sessions, cx))
-                    .child(self.render_nav_item("nav-tools", "高级工具", Section::Tools, cx)),
+                    .child(self.render_nav_item(
+                        "nav-mcp",
+                        "MCP 服务器",
+                        Section::Mcp,
+                        appearance,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-skills",
+                        "技能",
+                        Section::Skills,
+                        appearance,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-usage",
+                        "用量",
+                        Section::Usage,
+                        appearance,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-sessions",
+                        "会话",
+                        Section::Sessions,
+                        appearance,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-tools",
+                        "高级工具",
+                        Section::Tools,
+                        appearance,
+                        cx,
+                    )),
             )
-            .child(Self::render_sidebar_group("网络"))
+            .child(Self::render_sidebar_group("网络", appearance))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .px_2()
-                    .child(self.render_nav_item("nav-gateway", "转发站", Section::Gateway, cx)),
+                    .child(self.render_nav_item(
+                        "nav-gateway",
+                        "转发站",
+                        Section::Gateway,
+                        appearance,
+                        cx,
+                    )),
             )
-            .child(Self::render_sidebar_group("系统"))
+            .child(Self::render_sidebar_group("系统", appearance))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .px_2()
-                    .child(self.render_nav_item("nav-themes", "主题", Section::Themes, cx))
-                    .child(self.render_nav_item("nav-settings", "设置", Section::Settings, cx))
+                    .child(self.render_nav_item(
+                        "nav-themes",
+                        "主题",
+                        Section::Themes,
+                        appearance,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-settings",
+                        "设置",
+                        Section::Settings,
+                        appearance,
+                        cx,
+                    ))
                     .when(std::env::var_os("MS_GALLERY").is_some(), |col| {
                         col.child(self.render_nav_item(
                             "nav-gallery",
                             "组件画廊",
                             Section::Gallery,
+                            appearance,
                             cx,
                         ))
                     }),
@@ -1056,7 +1116,8 @@ impl AppRoot {
             .h_full()
             .w(px(252.))
             .flex_shrink_0()
-            .bg(theme::mantle().alpha(0.96))
+            .bg(theme::sidebar_background())
+            .text_color(theme::sidebar_glass_text(appearance))
             .border_r_1()
             .border_color(theme::border())
             .shadow_xs()
@@ -1911,13 +1972,14 @@ impl AppRoot {
 }
 
 impl Render for AppRoot {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let appearance = window.appearance();
         div()
             .id("app-root")
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme::bg())
+            .bg(theme::window_base_background())
             .text_color(theme::text())
             .font_family("Helvetica Neue")
             .relative()
@@ -1931,7 +1993,7 @@ impl Render for AppRoot {
                     .flex_row()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(self.render_sidebar(cx))
+                    .child(self.render_sidebar(appearance, cx))
                     .child(self.render_content(cx)),
             )
             .child(self.render_content_drag_region(cx))

@@ -205,6 +205,7 @@ fn main() {
             let window = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_background: theme::window_background_appearance(),
                     titlebar: Some(TitlebarOptions {
                         title: None,
                         // Content extends behind the native titlebar. Only the macOS
@@ -220,14 +221,17 @@ fn main() {
                         window
                             .observe_window_appearance(|window, cx| {
                                 let settings = ochub_core::settings::get_settings();
-                                if settings.theme_mode == ochub_core::settings::ThemeMode::System {
+                                if settings.theme_mode == ochub_core::settings::ThemeMode::System
+                                    && !theme::is_previewing()
+                                {
                                     theme::install_selected(
                                         &settings.theme_family,
                                         settings.theme_mode,
                                         window.appearance(),
                                     );
-                                    cx.refresh_windows();
+                                    theme::apply_window_background(window);
                                 }
+                                cx.refresh_windows();
                             })
                             .detach();
                         cx.new(|cx| AppRoot::new(app_state.clone(), cx))

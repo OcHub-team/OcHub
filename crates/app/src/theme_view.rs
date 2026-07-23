@@ -6,8 +6,8 @@
 use anyhow::{anyhow, Context as _, Result};
 use gpui::{
     canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, size, Background,
-    Bounds, ColorSpace, Context, Entity, FontWeight, PathBuilder, PathPromptOptions, Pixels, Point,
-    Rgba, SharedString, Window,
+    Bounds, ColorSpace, Context, Entity, FontWeight, ListAlignment, ListState, PathBuilder,
+    PathPromptOptions, Pixels, Point, Rgba, SharedString, Window,
 };
 use ochub_core::settings::{self, ThemeMode};
 
@@ -15,12 +15,76 @@ use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::icons::IconName;
 use crate::layout;
 use crate::text_input::TextInput;
-use crate::theme::{self, Theme, ThemeColor, ThemeFamily, ThemeRecord, THEME_TOKENS};
+use crate::theme::{
+    self, Theme, ThemeColor, ThemeFamily, ThemeRecord, ThemeWindowBackground,
+    MAX_SURFACE_OPACITY_PERCENT, MIN_SURFACE_OPACITY_PERCENT, THEME_TOKENS,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditorVariant {
     Light,
     Dark,
+}
+
+impl EditorVariant {
+    fn current() -> Self {
+        if theme::is_dark() {
+            Self::Dark
+        } else {
+            Self::Light
+        }
+    }
+
+    fn from_index(index: usize) -> Self {
+        if index == 0 {
+            Self::Light
+        } else {
+            Self::Dark
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Light => "浅色",
+            Self::Dark => "深色",
+        }
+    }
+
+    fn palette(self, family: &ThemeFamily) -> Theme {
+        match self {
+            Self::Light => family.light,
+            Self::Dark => family.dark,
+        }
+    }
+
+    fn palette_mut(self, family: &mut ThemeFamily) -> &mut Theme {
+        match self {
+            Self::Light => &mut family.light,
+            Self::Dark => &mut family.dark,
+        }
+    }
+}
+
+struct ThemeEffectInputs {
+    sidebar_opacity: Option<Entity<TextInput>>,
+    content_opacity: Option<Entity<TextInput>>,
+}
+
+struct ThemeVariantInputs {
+    effects: ThemeEffectInputs,
+    colors: Vec<Option<Entity<TextInput>>>,
+}
+
+impl ThemeVariantInputs {
+    fn empty() -> Self {
+        Self {
+            effects: ThemeEffectInputs {
+                sidebar_opacity: None,
+                content_opacity: None,
+            },
+            colors: (0..THEME_TOKENS.len()).map(|_| None).collect(),
+        }
+    }
 }
 
 struct ThemeEditor {
@@ -29,9 +93,29 @@ struct ThemeEditor {
     name: Entity<TextInput>,
     author: Entity<TextInput>,
     description: Entity<TextInput>,
-    light_colors: Vec<Entity<TextInput>>,
-    dark_colors: Vec<Entity<TextInput>>,
+    variant_inputs: ThemeVariantInputs,
 }
+
+#[derive(Clone, Copy)]
+enum ThemeEditorBlock {
+    Preview,
+    Information,
+    Variant,
+    Material,
+    TokenGroup(&'static str),
+}
+
+const THEME_EDITOR_BLOCKS: &[ThemeEditorBlock] = &[
+    ThemeEditorBlock::Preview,
+    ThemeEditorBlock::Information,
+    ThemeEditorBlock::Variant,
+    ThemeEditorBlock::Material,
+    ThemeEditorBlock::TokenGroup("表面"),
+    ThemeEditorBlock::TokenGroup("文字与边框"),
+    ThemeEditorBlock::TokenGroup("强调与选中"),
+    ThemeEditorBlock::TokenGroup("状态"),
+    ThemeEditorBlock::TokenGroup("效果"),
+];
 
 pub struct ThemeView {
     registry: theme::ThemeRegistry,
@@ -39,6 +123,7 @@ pub struct ThemeView {
     mode: ThemeMode,
     status: Option<SharedString>,
     editor: Option<ThemeEditor>,
+    editor_list_state: ListState,
     confirm_delete: Option<String>,
 }
 
@@ -87,30 +172,13 @@ impl ThemeView {
             mode: settings.theme_mode,
             status,
             editor: None,
+            editor_list_state: ListState::new(
+                THEME_EDITOR_BLOCKS.len(),
+                ListAlignment::Top,
+                px(560.),
+            ),
             confirm_delete: None,
         }
-    }
-
-    pub fn reload(&mut self, cx: &mut Context<Self>) {
-        self.registry = theme::load_registry();
-        let settings = settings::get_settings();
-        self.selected_family = settings.theme_family;
-        self.mode = settings.theme_mode;
-        if !self
-            .registry
-            .themes
-            .iter()
-            .any(|record| record.family.id == self.selected_family)
-        {
-            self.selected_family = theme::DEFAULT_THEME_FAMILY.to_string();
-        }
-        self.status = (!self.registry.diagnostics.is_empty()).then(|| {
-            SharedString::from(format!(
-                "有 {} 个用户主题未能加载。",
-                self.registry.diagnostics.len()
-            ))
-        });
-        cx.notify();
     }
 
     fn set_status(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -153,6 +221,7 @@ impl ThemeView {
             return;
         }
         theme::install_family(&family, mode, window.appearance());
+        theme::apply_window_background(window);
         cx.refresh_windows();
         self.set_status(format!("已应用 {}", family.name), cx);
     }
@@ -168,6 +237,7 @@ impl ThemeView {
             settings.theme_mode,
             window.appearance(),
         );
+        theme::apply_window_background(window);
         cx.refresh_windows();
     }
 
@@ -176,38 +246,65 @@ impl ThemeView {
         placeholder: &'static str,
         value: String,
     ) -> Entity<TextInput> {
-        cx.new(move |cx| {
-            let mut input = TextInput::new(cx, placeholder);
-            input.set_content(value, cx);
-            input
-        })
+        cx.new(move |cx| TextInput::new(cx, placeholder).with_content(value))
     }
 
     fn make_editor(&self, family: ThemeFamily, cx: &mut Context<Self>) -> ThemeEditor {
+        let variant = EditorVariant::current();
         let name = Self::make_input(cx, "主题名称", family.name.clone());
         let author = Self::make_input(cx, "作者", family.author.clone());
         let description = Self::make_input(cx, "主题说明", family.description.clone());
-        let light_colors = THEME_TOKENS
-            .iter()
-            .map(|descriptor| {
-                Self::make_input(cx, "#RRGGBB", family.light.color(descriptor.token).hex())
-            })
-            .collect();
-        let dark_colors = THEME_TOKENS
-            .iter()
-            .map(|descriptor| {
-                Self::make_input(cx, "#RRGGBB", family.dark.color(descriptor.token).hex())
-            })
-            .collect();
         ThemeEditor {
             family,
-            variant: EditorVariant::Light,
+            variant,
             name,
             author,
             description,
-            light_colors,
-            dark_colors,
+            variant_inputs: ThemeVariantInputs::empty(),
         }
+    }
+
+    fn ensure_effect_inputs(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(Entity<TextInput>, Entity<TextInput>)> {
+        let editor = self.editor.as_mut()?;
+        let palette = editor.variant.palette(&editor.family);
+        let sidebar_opacity = editor
+            .variant_inputs
+            .effects
+            .sidebar_opacity
+            .get_or_insert_with(|| {
+                Self::make_input(cx, "0–100%", palette.effects.sidebar_opacity.to_string())
+            })
+            .clone();
+        let content_opacity = editor
+            .variant_inputs
+            .effects
+            .content_opacity
+            .get_or_insert_with(|| {
+                Self::make_input(cx, "0–100%", palette.effects.content_opacity.to_string())
+            })
+            .clone();
+        Some((sidebar_opacity, content_opacity))
+    }
+
+    fn ensure_color_input(
+        &mut self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<TextInput>> {
+        let editor = self.editor.as_mut()?;
+        let descriptor = THEME_TOKENS.get(index)?;
+        let palette = editor.variant.palette(&editor.family);
+        let input = editor.variant_inputs.colors.get_mut(index)?;
+        Some(
+            input
+                .get_or_insert_with(|| {
+                    Self::make_input(cx, "#RRGGBB", palette.color(descriptor.token).hex())
+                })
+                .clone(),
+        )
     }
 
     fn open_editor(&mut self, family_id: &str, cx: &mut Context<Self>) {
@@ -226,12 +323,27 @@ impl ThemeView {
             return;
         }
         self.editor = Some(self.make_editor(record.family, cx));
+        self.editor_list_state.remeasure();
         self.status = None;
         cx.notify();
     }
 
     fn input_value(input: &Entity<TextInput>, cx: &mut Context<Self>) -> String {
         input.read(cx).content().trim().to_string()
+    }
+
+    fn opacity_value(input: &Entity<TextInput>, label: &str, cx: &mut Context<Self>) -> Result<u8> {
+        let value = Self::input_value(input, cx);
+        let value = value.trim_end_matches('%').trim();
+        let parsed = value
+            .parse::<u8>()
+            .with_context(|| format!("{label}需要填写整数百分比"))?;
+        if !(MIN_SURFACE_OPACITY_PERCENT..=MAX_SURFACE_OPACITY_PERCENT).contains(&parsed) {
+            return Err(anyhow!(
+                "{label}必须在 {MIN_SURFACE_OPACITY_PERCENT}–{MAX_SURFACE_OPACITY_PERCENT}% 之间"
+            ));
+        }
+        Ok(parsed)
     }
 
     fn sync_editor(&mut self, cx: &mut Context<Self>) -> Result<()> {
@@ -242,19 +354,72 @@ impl ThemeView {
         editor.family.name = Self::input_value(&editor.name, cx);
         editor.family.author = Self::input_value(&editor.author, cx);
         editor.family.description = Self::input_value(&editor.description, cx);
+        let label = editor.variant.label();
+        let sidebar_opacity = editor
+            .variant_inputs
+            .effects
+            .sidebar_opacity
+            .as_ref()
+            .map(|input| Self::opacity_value(input, &format!("{label} · 侧边栏不透明度"), cx))
+            .transpose()?;
+        let content_opacity = editor
+            .variant_inputs
+            .effects
+            .content_opacity
+            .as_ref()
+            .map(|input| Self::opacity_value(input, &format!("{label} · 主界面不透明度"), cx))
+            .transpose()?;
+        let colors = THEME_TOKENS
+            .iter()
+            .enumerate()
+            .filter_map(|(index, descriptor)| {
+                editor.variant_inputs.colors[index].as_ref().map(|input| {
+                    ThemeColor::parse(&Self::input_value(input, cx))
+                        .with_context(|| format!("{label} · {}", descriptor.label))
+                        .map(|color| (descriptor.token, color))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        for (index, descriptor) in THEME_TOKENS.iter().enumerate() {
-            let light = ThemeColor::parse(&Self::input_value(&editor.light_colors[index], cx))
-                .with_context(|| format!("浅色 · {}", descriptor.label))?;
-            let dark = ThemeColor::parse(&Self::input_value(&editor.dark_colors[index], cx))
-                .with_context(|| format!("深色 · {}", descriptor.label))?;
-            editor.family.light.set_color(descriptor.token, light);
-            editor.family.dark.set_color(descriptor.token, dark);
+        let palette = editor.variant.palette_mut(&mut editor.family);
+        if let Some(sidebar_opacity) = sidebar_opacity {
+            palette.effects.sidebar_opacity = sidebar_opacity;
+        }
+        if let Some(content_opacity) = content_opacity {
+            palette.effects.content_opacity = content_opacity;
+        }
+        for (token, color) in colors {
+            palette.set_color(token, color);
         }
         theme::validate_family(&editor.family)
     }
 
-    fn preview_editor(&mut self, cx: &mut Context<Self>) {
+    fn switch_editor_variant(
+        &mut self,
+        variant: EditorVariant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .editor
+            .as_ref()
+            .is_none_or(|editor| editor.variant == variant)
+        {
+            return;
+        }
+        if let Err(err) = self.sync_editor(cx) {
+            self.set_status(format!("无法切换外观变体: {err}"), cx);
+            return;
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            editor.variant = variant;
+            editor.variant_inputs = ThemeVariantInputs::empty();
+        }
+        self.editor_list_state.remeasure();
+        self.preview_editor(window, cx);
+    }
+
+    fn preview_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(err) = self.sync_editor(cx) {
             self.set_status(format!("无法预览: {err}"), cx);
             return;
@@ -262,11 +427,10 @@ impl ThemeView {
         let Some(editor) = self.editor.as_ref() else {
             return;
         };
-        let (palette, dark) = match editor.variant {
-            EditorVariant::Light => (editor.family.light, false),
-            EditorVariant::Dark => (editor.family.dark, true),
-        };
-        theme::install(palette, dark);
+        let palette = editor.variant.palette(&editor.family);
+        let dark = editor.variant == EditorVariant::Dark;
+        theme::install_preview(palette, dark);
+        theme::apply_window_background(window);
         cx.refresh_windows();
         self.set_status("正在预览草稿；保存或取消后会退出预览", cx);
     }
@@ -310,6 +474,7 @@ impl ThemeView {
         match theme::duplicate_family(&source) {
             Ok(family) => {
                 self.editor = Some(self.make_editor(family, cx));
+                self.editor_list_state.remeasure();
                 self.status = None;
                 cx.notify();
             }
@@ -408,6 +573,7 @@ impl ThemeView {
             self.selected_family = theme::DEFAULT_THEME_FAMILY.to_string();
             let _ = self.persist_selection();
             theme::install_selected(&self.selected_family, self.mode, window.appearance());
+            theme::apply_window_background(window);
             cx.refresh_windows();
         }
         self.registry = theme::load_registry();
@@ -1265,113 +1431,216 @@ impl ThemeView {
             .into_any_element()
     }
 
+    fn render_opacity_input(input: Entity<TextInput>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .flex_none()
+            .gap_2()
+            .child(div().w(px(88.)).child(input))
+            .child(div().text_sm().text_color(theme::muted()).child("%"))
+    }
+
+    fn render_editor_block(
+        &mut self,
+        block: ThemeEditorBlock,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if self.editor.is_none() {
+            return gpui::Empty.into_any_element();
+        }
+        let effect_inputs = match block {
+            ThemeEditorBlock::Material => self.ensure_effect_inputs(cx),
+            _ => None,
+        };
+        let color_inputs = match block {
+            ThemeEditorBlock::TokenGroup(group) => Some(
+                THEME_TOKENS
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, descriptor)| descriptor.group == group)
+                    .filter_map(|(index, _)| {
+                        self.ensure_color_input(index, cx)
+                            .map(|input| (index, input))
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        let Some(editor) = self.editor.as_ref() else {
+            return gpui::Empty.into_any_element();
+        };
+        let palette = editor.variant.palette(&editor.family);
+        let shell = div().flex().flex_col().items_start().w_full().pb_3();
+
+        match block {
+            ThemeEditorBlock::Preview => shell
+                .child(layout::section_header(
+                    "配色样图",
+                    "更新预览后，这里和整个应用都会使用当前草稿。",
+                ))
+                .child(
+                    div()
+                        .w_full()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme::border())
+                        .overflow_hidden()
+                        .child(Self::pair_preview(&editor.family)),
+                )
+                .into_any_element(),
+            ThemeEditorBlock::Information => shell
+                .child(layout::section_header(
+                    "主题信息",
+                    "主题 ID 保持稳定，名称、作者和说明可自由修改。",
+                ))
+                .child(
+                    components::card()
+                        .gap_3()
+                        .child(components::field(
+                            "主题名称",
+                            true,
+                            None,
+                            editor.name.clone(),
+                        ))
+                        .child(components::field(
+                            "作者",
+                            false,
+                            None,
+                            editor.author.clone(),
+                        ))
+                        .child(components::field(
+                            "说明",
+                            false,
+                            None,
+                            editor.description.clone(),
+                        )),
+                )
+                .into_any_element(),
+            ThemeEditorBlock::Variant => {
+                let variant_listener = cx.listener(|this, index: &usize, window, cx| {
+                    this.switch_editor_variant(EditorVariant::from_index(*index), window, cx);
+                });
+                let variant_index = usize::from(editor.variant == EditorVariant::Dark);
+                shell
+                    .child(layout::section_header(
+                        "外观变体",
+                        "材质和颜色分别保存在浅色与深色变体中；切换时会立即预览对应草稿。",
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .w_full()
+                            .child(components::segmented(
+                                "theme-editor-variant",
+                                &["浅色", "深色"],
+                                variant_index,
+                                move |index, window, cx| variant_listener(&index, window, cx),
+                            ))
+                            .child(div().text_xs().text_color(theme::muted()).child(
+                                if editor.variant == EditorVariant::Light {
+                                    "正在编辑浅色变体"
+                                } else {
+                                    "正在编辑深色变体"
+                                },
+                            )),
+                    )
+                    .into_any_element()
+            }
+            ThemeEditorBlock::Material => {
+                let background_listener = cx.listener(|this, index: &usize, window, cx| {
+                    if let Some(editor) = this.editor.as_mut() {
+                        let effect = if *index == 0 {
+                            ThemeWindowBackground::Blurred
+                        } else {
+                            ThemeWindowBackground::Opaque
+                        };
+                        editor
+                            .variant
+                            .palette_mut(&mut editor.family)
+                            .effects
+                            .window_background = effect;
+                    }
+                    this.preview_editor(window, cx);
+                });
+                let background_index =
+                    usize::from(palette.effects.window_background == ThemeWindowBackground::Opaque);
+                let Some((sidebar_opacity, content_opacity)) = effect_inputs else {
+                    return gpui::Empty.into_any_element();
+                };
+                shell
+                    .child(layout::section_header(
+                        "界面材质",
+                        "系统负责实际模糊；主题控制哪些区域透出背景以及透出的程度。",
+                    ))
+                    .child(layout::group(vec![
+                        components::field_row(
+                            "窗口背景",
+                            "毛玻璃使用系统合成效果；不透明模式保留主题颜色但不透出桌面。",
+                            components::segmented(
+                                "theme-editor-window-background",
+                                &["毛玻璃", "不透明"],
+                                background_index,
+                                move |index, window, cx| background_listener(&index, window, cx),
+                            ),
+                        )
+                        .into_any_element(),
+                        components::field_row(
+                            "侧边栏不透明度",
+                            "可设置 0–100%，默认 40%；数值越低，侧边栏后方的系统背景越明显。",
+                            Self::render_opacity_input(sidebar_opacity),
+                        )
+                        .into_any_element(),
+                        components::field_row(
+                            "主界面不透明度",
+                            "可设置 0–100%，默认 100%；调低后主界面也会透出毛玻璃。",
+                            Self::render_opacity_input(content_opacity),
+                        )
+                        .into_any_element(),
+                    ]))
+                    .into_any_element()
+            }
+            ThemeEditorBlock::TokenGroup(group) => {
+                let rows = color_inputs
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(index, input)| Self::render_color_row(index, palette, input))
+                    .collect::<Vec<_>>();
+                shell
+                    .when(group == "表面", |section| {
+                        section.child(layout::section_header(
+                            "颜色令牌",
+                            "使用 #RRGGBB；浅色与深色必须分别完整配置并通过可读性校验。",
+                        ))
+                    })
+                    .child(layout::section_header(
+                        SharedString::from(group.to_string()),
+                        SharedString::from(format!("{group}相关语义颜色。")),
+                    ))
+                    .child(layout::group(rows))
+                    .into_any_element()
+            }
+        }
+    }
+
     fn render_editor(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(editor) = self.editor.as_ref() else {
             return gpui::Empty.into_any_element();
         };
-        let variant_listener = cx.listener(|this, index: &usize, _window, cx| {
-            if let Some(editor) = this.editor.as_mut() {
-                editor.variant = if *index == 0 {
-                    EditorVariant::Light
-                } else {
-                    EditorVariant::Dark
-                };
-                cx.notify();
-            }
-        });
-        let variant_index = usize::from(editor.variant == EditorVariant::Dark);
-        let palette = if editor.variant == EditorVariant::Light {
-            editor.family.light
-        } else {
-            editor.family.dark
-        };
-        let inputs = if editor.variant == EditorVariant::Light {
-            &editor.light_colors
-        } else {
-            &editor.dark_colors
-        };
-
-        let mut token_sections = div().flex().flex_col().gap_3().w_full();
-        for group in ["表面", "文字与边框", "强调与选中", "状态", "效果"] {
-            let rows = THEME_TOKENS
-                .iter()
-                .enumerate()
-                .filter(|(_, descriptor)| descriptor.group == group)
-                .map(|(index, _)| Self::render_color_row(index, palette, inputs[index].clone()))
-                .collect::<Vec<_>>();
-            token_sections = token_sections
-                .child(layout::section_header(
-                    SharedString::from(group.to_string()),
-                    SharedString::from(format!("{group}相关语义颜色。")),
-                ))
-                .child(layout::group(rows));
-        }
-
-        let content = layout::wide_column()
-            .child(layout::section_header(
-                "配色样图",
-                "更新预览后，这里和整个应用都会使用当前草稿。",
-            ))
-            .child(
-                div()
-                    .w_full()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme::border())
-                    .overflow_hidden()
-                    .child(Self::pair_preview(&editor.family)),
-            )
-            .child(layout::section_header(
-                "主题信息",
-                "主题 ID 保持稳定，名称、作者和说明可自由修改。",
-            ))
-            .child(
-                components::card()
-                    .gap_3()
-                    .child(components::field(
-                        "主题名称",
-                        true,
-                        None,
-                        editor.name.clone(),
-                    ))
-                    .child(components::field(
-                        "作者",
-                        false,
-                        None,
-                        editor.author.clone(),
-                    ))
-                    .child(components::field(
-                        "说明",
-                        false,
-                        None,
-                        editor.description.clone(),
-                    )),
-            )
-            .child(layout::section_header(
-                "颜色令牌",
-                "浅色与深色必须分别完整配置并通过可读性校验。",
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .w_full()
-                    .child(components::segmented(
-                        "theme-editor-variant",
-                        &["浅色", "深色"],
-                        variant_index,
-                        move |index, window, cx| variant_listener(&index, window, cx),
-                    ))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::muted())
-                            .child("HEX 格式：#RRGGBB"),
-                    ),
-            )
-            .child(token_sections);
+        let list = gpui::list(
+            self.editor_list_state.clone(),
+            cx.processor(|this, index: usize, _window, cx| {
+                THEME_EDITOR_BLOCKS
+                    .get(index)
+                    .copied()
+                    .map(|block| this.render_editor_block(block, cx))
+                    .unwrap_or_else(|| gpui::Empty.into_any_element())
+            }),
+        );
 
         layout::page()
             .child(
@@ -1406,8 +1675,8 @@ impl ThemeView {
                                 ButtonSize::Sm,
                             )
                             .on_click(cx.listener(
-                                |this, _event, _window, cx| {
-                                    this.preview_editor(cx);
+                                |this, _event, window, cx| {
+                                    this.preview_editor(window, cx);
                                 },
                             )),
                         )
@@ -1426,7 +1695,7 @@ impl ThemeView {
                         ),
                 ),
             )
-            .child(layout::scroll_body("theme-editor-body", content))
+            .child(layout::wide_virtual_body(list))
             .into_any_element()
     }
 }

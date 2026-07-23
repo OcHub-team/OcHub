@@ -393,6 +393,16 @@ impl TextInput {
         }
     }
 
+    /// Seed a newly-created input without emitting a change event or scheduling
+    /// an extra repaint. Runtime replacements should continue to use
+    /// [`Self::set_content`].
+    pub fn with_content(mut self, content: impl Into<SharedString>) -> Self {
+        self.content = content.into();
+        let end = self.content.len();
+        self.selected_range = end..end;
+        self
+    }
+
     /// Keep caret animation owned by the input entity instead of whichever
     /// host happens to render it. This makes nested inputs (such as find bars)
     /// behave exactly like standalone fields and stops timers on blur.
