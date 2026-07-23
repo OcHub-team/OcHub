@@ -111,7 +111,7 @@ pub fn setup_panic_hook() {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
             let _ = file.write_all(entry.as_bytes());
             let _ = file.flush();
-            eprintln!("\n[OCHub] Crash log saved to: {}", log_path.display());
+            eprintln!("\n[OcHub] Crash log saved to: {}", log_path.display());
         }
         eprintln!("{entry}");
 

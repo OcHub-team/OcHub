@@ -290,7 +290,7 @@ impl Database {
 
     /// 在指定连接上应用 Schema 迁移
     ///
-    /// OCHub 拥有独立的版本线（从 v1 开始），与 cc-switch 的 user_version
+    /// OcHub 拥有独立的版本线（从 v1 开始），与 cc-switch 的 user_version
     /// 序列无关。`create_tables_on_conn` 总是直接建出当前终态结构，因此
     /// user_version=0 只意味着"全新数据库"，直接打上当前版本号即可。
     /// 旧 cc-switch 数据通过一次性导入（`import_ccswitch`）进入，不走迁移。
@@ -1739,7 +1739,7 @@ impl Database {
         Ok(false)
     }
 
-    /// 迁移工具函数：为未来 OCHub v1→v2+ 的加列迁移保留
+    /// 迁移工具函数：为未来 OcHub v1→v2+ 的加列迁移保留
     #[allow(dead_code)]
     fn add_column_if_missing(
         conn: &Connection,

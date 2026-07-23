@@ -57,7 +57,7 @@ pub enum AppMode {
     Additive,
 }
 
-/// Everything OCHub needs to know about one managed app.
+/// Everything OcHub needs to know about one managed app.
 ///
 /// Object-safe; implementable both by the built-in native plugins and by the
 /// generic manifest-driven plugin.

@@ -1,7 +1,7 @@
-//! cc-switch → OCHub 一次性数据导入。
+//! cc-switch → OcHub 一次性数据导入。
 //!
-//! 只在全新 OCHub 数据库首次初始化时运行：以只读方式 ATTACH
-//! `~/.cc-switch/cc-switch.db`，把数据翻译进 OCHub 自己的 schema。
+//! 只在全新 OcHub 数据库首次初始化时运行：以只读方式 ATTACH
+//! `~/.cc-switch/cc-switch.db`，把数据翻译进 OcHub 自己的 schema。
 //! 对 `~/.cc-switch/` 零写入，原版 cc-switch 可继续照常使用。
 //!
 //! 兼容策略（宽容读取）：cc-switch 的历史迁移全部是加表/加列（additive），
@@ -20,8 +20,8 @@ use crate::error::AppError;
 /// 已验证过导入兼容性的最高 cc-switch schema 版本。
 const MAX_VERIFIED_SOURCE_VERSION: i32 = 16;
 
-/// OCHub 认识的 app_type 值（`AppType` 的全部字符串形态 + 历史别名）。
-/// 带 app_type 语义行的表按此过滤，避免导入 OCHub 无法解析的行
+/// OcHub 认识的 app_type 值（`AppType` 的全部字符串形态 + 历史别名）。
+/// 带 app_type 语义行的表按此过滤，避免导入 OcHub 无法解析的行
 /// （例如新版 cc-switch 的 grokbuild）。
 const KNOWN_APP_TYPES: &str = "('claude','claude-desktop','claude_desktop','claudeDesktop','codex','gemini','opencode','openclaw','hermes')";
 
@@ -56,7 +56,7 @@ impl ImportReport {
 ///
 /// 明确排除：
 /// - `proxy_live_backup` — cc-switch 的运行时 live-config 接管状态，导入会让
-///   OCHub 误以为持有待恢复的备份；
+///   OcHub 误以为持有待恢复的备份；
 /// - `stream_check_logs` — 瞬态测速日志，无长期价值；
 /// - `sqlite_sequence` — SQLite 内部表。
 const IMPORT_TABLES: &[(&str, &str, Option<&str>, &str)] = &[
@@ -99,7 +99,7 @@ const IMPORT_TABLES: &[(&str, &str, Option<&str>, &str)] = &[
 
 /// 随数据库一并导入的旁路文件（app 配置目录下）。
 /// 注意不包含 `app_paths.json`：那是数据目录重定向引导文件，复制过来会把
-/// OCHub 重新指回 `~/.cc-switch`。
+/// OcHub 重新指回 `~/.cc-switch`。
 const IMPORT_SIDE_FILES: &[&str] = &[
     "settings.json",
     "copilot_auth.json",
@@ -110,7 +110,7 @@ impl Database {
     /// 从旧 cc-switch 数据库一次性导入数据。
     ///
     /// 返回 `Ok(None)` 表示没有可导入的源（首次全新安装）。仅应在全新
-    /// OCHub 数据库上调用；所有插入使用 INSERT OR REPLACE，因此对种子
+    /// OcHub 数据库上调用；所有插入使用 INSERT OR REPLACE，因此对种子
     /// 数据（官方 provider、内置定价、用量定价设置）是覆盖语义。
     pub fn import_from_ccswitch(&self) -> Result<Option<ImportReport>, AppError> {
         let source_path = crate::paths::get_legacy_ccswitch_database_path();
@@ -302,9 +302,9 @@ mod tests {
     use rusqlite::Connection;
 
     /// 造一个模拟 cc-switch v13+ 源库：
-    /// - providers 带 OCHub 不认识的额外列（enabled_grokbuild）和 grokbuild 行
+    /// - providers 带 OcHub 不认识的额外列（enabled_grokbuild）和 grokbuild 行
     /// - 旧代理定价与请求日志要迁入中性的用量表
-    /// - 一张 OCHub 完全不认识的表（grok_things）
+    /// - 一张 OcHub 完全不认识的表（grok_things）
     /// - proxy_live_backup 带数据（必须被跳过）
     fn build_fake_ccswitch_db(path: &std::path::Path) {
         let conn = Connection::open(path).unwrap();

@@ -1,6 +1,6 @@
-//! OCHub axum server.
+//! OcHub axum server.
 //!
-//! Exposes the OCHub HTTP/JSON control API. The GPUI app hosts this in-process;
+//! Exposes the OcHub HTTP/JSON control API. The GPUI app hosts this in-process;
 //! it can also run headless.
 
 pub mod api;
@@ -37,7 +37,7 @@ pub async fn serve(state: ServerState, addr: std::net::SocketAddr) -> anyhow::Re
     // coming online for the desktop app.
     state.app.gateway.maybe_autostart().await;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("OCHub control API listening on http://{addr}");
+    tracing::info!("OcHub control API listening on http://{addr}");
     axum::serve(listener, build_router(state)).await?;
     Ok(())
 }

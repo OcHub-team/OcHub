@@ -441,7 +441,7 @@ fn claude_provider_models_are_claude_safe(provider: &Provider) -> bool {
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "service": "OCHub" }))
+    Json(json!({ "status": "ok", "service": "OcHub" }))
 }
 
 /// Build the provider + settings + status routes. State is applied by the caller.

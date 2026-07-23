@@ -1,6 +1,6 @@
 //! SQLite 数据持久化层。
 //!
-//! OCHub 拥有独立的数据库（`~/.ochub/ochub.db`）与独立的 schema
+//! OcHub 拥有独立的数据库（`~/.ochub/ochub.db`）与独立的 schema
 //! 版本线（从 v1 开始）。旧 cc-switch 数据（`~/.cc-switch/cc-switch.db`）在
 //! 首次启动时通过 `import_ccswitch` 一次性只读导入，之后两者互不影响。
 //!
@@ -44,7 +44,7 @@ use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
 use std::sync::Mutex;
 
-/// 当前 Schema 版本号（OCHub 自有版本线，与 cc-switch 的版本序列无关）
+/// 当前 Schema 版本号（OcHub 自有版本线，与 cc-switch 的版本序列无关）
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
 pub(crate) const SCHEMA_VERSION: i32 = 3;
 

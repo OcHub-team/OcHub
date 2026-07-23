@@ -2,11 +2,11 @@
 //!
 //! Ported from cc-switch `src-tauri/src/mcp/opencode.rs`.
 //!
-//! 本模块处理 OCHub 统一 MCP 格式与 OpenCode 格式之间的转换。
+//! 本模块处理 OcHub 统一 MCP 格式与 OpenCode 格式之间的转换。
 //!
 //! ## 格式差异
 //!
-//! | OCHub 统一格式    | OpenCode 格式       |
+//! | OcHub 统一格式    | OpenCode 格式       |
 //! |----------------------|---------------------|
 //! | `type: "stdio"`      | `type: "local"`     |
 //! | `command` + `args`   | `command: [cmd, ...args]` |
@@ -34,10 +34,10 @@ fn should_sync_opencode_mcp() -> bool {
 }
 
 // ============================================================================
-// Format Conversion: OCHub → OpenCode
+// Format Conversion: OcHub → OpenCode
 // ============================================================================
 
-/// Convert OCHub unified format to OpenCode format
+/// Convert OcHub unified format to OpenCode format
 ///
 /// Conversion rules:
 /// - `stdio` → `local`, command+args → command array, env → environment
@@ -106,10 +106,10 @@ pub fn convert_to_opencode_format(spec: &Value) -> Result<Value, AppError> {
 }
 
 // ============================================================================
-// Format Conversion: OpenCode → OCHub
+// Format Conversion: OpenCode → OcHub
 // ============================================================================
 
-/// Convert OpenCode format to OCHub unified format
+/// Convert OpenCode format to OcHub unified format
 ///
 /// Conversion rules:
 /// - `local` → `stdio`, command array → command+args, environment → env

@@ -1,4 +1,4 @@
-# OCHub
+# OcHub
 
 A native desktop manager for switching API providers across AI coding tools —
 **Claude Code, Claude Desktop, Codex, OpenCode, OpenClaw, and Hermes**.
@@ -9,16 +9,16 @@ This is a from-scratch rewrite of [`cc-switch`](https://github.com/farion1231/cc
 - **[axum](https://github.com/tokio-rs/axum)** as the service backbone (control API + the local relay gateway), replacing Tauri's IPC/command layer.
 - **[GPUI](https://www.gpui.rs/)** (Zed's GPU-accelerated UI framework) as the native UI, replacing the Tauri webview + React frontend.
 
-OCHub owns its own data directory (`~/.ochub/`, with `ochub.db` on
+OcHub owns its own data directory (`~/.ochub/`, with `ochub.db` on
 an independent schema line starting at v1). On first launch it performs a
 **one-time, read-only import** of existing cc-switch data
 (`~/.cc-switch/cc-switch.db`, tolerant of schema v11–v16+): providers, MCP
 servers, skills, usage history, settings, and managed OAuth accounts
 all carry over, and `~/.cc-switch/` is never written to. Historical Gemini
-usage rows remain readable, but Gemini CLI is no longer a managed app. OCHub
+usage rows remain readable, but Gemini CLI is no longer a managed app. OcHub
 manages live config locations such as `~/.claude`, `~/.codex`, and the
 OpenCode/OpenClaw/Hermes directories — quit the
-original cc-switch app before switching providers from OCHub, or the two
+original cc-switch app before switching providers from OcHub, or the two
 will overwrite each other's live configs.
 
 ## Architecture
@@ -92,5 +92,5 @@ Routing and protocol translation now have a single owner: the gateway.
 
 ## License
 
-OCHub is licensed under the **GNU General Public License v3.0 (or later)** —
+OcHub is licensed under the **GNU General Public License v3.0 (or later)** —
 see [LICENSE](LICENSE).

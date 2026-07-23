@@ -1,4 +1,4 @@
-//! The OCHub root view: an app switcher sidebar plus a main panel that
+//! The OcHub root view: an app switcher sidebar plus a main panel that
 //! can show the provider list, a provider editor, the settings panel, or the
 //! gateway panel, all wired to live `ochub-core` data via an in-process `AppState`.
 
@@ -212,7 +212,7 @@ impl AppRoot {
     }
 
     fn close_window(&mut self, _: &CloseWindow, _window: &mut Window, _cx: &mut Context<Self>) {
-        // OCHub owns background gateway state, so keep the single root window
+        // OcHub owns background gateway state, so keep the single root window
         // alive. macOS can restore a hidden app from Dock; Windows/Linux keep
         // an explicit taskbar/dock entry by minimizing instead.
         #[cfg(target_os = "macos")]
@@ -1557,7 +1557,7 @@ impl Render for AppRoot {
             .when(self.show_first_run_notice, |root| {
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("欢迎使用 OCHub"))
+                        .child(components::modal_header("欢迎使用 OcHub"))
                         .child(components::modal_body().child(
                             div()
                                 .flex()
@@ -1565,7 +1565,7 @@ impl Render for AppRoot {
                                 .gap_2()
                                 .text_color(theme::subtext())
                                 .text_sm()
-                                .child("OCHub 会直接读写各 AI 工具的配置，并在本地保存供应商与网关数据。")
+                                .child("OcHub 会直接读写各 AI 工具的配置，并在本地保存供应商与网关数据。")
                                 .child("建议首次使用前备份现有配置；之后可在“设置”与各应用页面调整行为。"),
                         ))
                         .child(components::modal_footer(vec![

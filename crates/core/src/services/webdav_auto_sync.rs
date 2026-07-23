@@ -93,7 +93,7 @@ fn persist_auto_sync_error(settings: &mut WebDavSyncSettings, error: &AppError) 
     let _ = settings::update_webdav_sync_status(settings.status.clone());
 }
 
-// cc-switch emitted a `webdav-sync-status-updated` Tauri event here. OCHub
+// cc-switch emitted a `webdav-sync-status-updated` Tauri event here. OcHub
 // persists status in settings; GPUI and the HTTP API expose explicit refresh
 // actions instead of using a Tauri event bus.
 fn report_auto_sync_status(status: &str, error: Option<&str>) {

@@ -11,8 +11,8 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-authors = ["OCHub contributors"]
-repository = "https://github.com/Sleepstars/OCHub"
+authors = ["OcHub contributors"]
+repository = "https://github.com/Sleepstars/OcHub"
 rust-version = "1.97.0"
 
 [workspace.dependencies]
@@ -71,7 +71,7 @@ ochub-server = { path = "crates/server" }
 ochub-convert = { path = "crates/convert" }
 
 # GPUI is pinned to a Zed commit instead of crates.io because the published
-# crate lags the APIs used by OCHub.
+# crate lags the APIs used by OcHub.
 gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52" }
 zed-text = { git = "https://github.com/zed-industries/zed", package = "text", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52", features = ["font-kit", "runtime_shaders"] }

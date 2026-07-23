@@ -62,12 +62,12 @@ fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
     let settings = settings::get_settings();
     let quick_switch_enabled = settings.show_in_tray;
     let mut menus = vec![
-        Menu::new("OCHub").items([
+        Menu::new("OcHub").items([
             MenuItem::action("打开主窗口", OpenMainWindow),
             MenuItem::separator(),
             MenuItem::os_submenu("服务", SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("退出 OCHub", QuitApp),
+            MenuItem::action("退出 OcHub", QuitApp),
         ]),
         Menu::new("文件").items([
             MenuItem::action("保存", Save),
@@ -105,7 +105,7 @@ fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
             dock_items.extend(provider_submenus(app));
             dock_items.push(MenuItem::separator());
         }
-        dock_items.push(MenuItem::action("退出 OCHub", QuitApp));
+        dock_items.push(MenuItem::action("退出 OcHub", QuitApp));
         dock_items
     };
     cx.set_dock_menu(dock_items);
@@ -173,7 +173,7 @@ fn windows_taskbar_items(app: &Arc<AppState>, quick_switch_enabled: bool) -> Vec
     if quick_switch_enabled {
         items.extend(windows_provider_items(app));
     }
-    items.push(MenuItem::action("退出 OCHub", QuitApp));
+    items.push(MenuItem::action("退出 OcHub", QuitApp));
     items
 }
 

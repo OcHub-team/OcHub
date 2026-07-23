@@ -98,7 +98,7 @@ pub fn get_database_path() -> PathBuf {
 }
 
 /// Legacy cc-switch data directory (`~/.cc-switch`) — one-time import source.
-/// OCHub never writes here.
+/// OcHub never writes here.
 pub fn get_legacy_ccswitch_dir() -> PathBuf {
     get_home_dir().join(".cc-switch")
 }

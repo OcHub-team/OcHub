@@ -1,4 +1,4 @@
-# OCHub task runner — `just` 或 `just --list` 查看所有命令
+# OcHub task runner — `just` 或 `just --list` 查看所有命令
 
 # GPUI/Metal 构建需要完整 Xcode；已设置 DEVELOPER_DIR 时沿用现有值
 export DEVELOPER_DIR := env_var_or_default("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")

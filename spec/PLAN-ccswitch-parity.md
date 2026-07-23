@@ -1,7 +1,7 @@
 # Plan: cc-switch parity + Gemini CLI removal + skills → `npx skills`
 
 > Historical upstream integration plan. Its Gemini-removal and Skills-CLI
-> workstreams are now integrated. The proxy workstream is superseded by OCHub's
+> workstreams are now integrated. The proxy workstream is superseded by OcHub's
 > in-process relay gateway, which is the only active routing implementation.
 > Names and paths below are retained as implementation history.
 
@@ -85,7 +85,7 @@ Replace the SSOT engine inside `services/skill.rs` with a wrapper around
 `update [-y]`, `find`, `init`). Design:
 
 - **Registry of record stays SQLite** (`skills`, `skill_repos` tables, unchanged
-  schema): OCHub records id/name/description/source(owner/repo@branch)/apps
+  schema): OcHub records id/name/description/source(owner/repo@branch)/apps
   so per-app toggles, auto-sync watchers, and the UI keep working. File
   placement/symlinking is delegated entirely to the CLI.
 - App↔agent mapping probed at runtime (`claude→claude`, `codex→codex`,

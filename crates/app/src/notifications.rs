@@ -583,7 +583,7 @@ mod tests {
             NotificationLevel::Warning
         );
         assert_eq!(
-            NotificationLevel::from_text("已应用 OCHub"),
+            NotificationLevel::from_text("已应用 OcHub"),
             NotificationLevel::Success
         );
         assert_eq!(

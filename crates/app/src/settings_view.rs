@@ -962,10 +962,10 @@ impl SettingsView {
             }
             2 => section_block(
                 "配置目录",
-                "覆盖 OCHub 数据目录；各 CLI 的配置目录已移至对应应用的「应用设置」。",
+                "覆盖 OcHub 数据目录；各 CLI 的配置目录已移至对应应用的「应用设置」。",
                 vec![
                     Self::render_input_row(
-                        "OCHub 数据目录",
+                        "OcHub 数据目录",
                         "数据库、备份和托管技能目录；保存后建议重启应用。",
                         self.app_config_dir.clone(),
                     )

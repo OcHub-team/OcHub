@@ -736,12 +736,12 @@ pub fn prepare_codex_config_text_with_model_catalog(
 }
 
 /// Reverse of `prepare_codex_config_text_with_model_catalog`: read the
-/// OCHub-maintained catalog file referenced by `~/.codex/config.toml` and
+/// OcHub-maintained catalog file referenced by `~/.codex/config.toml` and
 /// convert it back into the simplified shape the frontend table uses:
 /// `{ "models": [{ "model", "displayName"?, "contextWindow"? }, ...] }`.
 ///
 /// We only reverse-parse catalogs whose `model_catalog_json` path is an
-/// OCHub-generated file. The current filename is `ochub-model-catalog.json`;
+/// OcHub-generated file. The current filename is `ochub-model-catalog.json`;
 /// the legacy cc-switch filename is accepted for a seamless one-time rebrand.
 /// A user-managed external catalog file is left alone — surfacing its richer
 /// structure as the simplified table would be a downgrade we can't safely
@@ -777,7 +777,7 @@ pub fn read_codex_model_catalog_simplified_from_live() -> Result<Option<Value>, 
     ))
 }
 
-/// Given `config.toml` text, resolve the on-disk path of an OCHub-owned
+/// Given `config.toml` text, resolve the on-disk path of an OcHub-owned
 /// catalog file (returns `None` if `model_catalog_json` is absent or points at
 /// a file we don't own). Relative paths fall back to `generated_path`.
 pub(crate) fn resolve_ochub_catalog_path(
@@ -2310,7 +2310,7 @@ model = "glm-5"
         let parsed: toml::Value = toml::from_str(&result).unwrap();
         assert!(
             parsed.get("model_catalog_json").is_none(),
-            "None arm should remove OCHub-owned field regardless of path format"
+            "None arm should remove OcHub-owned field regardless of path format"
         );
     }
 
@@ -2349,7 +2349,7 @@ model_catalog_json = "ochub-model-catalog.json"
         let result = resolve_ochub_catalog_path(config_text, &generated_path);
         assert_eq!(
             result, None,
-            "user-owned catalog should not be claimed by OCHub"
+            "user-owned catalog should not be claimed by OcHub"
         );
     }
 
@@ -2361,7 +2361,7 @@ model_catalog_json = "ochub-model-catalog.json"
         let parsed: toml::Value = toml::from_str(&result).unwrap();
         assert!(
             parsed.get("model_catalog_json").is_none(),
-            "None arm should remove relative OCHub-owned field"
+            "None arm should remove relative OcHub-owned field"
         );
     }
 }

@@ -10,7 +10,7 @@ resources_dir="${contents_dir}/Resources"
 executable_path="${macos_dir}/ochub"
 
 if pgrep -f "${executable_path}" >/dev/null 2>&1; then
-    printf 'OCHub-QA is still running. Quit it before rebuilding %s.\n' "${app_path}" >&2
+    printf 'OcHub-QA is still running. Quit it before rebuilding %s.\n' "${app_path}" >&2
     exit 1
 fi
 

@@ -1,7 +1,7 @@
 //! Codex provider config codec.
 //!
 //! Codex reads two files: `~/.codex/auth.json` (the API key / OpenAI-login
-//! material) and `~/.codex/config.toml` (model + provider table). OCHub
+//! material) and `~/.codex/config.toml` (model + provider table). OcHub
 //! stores both inside one `settingsConfig` object shaped
 //! `{ "auth": { "OPENAI_API_KEY": … }, "config": "<config.toml text>" }`.
 //!
@@ -86,7 +86,7 @@ impl AppConfig for CodexConfig {
                         },
                     )
                     .visible_when("auth_mode", AUTH_API_KEY)
-                    .help("Codex 从该环境变量读取密钥；OCHub 启动时会注入。"),
+                    .help("Codex 从该环境变量读取密钥；OcHub 启动时会注入。"),
                     FormField::new(
                         "api_key",
                         "API Key",

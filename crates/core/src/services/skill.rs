@@ -713,7 +713,7 @@ impl SkillService {
     /// 获取技能全局仓库目录（WebDAV/S3 同步会打包该目录）。
     ///
     /// 目录选择遵循持久化的 `SkillStorageLocation` 设置，避免同步快照在两个
-    /// 存储位置间意外漂移（否则 OCHub 用户的远端 skills.zip 会被近乎空的
+    /// 存储位置间意外漂移（否则 OcHub 用户的远端 skills.zip 会被近乎空的
     /// 新目录覆盖）：
     /// - `SkillStorageLocation::Ochub`   → `~/.ochub/skills/`
     /// - `SkillStorageLocation::Unified`  → `~/.agents/skills/`
@@ -1557,7 +1557,7 @@ mod tests {
         // 仅 unified 存在
         fs::create_dir_all(&unified).unwrap();
 
-        // 配置为 OCHub 但其目录缺失，另一目录存在 → 回退到 unified
+        // 配置为 OcHub 但其目录缺失，另一目录存在 → 回退到 unified
         assert_eq!(
             resolve_ssot_dir(SkillStorageLocation::Ochub, unified.clone(), ochub.clone()),
             unified

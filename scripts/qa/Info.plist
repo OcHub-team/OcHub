@@ -7,9 +7,9 @@
     <key>CFBundleIdentifier</key>
     <string>io.ochub.debug.qa</string>
     <key>CFBundleName</key>
-    <string>OCHub QA</string>
+    <string>OcHub QA</string>
     <key>CFBundleDisplayName</key>
-    <string>OCHub QA</string>
+    <string>OcHub QA</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

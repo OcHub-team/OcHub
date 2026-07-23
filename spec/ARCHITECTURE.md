@@ -1,7 +1,7 @@
-# OCHub — architecture & integration contract
+# OcHub — architecture & integration contract
 
-Living notes for the OCHub architecture. cc-switch remains a compatibility
-reference and read-only import source, not OCHub's runtime source of truth.
+Living notes for the OcHub architecture. cc-switch remains a compatibility
+reference and read-only import source, not OcHub's runtime source of truth.
 
 ## Crates
 - `ochub-core` (`crates/core`): domain + config + SQLite store + services. No Tauri/GPUI.
@@ -63,7 +63,7 @@ management, deeplink, settings, update/restart, lightweight mode.
 
 ## Current integration rules
 
-1. SQLite under `~/.ochub/` is OCHub's source of truth; cc-switch data is imported
+1. SQLite under `~/.ochub/` is OcHub's source of truth; cc-switch data is imported
    once and never written back.
 2. The in-process relay gateway is the sole owner of local routing, protocol
    conversion, failover, health checks, and gateway usage accounting.

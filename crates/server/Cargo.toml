@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "OCHub axum server: control API + local relay gateway"
+description = "OcHub axum server: control API + local relay gateway"
 
 [lib]
 name = "ochub_server"

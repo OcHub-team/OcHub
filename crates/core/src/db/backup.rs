@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-const OCHUB_SQL_EXPORT_HEADER: &str = "-- OCHub SQLite 导出";
+const OCHUB_SQL_EXPORT_HEADER: &str = "-- OcHub SQLite 导出";
 
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
 const SYNC_SKIP_TABLES: &[&str] = &["usage_logs", "stream_check_logs", "usage_daily_rollups"];
@@ -164,8 +164,8 @@ impl Database {
 
         Err(AppError::localized(
             "backup.sql.invalid_format",
-            "仅支持导入由 OCHub 导出的 SQL 备份文件。",
-            "Only SQL backups exported by OCHub are supported.",
+            "仅支持导入由 OcHub 导出的 SQL 备份文件。",
+            "Only SQL backups exported by OcHub are supported.",
         ))
     }
 

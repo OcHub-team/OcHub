@@ -316,7 +316,7 @@ impl Default for SkillStore {
     }
 }
 
-/// 未被 OCHub 管理的 Skill（扫描应用目录时发现）
+/// 未被 OcHub 管理的 Skill（扫描应用目录时发现）
 ///
 /// Ported from cc-switch `app_config.rs` (`UnmanagedSkill`).
 #[derive(Debug, Clone, Serialize, Deserialize)]

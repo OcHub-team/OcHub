@@ -837,11 +837,11 @@ async fn restart_app() -> ApiResult<Json<Value>> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
 
     std::thread::Builder::new()
-        .name("OCHub-restart".to_string())
+        .name("OcHub-restart".to_string())
         .spawn(move || {
             std::thread::sleep(Duration::from_millis(150));
             if let Err(err) = Command::new(&exe).args(args).spawn() {
-                log::error!("重启 OCHub 失败: {err}");
+                log::error!("重启 OcHub 失败: {err}");
                 return;
             }
             std::process::exit(0);
@@ -881,7 +881,7 @@ fn auto_launch_handle() -> Result<AutoLaunch, AppError> {
     let app_path = exe_path;
 
     AutoLaunchBuilder::new()
-        .set_app_name("OCHub")
+        .set_app_name("OcHub")
         .set_app_path(&app_path.to_string_lossy())
         .build()
         .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))

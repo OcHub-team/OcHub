@@ -140,8 +140,8 @@ impl ToolsView {
             cx.new(|cx| TextInput::new(cx, "Hermes MEMORY.md").multiline(true));
         let hermes_user_memory_content =
             cx.new(|cx| TextInput::new(cx, "Hermes USER.md").multiline(true));
-        let export_sql_path = cx.new(|cx| TextInput::new(cx, "~/.ochub/exports/OCHub.sql"));
-        let import_sql_path = cx.new(|cx| TextInput::new(cx, "/path/to/OCHub.sql"));
+        let export_sql_path = cx.new(|cx| TextInput::new(cx, "~/.ochub/exports/OcHub.sql"));
+        let import_sql_path = cx.new(|cx| TextInput::new(cx, "/path/to/OcHub.sql"));
         let env_restore_path =
             cx.new(|cx| TextInput::new(cx, "~/.ochub/backups/env-backup-YYYYMMDD.json"));
         let backup_rename = cx.new(|cx| TextInput::new(cx, "backup-name"));
@@ -1196,7 +1196,7 @@ impl ToolsView {
                         .w_full()
                         .child(layout::section_header(
                             "应用辅助",
-                            "应用级辅助开关与 OCHub 数据目录。",
+                            "应用级辅助开关与 OcHub 数据目录。",
                         ))
                         .child(
                             div()
@@ -1224,7 +1224,7 @@ impl ToolsView {
                                 .child(
                                     components::button(
                                         "open-app-config",
-                                        "打开 OCHub 数据目录",
+                                        "打开 OcHub 数据目录",
                                         ButtonTone::Neutral,
                                         ButtonSize::Sm,
                                     )
@@ -1845,7 +1845,7 @@ impl ToolsView {
                                         .child(
                                             components::button(
                                                 "claude-plugin-apply",
-                                                "应用 OCHub 插件",
+                                                "应用 OcHub 插件",
                                                 ButtonTone::Neutral,
                                                 ButtonSize::Sm,
                                             )
@@ -2505,7 +2505,7 @@ fn auto_launch_handle() -> Result<AutoLaunch, AppError> {
     let app_path = exe_path;
 
     AutoLaunchBuilder::new()
-        .set_app_name("OCHub")
+        .set_app_name("OcHub")
         .set_app_path(&app_path.to_string_lossy())
         .build()
         .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))

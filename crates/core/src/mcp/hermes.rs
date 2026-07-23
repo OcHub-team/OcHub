@@ -2,11 +2,11 @@
 //!
 //! Ported from cc-switch `src-tauri/src/mcp/hermes.rs`.
 //!
-//! Handles conversion between OCHub unified MCP format and Hermes config.yaml format.
+//! Handles conversion between OcHub unified MCP format and Hermes config.yaml format.
 //!
 //! ## Format mapping
 //!
-//! | OCHub unified (JSON)                        | Hermes config.yaml (YAML)       |
+//! | OcHub unified (JSON)                        | Hermes config.yaml (YAML)       |
 //! |-------------------------------------------------|---------------------------------|
 //! | `{"type":"stdio","command":"npx","args":[...],"env":{}}` | `command: npx`, `args: [...]`, `env: {}` |
 //! | `{"type":"sse"/"http","url":"...","headers":{}}` | `url: "..."`, `headers: {}`    |
@@ -29,7 +29,7 @@ use super::validation::validate_server_spec;
 /// Update this list when Hermes adds new per-server config fields.
 ///
 /// `auth` ("oauth" / absent) is an OAuth-type declaration read by Hermes —
-/// OCHub has no OAuth UI, but losing the field on round-trip downgrades
+/// OcHub has no OAuth UI, but losing the field on round-trip downgrades
 /// the server to unauthenticated calls.
 const HERMES_EXTRA_FIELDS: &[&str] = &[
     "enabled",
@@ -51,10 +51,10 @@ fn should_sync_hermes_mcp() -> bool {
 }
 
 // ============================================================================
-// Format Conversion: OCHub -> Hermes
+// Format Conversion: OcHub -> Hermes
 // ============================================================================
 
-/// Convert OCHub unified format to Hermes format
+/// Convert OcHub unified format to Hermes format
 ///
 /// Conversion rules:
 /// - `stdio`: output `command`, `args`, `env` (strip `type` field)
@@ -107,10 +107,10 @@ fn convert_to_hermes_format(spec: &Value) -> Result<Value, AppError> {
 }
 
 // ============================================================================
-// Format Conversion: Hermes -> OCHub
+// Format Conversion: Hermes -> OcHub
 // ============================================================================
 
-/// Convert Hermes format to OCHub unified format
+/// Convert Hermes format to OcHub unified format
 ///
 /// Conversion rules:
 /// - If `command` exists: set `type: "stdio"`, extract `command`, `args`, `env`
@@ -207,7 +207,7 @@ pub fn sync_single_server_to_hermes(
 ///
 /// Core fields (command, args, env, url, headers) come from `new_spec`.
 /// Hermes-specific fields (enabled, tools, sampling, etc.) are kept from
-/// `existing` — this prevents OCHub from overwriting user customizations.
+/// `existing` — this prevents OcHub from overwriting user customizations.
 fn merge_hermes_spec(existing: &Value, new_spec: &Value) -> Value {
     let mut result = serde_json::Map::new();
 
@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(merged["headers"]["X-Trace"], "abc");
         assert_eq!(
             merged["auth"], "oauth",
-            "auth declaration must survive OCHub round-trip"
+            "auth declaration must survive OcHub round-trip"
         );
     }
 

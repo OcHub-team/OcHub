@@ -131,7 +131,7 @@ impl GatewayService {
         })?
     }
 
-    /// Stop the in-process listener. This never terminates or restarts OCHub.
+    /// Stop the in-process listener. This never terminates or restarts OcHub.
     pub async fn stop(&self) -> Result<(), AppError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.send(GatewayCommand::Stop(reply_tx))?;
