@@ -31,7 +31,7 @@ Key API (all take `&AppState`):
 - `delete(state, app_type, id)`
 - `switch(state, app_type, id) -> SwitchResult`
 - `remove_from_live_config(state, app_type, id)`
-- `import_default_config(state, app_type) -> bool`
+- `auto_import_live_providers(state, app_type) -> usize`
 - `extract_common_config_snippet`, `migrate_legacy_common_config_usage_if_needed`,
   `update_sort_order`, speedtest/endpoint helpers, usage helpers.
 

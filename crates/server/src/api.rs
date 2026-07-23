@@ -181,7 +181,7 @@ async fn import_default(
     Path(app): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let app_type = parse_app(&app)?;
-    let imported = ProviderService::import_default_config(&state.app, app_type)?;
+    let imported = ProviderService::auto_import_live_providers(&state.app, app_type)? > 0;
     Ok(Json(json!({ "imported": imported })))
 }
 
@@ -190,17 +190,13 @@ async fn import_live(
     Path(app): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let app_type = parse_app(&app)?;
-    let imported = match app_type {
-        AppType::OpenCode => provider::import_opencode_providers_from_live(&state.app)?,
-        AppType::OpenClaw => provider::import_openclaw_providers_from_live(&state.app)?,
-        AppType::Hermes => provider::import_hermes_providers_from_live(&state.app)?,
-        other => {
-            return Err(ApiError(AppError::InvalidInput(format!(
-                "{} does not support live-provider import",
-                other.as_str()
-            ))))
-        }
-    };
+    if !app_type.is_additive_mode() {
+        return Err(ApiError(AppError::InvalidInput(format!(
+            "{} does not support live-provider import",
+            app_type.as_str()
+        ))));
+    }
+    let imported = ProviderService::auto_import_live_providers(&state.app, app_type)?;
     Ok(Json(json!({ "imported": imported })))
 }
 

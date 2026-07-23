@@ -50,9 +50,10 @@ impl AppState {
     /// checks, "already has providers" checks), so it is safe to run on every
     /// startup.
     ///
-    /// Order matters: import existing live configs as the `default` provider
-    /// (set current) *before* seeding official presets, so switching to an
-    /// official preset never clobbers the user's original live config.
+    /// Order matters: discover existing live configs *before* seeding official
+    /// presets, so switching to an official preset never clobbers the user's
+    /// original live config. Discovery is repeated on every startup and only
+    /// adds provider ids that OcHub does not already manage.
     pub fn bootstrap(&self) {
         match self.db.init_default_skill_repos() {
             Ok(count) if count > 0 => log::info!("seeded {count} default skill repositories"),
@@ -66,21 +67,18 @@ impl AppState {
             log::warn!("failed to load user plugin {}: {}", err.path, err.message);
         }
 
-        for app_type in AppType::all()
-            .filter(|t| !t.is_additive_mode())
-            .filter(crate::plugin::registry::is_app_type_enabled)
-        {
-            if ProviderService::should_import_default_config_on_startup(self, &app_type)
-                .unwrap_or(false)
-            {
-                match ProviderService::import_default_config(self, app_type) {
-                    Ok(true) => {
-                        log::info!("imported live config for {} as default", app_type.as_str())
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        log::debug!("no live config to import for {}: {e}", app_type.as_str())
-                    }
+        for app_type in AppType::all().filter(crate::plugin::registry::is_app_type_enabled) {
+            match ProviderService::auto_import_live_providers(self, app_type) {
+                Ok(count) if count > 0 => log::info!(
+                    "automatically discovered {count} provider(s) from {}",
+                    app_type.as_str()
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    log::debug!(
+                        "no live providers to discover for {}: {e}",
+                        app_type.as_str()
+                    )
                 }
             }
         }

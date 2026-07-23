@@ -480,6 +480,13 @@ impl AppRoot {
 
     /// (Re)load providers + current id for the selected app from the store.
     fn reload(&mut self, cx: &mut Context<Self>) {
+        if let Err(err) = ProviderService::auto_import_live_providers(&self.app, self.selected_app)
+        {
+            log::debug!(
+                "automatic provider discovery skipped for {}: {err}",
+                self.selected_app.as_str()
+            );
+        }
         match ProviderService::list(&self.app, self.selected_app) {
             Ok(map) => self.providers = map.into_values().collect(),
             Err(err) => {
@@ -570,48 +577,6 @@ impl AppRoot {
             Err(err) => {
                 self.notify_error("切换供应商失败", err.to_string(), cx);
             }
-        }
-        self.reload(cx);
-        shell_menu::refresh(&self.app, cx);
-        cx.notify();
-    }
-
-    fn do_import_default(&mut self, cx: &mut Context<Self>) {
-        match ProviderService::import_default_config(&self.app, self.selected_app) {
-            Ok(true) => {
-                self.notify_success("已从工具配置导入供应商", cx);
-            }
-            Ok(false) => {
-                self.notify_info("没有可导入的工具配置", cx);
-            }
-            Err(err) => self.notify_error("导入工具配置失败", err.to_string(), cx),
-        }
-        self.reload(cx);
-        shell_menu::refresh(&self.app, cx);
-        cx.notify();
-    }
-
-    fn do_import_live(&mut self, cx: &mut Context<Self>) {
-        let imported = match self.selected_app {
-            AppType::OpenCode => provider::import_opencode_providers_from_live(&self.app),
-            AppType::OpenClaw => provider::import_openclaw_providers_from_live(&self.app),
-            AppType::Hermes => provider::import_hermes_providers_from_live(&self.app),
-            other => {
-                self.notify_warning(
-                    "暂不支持导入",
-                    format!("{} 暂不支持从工具配置批量导入供应商", other.as_str()),
-                    cx,
-                );
-                cx.notify();
-                return;
-            }
-        };
-
-        match imported {
-            Ok(count) => {
-                self.notify_success(format!("已从工具配置导入 {count} 个供应商"), cx);
-            }
-            Err(err) => self.notify_error("导入工具配置失败", err.to_string(), cx),
         }
         self.reload(cx);
         shell_menu::refresh(&self.app, cx);
@@ -1318,8 +1283,6 @@ impl AppRoot {
     fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.selected_app;
         let is_switch = !app.is_additive_mode();
-        let can_import_live =
-            matches!(app, AppType::OpenCode | AppType::OpenClaw | AppType::Hermes);
 
         // In switch mode the live provider is surfaced in the hero, so the list below
         // shows only the switchable alternatives. Additive apps list everything.
@@ -1369,21 +1332,6 @@ impl AppRoot {
                         this.open_add_editor(cx);
                     })),
             )
-            .child(
-                components::icon_button("import-default", "导入工具配置", IconName::Archive, false)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.do_import_default(cx);
-                    })),
-            )
-            .when(can_import_live, |s| {
-                s.child(
-                    components::icon_button("import-live", "批量导入", IconName::Cloud, false)
-                        .aria_label("从工具配置批量导入供应商")
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.do_import_live(cx);
-                        })),
-                )
-            })
             .when(app_has_settings(app), |s| {
                 s.child(
                     components::icon_button(
@@ -1424,7 +1372,7 @@ impl AppRoot {
                             components::card().p_0().child(components::empty_state(
                                 IconName::Folder,
                                 "还没有供应商",
-                                "点击“新增”或“导入工具配置”创建一个。",
+                                "已有工具配置会自动识别，也可以手动新增。",
                                 Some(
                                     components::icon_button(
                                         "empty-add-provider",

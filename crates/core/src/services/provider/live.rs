@@ -1038,7 +1038,7 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
     }
 }
 
-/// Import default configuration from live files
+/// Import default configuration from live files.
 ///
 /// Returns `Ok(true)` if a provider was actually imported,
 /// `Ok(false)` if skipped (providers already exist for this app).
@@ -1049,10 +1049,8 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         return Ok(false);
     }
 
-    // 允许 "只有官方 seed 预设" 的情况下继续导入 live：
-    // - 启动编排顺序是先 import 后 seed，新用户启动时 providers 为空，导入照常
-    // - 老用户已有非 seed provider，跳过导入（正确）
-    // - 用户手动点 ProviderEmptyState 的导入按钮时，与官方 seed 共存而不被阻塞
+    // 允许只有官方 seed 预设时继续导入 live。自动发现会额外确认 OcHub
+    // 尚未管理当前供应商，避免用户主动删除导入项后又被重新创建。
     if state.db.has_non_official_seed_provider(app_type.as_str())? {
         return Ok(false);
     }
@@ -1127,20 +1125,50 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
     Ok(true) // 真正导入了
 }
 
-/// Decide whether startup should auto-import the current live config as `default`.
+/// Decide whether automatic discovery should import the current live config as
+/// `default`.
 ///
-/// This is intentionally stricter than the manual import path:
-/// if the app already has any provider row at all (including official seeds),
-/// startup must skip auto-import to avoid recreating `default` on each launch.
-pub fn should_import_default_config_on_startup(
+/// Official seeds do not block discovery because they may have been added
+/// before the user installs or configures the corresponding tool. Once OcHub
+/// has a current provider or any non-seed provider, the live file is considered
+/// managed and is never imported over the stored state.
+pub fn should_auto_import_default_config(
     state: &AppState,
     app_type: &AppType,
 ) -> Result<bool, AppError> {
-    if app_type.is_additive_mode() {
+    if app_type.is_additive_mode() || matches!(app_type, AppType::ClaudeDesktop) {
         return Ok(false);
     }
 
-    Ok(!state.db.has_any_provider_for_app(app_type.as_str())?)
+    if state.db.get_current_provider(app_type.as_str())?.is_some() {
+        return Ok(false);
+    }
+
+    Ok(!state.db.has_non_official_seed_provider(app_type.as_str())?)
+}
+
+/// Discover providers from the selected tool's live configuration.
+///
+/// The operation is idempotent:
+/// - switch-mode tools import one `default` provider only while unmanaged;
+/// - additive-mode tools import only provider ids missing from the OcHub DB;
+/// - existing OcHub providers are never overwritten.
+pub fn auto_import_live_providers(state: &AppState, app_type: AppType) -> Result<usize, AppError> {
+    match app_type {
+        AppType::Claude | AppType::Codex => {
+            if should_auto_import_default_config(state, &app_type)?
+                && import_default_config(state, app_type)?
+            {
+                Ok(1)
+            } else {
+                Ok(0)
+            }
+        }
+        AppType::ClaudeDesktop => Ok(0),
+        AppType::OpenCode => import_opencode_providers_from_live(state),
+        AppType::OpenClaw => import_openclaw_providers_from_live(state),
+        AppType::Hermes => import_hermes_providers_from_live(state),
+    }
 }
 
 /// Remove an OpenCode provider from the live configuration
@@ -1378,6 +1406,8 @@ pub fn remove_openclaw_provider_from_live(provider_id: &str) -> Result<(), AppEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
     use serde_json::json;
 
     #[test]
@@ -1574,6 +1604,62 @@ mod tests {
             result.get("modelCatalog"),
             live_settings.get("modelCatalog"),
             "backfill must keep the Live-reconstructed catalog when the DB has none"
+        );
+    }
+
+    #[test]
+    fn automatic_default_import_allows_unmanaged_official_seed_only() {
+        let db = Arc::new(Database::memory().expect("memory db"));
+        let state = AppState::new(db);
+
+        state
+            .db
+            .init_default_official_providers()
+            .expect("seed official providers");
+
+        assert!(should_auto_import_default_config(&state, &AppType::Claude)
+            .expect("claude discovery policy"));
+        assert!(should_auto_import_default_config(&state, &AppType::Codex)
+            .expect("codex discovery policy"));
+        assert!(
+            !should_auto_import_default_config(&state, &AppType::ClaudeDesktop)
+                .expect("desktop discovery policy")
+        );
+    }
+
+    #[test]
+    fn automatic_default_import_stops_once_ochub_manages_live_config() {
+        let db = Arc::new(Database::memory().expect("memory db"));
+        let state = AppState::new(db);
+
+        state
+            .db
+            .init_default_official_providers()
+            .expect("seed official providers");
+        state
+            .db
+            .set_current_provider("claude", "claude-official")
+            .expect("set current provider");
+
+        assert!(!should_auto_import_default_config(&state, &AppType::Claude)
+            .expect("managed discovery policy"));
+
+        let custom = Provider::with_id(
+            "custom".to_string(),
+            "Custom".to_string(),
+            json!({"auth": {}, "config": ""}),
+            None,
+        );
+        state
+            .db
+            .save_provider("codex", &custom)
+            .expect("save non-seed provider");
+
+        assert!(!should_auto_import_default_config(&state, &AppType::Codex)
+            .expect("non-seed discovery policy"));
+        assert!(
+            !should_auto_import_default_config(&state, &AppType::OpenCode)
+                .expect("additive discovery policy")
         );
     }
 }

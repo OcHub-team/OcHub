@@ -21,9 +21,9 @@ use crate::settings::CustomEndpoint;
 
 // Re-export sub-module functions for external access
 pub use live::{
-    import_default_config, import_hermes_providers_from_live, import_openclaw_providers_from_live,
-    import_opencode_providers_from_live, read_live_settings,
-    should_import_default_config_on_startup, sync_current_to_live,
+    auto_import_live_providers, import_default_config, import_hermes_providers_from_live,
+    import_openclaw_providers_from_live, import_opencode_providers_from_live, read_live_settings,
+    should_auto_import_default_config, sync_current_to_live,
 };
 
 // Internal re-exports (pub(crate)). These mirror the cc-switch re-export seams;
@@ -852,11 +852,20 @@ impl ProviderService {
         import_default_config(state, app_type)
     }
 
-    pub fn should_import_default_config_on_startup(
+    pub fn should_auto_import_default_config(
         state: &AppState,
         app_type: &AppType,
     ) -> Result<bool, AppError> {
-        should_import_default_config_on_startup(state, app_type)
+        should_auto_import_default_config(state, app_type)
+    }
+
+    /// Discover providers from the tool's live configuration without
+    /// overwriting anything already managed by OcHub.
+    pub fn auto_import_live_providers(
+        state: &AppState,
+        app_type: AppType,
+    ) -> Result<usize, AppError> {
+        auto_import_live_providers(state, app_type)
     }
 
     /// Read current live settings (re-export)
