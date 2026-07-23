@@ -702,8 +702,10 @@ impl GatewayView {
                 let status = app.gateway.start().await?;
                 let base_url = status.base_url;
                 let app_for_info = app.clone();
-                cx.background_spawn(async move { apply::generic_client_info(&app_for_info, &base_url) })
-                    .await
+                cx.background_spawn(
+                    async move { apply::generic_client_info(&app_for_info, &base_url) },
+                )
+                .await
             }
             .await;
             this.update(cx, |this, cx| {
@@ -942,24 +944,17 @@ impl GatewayView {
                 .flex_wrap()
                 .items_center()
                 .gap_4()
-                .child(
-                    div()
-                        .text_color(theme::muted())
-                        .text_xs()
-                        .child("当前连接"),
-                )
+                .child(div().text_color(theme::muted()).text_xs().child("当前连接"))
                 .children(items)
                 .into_any_element(),
         )
     }
 
     fn render_connection_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let panel = components::card()
-            .gap_3()
-            .child(section_title(
-                "其他工具接入",
-                "任何使用 OpenAI Chat 接口的工具，填入以下本机地址和密钥即可接入。",
-            ));
+        let panel = components::card().gap_3().child(section_title(
+            "其他工具接入",
+            "任何使用 OpenAI Chat 接口的工具，填入以下本机地址和密钥即可接入。",
+        ));
         let panel = match self.connection_info.clone() {
             None => panel.child(div().text_color(theme::muted()).text_sm().child(
                 if self.connection_loading {
@@ -985,7 +980,13 @@ impl GatewayView {
                             .flex_wrap()
                             .items_center()
                             .gap_2()
-                            .child(div().text_color(theme::muted()).text_xs().w(px(40.)).child("地址"))
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .w(px(40.))
+                                    .child("地址"),
+                            )
                             .child(
                                 div()
                                     .text_color(theme::text())
@@ -999,9 +1000,15 @@ impl GatewayView {
                                     ButtonTone::Neutral,
                                     ButtonSize::Sm,
                                 )
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
-                                    this.copy_to_clipboard(url_for_copy.clone(), "已复制地址", cx);
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.copy_to_clipboard(
+                                            url_for_copy.clone(),
+                                            "已复制地址",
+                                            cx,
+                                        );
+                                    },
+                                )),
                             ),
                     )
                     .child(
@@ -1011,7 +1018,13 @@ impl GatewayView {
                             .flex_wrap()
                             .items_center()
                             .gap_2()
-                            .child(div().text_color(theme::muted()).text_xs().w(px(40.)).child("密钥"))
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .w(px(40.))
+                                    .child("密钥"),
+                            )
                             .child(
                                 div()
                                     .text_color(theme::text())
@@ -1029,10 +1042,12 @@ impl GatewayView {
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,
                                 )
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.reveal_connection_key = !this.reveal_connection_key;
-                                    cx.notify();
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.reveal_connection_key = !this.reveal_connection_key;
+                                        cx.notify();
+                                    },
+                                )),
                             )
                             .child(
                                 components::button(
@@ -1041,9 +1056,11 @@ impl GatewayView {
                                     ButtonTone::Neutral,
                                     ButtonSize::Sm,
                                 )
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
-                                    this.copy_to_clipboard(key.clone(), "已复制密钥", cx);
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.copy_to_clipboard(key.clone(), "已复制密钥", cx);
+                                    },
+                                )),
                             ),
                     )
             }
@@ -1347,7 +1364,9 @@ impl GatewayView {
             .collect();
 
         let probe_help: SharedString = match editor.probe {
-            ProbeState::Idle => "选择转发站服务端使用的接口格式，不确定时点「检测」自动识别。".into(),
+            ProbeState::Idle => {
+                "选择转发站服务端使用的接口格式，不确定时点「检测」自动识别。".into()
+            }
             ProbeState::Running => "正在检测接口格式…".into(),
             ProbeState::Detected(dialect) => {
                 format!("已检测到 {}，如不符可手动修改。", dialect_label(dialect)).into()

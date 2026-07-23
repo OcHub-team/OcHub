@@ -29,7 +29,7 @@ pub fn page() -> gpui::Div {
         .flex_1()
         .min_w_0()
         .h_full()
-        .bg(theme::bg())
+        .bg(theme::content_background())
 }
 
 /// A page header bar: bold title, optional muted subtitle, and a trailing slot for
