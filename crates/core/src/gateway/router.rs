@@ -72,6 +72,7 @@ mod tests {
             weight,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         }
     }
 

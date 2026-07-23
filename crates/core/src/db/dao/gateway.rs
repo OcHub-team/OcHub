@@ -26,11 +26,12 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayChannel> {
         weight: row.get::<_, i64>(9)?.max(1) as u32,
         enabled: row.get(10)?,
         extra_headers: serde_json::from_str(&extra_headers_str).unwrap_or_default(),
+        imported_from: row.get(12)?,
     })
 }
 
 const CHANNEL_COLUMNS: &str = "id, name, dialect, base_url, api_key, path_override, models, \
-     model_override, priority, weight, enabled, extra_headers";
+     model_override, priority, weight, enabled, extra_headers, imported_from";
 
 fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
     let channel_ids: String = row.get(3)?;
@@ -89,15 +90,17 @@ impl Database {
         conn.execute(
             "INSERT INTO gateway_channels (
                 id, name, dialect, base_url, api_key, path_override, models,
-                model_override, priority, weight, enabled, extra_headers, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                model_override, priority, weight, enabled, extra_headers, created_at,
+                imported_from
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, dialect = excluded.dialect,
                 base_url = excluded.base_url, api_key = excluded.api_key,
                 path_override = excluded.path_override, models = excluded.models,
                 model_override = excluded.model_override, priority = excluded.priority,
                 weight = excluded.weight, enabled = excluded.enabled,
-                extra_headers = excluded.extra_headers",
+                extra_headers = excluded.extra_headers,
+                imported_from = excluded.imported_from",
             params![
                 channel.id,
                 channel.name,
@@ -112,6 +115,7 @@ impl Database {
                 channel.enabled,
                 to_json_string(&channel.extra_headers)?,
                 chrono::Utc::now().timestamp(),
+                channel.imported_from,
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -368,6 +372,7 @@ mod tests {
             weight: 3,
             enabled: true,
             extra_headers: vec![("x-extra".into(), "1".into())],
+            imported_from: Some("claude:openrouter".into()),
         }
     }
 

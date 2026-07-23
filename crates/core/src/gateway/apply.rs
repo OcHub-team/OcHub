@@ -506,6 +506,7 @@ pub fn import_provider_as_channel(
         weight: 1,
         enabled: true,
         extra_headers: Vec::new(),
+        imported_from: Some(format!("{}:{}", app_type.as_str(), provider.id)),
     };
     state.db.upsert_gateway_channel(&channel)?;
     Ok(channel)
@@ -653,6 +654,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: Vec::new(),
+            imported_from: None,
         };
         state.db.upsert_gateway_channel(&channel).unwrap();
 
@@ -697,6 +699,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: Vec::new(),
+            imported_from: None,
         };
         state.db.upsert_gateway_channel(&channel).unwrap();
         ensure_station_route(state, &channel).unwrap()

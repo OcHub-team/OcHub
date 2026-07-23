@@ -249,7 +249,8 @@ impl Database {
                 enabled INTEGER NOT NULL DEFAULT 1,
                 extra_headers TEXT NOT NULL DEFAULT '[]',
                 created_at INTEGER NOT NULL,
-                sort_index INTEGER
+                sort_index INTEGER,
+                imported_from TEXT
             )",
             [],
         )
@@ -478,6 +479,20 @@ impl Database {
                                 })?;
                         }
                         Self::set_user_version(conn, 4)?;
+                    }
+                    4 => {
+                        if Self::table_exists(conn, "gateway_channels")?
+                            && !Self::has_column(conn, "gateway_channels", "imported_from")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE gateway_channels ADD COLUMN imported_from TEXT",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!("为网关渠道添加导入来源失败: {e}"))
+                            })?;
+                        }
+                        Self::set_user_version(conn, 5)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1957,5 +1972,45 @@ mod schema_migration_tests {
             .unwrap();
         assert_eq!(secret, "rd-existing");
         assert!(route_id.is_none());
+    }
+
+    #[test]
+    fn migrates_v4_gateway_channels_to_import_origin() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_channels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                dialect TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key TEXT NOT NULL DEFAULT '',
+                path_override TEXT,
+                models TEXT NOT NULL DEFAULT '[]',
+                model_override TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                weight INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                extra_headers TEXT NOT NULL DEFAULT '[]',
+                created_at INTEGER NOT NULL,
+                sort_index INTEGER
+             );
+             INSERT INTO gateway_channels (id, name, dialect, base_url, created_at)
+             VALUES ('c1', 'relay', 'chat', 'https://x', 1);
+             PRAGMA user_version = 4;",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "gateway_channels", "imported_from").unwrap());
+        let origin: Option<String> = conn
+            .query_row(
+                "SELECT imported_from FROM gateway_channels WHERE id = 'c1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(origin.is_none());
     }
 }

@@ -355,6 +355,11 @@ impl GatewayView {
             });
         }
 
+        let imported_from = self
+            .stations
+            .iter()
+            .find(|station| station.channel.id == editor.channel_id)
+            .and_then(|station| station.channel.imported_from.clone());
         let channel = GatewayChannel {
             id: editor.channel_id.clone(),
             name: name.clone(),
@@ -368,6 +373,7 @@ impl GatewayView {
             weight: 1,
             enabled: editor.enabled,
             extra_headers: Vec::new(),
+            imported_from,
         };
         let route = GatewayRoute {
             id: editor.route_id.clone(),

@@ -1017,6 +1017,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         };
         let body = json!({ "model": "client-m", "max_tokens": 5, "messages": [], "stream": false });
         let p = prepare_request(
@@ -1051,6 +1052,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         };
         let body = json!({
             "model": "m",
@@ -1092,6 +1094,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         };
         let body = json!({
             "model": "client-m",
@@ -1135,6 +1138,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         };
         let body = json!({
             "model": "m",
@@ -1311,6 +1315,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         })
         .unwrap();
 
@@ -1430,6 +1435,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         })
         .unwrap();
         db.upsert_gateway_channel(&GatewayChannel {
@@ -1445,6 +1451,7 @@ mod tests {
             weight: 1,
             enabled: true,
             extra_headers: vec![],
+            imported_from: None,
         })
         .unwrap();
         db.upsert_gateway_route(&GatewayRoute {
