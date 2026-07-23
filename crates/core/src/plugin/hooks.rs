@@ -2,10 +2,7 @@
 //!
 //! A manifest can name three kinds of hooks — a `live_validate` precondition, an
 //! ordered list of `post_write` side effects, and a `decode` augmentation — but
-//! the *implementations* are native Rust, registered here by name. Built-in
-//! hooks ([`HookRegistry::builtin`]) reproduce the parts of the native Gemini
-//! live-write that are not expressible declaratively (auth-type detection and
-//! the `security.auth.selectedType` write).
+//! the implementations are native Rust, registered here by name.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -76,42 +73,8 @@ impl HookRegistry {
         self.decode.get(name)
     }
 
-    /// The registry seeded with the built-in (Gemini) hooks.
+    /// The registry seeded with built-in hooks.
     pub fn builtin() -> Self {
-        use crate::apps::gemini::{validate_gemini_settings_strict, write_packycode_settings};
-        use crate::services::provider::gemini_auth::{
-            detect_gemini_auth_type, ensure_google_oauth_security_flag, GeminiAuthType,
-        };
-
-        let mut registry = Self::new();
-
-        // Mirrors write_gemini_live's API-key precondition: OAuth (GoogleOfficial)
-        // skips validation; every other auth type requires GEMINI_API_KEY.
-        registry.register_live_validate(
-            "gemini.strict_validate",
-            Arc::new(|provider: &Provider| -> Result<(), AppError> {
-                match detect_gemini_auth_type(provider) {
-                    GeminiAuthType::GoogleOfficial => Ok(()),
-                    GeminiAuthType::Packycode | GeminiAuthType::Generic => {
-                        validate_gemini_settings_strict(&provider.settings_config)
-                    }
-                }
-            }),
-        );
-
-        // Mirrors write_gemini_live's post-write selectedType branch.
-        registry.register_post_write(
-            "gemini.selected_type",
-            Arc::new(|provider: &Provider, _dir: &Path| -> Result<(), AppError> {
-                match detect_gemini_auth_type(provider) {
-                    GeminiAuthType::GoogleOfficial => ensure_google_oauth_security_flag(provider),
-                    GeminiAuthType::Packycode | GeminiAuthType::Generic => {
-                        write_packycode_settings()
-                    }
-                }
-            }),
-        );
-
-        registry
+        Self::new()
     }
 }

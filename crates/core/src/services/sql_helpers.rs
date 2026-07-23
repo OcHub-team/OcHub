@@ -16,6 +16,10 @@
 /// style provider not added here) shows up loudly as a too-low cache hit
 /// rate, which is easier to catch than the silent over-deduction that
 /// would happen with the opposite default.
+///
+/// `"gemini"` is retained here for historical rows only: no current
+/// producer writes `app_type = 'gemini'`, but past rows still need
+/// cache-inclusive aggregation for consistent historical reads.
 const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini"];
 
 /// Build an SQL expression that returns the cache-normalized `input_tokens`

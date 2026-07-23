@@ -30,7 +30,6 @@ async fn control_api_smoke_covers_core_feature_groups() {
         "/api/settings",
         "/api/providers/claude",
         "/api/providers/codex",
-        "/api/providers/gemini",
         "/api/gateway/status",
         "/api/gateway/config",
         "/api/gateway/channels",

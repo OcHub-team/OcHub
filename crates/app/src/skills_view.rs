@@ -1,7 +1,7 @@
 //! Skills panel. Tabbed management of the central skill registry: installed
-//! skills with per-app sync toggles, discovery (skills.sh market + configured
-//! repos), import (ZIP / unmanaged scan), and uninstall backups. All disk and
-//! network work runs off the UI thread.
+//! skills with per-app toggles plus discovery through skills.sh and configured
+//! repositories. File installation and app linking are delegated to the
+//! Vercel `skills` CLI; all disk and network work runs off the UI thread.
 
 use std::path::Path;
 use std::process::Command;
@@ -10,14 +10,10 @@ use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    div, prelude::*, px, Context, FontWeight, ListAlignment, ListState, PathPromptOptions,
-    SharedString, Window,
+    div, prelude::*, px, Context, FontWeight, ListAlignment, ListState, SharedString, Window,
 };
-use ochub_core::db::legacy_json::{InstalledSkill, SkillApps, SkillRepo, UnmanagedSkill};
-use ochub_core::services::skill::{
-    DiscoverableSkill, ImportSkillSelection, SkillBackupEntry, SkillUpdateInfo,
-    SkillsShDiscoverableSkill,
-};
+use ochub_core::db::legacy_json::{InstalledSkill, SkillRepo};
+use ochub_core::services::skill::{DiscoverableSkill, SkillUpdateInfo, SkillsShDiscoverableSkill};
 use ochub_core::services::SkillService;
 use ochub_core::{AppState, AppType};
 
@@ -30,11 +26,10 @@ use crate::theme;
 /// 每次市场搜索的分页大小。
 const MARKET_PAGE_SIZE: usize = 30;
 
-/// 破坏性操作确认目标（卸载技能 / 删除备份 / 删除仓库），携带展示名称。
+/// 破坏性操作确认目标（卸载技能 / 删除仓库），携带展示名称。
 #[derive(Clone)]
 enum ConfirmAction {
     Uninstall { id: String, name: String },
-    DeleteBackup { id: String, name: String },
     DeleteRepo { owner: String, name: String },
 }
 
@@ -42,8 +37,6 @@ enum ConfirmAction {
 enum SkillsTab {
     Installed,
     Discover,
-    Import,
-    Backups,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -69,12 +62,6 @@ enum SkillRow {
     RepoManager,
     RepoResultsHeader,
     Discoverable(usize),
-    // 导入
-    ImportToolbar,
-    Unmanaged(usize),
-    // 备份
-    BackupHeader,
-    Backup(usize),
 }
 
 pub struct SkillsView {
@@ -86,26 +73,16 @@ pub struct SkillsView {
     discoverable: Vec<DiscoverableSkill>,
     market_results: Vec<SkillsShDiscoverableSkill>,
     market_total: usize,
-    backups: Vec<SkillBackupEntry>,
-    unmanaged: Vec<UnmanagedSkill>,
     updates: HashMap<String, SkillUpdateInfo>,
     updating: HashSet<String>,
     installing: HashSet<String>,
     /// `"<skill id>:<app id>"` 键，标记正在切换的应用开关。
     toggling: HashSet<String>,
-    restoring: HashSet<String>,
     uninstalling: HashSet<String>,
-    importing: HashSet<String>,
     checking_updates: bool,
     updating_all: bool,
     discovering: bool,
     searching_market: bool,
-    scanning: bool,
-    installing_zip: bool,
-    importing_all: bool,
-    syncing: bool,
-    /// 未管理扫描是否已跑过一次（进入导入页时自动触发）。
-    scanned_once: bool,
     /// 自动检查更新是否已触发过（视图生命周期内一次）。
     auto_checked: bool,
     selected_app: AppType,
@@ -134,24 +111,15 @@ impl SkillsView {
             discoverable: Vec::new(),
             market_results: Vec::new(),
             market_total: 0,
-            backups: Vec::new(),
-            unmanaged: Vec::new(),
             updates: HashMap::new(),
             updating: HashSet::new(),
             installing: HashSet::new(),
             toggling: HashSet::new(),
-            restoring: HashSet::new(),
             uninstalling: HashSet::new(),
-            importing: HashSet::new(),
             checking_updates: false,
             updating_all: false,
             discovering: false,
             searching_market: false,
-            scanning: false,
-            installing_zip: false,
-            importing_all: false,
-            syncing: false,
-            scanned_once: false,
             auto_checked: false,
             selected_app: AppType::Claude,
             search_input,
@@ -206,7 +174,6 @@ impl SkillsView {
             }
         }
         self.repos = self.app.db.get_skill_repos().unwrap_or_default();
-        self.backups = SkillService::list_backups().unwrap_or_default();
         self.list_state.remeasure();
         cx.notify();
     }
@@ -276,14 +243,11 @@ impl SkillsView {
             return;
         }
         self.tab = tab;
-        match tab {
-            SkillsTab::Import if !self.scanned_once => self.scan_unmanaged(cx),
-            SkillsTab::Discover
-                if self.discover_mode == DiscoverMode::Repos && self.discoverable.is_empty() =>
-            {
-                self.discover_skills(cx)
-            }
-            _ => {}
+        if tab == SkillsTab::Discover
+            && self.discover_mode == DiscoverMode::Repos
+            && self.discoverable.is_empty()
+        {
+            self.discover_skills(cx);
         }
         self.refresh_list(cx);
     }
@@ -485,8 +449,8 @@ impl SkillsView {
         cx.notify();
 
         let app = self.app.clone();
-        let task = cx.background_spawn(async move {
-            SkillService::toggle_app(&app.db, &id, &app_type, enabled)
+        let task = Self::spawn_tokio(cx, async move {
+            SkillService::toggle_app(&app.db, &id, &app_type, enabled).await
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -522,7 +486,9 @@ impl SkillsView {
 
         let app = self.app.clone();
         let task_id = id.clone();
-        let task = cx.background_spawn(async move { SkillService::uninstall(&app.db, &task_id) });
+        let task = Self::spawn_tokio(cx, async move {
+            SkillService::uninstall(&app.db, &task_id).await
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -531,52 +497,13 @@ impl SkillsView {
                 this.updating.remove(&id);
                 match result {
                     Ok(_) => {
-                        this.status = Some(SharedString::from("技能已卸载，备份保存在「备份」页"));
+                        this.status = Some(SharedString::from("技能已卸载"));
                     }
                     Err(err) => {
                         this.status = Some(SharedString::from(format!("卸载失败: {err}")));
                     }
                 }
                 this.reload(cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// 将所有技能重新同步到各应用目录（修复被外部删除/损坏的链接）。
-    fn sync_all(&mut self, cx: &mut Context<Self>) {
-        if self.syncing {
-            return;
-        }
-        self.syncing = true;
-        self.status = Some(SharedString::from("正在重新同步应用目录..."));
-        cx.notify();
-
-        let app = self.app.clone();
-        let apps = Self::skill_apps();
-        let count = apps.len();
-        let task = cx.background_spawn(async move {
-            for app_type in apps {
-                SkillService::sync_to_app(&app.db, &app_type)?;
-            }
-            anyhow::Ok(())
-        });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                this.syncing = false;
-                match result {
-                    Ok(()) => {
-                        this.status = Some(SharedString::from(format!(
-                            "已重新同步 {count} 个应用的技能目录"
-                        )));
-                    }
-                    Err(err) => {
-                        this.status = Some(SharedString::from(format!("重新同步失败: {err}")));
-                    }
-                }
-                cx.notify();
             })
             .ok();
         })
@@ -846,286 +773,22 @@ impl SkillsView {
         self.refresh_list(cx);
     }
 
-    // ── 导入：ZIP / 未管理 ─────────────────────────────────────────────────
-
-    fn pick_and_install_zip(&mut self, cx: &mut Context<Self>) {
-        if self.installing_zip {
-            return;
-        }
-        let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("选择技能 ZIP".into()),
-        });
-        let app = self.app.clone();
-        let target = self.selected_app;
-        cx.spawn(async move |this, cx| {
-            let path = match receiver.await {
-                Ok(Ok(Some(paths))) => paths.into_iter().next(),
-                _ => None,
-            };
-            let Some(path) = path else {
-                return;
-            };
-            this.update(cx, |this, cx| {
-                this.installing_zip = true;
-                this.status = Some(SharedString::from("正在从 ZIP 安装技能..."));
-                cx.notify();
-            })
-            .ok();
-            let result = cx
-                .background_spawn(
-                    async move { SkillService::install_from_zip(&app.db, &path, &target) },
-                )
-                .await;
-            this.update(cx, |this, cx| {
-                this.installing_zip = false;
-                match result {
-                    Ok(skills) => {
-                        this.status = Some(SharedString::from(format!(
-                            "已从 ZIP 安装 {} 个技能到 {}",
-                            skills.len(),
-                            Self::app_label(target)
-                        )));
-                        this.reload(cx);
-                    }
-                    Err(err) => {
-                        this.status = Some(SharedString::from(format!("ZIP 安装失败: {err}")));
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn scan_unmanaged(&mut self, cx: &mut Context<Self>) {
-        if self.scanning {
-            return;
-        }
-        self.scanning = true;
-        self.scanned_once = true;
-        self.status = Some(SharedString::from("正在扫描应用目录..."));
-        cx.notify();
-
-        let app = self.app.clone();
-        let task = cx.background_spawn(async move { SkillService::scan_unmanaged(&app.db) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                this.scanning = false;
-                match result {
-                    Ok(list) => {
-                        let count = list.len();
-                        this.unmanaged = list;
-                        this.status =
-                            Some(SharedString::from(format!("发现 {count} 个未管理技能")));
-                    }
-                    Err(err) => {
-                        this.status =
-                            Some(SharedString::from(format!("扫描未管理技能失败: {err}")));
-                    }
-                }
-                this.refresh_list(cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// 未管理技能的默认导入目标：优先它被发现时所在的应用，兜底当前选中应用。
-    fn unmanaged_target_apps(&self, found_in: &[String]) -> SkillApps {
-        let enabled = Self::skill_apps();
-        let mut apps = SkillApps::default();
-        for name in found_in {
-            if let Some(app_type) = AppType::all().find(|a| a.as_str() == name) {
-                if enabled.contains(&app_type) {
-                    apps.set_enabled_for(&app_type, true);
-                }
-            }
-        }
-        if apps.is_empty() {
-            apps = SkillApps::only(&self.selected_app);
-        }
-        apps
-    }
-
-    fn import_selections(&mut self, selections: Vec<ImportSkillSelection>, cx: &mut Context<Self>) {
-        if selections.is_empty() {
-            return;
-        }
-        let dirs: Vec<String> = selections.iter().map(|s| s.directory.clone()).collect();
-        for dir in &dirs {
-            self.importing.insert(dir.clone());
-        }
-        self.status = Some(SharedString::from("正在导入技能..."));
-        cx.notify();
-
-        let app = self.app.clone();
-        let task =
-            cx.background_spawn(async move { SkillService::import_from_apps(&app.db, selections) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                for dir in &dirs {
-                    this.importing.remove(dir);
-                }
-                this.importing_all = false;
-                match result {
-                    Ok(imported) => {
-                        this.status = Some(SharedString::from(format!(
-                            "已导入 {} 个技能",
-                            imported.len()
-                        )));
-                        this.unmanaged
-                            .retain(|skill| !dirs.contains(&skill.directory));
-                        this.reload(cx);
-                    }
-                    Err(err) => {
-                        this.status = Some(SharedString::from(format!("导入失败: {err}")));
-                    }
-                }
-                this.refresh_list(cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn import_unmanaged(&mut self, skill: &UnmanagedSkill, cx: &mut Context<Self>) {
-        if self.importing.contains(&skill.directory) {
-            return;
-        }
-        let selection = ImportSkillSelection {
-            directory: skill.directory.clone(),
-            apps: self.unmanaged_target_apps(&skill.found_in),
-        };
-        self.import_selections(vec![selection], cx);
-    }
-
-    fn import_all_unmanaged(&mut self, cx: &mut Context<Self>) {
-        if self.importing_all || self.unmanaged.is_empty() {
-            return;
-        }
-        self.importing_all = true;
-        let selections: Vec<ImportSkillSelection> = self
-            .unmanaged
-            .iter()
-            .map(|skill| ImportSkillSelection {
-                directory: skill.directory.clone(),
-                apps: self.unmanaged_target_apps(&skill.found_in),
-            })
-            .collect();
-        self.import_selections(selections, cx);
-    }
-
-    // ── 备份 ────────────────────────────────────────────────────────────────
-
-    /// 恢复备份：目标为备份记录中原本启用的应用（先恢复到第一个，再逐个启用其余）。
-    fn restore_backup(&mut self, backup_id: String, cx: &mut Context<Self>) {
-        if self.restoring.contains(&backup_id) {
-            return;
-        }
-        let Some(entry) = self
-            .backups
-            .iter()
-            .find(|entry| entry.backup_id == backup_id)
-        else {
-            return;
-        };
-        let enabled = Self::skill_apps();
-        let mut targets: Vec<AppType> = entry
-            .skill
-            .apps
-            .enabled_apps()
-            .into_iter()
-            .filter(|app| enabled.contains(app))
-            .collect();
-        if targets.is_empty() {
-            targets.push(self.selected_app);
-        }
-        let primary = targets[0];
-        let rest: Vec<AppType> = targets[1..].to_vec();
-
-        self.restoring.insert(backup_id.clone());
-        self.status = Some(SharedString::from("正在恢复备份..."));
-        cx.notify();
-
-        let app = self.app.clone();
-        let task_id = backup_id.clone();
-        let task = cx.background_spawn(async move {
-            let skill = SkillService::restore_from_backup(&app.db, &task_id, &primary)?;
-            for app_type in &rest {
-                SkillService::toggle_app(&app.db, &skill.id, app_type, true)?;
-            }
-            anyhow::Ok(skill)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                this.restoring.remove(&backup_id);
-                match result {
-                    Ok(skill) => {
-                        this.status =
-                            Some(SharedString::from(format!("{} 已从备份恢复", skill.name)));
-                        this.reload(cx);
-                    }
-                    Err(err) => {
-                        this.status = Some(SharedString::from(format!("恢复备份失败: {err}")));
-                    }
-                }
-                this.refresh_list(cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn delete_backup(&mut self, backup_id: String, cx: &mut Context<Self>) {
-        let task = cx.background_spawn(async move { SkillService::delete_backup(&backup_id) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        this.status = Some(SharedString::from("技能备份已删除"));
-                        this.backups = SkillService::list_backups().unwrap_or_default();
-                    }
-                    Err(err) => {
-                        this.status = Some(SharedString::from(format!("删除备份失败: {err}")));
-                    }
-                }
-                this.refresh_list(cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     // ── 渲染 ────────────────────────────────────────────────────────────────
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let labels = [
             format!("已安装 ({})", self.skills.len()),
             "发现".to_string(),
-            format!("导入 ({})", self.unmanaged.len()),
-            format!("备份 ({})", self.backups.len()),
         ];
         let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         let selected = match self.tab {
             SkillsTab::Installed => 0,
             SkillsTab::Discover => 1,
-            SkillsTab::Import => 2,
-            SkillsTab::Backups => 3,
         };
         let on_select = cx.listener(move |this: &mut Self, ix: &usize, _window, cx| {
             let tab = match ix {
                 0 => SkillsTab::Installed,
-                1 => SkillsTab::Discover,
-                2 => SkillsTab::Import,
-                _ => SkillsTab::Backups,
+                _ => SkillsTab::Discover,
             };
             this.set_tab(tab, cx);
         });
@@ -1255,22 +918,6 @@ impl SkillsView {
                 })),
             );
         }
-        actions = actions.child(
-            components::button(
-                "skill-sync-all",
-                if self.syncing {
-                    "同步中..."
-                } else {
-                    "重新同步"
-                },
-                ButtonTone::Neutral,
-                ButtonSize::Sm,
-            )
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.sync_all(cx);
-            })),
-        );
-
         let mut col = div().flex().flex_col().gap_3().child(
             div()
                 .flex()
@@ -1297,7 +944,7 @@ impl SkillsView {
             col = col.child(components::empty_state(
                 IconName::Blocks,
                 "还没有安装技能",
-                "从技能市场、仓库或 ZIP 安装第一个技能。",
+                "从技能市场或仓库安装第一个技能。",
                 Some(goto_discover),
             ));
         } else if self.installed_indices(&filter).is_empty() {
@@ -1969,6 +1616,7 @@ impl SkillsView {
             )
     }
 
+    #[cfg(any())]
     fn render_import_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut actions = div().flex().flex_row().flex_wrap().items_center().gap_2();
         actions = actions.child(
@@ -2050,6 +1698,7 @@ impl SkillsView {
         col
     }
 
+    #[cfg(any())]
     fn render_unmanaged_row(
         &self,
         skill: &UnmanagedSkill,
@@ -2110,6 +1759,7 @@ impl SkillsView {
             )
     }
 
+    #[cfg(any())]
     fn render_backup_header(&self) -> impl IntoElement {
         let mut col = div()
             .flex()
@@ -2130,6 +1780,7 @@ impl SkillsView {
         col
     }
 
+    #[cfg(any())]
     fn render_backup_row(
         &self,
         backup: &SkillBackupEntry,
@@ -2258,14 +1909,6 @@ impl Render for SkillsView {
                     }
                 }
             }
-            SkillsTab::Import => {
-                plan.push(SkillRow::ImportToolbar);
-                plan.extend((0..self.unmanaged.len()).map(SkillRow::Unmanaged));
-            }
-            SkillsTab::Backups => {
-                plan.push(SkillRow::BackupHeader);
-                plan.extend((0..self.backups.len()).map(SkillRow::Backup));
-            }
         }
         if self.list_state.item_count() != plan.len() {
             self.list_state.reset(plan.len());
@@ -2324,30 +1967,6 @@ impl Render for SkillsView {
                         }
                         None => gpui::Empty.into_any_element(),
                     },
-                    Some(SkillRow::ImportToolbar) => block
-                        .child(this.render_import_toolbar(cx))
-                        .into_any_element(),
-                    Some(SkillRow::Unmanaged(uix)) => match this.unmanaged.get(uix) {
-                        Some(skill) => {
-                            let skill = skill.clone();
-                            block
-                                .child(this.render_unmanaged_row(&skill, cx))
-                                .into_any_element()
-                        }
-                        None => gpui::Empty.into_any_element(),
-                    },
-                    Some(SkillRow::BackupHeader) => {
-                        block.child(this.render_backup_header()).into_any_element()
-                    }
-                    Some(SkillRow::Backup(bix)) => match this.backups.get(bix) {
-                        Some(backup) => {
-                            let backup = backup.clone();
-                            block
-                                .child(this.render_backup_row(&backup, cx))
-                                .into_any_element()
-                        }
-                        None => gpui::Empty.into_any_element(),
-                    },
                     None => gpui::Empty.into_any_element(),
                 }
             }),
@@ -2357,22 +1976,15 @@ impl Render for SkillsView {
             .relative()
             .child(layout::page_header(
                 "技能",
-                Some("集中管理技能，并同步到各 AI 编码工具".into()),
+                Some("通过 skills CLI 集中安装、更新并分发技能".into()),
             ))
             .child(layout::virtual_body(list))
             .when_some(self.confirm.clone(), |root, action| {
                 let (title, message, confirm_label) = match &action {
                     ConfirmAction::Uninstall { name, .. } => (
                         "卸载技能",
-                        format!(
-                            "确定卸载技能「{name}」吗？技能目录会先自动备份，可在「备份」页恢复。"
-                        ),
+                        format!("确定卸载技能「{name}」吗？skills CLI 会从已启用应用中移除它。"),
                         "卸载",
-                    ),
-                    ConfirmAction::DeleteBackup { name, .. } => (
-                        "删除备份",
-                        format!("确定删除技能备份「{name}」吗？此操作不可撤销。"),
-                        "删除",
                     ),
                     ConfirmAction::DeleteRepo { owner, name } => (
                         "删除仓库",
@@ -2414,9 +2026,6 @@ impl Render for SkillsView {
                                 match &action {
                                     ConfirmAction::Uninstall { id, .. } => {
                                         this.do_uninstall(id.clone(), cx)
-                                    }
-                                    ConfirmAction::DeleteBackup { id, .. } => {
-                                        this.delete_backup(id.clone(), cx)
                                     }
                                     ConfirmAction::DeleteRepo { owner, name } => {
                                         this.do_delete_repo(owner.clone(), name.clone(), cx)

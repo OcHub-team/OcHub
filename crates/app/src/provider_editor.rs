@@ -21,7 +21,8 @@ use ochub_core::provider_config::{
     GridCellKind, Language, Severity,
 };
 use ochub_core::services::provider::ProviderService;
-use ochub_core::{AppState, AppType, Provider, UsageResult};
+use ochub_core::services::ConfigService;
+use ochub_core::{AppState, AppType, Provider, ProviderMeta, UsageResult};
 use serde_json::{json, Map, Value};
 
 use crate::code_editor::CodeEditor;
@@ -132,6 +133,11 @@ pub struct ProviderEditor {
     preview_refresh_epoch: usize,
     /// When `Some`, a modal code editor for one preview file is open.
     raw_edit: Option<RawEdit>,
+    common_config_supported: bool,
+    common_config_enabled: bool,
+    common_snippet: Entity<TextInput>,
+    original_snippet: String,
+    convert_open: bool,
     error: Option<SharedString>,
     status: Option<SharedString>,
 }
@@ -146,7 +152,9 @@ impl ProviderEditor {
     }
 
     pub(crate) fn shortcut_cancel(&mut self, cx: &mut Context<Self>) {
-        if self.raw_edit.is_some() {
+        if self.convert_open {
+            self.close_convert(cx);
+        } else if self.raw_edit.is_some() {
             self.close_raw_edit(cx);
         } else {
             cx.emit(EditorEvent::Cancelled);
@@ -203,6 +211,28 @@ impl ProviderEditor {
             .as_ref()
             .map(|p| p.settings_config.clone())
             .unwrap_or(Value::Null);
+        let common_config_supported = common_config_supported(app_type);
+        let common_config_enabled = original_provider
+            .as_ref()
+            .and_then(|provider| provider.meta.as_ref())
+            .and_then(|meta| meta.common_config_enabled)
+            .unwrap_or(false);
+        let original_snippet = if common_config_supported {
+            ConfigService::get_common_config_snippet(&app, app_type.as_str())
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let snippet_seed = original_snippet.clone();
+        let common_snippet = cx.new(|cx| {
+            let mut input = TextInput::new(cx, "输入共享配置片段")
+                .code(true)
+                .multiline(true);
+            input.set_content(snippet_seed, cx);
+            input
+        });
         Self {
             app,
             app_type,
@@ -229,6 +259,11 @@ impl ProviderEditor {
             preview_dirty: true,
             preview_refresh_epoch: 0,
             raw_edit: None,
+            common_config_supported,
+            common_config_enabled,
+            common_snippet,
+            original_snippet,
+            convert_open: false,
             error: None,
             status: None,
         }
@@ -706,9 +741,33 @@ impl ProviderEditor {
         }
 
         let prior_meta = self.original_provider.as_ref().and_then(|p| p.meta.clone());
-        let encoded = self
+        let mut encoded = self
             .codec
             .encode(&self.values, &self.working_base, prior_meta.as_ref());
+
+        if self.common_config_supported {
+            let snippet = self.common_snippet.read(cx).content().to_string();
+            if snippet != self.original_snippet {
+                if let Err(err) = ConfigService::set_common_config_snippet(
+                    &self.app,
+                    self.app_type.as_str(),
+                    snippet.clone(),
+                ) {
+                    self.error = Some(SharedString::from(format!("通用配置片段无效: {err}")));
+                    cx.notify();
+                    return;
+                }
+                self.original_snippet = snippet;
+            }
+            if self.common_config_enabled {
+                encoded
+                    .meta
+                    .get_or_insert_with(ProviderMeta::default)
+                    .common_config_enabled = Some(true);
+            } else if let Some(meta) = encoded.meta.as_mut() {
+                meta.common_config_enabled = None;
+            }
+        }
 
         let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
         let category = nonempty(self.category.read(cx).content().trim().to_string());
@@ -878,6 +937,87 @@ impl ProviderEditor {
             .ok();
         })
         .detach();
+    }
+
+    fn toggle_common_config(&mut self, cx: &mut Context<Self>) {
+        self.common_config_enabled = !self.common_config_enabled;
+        cx.notify();
+    }
+
+    fn extract_common_config(&mut self, cx: &mut Context<Self>) {
+        self.pull_values(cx);
+        let prior_meta = self.original_provider.as_ref().and_then(|p| p.meta.clone());
+        let settings = self
+            .codec
+            .encode(&self.values, &self.working_base, prior_meta.as_ref())
+            .settings_config;
+        match ConfigService::extract_common_config_snippet(
+            &self.app,
+            self.app_type,
+            Some(&settings),
+        ) {
+            Ok(snippet) => {
+                self.common_snippet
+                    .update(cx, |input, cx| input.set_content(snippet, cx));
+                self.status = Some(SharedString::from("已从当前配置提取通用配置片段"));
+                self.error = None;
+            }
+            Err(err) => {
+                self.error = Some(SharedString::from(format!("提取失败: {err}")));
+                self.status = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_convert(&mut self, cx: &mut Context<Self>) {
+        self.convert_open = true;
+        cx.notify();
+    }
+
+    fn close_convert(&mut self, cx: &mut Context<Self>) {
+        self.convert_open = false;
+        cx.notify();
+    }
+
+    fn convert_to(&mut self, target: AppType, cx: &mut Context<Self>) {
+        self.pull_values(cx);
+        let target_codec = provider_config::config_for(target)
+            .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
+        let encoded = target_codec.encode(&self.values, &Value::Null, None);
+        let base_name = self.name.read(cx).content().trim().to_string();
+        let source_label = crate::app_meta::label(self.app_type);
+        let name = if base_name.is_empty() {
+            format!("来自 {source_label} 的配置")
+        } else {
+            format!("{base_name}（来自 {source_label}）")
+        };
+        let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
+        let mut provider = Provider::with_id(
+            uuid::Uuid::new_v4().to_string(),
+            name,
+            encoded.settings_config,
+            website_url,
+        );
+        provider.meta = encoded.meta;
+        provider.category = nonempty(self.category.read(cx).content().trim().to_string());
+        provider.notes = nonempty(self.notes.read(cx).content().trim().to_string());
+        provider.created_at = Some(chrono_now_millis());
+        match ProviderService::add(&self.app, target, provider, false) {
+            Ok(_) => {
+                self.convert_open = false;
+                self.status = Some(SharedString::from(format!(
+                    "已复制到 {}",
+                    crate::app_meta::label(target)
+                )));
+                self.error = None;
+            }
+            Err(err) => {
+                self.error = Some(SharedString::from(format!("复制失败: {err}")));
+                self.status = None;
+            }
+        }
+        cx.notify();
     }
 
     // ---- rendering ----------------------------------------------------------
@@ -1505,6 +1645,154 @@ impl ProviderEditor {
         )
     }
 
+    fn render_common_config(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let enabled = self.common_config_enabled;
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .child(layout::section_header("通用配置", "跨供应商共享片段"))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_color(theme::text())
+                                    .text_sm()
+                                    .child("应用通用配置到此供应商"),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child("写入工具配置时会合并下方共享片段。"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("common-config-toggle")
+                            .cursor_pointer()
+                            .child(layout::toggle(enabled))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.toggle_common_config(cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child("此片段按应用共享，供所有已启用的供应商使用。"),
+                    )
+                    .child(
+                        components::button(
+                            "common-config-extract",
+                            "从当前配置提取",
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.extract_common_config(cx);
+                            },
+                        )),
+                    ),
+            )
+            .child(
+                div()
+                    .id("common-config-editor")
+                    .flex()
+                    .w_full()
+                    .max_h(px(220.))
+                    .overflow_y_scroll()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme::border())
+                    .child(self.common_snippet.clone()),
+            )
+            .into_any_element()
+    }
+
+    fn render_convert_modal(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.convert_open {
+            return None;
+        }
+        let mut targets = div().flex().flex_col().gap_2().w_full();
+        for app in crate::app_meta::enabled_app_types() {
+            if app == self.app_type {
+                continue;
+            }
+            targets = targets.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "convert-target-{}",
+                        app.as_str()
+                    )))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(theme::inset())
+                    .text_color(theme::text())
+                    .text_sm()
+                    .hover(|style| style.bg(theme::accent_soft()).text_color(theme::accent()))
+                    .child(crate::app_meta::label(app))
+                    .child(div().text_color(theme::muted()).text_xs().child("→"))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.convert_to(app, cx);
+                    })),
+            );
+        }
+        Some(
+            components::modal_overlay(
+                components::modal_card()
+                    .child(components::modal_header("复制到其他应用"))
+                    .child(
+                        components::modal_body()
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child("使用目标应用的格式重新生成，并另存为新供应商。"),
+                            )
+                            .child(targets),
+                    )
+                    .child(components::modal_footer(vec![components::button(
+                        "convert-cancel",
+                        "取消",
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.close_convert(cx);
+                    }))
+                    .into_any_element()])),
+            )
+            .into_any_element(),
+        )
+    }
+
     fn render_identity(&self) -> impl IntoElement {
         div()
             .flex()
@@ -1600,12 +1888,27 @@ impl Render for ProviderEditor {
         } else {
             None
         };
+        let common_config = self
+            .common_config_supported
+            .then(|| self.render_common_config(cx));
         let modal = self.render_raw_modal(cx);
+        let convert_modal = self.render_convert_modal(cx);
 
         let actions = div()
             .flex()
             .flex_row()
             .gap_2()
+            .child(
+                components::button(
+                    "editor-convert",
+                    "复制到应用",
+                    ButtonTone::Neutral,
+                    ButtonSize::Md,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.open_convert(cx);
+                })),
+            )
             .child(
                 components::button("editor-save", "保存", ButtonTone::Primary, ButtonSize::Md)
                     .on_click(cx.listener(|this, _e, _w, cx| this.do_save(cx))),
@@ -1624,6 +1927,7 @@ impl Render for ProviderEditor {
             .when_some(preset_picker, |s, picker| s.child(picker))
             .child(identity)
             .children(sections)
+            .when_some(common_config, |form, common| form.child(common))
             .child(
                 div()
                     .flex()
@@ -1697,6 +2001,7 @@ impl Render for ProviderEditor {
             .child(layout::page_header(title, Some(subtitle)).child(actions))
             .child(editor_body)
             .when_some(modal, |s, modal| s.child(modal))
+            .when_some(convert_modal, |s, modal| s.child(modal))
     }
 }
 
@@ -1714,6 +2019,10 @@ fn nonempty(value: String) -> Option<String> {
     } else {
         Some(value)
     }
+}
+
+fn common_config_supported(app: AppType) -> bool {
+    matches!(app, AppType::Claude | AppType::Codex)
 }
 
 fn preview_line_ranges(content: &str) -> Vec<Range<usize>> {

@@ -109,9 +109,6 @@ pub fn import_mcp_from_deeplink(
             if target_apps.codex {
                 merged_apps.codex = true;
             }
-            if target_apps.gemini {
-                merged_apps.gemini = true;
-            }
 
             McpServer {
                 id: existing.id.clone(),
@@ -174,7 +171,6 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
         match app.trim() {
             "claude" => apps.claude = true,
             "codex" => apps.codex = true,
-            "gemini" => apps.gemini = true,
             "opencode" => apps.opencode = true,
             "openclaw" => {
                 // OpenClaw doesn't support MCP, ignore silently

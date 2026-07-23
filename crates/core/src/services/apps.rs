@@ -83,7 +83,7 @@ mod tests {
         assert!(set_app_enabled(&state, &bogus, false).await.is_err());
 
         // Disabling everything but one is fine; disabling the last enabled app fails.
-        for id in ["claude", "claude-desktop", "gemini", "opencode", "openclaw"] {
+        for id in ["claude", "claude-desktop", "opencode", "openclaw"] {
             set_app_enabled(&state, &AppId::parse(id).unwrap(), false)
                 .await
                 .unwrap();

@@ -286,7 +286,6 @@ impl McpView {
         let imports = [
             ("Claude", McpService::import_from_claude(&self.app)),
             ("Codex", McpService::import_from_codex(&self.app)),
-            ("Gemini", McpService::import_from_gemini(&self.app)),
             ("OpenCode", McpService::import_from_opencode(&self.app)),
             ("Hermes", McpService::import_from_hermes(&self.app)),
         ];

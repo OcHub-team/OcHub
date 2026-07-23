@@ -373,12 +373,6 @@ impl Provider {
                     .unwrap_or_default();
                 (base_url, api_key)
             }
-            AppType::Gemini => {
-                let env = settings.get("env");
-                let base_url = str_at(env.and_then(|e| e.get("GOOGLE_GEMINI_BASE_URL")));
-                let api_key = first_non_empty(env, &["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
-                (base_url, api_key)
-            }
             AppType::Hermes => (
                 str_at(settings.get("base_url")),
                 str_at(settings.get("api_key")),

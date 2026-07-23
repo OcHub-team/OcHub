@@ -1,6 +1,7 @@
 # OCHUB — architecture & integration contract
 
-Living notes that anchor the port. Source of truth is `cc-switch/src-tauri/src`.
+Living notes for the OCHUB architecture. cc-switch remains a compatibility
+reference and read-only import source, not OCHUB's runtime source of truth.
 
 ## Crates
 - `ochub-core` (`crates/core`): domain + config + SQLite store + services. No Tauri/GPUI.
@@ -35,7 +36,7 @@ Key API (all take `&AppState`):
   `update_sort_order`, speedtest/endpoint helpers, usage helpers.
 
 ### Switch modes (from `AppType::is_additive_mode`)
-- **Switch mode** (Claude, ClaudeDesktop, Codex, Gemini): only the current provider
+- **Switch mode** (Claude, ClaudeDesktop, Codex): only the current provider
   is written to the live config; switching replaces it.
 - **Additive mode** (OpenCode, OpenClaw, Hermes): all enabled providers are written;
   per-provider `meta.live_config_managed` tracks membership.
@@ -46,7 +47,6 @@ Key API (all take `&AppState`):
 - Claude Desktop → native direct profile writer; arbitrary model routing is configured in Gateway.
 - Codex → `codex_config.rs`: writes `~/.codex/auth.json` + `~/.codex/config.toml`
   from `settings_config.{auth, config}`; OAuth + session-history bucketing logic.
-- Gemini → `gemini_config.rs`: `~/.gemini/settings.json` (env-based).
 - OpenCode → `opencode_config.rs`: `opencode.json` providers map (additive).
 - OpenClaw → `openclaw_config.rs`: `openclaw.json` (additive).
 - Hermes → `hermes_config.rs`: `config.yaml` (additive).
@@ -56,17 +56,19 @@ points that merge common config and write the file.
 
 ## Command surface to expose via axum (≈250 commands)
 Grouped into axum routers: providers, claude-desktop, config status, MCP
-(claude + unified), skills (unified + legacy), gateway (lifecycle/config/
+(claude + unified), skills (Vercel CLI-backed), gateway (lifecycle/config/
 channels/keys/apply), usage stats + pricing, sessions, sync (webdav/s3),
 auth (managed accounts + copilot + codex oauth), OMO, OpenClaw, Hermes, env
 management, deeplink, settings, update/restart, lightweight mode.
 
-## Port phases (each ends with `cargo check -p ochub-core` green)
-1. ✅ Foundation: error, app_type, model, settings, app_store, paths.
-2. ⏳ DB store: database/* → `crates/core/src/db/` (delegated).
-3. Per-app writers + ProviderService + AppState (+ GatewayService/UsageCache).
-4. axum server: control API routes calling services; in-process host from app.
-5. GPUI UI wired to live data (replace `demo_providers`): list/switch/add/edit/delete.
-6. Gateway (multi-dialect forward/routing/failover/health/usage).
-7. Remaining subsystems: MCP, skills, sessions, sync, auth, OMO/OpenClaw/
-   Hermes specifics, deeplink, env, tray, updater, usage UI.
+## Current integration rules
+
+1. SQLite under `~/.ochub/` is OCHUB's source of truth; cc-switch data is imported
+   once and never written back.
+2. The in-process relay gateway is the sole owner of local routing, protocol
+   conversion, failover, health checks, and gateway usage accounting.
+3. Skills are installed and linked by `npx -y skills`; SQLite retains catalog
+   metadata and enabled-app state.
+4. Gemini CLI producers and live writers are removed. Historical Gemini usage
+   and vestigial compatibility columns remain readable.
+5. The GPUI app and axum server share the same `Arc<AppState>`.

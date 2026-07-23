@@ -123,7 +123,6 @@ impl StreamCheckService {
             AppType::Hermes => Self::extract_hermes_base_url(provider),
             AppType::Claude | AppType::ClaudeDesktop => Self::extract_claude_base_url(provider),
             AppType::Codex => Self::extract_codex_base_url(provider),
-            AppType::Gemini => Self::extract_gemini_base_url(provider),
         }
     }
 
@@ -177,24 +176,6 @@ impl StreamCheckService {
                     .map(|value| value.trim_end_matches('/').to_string())
             })
             .ok_or_else(|| AppError::Config("Codex 供应商缺少 Base URL".to_string()))
-    }
-
-    fn extract_gemini_base_url(provider: &Provider) -> Result<String, AppError> {
-        Self::first_non_empty([
-            provider
-                .settings_config
-                .pointer("/env/GOOGLE_GEMINI_BASE_URL")
-                .and_then(|value| value.as_str()),
-            provider
-                .settings_config
-                .get("base_url")
-                .and_then(|value| value.as_str()),
-            provider
-                .settings_config
-                .get("baseURL")
-                .and_then(|value| value.as_str()),
-        ])
-        .ok_or_else(|| AppError::Config("Gemini 供应商缺少 Base URL".to_string()))
     }
 
     fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {

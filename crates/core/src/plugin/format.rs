@@ -1,15 +1,12 @@
 //! Shared file-format (de)serialization for the manifest engine.
 //!
-//! Serialization must be byte-identical to the native codecs it replaces, so the
-//! env writer routes through [`crate::apps::gemini::serialize_env_file`] (sorted
-//! `KEY=VALUE`) and JSON uses the same `to_string_pretty` the native Gemini
-//! preview uses.
+//! Env files use stable, sorted `KEY=VALUE` output and JSON uses
+//! `serde_json::to_string_pretty`.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::apps::gemini::{parse_env_file, serialize_env_file};
 use crate::provider_config::Language;
 
 use super::manifest::FileFormat;
@@ -62,7 +59,7 @@ pub fn parse(format: FileFormat, content: &str, file_id: &str) -> Result<Value, 
 /// Byte-identical to the native Gemini `.env` writer: string values only, keys
 /// sorted, `KEY=VALUE` lines joined by `\n`, no trailing newline.
 fn serialize_env(store: &Value) -> String {
-    let mut map: HashMap<String, String> = HashMap::new();
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
     if let Some(obj) = store.as_object() {
         for (k, v) in obj {
             if let Some(s) = v.as_str() {
@@ -70,5 +67,26 @@ fn serialize_env(store: &Value) -> String {
             }
         }
     }
-    serialize_env_file(&map)
+    map.into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_env_file(content: &str) -> BTreeMap<String, String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            if key.is_empty() || !key.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
+                return None;
+            }
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect()
 }

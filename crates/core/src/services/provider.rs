@@ -4,7 +4,6 @@
 //! Ported from cc-switch `services/provider/mod.rs`.
 
 mod endpoints;
-pub(crate) mod gemini_auth;
 pub(crate) mod live;
 mod usage;
 
@@ -42,7 +41,7 @@ pub(crate) use live::{
 // Internal re-exports
 use live::{
     remove_hermes_provider_from_live, remove_openclaw_provider_from_live,
-    remove_opencode_provider_from_live, sync_current_provider_for_app_to_live, write_gemini_live,
+    remove_opencode_provider_from_live, sync_current_provider_for_app_to_live,
 };
 use usage::validate_usage_script;
 
@@ -550,7 +549,7 @@ impl ProviderService {
             state.db.set_current_provider(app_type.as_str(), id)?;
         }
 
-        // Sync to live (write_gemini_live handles security flag internally for Gemini)
+        // Sync to live.
         write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
 
         // Hermes is additive: update top-level `model:` section to point at this provider.
@@ -709,7 +708,6 @@ impl ProviderService {
             AppType::Claude => Self::extract_claude_common_config(&provider.settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(&provider.settings_config),
-            AppType::Gemini => Self::extract_gemini_common_config(&provider.settings_config),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
@@ -725,7 +723,6 @@ impl ProviderService {
             AppType::Claude => Self::extract_claude_common_config(settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(settings_config),
-            AppType::Gemini => Self::extract_gemini_common_config(settings_config),
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Hermes => Ok(String::new()),
@@ -812,34 +809,6 @@ impl ProviderService {
         }
 
         Ok(cleaned.trim().to_string())
-    }
-
-    /// Extract common config for Gemini (JSON format)
-    fn extract_gemini_common_config(settings: &Value) -> Result<String, AppError> {
-        let env = settings.get("env").and_then(|v| v.as_object());
-
-        let mut snippet = serde_json::Map::new();
-        if let Some(env) = env {
-            for (key, value) in env {
-                if key == "GOOGLE_GEMINI_BASE_URL" || key == "GEMINI_API_KEY" {
-                    continue;
-                }
-                let Value::String(v) = value else {
-                    continue;
-                };
-                let trimmed = v.trim();
-                if !trimmed.is_empty() {
-                    snippet.insert(key.to_string(), Value::String(trimmed.to_string()));
-                }
-            }
-        }
-
-        if snippet.is_empty() {
-            return Ok("{}".to_string());
-        }
-
-        serde_json::to_string_pretty(&Value::Object(snippet))
-            .map_err(|e| AppError::Message(format!("Serialization failed: {e}")))
     }
 
     /// Extract common config for OpenCode (JSON format)
@@ -990,11 +959,6 @@ impl ProviderService {
         .await
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn write_gemini_live(provider: &Provider) -> Result<(), AppError> {
-        write_gemini_live(provider)
-    }
-
     fn validate_provider_settings(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
         match app_type {
             AppType::Claude => {
@@ -1048,10 +1012,6 @@ impl ProviderService {
                         crate::apps::codex::validate_config_toml(cfg_text)?;
                     }
                 }
-            }
-            AppType::Gemini => {
-                use crate::apps::gemini::validate_gemini_settings;
-                validate_gemini_settings(&provider.settings_config)?
             }
             AppType::OpenCode => {
                 if !provider.settings_config.is_object() {
@@ -1205,26 +1165,6 @@ impl ProviderService {
                         "base_url is missing from config.toml",
                     ));
                 };
-
-                Ok((api_key, base_url))
-            }
-            AppType::Gemini => {
-                use crate::apps::gemini::json_to_env;
-
-                let env_map = json_to_env(&provider.settings_config)?;
-
-                let api_key = env_map.get("GEMINI_API_KEY").cloned().ok_or_else(|| {
-                    AppError::localized(
-                        "gemini.missing_api_key",
-                        "缺少 GEMINI_API_KEY",
-                        "Missing GEMINI_API_KEY",
-                    )
-                })?;
-
-                let base_url = env_map
-                    .get("GOOGLE_GEMINI_BASE_URL")
-                    .cloned()
-                    .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
 
                 Ok((api_key, base_url))
             }

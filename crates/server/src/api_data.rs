@@ -204,10 +204,6 @@ async fn usage_session_sync(State(s): State<ServerState>) -> ApiResult<Json<Valu
             ochub_core::services::session_usage_codex::sync_codex_usage(&s.app.db),
         ),
         (
-            "Gemini",
-            ochub_core::services::session_usage_gemini::sync_gemini_usage(&s.app.db),
-        ),
-        (
             "OpenCode",
             ochub_core::services::session_usage_opencode::sync_opencode_usage(&s.app.db),
         ),

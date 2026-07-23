@@ -1,6 +1,6 @@
 //! The app plugin system.
 //!
-//! Every managed app — the seven built-ins and future user-defined manifest
+//! Every managed app — the six built-ins and future user-defined manifest
 //! apps — is described by one [`AppPlugin`] behind the process-wide
 //! [`registry`]. Per-app *data* (labels, dirs, modes, capability flags) lives
 //! on the trait; per-app *leaf writers* live behind [`LiveConfigOps`];
@@ -42,21 +42,10 @@ use crate::app_id::AppId;
 use crate::error::AppError;
 use crate::provider_config::AppConfig;
 
-/// The embedded built-in Gemini manifest.
-pub const GEMINI_MANIFEST_TOML: &str = include_str!("builtin/gemini.toml");
-
 /// Process-wide registry of the native hooks manifests may reference.
 pub fn builtin_hooks() -> Arc<HookRegistry> {
     static HOOKS: LazyLock<Arc<HookRegistry>> = LazyLock::new(|| Arc::new(HookRegistry::builtin()));
     HOOKS.clone()
-}
-
-/// The built-in Gemini plugin, parsed + checked from the embedded manifest.
-pub fn builtin_gemini_plugin() -> Arc<ManifestPlugin> {
-    let manifest =
-        AppManifest::parse(GEMINI_MANIFEST_TOML).expect("embedded gemini manifest must parse");
-    ManifestPlugin::from_manifest(manifest, builtin_hooks(), ManifestSource::BuiltIn)
-        .expect("embedded gemini manifest must check")
 }
 
 /// How providers map onto the app's live config.

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use gpui::{actions, App, Menu, MenuItem, OsAction, SharedString, SystemMenuType};
 use ochub_core::services::provider::ProviderService;
 use ochub_core::services::subscription::{
-    SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH, TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO,
-    TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET, TIER_WEEKLY_LIMIT,
+    SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
+    TIER_WEEKLY_LIMIT,
 };
 use ochub_core::{settings, AppState, AppType, Provider, UsageResult};
 
@@ -351,16 +351,7 @@ const W_TIER_NAMES: &[&str] = &[
     TIER_SEVEN_DAY_OPUS,
     TIER_SEVEN_DAY_SONNET,
 ];
-const GEMINI_PRO_TIER_NAMES: &[&str] = &[TIER_GEMINI_PRO];
-const GEMINI_FLASH_TIER_NAMES: &[&str] = &[TIER_GEMINI_FLASH];
-const GEMINI_FLASH_LITE_TIER_NAMES: &[&str] = &[TIER_GEMINI_FLASH_LITE];
-const TIER_LABEL_GROUPS: &[(&str, &[&str])] = &[
-    ("h", H_TIER_NAMES),
-    ("w", W_TIER_NAMES),
-    ("p", GEMINI_PRO_TIER_NAMES),
-    ("f", GEMINI_FLASH_TIER_NAMES),
-    ("l", GEMINI_FLASH_LITE_TIER_NAMES),
-];
+const TIER_LABEL_GROUPS: &[(&str, &[&str])] = &[("h", H_TIER_NAMES), ("w", W_TIER_NAMES)];
 
 fn usage_suffix(
     app: &Arc<AppState>,

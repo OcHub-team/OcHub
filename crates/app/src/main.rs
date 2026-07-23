@@ -21,6 +21,7 @@ mod provider_editor;
 mod sessions_view;
 mod settings_view;
 mod shell_menu;
+mod shell_support;
 mod shortcuts;
 mod skills_view;
 mod text_input;
@@ -119,7 +120,14 @@ mod asset_path_tests {
 
 /// Spawn the axum control API on a dedicated thread with its own tokio runtime,
 /// sharing the same `AppState` as the UI.
-fn spawn_control_api(app: Arc<AppState>) {
+fn control_api_port() -> u16 {
+    std::env::var("MS_PORT")
+        .ok()
+        .and_then(|port| port.parse().ok())
+        .unwrap_or(8787)
+}
+
+fn spawn_control_api(app: Arc<AppState>, port: u16) {
     std::thread::Builder::new()
         .name("ochub-server".into())
         .spawn(move || {
@@ -133,10 +141,6 @@ fn spawn_control_api(app: Arc<AppState>) {
                     return;
                 }
             };
-            let port: u16 = std::env::var("MS_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(8787);
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             if let Err(err) = runtime.block_on(ochub_server::serve_with_app(app, addr)) {
                 log::error!("control API server error: {err}");
@@ -146,7 +150,17 @@ fn spawn_control_api(app: Arc<AppState>) {
 }
 
 fn main() {
+    shell_support::setup_panic_hook();
     env_logger_init();
+
+    let port = control_api_port();
+    let _instance_lock = match shell_support::acquire_single_instance(port) {
+        Ok(lock) => lock,
+        Err(running_port) => {
+            println!("OCHUB 已在运行（控制 API 端口 {running_port}），本次启动已退出。");
+            return;
+        }
+    };
 
     let db = match Database::init() {
         Ok(db) => Arc::new(db),
@@ -158,7 +172,7 @@ fn main() {
     let app_state = Arc::new(AppState::new(db));
     app_state.bootstrap();
 
-    spawn_control_api(app_state.clone());
+    spawn_control_api(app_state.clone(), port);
 
     application()
         .with_assets(Assets {
@@ -178,7 +192,16 @@ fn main() {
             // Pin to the primary display (avoids landing on a secondary monitor)
             // and use a roomier default size for the denser, redesigned UI.
             let display_id = cx.primary_display().map(|display| display.id());
-            let bounds = Bounds::centered(display_id, size(px(1200.), px(820.)), cx);
+            let display_bounds: Vec<_> = cx
+                .displays()
+                .iter()
+                .map(|display| display.bounds())
+                .collect();
+            let bounds = shell_support::load_window_bounds()
+                .filter(|bounds| {
+                    shell_support::bounds_visible_on_displays(*bounds, &display_bounds)
+                })
+                .unwrap_or_else(|| Bounds::centered(display_id, size(px(1200.), px(820.)), cx));
             let window = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -211,10 +234,21 @@ fn main() {
                     }
                 },
             );
-            if let Err(err) = window {
-                log::error!("failed to open window: {err}");
-                return;
-            }
+            let window = match window {
+                Ok(window) => window,
+                Err(err) => {
+                    log::error!("failed to open window: {err}");
+                    return;
+                }
+            };
+            window
+                .update(cx, |_root, window, cx| {
+                    window.on_window_should_close(cx, |window, _cx| {
+                        shell_support::save_window_bounds(window.window_bounds().get_bounds());
+                        true
+                    });
+                })
+                .ok();
             cx.activate(true);
         });
 }

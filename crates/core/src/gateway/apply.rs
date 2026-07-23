@@ -165,6 +165,6 @@ mod tests {
         assert!(toml.contains("base_url = \"http://127.0.0.1:4180/v1\""));
         assert!(toml.contains("wire_api = \"responses\""));
 
-        assert!(gateway_settings_for(AppType::Gemini, "x", "y").is_err());
+        assert!(gateway_settings_for(AppType::OpenCode, "x", "y").is_err());
     }
 }

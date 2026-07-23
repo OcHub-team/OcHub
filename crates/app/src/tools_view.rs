@@ -11,7 +11,7 @@ use gpui::{
     div, prelude::*, px, App, Context, Entity, Focusable, FontWeight, ListAlignment, ListState,
     SharedString, Window,
 };
-use ochub_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
+use ochub_core::apps::{claude_desktop, claude_plugin, codex, hermes, openclaw, opencode};
 use ochub_core::services::OmoService;
 use ochub_core::{AppError, AppState, AppType};
 use serde_json::Value;
@@ -1354,13 +1354,11 @@ impl ToolsView {
                     .collect();
                 let env_selected = match self.env_app {
                     AppType::Codex => 1,
-                    AppType::Gemini => 2,
                     _ => 0,
                 };
                 let on_env_select = cx.listener(|this, ix: &usize, _window, cx| {
                     let app = match ix {
                         1 => AppType::Codex,
-                        2 => AppType::Gemini,
                         _ => AppType::Claude,
                     };
                     this.select_env_app(app, cx);
@@ -1385,7 +1383,7 @@ impl ToolsView {
                                     .gap_2()
                                     .child(components::segmented(
                                         "tools-env-app",
-                                        &["Claude", "Codex", "Gemini"],
+                                        &["Claude", "Codex"],
                                         env_selected,
                                         move |ix, window, cx| on_env_select(&ix, window, cx),
                                     ))
@@ -2317,13 +2315,6 @@ fn config_status(app: &Arc<AppState>, app_type: AppType) -> Result<(bool, String
                 codex::get_codex_config_dir().to_string_lossy().to_string(),
             )
         }
-        AppType::Gemini => {
-            let env_path = gemini::get_gemini_env_path();
-            (
-                env_path.exists(),
-                gemini::get_gemini_dir().to_string_lossy().to_string(),
-            )
-        }
         AppType::OpenCode => {
             let config_path = opencode::get_opencode_config_path();
             (
@@ -2396,19 +2387,16 @@ fn hermes_outcome_message(prefix: &str, outcome: hermes::HermesWriteOutcome) -> 
 }
 
 fn cli_tool_ids() -> Vec<String> {
-    [
-        "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
+    ["claude", "codex", "opencode", "openclaw", "hermes"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 fn env_app_label(app: AppType) -> &'static str {
     match app {
         AppType::Claude => "Claude",
         AppType::Codex => "Codex",
-        AppType::Gemini => "Gemini",
         _ => app.as_str(),
     }
 }

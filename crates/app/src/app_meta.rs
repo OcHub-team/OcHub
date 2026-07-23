@@ -56,7 +56,6 @@ pub fn builtin_icon(icon_id: &str) -> Option<IconName> {
         "claude" => IconName::AgentClaude,
         "claude-code" => IconName::AgentClaudeCode,
         "codex" => IconName::AgentCodex,
-        "gemini" => IconName::AgentGemini,
         "hermes" => IconName::AgentHermes,
         "openclaw" => IconName::AgentOpenClaw,
         "opencode" => IconName::AgentOpenCode,

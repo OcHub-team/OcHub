@@ -591,8 +591,21 @@ impl SettingsView {
         self.status = Some(SharedString::from("正在检查更新..."));
         cx.notify();
 
+        let task = cx.background_spawn(async move {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => {
+                    runtime.block_on(ochub_core::services::update::check_for_updates(None))
+                }
+                Err(err) => Err(ochub_core::AppError::Config(format!(
+                    "构建异步运行时失败: {err}"
+                ))),
+            }
+        });
         cx.spawn(async move |this, cx| {
-            let result = ochub_core::services::update::check_for_updates(None).await;
+            let result = task.await;
             this.update(cx, |this, cx| {
                 this.update_checking = false;
                 match result {

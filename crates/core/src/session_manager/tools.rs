@@ -21,9 +21,7 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-const VALID_TOOLS: [&str; 6] = [
-    "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
-];
+const VALID_TOOLS: [&str; 5] = ["claude", "codex", "opencode", "openclaw", "hermes"];
 
 /// 单个工具的版本探测结果。
 #[derive(Debug, Clone, Serialize)]
@@ -613,7 +611,6 @@ async fn get_single_tool_version_impl(tool: &str) -> ToolVersion {
             fetch_npm_latest_for_tool(&client, "@anthropic-ai/claude-code", tool, local).await
         }
         "codex" => fetch_npm_latest_for_tool(&client, "@openai/codex", tool, local).await,
-        "gemini" => fetch_npm_latest_for_tool(&client, "@google/gemini-cli", tool, local).await,
         "opencode" => {
             if let Some(version) =
                 fetch_npm_latest_for_tool(&client, "opencode-ai", tool, local).await
@@ -1071,7 +1068,6 @@ fn npm_package_for(tool: &str) -> Option<&'static str> {
     match tool {
         "claude" => Some("@anthropic-ai/claude-code"),
         "codex" => Some("@openai/codex"),
-        "gemini" => Some("@google/gemini-cli"),
         "opencode" => Some("opencode-ai"),
         "openclaw" => Some("openclaw"),
         _ => None,
@@ -1312,7 +1308,6 @@ fn npm_install_command_for(tool: &str) -> Option<&'static str> {
     match tool {
         "claude" => Some("npm i -g @anthropic-ai/claude-code@latest"),
         "codex" => Some("npm i -g @openai/codex@latest"),
-        "gemini" => Some("npm i -g @google/gemini-cli@latest"),
         "opencode" => Some("npm i -g opencode-ai@latest"),
         "openclaw" => Some("npm i -g openclaw@latest"),
         _ => None,
@@ -1448,7 +1443,6 @@ fn tool_display_name(tool: &str) -> &'static str {
     match tool {
         "claude" => "Claude Code",
         "codex" => "Codex",
-        "gemini" => "Gemini CLI",
         "opencode" => "OpenCode",
         "openclaw" => "OpenClaw",
         "hermes" => "Hermes",
@@ -1611,7 +1605,7 @@ mod tests {
             "nvm"
         );
         assert_eq!(
-            infer_install_source(Path::new("/opt/homebrew/Cellar/gemini-cli/0.1/bin/gemini")),
+            infer_install_source(Path::new("/opt/homebrew/Cellar/some-cli/0.1/bin/some-cli")),
             "homebrew"
         );
         assert_eq!(
@@ -1630,10 +1624,10 @@ mod tests {
     #[test]
     fn brew_formula_extracts_name() {
         assert_eq!(
-            brew_formula_from_path("/opt/homebrew/Cellar/gemini-cli/0.13.0/bin/gemini").as_deref(),
-            Some("gemini-cli")
+            brew_formula_from_path("/opt/homebrew/Cellar/some-cli/0.13.0/bin/some-cli").as_deref(),
+            Some("some-cli")
         );
-        assert_eq!(brew_formula_from_path("/opt/homebrew/bin/gemini"), None);
+        assert_eq!(brew_formula_from_path("/opt/homebrew/bin/some-cli"), None);
     }
 
     #[cfg(not(target_os = "windows"))]

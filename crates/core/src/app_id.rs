@@ -16,7 +16,6 @@ pub mod builtin {
     pub const CLAUDE: &str = "claude";
     pub const CLAUDE_DESKTOP: &str = "claude-desktop";
     pub const CODEX: &str = "codex";
-    pub const GEMINI: &str = "gemini";
     pub const OPENCODE: &str = "opencode";
     pub const OPENCLAW: &str = "openclaw";
     pub const HERMES: &str = "hermes";
@@ -105,7 +104,6 @@ mod tests {
             builtin::CLAUDE,
             builtin::CLAUDE_DESKTOP,
             builtin::CODEX,
-            builtin::GEMINI,
             builtin::OPENCODE,
             builtin::OPENCLAW,
             builtin::HERMES,

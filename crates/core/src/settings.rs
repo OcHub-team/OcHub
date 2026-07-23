@@ -749,7 +749,6 @@ macro_rules! override_getter {
 
 override_getter!(get_claude_override_dir, claude_config_dir);
 override_getter!(get_codex_override_dir, codex_config_dir);
-override_getter!(get_gemini_override_dir, gemini_config_dir);
 override_getter!(get_opencode_override_dir, opencode_config_dir);
 override_getter!(get_openclaw_override_dir, openclaw_config_dir);
 override_getter!(get_hermes_override_dir, hermes_config_dir);
@@ -780,7 +779,6 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::Claude => settings.current_provider_claude.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop.clone(),
         AppType::Codex => settings.current_provider_codex.clone(),
-        AppType::Gemini => settings.current_provider_gemini.clone(),
         AppType::OpenCode => settings.current_provider_opencode.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
         AppType::Hermes => settings.current_provider_hermes.clone(),
@@ -793,7 +791,6 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::Claude => settings.current_provider_claude = id_owned.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop = id_owned.clone(),
         AppType::Codex => settings.current_provider_codex = id_owned.clone(),
-        AppType::Gemini => settings.current_provider_gemini = id_owned.clone(),
         AppType::OpenCode => settings.current_provider_opencode = id_owned.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw = id_owned.clone(),
         AppType::Hermes => settings.current_provider_hermes = id_owned.clone(),

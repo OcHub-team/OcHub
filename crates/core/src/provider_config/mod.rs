@@ -1,7 +1,7 @@
 //! Per-app provider configuration codecs.
 //!
 //! Each managed app stores its provider config in a different on-disk shape
-//! (Codex = `auth.json` + `config.toml`, Gemini = `.env` + `settings.json`,
+//! (Codex = `auth.json` + `config.toml`,
 //! OpenCode = a typed JSON block, …) plus, for some apps, fields that live in
 //! [`ProviderMeta`] rather than `settingsConfig`. The legacy add/edit form
 //! flattened all of this into name/baseURL/key/model, which is both lossy and,
@@ -22,7 +22,6 @@ use crate::AppType;
 mod claude;
 mod claude_desktop;
 mod codex;
-mod gemini;
 mod hermes;
 mod openclaw;
 mod opencode;
@@ -30,7 +29,6 @@ mod opencode;
 pub use claude::ClaudeConfig;
 pub use claude_desktop::ClaudeDesktopConfig;
 pub use codex::CodexConfig;
-pub use gemini::GeminiConfig;
 pub use hermes::HermesConfig;
 pub use openclaw::OpenClawConfig;
 pub use opencode::OpenCodeConfig;
@@ -334,7 +332,6 @@ pub fn config_for(app: AppType) -> Option<Box<dyn AppConfig>> {
         AppType::Claude => Some(Box::new(ClaudeConfig)),
         AppType::ClaudeDesktop => Some(Box::new(ClaudeDesktopConfig)),
         AppType::Codex => Some(Box::new(CodexConfig)),
-        AppType::Gemini => Some(Box::new(GeminiConfig)),
         AppType::OpenCode => Some(Box::new(OpenCodeConfig)),
         AppType::OpenClaw => Some(Box::new(OpenClawConfig)),
         AppType::Hermes => Some(Box::new(HermesConfig)),

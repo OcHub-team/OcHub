@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
-use ochub_core::apps::{claude_desktop, claude_plugin, codex, gemini, hermes, openclaw, opencode};
+use ochub_core::apps::{claude_desktop, claude_plugin, codex, hermes, openclaw, opencode};
 use ochub_core::settings::{self, S3SyncSettings, WebDavSyncSettings};
 use ochub_core::{AppError, AppType};
 
@@ -694,13 +694,6 @@ fn app_config_status_sync(
             ochub_core::paths::ConfigStatus {
                 exists: auth_path.exists() || !config_text.trim().is_empty(),
                 path: codex::get_codex_config_dir().to_string_lossy().to_string(),
-            }
-        }
-        AppType::Gemini => {
-            let env_path = gemini::get_gemini_env_path();
-            ochub_core::paths::ConfigStatus {
-                exists: env_path.exists(),
-                path: gemini::get_gemini_dir().to_string_lossy().to_string(),
             }
         }
         AppType::OpenCode => {

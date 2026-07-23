@@ -1,7 +1,7 @@
 # OCHUB
 
 A native desktop manager for switching API providers across AI coding tools —
-**Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw, and Hermes**.
+**Claude Code, Claude Desktop, Codex, OpenCode, OpenClaw, and Hermes**.
 
 This is a from-scratch rewrite of [`cc-switch`](https://github.com/farion1231/cc-switch)
 (originally Tauri + React) onto a new stack:
@@ -14,8 +14,10 @@ an independent schema line starting at v1). On first launch it performs a
 **one-time, read-only import** of existing cc-switch data
 (`~/.cc-switch/cc-switch.db`, tolerant of schema v11–v16+): providers, MCP
 servers, skills, usage history, settings, and managed OAuth accounts
-all carry over, and `~/.cc-switch/` is never written to. It manages the same
-live config locations (`~/.claude`, `~/.codex`, `~/.gemini`, …) — quit the
+all carry over, and `~/.cc-switch/` is never written to. Historical Gemini
+usage rows remain readable, but Gemini CLI is no longer a managed app. OCHUB
+manages live config locations such as `~/.claude`, `~/.codex`, and the
+OpenCode/OpenClaw/Hermes directories — quit the
 original cc-switch app before switching providers from OCHUB, or the two
 will overwrite each other's live configs.
 
@@ -67,8 +69,9 @@ passing) and contains the full cc-switch backend:
 
 - Domain model, config/paths, device settings
 - SQLite store — independent schema v3, backup/restore, legacy read-only import, and usage rollups
-- Provider switching + all 7 per-app live-config writers + first-launch seeding
-- MCP / skills / common-config services (sync-on-switch wired)
+- Provider switching + all 6 per-app live-config writers + first-launch seeding
+- MCP and common-config services
+- Skills management through the Vercel `npx -y skills` CLI
 - Relay gateway — silent in-process lifecycle, channel routing, health-aware failover,
   protocol conversion, per-app keys, one-click app configuration, and usage accounting
 - Usage statistics, session manager, environment management, deeplink import
@@ -76,7 +79,7 @@ passing) and contains the full cc-switch backend:
 - Model-fetch / speedtest / subscription / balance / coding-plan
 - Auth — Copilot OAuth device flow, Codex OAuth, managed multi-account stores
 
-`ochub-server` exposes ~47 control-API routes. `ochub-app` is a working GPUI desktop UI
+`ochub-server` exposes the local control API. `ochub-app` is a working GPUI desktop UI
 (sidebar app-switcher, provider list with switch/import/add/edit/delete, a
 text-input component, settings panel, sessions browser, usage dashboard, and gateway panel).
 

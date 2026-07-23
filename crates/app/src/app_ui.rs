@@ -103,6 +103,8 @@ pub struct AppRoot {
     editor: Option<Entity<ProviderEditor>>,
     /// Provider pending deletion confirmation; when `Some`, a modal is shown.
     confirm_delete: Option<Provider>,
+    /// One-time acknowledgement shown after the first successful launch.
+    show_first_run_notice: bool,
     settings_view: Entity<SettingsView>,
     gateway_view: Entity<GatewayView>,
     mcp_view: Entity<McpView>,
@@ -135,6 +137,10 @@ enum ProviderRow {
 impl AppRoot {
     fn save_active(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         if self.confirm_delete.is_some() {
+            window.play_system_bell();
+            return;
+        }
+        if self.show_first_run_notice {
             window.play_system_bell();
             return;
         }
@@ -246,6 +252,7 @@ impl AppRoot {
             notifications,
             editor: None,
             confirm_delete: None,
+            show_first_run_notice: crate::shell_support::first_run_notice_pending(),
             settings_view,
             gateway_view,
             mcp_view,
@@ -623,6 +630,54 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn visible_provider_ids(&self) -> Vec<String> {
+        let hide_current = !self.selected_app.is_additive_mode();
+        self.providers
+            .iter()
+            .filter(|provider| !hide_current || provider.id != self.current)
+            .map(|provider| provider.id.clone())
+            .collect()
+    }
+
+    fn move_provider(&mut self, id: String, delta: isize, cx: &mut Context<Self>) {
+        let visible = self.visible_provider_ids();
+        let Some(position) = visible.iter().position(|provider_id| provider_id == &id) else {
+            return;
+        };
+        let target = position as isize + delta;
+        if target < 0 || target as usize >= visible.len() {
+            return;
+        }
+        let target_id = &visible[target as usize];
+        let Some(source_index) = self.providers.iter().position(|provider| provider.id == id)
+        else {
+            return;
+        };
+        let Some(target_index) = self
+            .providers
+            .iter()
+            .position(|provider| provider.id == *target_id)
+        else {
+            return;
+        };
+        self.providers.swap(source_index, target_index);
+        let updates = self
+            .providers
+            .iter()
+            .enumerate()
+            .map(|(sort_index, provider)| provider::ProviderSortUpdate {
+                id: provider.id.clone(),
+                sort_index,
+            })
+            .collect();
+        if let Err(err) = ProviderService::update_sort_order(&self.app, self.selected_app, updates)
+        {
+            self.notify_error("调整供应商顺序失败", err.to_string(), cx);
+        }
+        self.reload(cx);
+        cx.notify();
+    }
+
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
         match ProviderService::delete(&self.app, self.selected_app, &id) {
             Ok(()) => {
@@ -632,6 +687,12 @@ impl AppRoot {
         }
         self.reload(cx);
         shell_menu::refresh(&self.app, cx);
+        cx.notify();
+    }
+
+    fn acknowledge_first_run(&mut self, cx: &mut Context<Self>) {
+        crate::shell_support::confirm_first_run_notice();
+        self.show_first_run_notice = false;
         cx.notify();
     }
 
@@ -909,6 +970,15 @@ impl AppRoot {
         let edit_provider = provider.clone();
         let confirm_provider = provider.clone();
         let live_id = provider.id.clone();
+        let reorder_id_up = provider.id.clone();
+        let reorder_id_down = provider.id.clone();
+        let visible_ids = self.visible_provider_ids();
+        let visible_position = visible_ids
+            .iter()
+            .position(|provider_id| provider_id == &provider.id);
+        let can_move_up = visible_position.is_some_and(|position| position > 0);
+        let can_move_down =
+            visible_position.is_some_and(|position| position + 1 < visible_ids.len());
         let base_url = self.provider_base_url(provider);
         let is_additive = self.selected_app.is_additive_mode();
         let is_in_live = provider
@@ -1012,6 +1082,38 @@ impl AppRoot {
                     .flex_row()
                     .items_center()
                     .gap_2()
+                    .when(can_move_up, |row| {
+                        row.child(
+                            components::button(
+                                SharedString::from(format!("move-up-{}", provider.id)),
+                                "↑",
+                                ButtonTone::Ghost,
+                                ButtonSize::Sm,
+                            )
+                            .aria_label(SharedString::from(format!("上移 {}", provider.name)))
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    this.move_provider(reorder_id_up.clone(), -1, cx);
+                                },
+                            )),
+                        )
+                    })
+                    .when(can_move_down, |row| {
+                        row.child(
+                            components::button(
+                                SharedString::from(format!("move-down-{}", provider.id)),
+                                "↓",
+                                ButtonTone::Ghost,
+                                ButtonSize::Sm,
+                            )
+                            .aria_label(SharedString::from(format!("下移 {}", provider.name)))
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    this.move_provider(reorder_id_down.clone(), 1, cx);
+                                },
+                            )),
+                        )
+                    })
                     .child(
                         components::action_button(
                             SharedString::from(format!("edit-{}", provider.id)),
@@ -1447,6 +1549,34 @@ impl Render for AppRoot {
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.confirm_delete = None;
                                 this.do_delete(delete_id.clone(), cx);
+                            }))
+                            .into_any_element(),
+                        ])),
+                ))
+            })
+            .when(self.show_first_run_notice, |root| {
+                root.child(components::modal_overlay(
+                    components::modal_card()
+                        .child(components::modal_header("欢迎使用 OCHUB"))
+                        .child(components::modal_body().child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .text_color(theme::subtext())
+                                .text_sm()
+                                .child("OCHUB 会直接读写各 AI 工具的配置，并在本地保存供应商与网关数据。")
+                                .child("建议首次使用前备份现有配置；之后可在“设置”与各应用页面调整行为。"),
+                        ))
+                        .child(components::modal_footer(vec![
+                            components::button(
+                                "first-run-confirm",
+                                "我知道了",
+                                ButtonTone::Primary,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.acknowledge_first_run(cx);
                             }))
                             .into_any_element(),
                         ])),

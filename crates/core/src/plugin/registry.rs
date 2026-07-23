@@ -149,12 +149,11 @@ mod tests {
             .iter()
             .map(|p| p.id().as_str().to_string())
             .collect();
-        // At least the seven builtins in sort order (user plugins may follow).
+        // All six builtins stay in sidebar order (user plugins may follow).
         let expected = [
             builtin::CLAUDE,
             builtin::CLAUDE_DESKTOP,
             builtin::CODEX,
-            builtin::GEMINI,
             builtin::OPENCODE,
             builtin::OPENCLAW,
             builtin::HERMES,
