@@ -1173,10 +1173,14 @@ impl Render for SettingsView {
         layout::page()
             .relative()
             .child(layout::page_header("设置", None))
-            .child(layout::virtual_body(gpui::list(
-                self.list_state.clone(),
-                cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
-            )))
+            .child(layout::virtual_body(
+                "settings-body",
+                gpui::list(
+                    self.list_state.clone(),
+                    cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
+                ),
+                &self.list_state,
+            ))
             .when_some(self.confirm_download, |root, target| {
                 let provider = match target {
                     SyncDownloadTarget::WebDav => "WebDAV",

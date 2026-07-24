@@ -1297,14 +1297,22 @@ impl GatewayView {
             Dialect::Responses => 2,
         };
         let on_dialect_select = cx.listener(|this, index: &usize, _window, cx| {
+            let dialect = match index {
+                1 => Dialect::Chat,
+                2 => Dialect::Responses,
+                _ => Dialect::Messages,
+            };
             if let Some(editor) = &mut this.editor {
-                editor.dialect = match index {
-                    1 => Dialect::Chat,
-                    2 => Dialect::Responses,
-                    _ => Dialect::Messages,
-                };
+                editor.dialect = dialect;
             }
-            cx.notify();
+            if dialect == Dialect::Chat {
+                this.toast_warning(
+                    "OpenAI Chat 格式不支持思考签名等高级能力；应用到 Claude Code、Codex 等工具时会自动转换，思考内容不参与后续对话。",
+                    cx,
+                );
+            } else {
+                cx.notify();
+            }
         });
         let reasoning_index = match editor.reasoning_mode {
             GatewayReasoningMode::Auto => 0,
@@ -1373,7 +1381,7 @@ impl GatewayView {
             }
             ProbeState::Failed => "无法自动检测，请按转发站文档选择。".into(),
         };
-        components::card_emphasis()
+        components::card()
             .gap_5()
             .child(
                 div()
@@ -1463,30 +1471,36 @@ impl GatewayView {
                         None,
                         editor.base_url.clone(),
                     )))
-                    .child(div().flex_1().min_w(px(220.)).child(components::field(
-                        "API Key",
-                        false,
-                        None,
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .child(div().flex_1().min_w_0().child(editor.api_key.clone()))
-                            .child(
-                                components::button(
-                                    "station-key-reveal",
-                                    if editor.reveal_key { "隐藏" } else { "显示" },
-                                    ButtonTone::Ghost,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.toggle_reveal_key(cx);
-                                    },
-                                )),
-                            ),
-                    ))),
+                    .child(
+                        div().flex_1().min_w(px(220.)).child(components::field(
+                            "API Key",
+                            false,
+                            None,
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .child(div().flex_1().min_w_0().child(editor.api_key.clone()))
+                                .child(
+                                    components::button(
+                                        "station-key-reveal",
+                                        if editor.reveal_key {
+                                            "隐藏"
+                                        } else {
+                                            "显示"
+                                        },
+                                        ButtonTone::Ghost,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.toggle_reveal_key(cx);
+                                        },
+                                    )),
+                                ),
+                        )),
+                    ),
             )
             .child(components::field(
                 "转发站接口格式",
@@ -1515,19 +1529,13 @@ impl GatewayView {
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
                         )
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.detect_dialect(cx);
-                        })),
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.detect_dialect(cx);
+                            },
+                        )),
                     ),
             ))
-            .when(editor.dialect == Dialect::Chat, |panel| {
-                panel.child(
-                    div()
-                        .text_color(theme::yellow())
-                        .text_xs()
-                        .child("OpenAI Chat 格式不支持思考签名等高级能力，应用到 Claude Code、Codex 等工具时会自动转换，思考内容不参与后续对话。"),
-                )
-            })
             .child(section_title(
                 "模型",
                 "设置默认模型，或把 CLI 熟悉的模型名映射到转发站模型。",

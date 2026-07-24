@@ -708,6 +708,7 @@ impl ProviderService {
             AppType::Claude => Self::extract_claude_common_config(&provider.settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(&provider.settings_config),
+            AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
@@ -723,6 +724,7 @@ impl ProviderService {
             AppType::Claude => Self::extract_claude_common_config(settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(settings_config),
+            AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Hermes => Ok(String::new()),
@@ -1022,6 +1024,16 @@ impl ProviderService {
                     }
                 }
             }
+            AppType::GrokBuild => {
+                let config = provider
+                    .settings_config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AppError::Config("Grok Build 配置缺少 config 字段".to_string())
+                    })?;
+                crate::apps::grokbuild::validate_config_toml(config)?;
+            }
             AppType::OpenCode => {
                 if !provider.settings_config.is_object() {
                     return Err(AppError::localized(
@@ -1175,6 +1187,20 @@ impl ProviderService {
                     ));
                 };
 
+                Ok((api_key, base_url))
+            }
+            AppType::GrokBuild => {
+                let config = provider
+                    .settings_config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AppError::Config("Grok Build 配置缺少 config 字段".to_string())
+                    })?;
+                let (base_url, api_key) = crate::apps::grokbuild::extract_credentials(config)
+                    .ok_or_else(|| {
+                        AppError::Config("Grok Build 配置缺少 Base URL 或 API Key".to_string())
+                    })?;
                 Ok((api_key, base_url))
             }
             AppType::OpenCode => {

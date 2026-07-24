@@ -377,6 +377,11 @@ impl Provider {
                     .unwrap_or_default();
                 (base_url, api_key)
             }
+            AppType::GrokBuild => settings
+                .get("config")
+                .and_then(Value::as_str)
+                .and_then(crate::apps::grokbuild::extract_credentials)
+                .unwrap_or_default(),
             AppType::Hermes => (
                 str_at(settings.get("base_url")),
                 str_at(settings.get("api_key")),

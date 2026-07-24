@@ -17,6 +17,7 @@
 mod claude;
 mod claude_mcp;
 mod codex;
+mod grokbuild;
 mod hermes;
 mod opencode;
 mod validation;
@@ -28,6 +29,9 @@ pub use claude::{
 };
 pub use codex::{
     import_from_codex, remove_server_from_codex, sync_enabled_to_codex, sync_single_server_to_codex,
+};
+pub use grokbuild::{
+    import_from_grokbuild, remove_server_from_grokbuild, sync_single_server_to_grokbuild,
 };
 pub use hermes::{import_from_hermes, remove_server_from_hermes, sync_single_server_to_hermes};
 pub use opencode::{

@@ -55,6 +55,10 @@ impl AppState {
     /// original live config. Discovery is repeated on every startup and only
     /// adds provider ids that OcHub does not already manage.
     pub fn bootstrap(&self) {
+        if let Err(error) = crate::settings::enable_extended_managed_apps_once() {
+            log::warn!("failed to enable newly supported managed apps: {error}");
+        }
+
         match self.db.init_default_skill_repos() {
             Ok(count) if count > 0 => log::info!("seeded {count} default skill repositories"),
             Ok(_) => {}

@@ -297,6 +297,8 @@ pub struct LocalMigrations {
     pub codex_provider_template_v1: Option<CodexProviderTemplateMigration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_official_history_unify_v1: Option<CodexOfficialHistoryUnifyMigration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_managed_apps_v1: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,6 +393,8 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grokbuild_config_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opencode_config_dir: Option<String>,
@@ -411,6 +415,8 @@ pub struct AppSettings {
     pub current_provider_claude_desktop: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_codex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_provider_grokbuild: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_gemini: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -468,6 +474,7 @@ impl Default for AppSettings {
             enabled_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
+            grokbuild_config_dir: None,
             gemini_config_dir: None,
             opencode_config_dir: None,
             openclaw_config_dir: None,
@@ -476,6 +483,7 @@ impl Default for AppSettings {
             current_provider_claude: None,
             current_provider_claude_desktop: None,
             current_provider_codex: None,
+            current_provider_grokbuild: None,
             current_provider_gemini: None,
             current_provider_opencode: None,
             current_provider_openclaw: None,
@@ -545,6 +553,7 @@ impl AppSettings {
     fn normalize_paths(&mut self) {
         Self::normalize_one(&mut self.claude_config_dir);
         Self::normalize_one(&mut self.codex_config_dir);
+        Self::normalize_one(&mut self.grokbuild_config_dir);
         Self::normalize_one(&mut self.gemini_config_dir);
         Self::normalize_one(&mut self.opencode_config_dir);
         Self::normalize_one(&mut self.openclaw_config_dir);
@@ -728,6 +737,29 @@ where
     Ok(())
 }
 
+/// One-time rollout for clients that became first-class managed apps after the
+/// initial four-app release. Once marked, later user toggles are preserved.
+pub fn enable_extended_managed_apps_once() -> Result<(), AppError> {
+    if get_settings()
+        .local_migrations
+        .as_ref()
+        .and_then(|migrations| migrations.extended_managed_apps_v1)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    mutate_settings(|settings| {
+        for app_id in ["grokbuild", "openclaw", "hermes"] {
+            settings.set_app_enabled(app_id, true);
+        }
+        settings
+            .local_migrations
+            .get_or_insert_with(Default::default)
+            .extended_managed_apps_v1 = Some(true);
+    })
+}
+
 /// Reload settings from disk into the in-memory cache.
 pub fn reload_settings() -> Result<(), AppError> {
     let fresh = AppSettings::load_from_file();
@@ -750,6 +782,7 @@ macro_rules! override_getter {
 
 override_getter!(get_claude_override_dir, claude_config_dir);
 override_getter!(get_codex_override_dir, codex_config_dir);
+override_getter!(get_grokbuild_override_dir, grokbuild_config_dir);
 override_getter!(get_opencode_override_dir, opencode_config_dir);
 override_getter!(get_openclaw_override_dir, openclaw_config_dir);
 override_getter!(get_hermes_override_dir, hermes_config_dir);
@@ -780,6 +813,7 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::Claude => settings.current_provider_claude.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop.clone(),
         AppType::Codex => settings.current_provider_codex.clone(),
+        AppType::GrokBuild => settings.current_provider_grokbuild.clone(),
         AppType::OpenCode => settings.current_provider_opencode.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
         AppType::Hermes => settings.current_provider_hermes.clone(),
@@ -792,6 +826,7 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::Claude => settings.current_provider_claude = id_owned.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop = id_owned.clone(),
         AppType::Codex => settings.current_provider_codex = id_owned.clone(),
+        AppType::GrokBuild => settings.current_provider_grokbuild = id_owned.clone(),
         AppType::OpenCode => settings.current_provider_opencode = id_owned.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw = id_owned.clone(),
         AppType::Hermes => settings.current_provider_hermes = id_owned.clone(),

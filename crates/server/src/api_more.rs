@@ -696,6 +696,15 @@ fn app_config_status_sync(
                 path: codex::get_codex_config_dir().to_string_lossy().to_string(),
             }
         }
+        AppType::GrokBuild => {
+            let config_path = ochub_core::apps::grokbuild::get_grok_config_path();
+            ochub_core::paths::ConfigStatus {
+                exists: config_path.exists(),
+                path: ochub_core::apps::grokbuild::get_grok_config_dir()
+                    .to_string_lossy()
+                    .to_string(),
+            }
+        }
         AppType::OpenCode => {
             let config_path = opencode::get_opencode_config_path();
             ochub_core::paths::ConfigStatus {

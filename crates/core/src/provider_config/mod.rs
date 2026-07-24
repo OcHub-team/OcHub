@@ -22,6 +22,7 @@ use crate::AppType;
 mod claude;
 mod claude_desktop;
 mod codex;
+mod grokbuild;
 mod hermes;
 mod openclaw;
 mod opencode;
@@ -29,6 +30,7 @@ mod opencode;
 pub use claude::ClaudeConfig;
 pub use claude_desktop::ClaudeDesktopConfig;
 pub use codex::CodexConfig;
+pub use grokbuild::GrokBuildConfig;
 pub use hermes::HermesConfig;
 pub use openclaw::OpenClawConfig;
 pub use opencode::OpenCodeConfig;
@@ -346,6 +348,7 @@ pub fn config_for(app: AppType) -> Option<Box<dyn AppConfig>> {
         AppType::Claude => Some(Box::new(ClaudeConfig)),
         AppType::ClaudeDesktop => Some(Box::new(ClaudeDesktopConfig)),
         AppType::Codex => Some(Box::new(CodexConfig)),
+        AppType::GrokBuild => Some(Box::new(GrokBuildConfig)),
         AppType::OpenCode => Some(Box::new(OpenCodeConfig)),
         AppType::OpenClaw => Some(Box::new(OpenClawConfig)),
         AppType::Hermes => Some(Box::new(HermesConfig)),

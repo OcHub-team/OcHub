@@ -328,7 +328,11 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
 
             toml_item_is_subset(target_doc.as_item(), source_doc.as_item())
         }
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::ClaudeDesktop => false,
+        AppType::OpenCode
+        | AppType::OpenClaw
+        | AppType::Hermes
+        | AppType::GrokBuild
+        | AppType::ClaudeDesktop => false,
     }
 }
 
@@ -389,9 +393,11 @@ pub(crate) fn remove_common_config_from_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::ClaudeDesktop => {
-            Ok(settings.clone())
-        }
+        AppType::OpenCode
+        | AppType::OpenClaw
+        | AppType::Hermes
+        | AppType::GrokBuild
+        | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
 
@@ -435,9 +441,11 @@ fn apply_common_config_to_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::ClaudeDesktop => {
-            Ok(settings.clone())
-        }
+        AppType::OpenCode
+        | AppType::OpenClaw
+        | AppType::Hermes
+        | AppType::GrokBuild
+        | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
 
@@ -547,6 +555,19 @@ fn restore_live_settings_for_provider_backfill(
     provider: &Provider,
     live_settings: Value,
 ) -> Value {
+    if matches!(app_type, AppType::GrokBuild) {
+        let mut settings = live_settings;
+        if let Err(error) =
+            crate::apps::grokbuild::strip_grok_mcp_servers_from_settings(&mut settings)
+        {
+            log::warn!(
+                "Failed to strip Grok Build MCP projection while backfilling '{}': {error}",
+                provider.id
+            );
+        }
+        return settings;
+    }
+
     if !matches!(app_type, AppType::Codex) {
         return live_settings;
     }
@@ -689,6 +710,7 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
             "Claude Desktop configuration must be written through the provider switch flow",
         )),
         AppType::Codex => write_codex_live_snapshot(provider),
+        AppType::GrokBuild => write_grokbuild_live_snapshot(provider),
         AppType::OpenCode => write_opencode_live_snapshot(provider),
         AppType::OpenClaw => write_openclaw_live_snapshot(provider),
         AppType::Hermes => write_hermes_live_snapshot(provider),
@@ -717,6 +739,10 @@ pub(crate) fn write_codex_live_snapshot(provider: &Provider) -> Result<(), AppEr
         auth,
         config_str,
     )
+}
+
+pub(crate) fn write_grokbuild_live_snapshot(provider: &Provider) -> Result<(), AppError> {
+    crate::apps::grokbuild::write_grok_provider_live(provider)
 }
 
 pub(crate) fn write_opencode_live_snapshot(provider: &Provider) -> Result<(), AppError> {
@@ -976,6 +1002,7 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             }
             Ok(result)
         }
+        AppType::GrokBuild => crate::apps::grokbuild::read_grok_live_settings(),
         AppType::Claude => {
             let path = get_claude_settings_path();
             if !path.exists() {
@@ -1057,6 +1084,7 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
 
     let settings_config = match app_type {
         AppType::Codex => crate::apps::codex::read_codex_live_settings()?,
+        AppType::GrokBuild => crate::apps::grokbuild::read_grok_live_settings()?,
         AppType::Claude => {
             let settings_path = get_claude_settings_path();
             if !settings_path.exists() {
@@ -1155,7 +1183,7 @@ pub fn should_auto_import_default_config(
 /// - existing OcHub providers are never overwritten.
 pub fn auto_import_live_providers(state: &AppState, app_type: AppType) -> Result<usize, AppError> {
     match app_type {
-        AppType::Claude | AppType::Codex => {
+        AppType::Claude | AppType::Codex | AppType::GrokBuild => {
             if should_auto_import_default_config(state, &app_type)?
                 && import_default_config(state, app_type)?
             {

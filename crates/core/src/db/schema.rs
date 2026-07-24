@@ -61,7 +61,8 @@ impl Database {
             id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
             description TEXT, homepage TEXT, docs TEXT, tags TEXT NOT NULL DEFAULT '[]',
             enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
-            enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
+            enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
+            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_hermes BOOLEAN NOT NULL DEFAULT 0
         )",
             [],
@@ -493,6 +494,22 @@ impl Database {
                             })?;
                         }
                         Self::set_user_version(conn, 5)?;
+                    }
+                    5 => {
+                        if Self::table_exists(conn, "mcp_servers")?
+                            && !Self::has_column(conn, "mcp_servers", "enabled_grokbuild")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE mcp_servers ADD COLUMN enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!(
+                                    "为 MCP 添加 Grok Build 启用状态失败: {e}"
+                                ))
+                            })?;
+                        }
+                        Self::set_user_version(conn, 6)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(

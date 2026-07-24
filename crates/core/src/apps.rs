@@ -8,6 +8,7 @@
 pub mod claude_desktop;
 pub mod claude_plugin;
 pub mod codex;
+pub mod grokbuild;
 pub mod hermes;
 pub mod openclaw;
 pub mod opencode;

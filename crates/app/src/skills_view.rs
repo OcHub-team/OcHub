@@ -1978,7 +1978,11 @@ impl Render for SkillsView {
                 "技能",
                 Some("通过 skills CLI 集中安装、更新并分发技能".into()),
             ))
-            .child(layout::virtual_body(list))
+            .child(layout::virtual_body(
+                "skills-list-body",
+                list,
+                &self.list_state,
+            ))
             .when_some(self.confirm.clone(), |root, action| {
                 let (title, message, confirm_label) = match &action {
                     ConfirmAction::Uninstall { name, .. } => (

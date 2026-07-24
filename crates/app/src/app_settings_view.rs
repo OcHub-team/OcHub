@@ -9,7 +9,7 @@
 //! in the global [`AppSettings`] (persisted via `settings::update_settings`);
 //! only their *placement* is app-scoped.
 
-use gpui::{div, prelude::*, Context, Entity, SharedString, Window};
+use gpui::{div, prelude::*, Context, Entity, ScrollHandle, SharedString, Window};
 use ochub_core::settings::{self, AppSettings};
 use ochub_core::AppType;
 
@@ -31,6 +31,7 @@ pub struct AppSettingsView {
     /// The app's config-dir override input (None for apps without one).
     config_dir: Option<Entity<TextInput>>,
     status: Option<SharedString>,
+    scroll_handle: ScrollHandle,
 }
 
 /// Whether an app has any app-scoped settings worth a gear button.
@@ -59,6 +60,7 @@ impl AppSettingsView {
             settings,
             config_dir,
             status: None,
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -194,9 +196,11 @@ impl Render for AppSettingsView {
             column = column.child(dir);
         }
 
-        layout::page()
-            .child(header)
-            .child(layout::scroll_body("app-settings-body", column))
+        layout::page().child(header).child(layout::scroll_body(
+            "app-settings-body",
+            &self.scroll_handle,
+            column,
+        ))
     }
 }
 
@@ -273,6 +277,10 @@ fn config_dir_meta(app: AppType) -> Option<(&'static str, &'static str)> {
             "~/.codex",
             "默认 ~/.codex；影响 auth.json、config.toml 和会话历史。",
         )),
+        AppType::GrokBuild => Some((
+            "~/.grok",
+            "默认 ~/.grok；影响 config.toml、MCP 与会话历史。",
+        )),
         AppType::OpenCode => Some((
             "~/.config/opencode",
             "默认 ~/.config/opencode；影响 opencode.json。",
@@ -287,6 +295,7 @@ fn read_config_dir(settings: &AppSettings, app: AppType) -> Option<String> {
     match app {
         AppType::Claude => settings.claude_config_dir.clone(),
         AppType::Codex => settings.codex_config_dir.clone(),
+        AppType::GrokBuild => settings.grokbuild_config_dir.clone(),
         AppType::OpenCode => settings.opencode_config_dir.clone(),
         AppType::OpenClaw => settings.openclaw_config_dir.clone(),
         AppType::Hermes => settings.hermes_config_dir.clone(),
@@ -298,6 +307,7 @@ fn write_config_dir(settings: &mut AppSettings, app: AppType, value: Option<Stri
     match app {
         AppType::Claude => settings.claude_config_dir = value,
         AppType::Codex => settings.codex_config_dir = value,
+        AppType::GrokBuild => settings.grokbuild_config_dir = value,
         AppType::OpenCode => settings.opencode_config_dir = value,
         AppType::OpenClaw => settings.openclaw_config_dir = value,
         AppType::Hermes => settings.hermes_config_dir = value,

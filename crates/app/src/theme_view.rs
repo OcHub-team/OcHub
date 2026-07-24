@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context as _, Result};
 use gpui::{
     canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, size, Background,
     Bounds, ColorSpace, Context, Entity, FontWeight, ListAlignment, ListState, PathBuilder,
-    PathPromptOptions, Pixels, Point, Rgba, SharedString, Window,
+    PathPromptOptions, Pixels, Point, Rgba, ScrollHandle, SharedString, Window,
 };
 use ochub_core::settings::{self, ThemeMode};
 
@@ -124,6 +124,7 @@ pub struct ThemeView {
     status: Option<SharedString>,
     editor: Option<ThemeEditor>,
     editor_list_state: ListState,
+    manager_scroll_handle: ScrollHandle,
     confirm_delete: Option<String>,
 }
 
@@ -177,6 +178,7 @@ impl ThemeView {
                 ListAlignment::Top,
                 px(560.),
             ),
+            manager_scroll_handle: ScrollHandle::new(),
             confirm_delete: None,
         }
     }
@@ -1336,7 +1338,11 @@ impl ThemeView {
                     })),
                 ),
             )
-            .child(layout::scroll_body("theme-manager-body", content))
+            .child(layout::scroll_body(
+                "theme-manager-body",
+                &self.manager_scroll_handle,
+                content,
+            ))
             .when_some(self.confirm_delete.clone(), |root, family_id| {
                 let family_name = self
                     .registry
@@ -1695,7 +1701,11 @@ impl ThemeView {
                         ),
                 ),
             )
-            .child(layout::wide_virtual_body(list))
+            .child(layout::wide_virtual_body(
+                "theme-editor-body",
+                list,
+                &self.editor_list_state,
+            ))
             .into_any_element()
     }
 }

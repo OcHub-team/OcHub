@@ -35,6 +35,8 @@ pub struct McpApps {
     #[serde(default)]
     pub gemini: bool,
     #[serde(default)]
+    pub grokbuild: bool,
+    #[serde(default)]
     pub opencode: bool,
     #[serde(default)]
     pub hermes: bool,
@@ -45,6 +47,7 @@ impl McpApps {
         match app {
             AppType::Claude => self.claude,
             AppType::Codex => self.codex,
+            AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
             AppType::OpenClaw => false,
             AppType::Hermes => self.hermes,
@@ -56,6 +59,7 @@ impl McpApps {
         match app {
             AppType::Claude => self.claude = enabled,
             AppType::Codex => self.codex = enabled,
+            AppType::GrokBuild => self.grokbuild = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::OpenClaw => {}
             AppType::Hermes => self.hermes = enabled,
@@ -71,6 +75,9 @@ impl McpApps {
         if self.codex {
             apps.push(AppType::Codex);
         }
+        if self.grokbuild {
+            apps.push(AppType::GrokBuild);
+        }
         if self.opencode {
             apps.push(AppType::OpenCode);
         }
@@ -81,7 +88,7 @@ impl McpApps {
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.opencode && !self.hermes
+        !self.claude && !self.codex && !self.grokbuild && !self.opencode && !self.hermes
     }
 }
 
@@ -136,6 +143,8 @@ pub struct McpRoot {
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub gemini: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    pub grokbuild: McpConfig,
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub opencode: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub openclaw: McpConfig,
@@ -151,6 +160,7 @@ impl Default for McpRoot {
             claude_desktop: McpConfig::default(),
             codex: McpConfig::default(),
             gemini: McpConfig::default(),
+            grokbuild: McpConfig::default(),
             opencode: McpConfig::default(),
             openclaw: McpConfig::default(),
             hermes: McpConfig::default(),
@@ -182,6 +192,7 @@ impl SkillApps {
         match app {
             AppType::Claude => self.claude,
             AppType::Codex => self.codex,
+            AppType::GrokBuild => false,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
             AppType::OpenClaw => false,
@@ -193,6 +204,7 @@ impl SkillApps {
         match app {
             AppType::Claude => self.claude = enabled,
             AppType::Codex => self.codex = enabled,
+            AppType::GrokBuild => {}
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::OpenClaw => {}
@@ -357,6 +369,7 @@ impl CommonConfigSnippets {
             AppType::Claude => self.claude.as_ref(),
             AppType::ClaudeDesktop => None,
             AppType::Codex => self.codex.as_ref(),
+            AppType::GrokBuild => None,
             AppType::OpenCode => self.opencode.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::Hermes => self.hermes.as_ref(),
@@ -368,6 +381,7 @@ impl CommonConfigSnippets {
             AppType::Claude => self.claude = snippet,
             AppType::ClaudeDesktop => {}
             AppType::Codex => self.codex = snippet,
+            AppType::GrokBuild => {}
             AppType::OpenCode => self.opencode = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::Hermes => self.hermes = snippet,
@@ -408,6 +422,7 @@ impl Default for MultiAppConfig {
         apps.insert("claude".to_string(), ProviderManager::default());
         apps.insert("claude-desktop".to_string(), ProviderManager::default());
         apps.insert("codex".to_string(), ProviderManager::default());
+        apps.insert("grokbuild".to_string(), ProviderManager::default());
         apps.insert("opencode".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
         apps.insert("hermes".to_string(), ProviderManager::default());

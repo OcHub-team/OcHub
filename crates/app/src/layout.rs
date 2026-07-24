@@ -10,8 +10,9 @@
 //! Keeping all of this in one module means pages line up (same column width, same
 //! header chrome, same card rhythm) instead of each view hand-rolling its own.
 
-use gpui::{div, prelude::*, px, AnyElement, ElementId, FontWeight, SharedString};
+use gpui::{div, prelude::*, px, AnyElement, FontWeight, SharedString};
 
+use crate::scrollbar::VerticalScrollbar;
 use crate::theme;
 
 /// Max width of the centered content column, shared by every view so pages align.
@@ -71,41 +72,46 @@ pub fn page_header(title: impl Into<SharedString>, subtitle: Option<SharedString
 /// The scrollable body: a vertically scrolling region that horizontally centers its
 /// content. Pass the column built via [`content_column`] (or any centered child).
 pub fn scroll_body(
-    id: impl Into<ElementId>,
+    id: &'static str,
+    handle: &gpui::ScrollHandle,
     column: impl IntoElement,
-) -> gpui::Stateful<gpui::Div> {
+) -> gpui::Div {
     div()
-        .id(id.into())
+        .relative()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .items_center()
-        .p_6()
         .min_w_0()
-        .overflow_y_scroll()
-        .child(column)
+        .overflow_hidden()
+        .child(
+            div()
+                .id(id)
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .items_center()
+                .p_6()
+                .min_w_0()
+                .overflow_y_scroll()
+                .track_scroll(handle)
+                .child(column),
+        )
+        .child(VerticalScrollbar::new(
+            gpui::ElementId::Name(format!("{id}-scrollbar").into()),
+            handle.clone(),
+        ))
 }
 
 /// [`scroll_body`] with an externally held [`gpui::ScrollHandle`], so the view
 /// can scroll programmatically (e.g. jump back to a top-anchored editor).
 pub fn scroll_body_tracked(
-    id: impl Into<ElementId>,
+    id: &'static str,
     handle: &gpui::ScrollHandle,
     column: impl IntoElement,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id.into())
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .items_center()
-        .p_6()
-        .min_w_0()
-        .overflow_y_scroll()
-        .track_scroll(handle)
-        .child(column)
+) -> gpui::Div {
+    scroll_body(id, handle, column)
 }
 
 /// A **virtualized** scrolling body, centered at [`CONTENT_MAX_WIDTH`] like
@@ -115,17 +121,31 @@ pub fn scroll_body_tracked(
 /// frame. The caller owns a `gpui::ListState` and supplies the `list` element built
 /// with `gpui::list(state, cx.processor(|this, ix, window, cx| ...))`; each item
 /// should carry its own bottom spacing (the list draws no inter-item gap).
-pub fn virtual_body(list: gpui::List) -> impl IntoElement {
-    virtual_body_with_width(list, CONTENT_MAX_WIDTH)
+pub fn virtual_body(
+    id: &'static str,
+    list: gpui::List,
+    state: &gpui::ListState,
+) -> impl IntoElement {
+    virtual_body_with_width(id, list, state, CONTENT_MAX_WIDTH)
 }
 
 /// [`virtual_body`] at [`WIDE_MAX_WIDTH`], for the data-dense pages.
-pub fn wide_virtual_body(list: gpui::List) -> impl IntoElement {
-    virtual_body_with_width(list, WIDE_MAX_WIDTH)
+pub fn wide_virtual_body(
+    id: &'static str,
+    list: gpui::List,
+    state: &gpui::ListState,
+) -> impl IntoElement {
+    virtual_body_with_width(id, list, state, WIDE_MAX_WIDTH)
 }
 
-fn virtual_body_with_width(list: gpui::List, max_width: f32) -> impl IntoElement {
+fn virtual_body_with_width(
+    id: &'static str,
+    list: gpui::List,
+    state: &gpui::ListState,
+    max_width: f32,
+) -> impl IntoElement {
     div()
+        .relative()
         .flex()
         .flex_col()
         .items_center()
@@ -135,12 +155,25 @@ fn virtual_body_with_width(list: gpui::List, max_width: f32) -> impl IntoElement
         .min_w_0()
         .px_6()
         .child(
-            list.with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+            div()
+                .relative()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .min_h_0()
                 .w_full()
                 .max_w(px(max_width))
-                .py_6(),
+                .child(
+                    list.with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .py_6(),
+                )
+                .child(VerticalScrollbar::new(
+                    gpui::ElementId::Name(format!("{id}-scrollbar").into()),
+                    state.clone(),
+                )),
         )
 }
 
