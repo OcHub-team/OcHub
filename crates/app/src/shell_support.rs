@@ -2,15 +2,18 @@
 //! single-instance lock, and first-run notice state. Kept out of `main.rs` so
 //! the shell wiring there stays readable.
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::panic;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use fs2::FileExt;
 use gpui::{point, px, size, Bounds, Pixels};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use uuid::Uuid;
 
 use ochub_core::paths::get_app_config_dir;
 use ochub_core::settings;
@@ -207,75 +210,238 @@ pub fn save_window_bounds(bounds: Bounds<Pixels>) {
 }
 
 // ---------------------------------------------------------------------------
-// Single-instance guard — a lock file holding the running instance's control
-// API port. On a second launch, if that port answers `GET /api/health` the
-// existing instance is alive; otherwise the lock is stale and we take it over.
+// Single-instance guard — an OS-backed exclusive file lock plus a dedicated
+// loopback activation channel. The lock is independent from the control API,
+// so an unrelated process occupying that port can never masquerade as OcHub.
 // ---------------------------------------------------------------------------
 
 fn lock_file_path() -> PathBuf {
     get_app_config_dir().join("ochub.lock")
 }
 
-/// Removes the lock file on drop so a clean shutdown doesn't leave a stale lock.
-/// (An unclean exit leaves the file behind; the health probe handles that case.)
+const INSTANCE_PROTOCOL_VERSION: u8 = 1;
+const ACTIVATION_COMMAND: &str = "activate";
+const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(800);
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct InstanceRecord {
+    protocol_version: u8,
+    pid: u32,
+    control_port: u16,
+    activation_port: u16,
+    token: String,
+}
+
+/// Keeps the operating-system file lock alive for the process lifetime. The
+/// metadata file intentionally remains on disk after exit; the OS releases the
+/// actual lock even after a crash, so stale metadata is harmless and can be
+/// atomically replaced by the next owner.
 pub struct InstanceLock {
+    _file: File,
+}
+
+pub struct ActivationServer {
+    listener: TcpListener,
+    token: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExistingInstance {
+    pub pid: Option<u32>,
+    pub control_port: Option<u16>,
+    pub activation_requested: bool,
+}
+
+pub enum InstanceAcquire {
+    Acquired {
+        lock: InstanceLock,
+        activation_server: ActivationServer,
+    },
+    AlreadyRunning(ExistingInstance),
+}
+
+impl ActivationServer {
+    /// Start accepting authenticated activation requests. The receiver is
+    /// consumed by GPUI after the first window opens; requests arriving during
+    /// database/bootstrap work remain queued.
+    pub fn start(self) -> std::io::Result<UnboundedReceiver<()>> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        std::thread::Builder::new()
+            .name("ochub-activation".into())
+            .spawn(move || activation_loop(self.listener, self.token, sender))?;
+        Ok(receiver)
+    }
+}
+
+fn activation_loop(listener: TcpListener, token: String, sender: UnboundedSender<()>) {
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else {
+            continue;
+        };
+        let _ = stream.set_read_timeout(Some(ACTIVATION_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(ACTIVATION_TIMEOUT));
+
+        let mut line = String::new();
+        let read_ok = {
+            let mut reader = BufReader::new(&mut stream);
+            reader.read_line(&mut line).is_ok()
+        };
+        let expected = format!("{ACTIVATION_COMMAND} {token}\n");
+        if read_ok && line == expected {
+            let _ = sender.send(());
+            let _ = stream.write_all(b"ok\n");
+        } else {
+            let _ = stream.write_all(b"error\n");
+        }
+    }
+}
+
+fn read_instance_record(file: &mut File) -> Option<InstanceRecord> {
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut content = String::new();
+    file.read_to_string(&mut content).ok()?;
+    serde_json::from_str(content.trim()).ok()
+}
+
+fn write_instance_record(file: &mut File, record: &InstanceRecord) -> std::io::Result<()> {
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    serde_json::to_writer(&mut *file, record).map_err(std::io::Error::other)?;
+    file.write_all(b"\n")?;
+    file.sync_data()
+}
+
+fn request_activation(record: &InstanceRecord) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], record.activation_port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, ACTIVATION_TIMEOUT) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(ACTIVATION_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(ACTIVATION_TIMEOUT));
+    let request = format!("{ACTIVATION_COMMAND} {}\n", record.token);
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = [0u8; 16];
+    matches!(stream.read(&mut response), Ok(n) if &response[..n] == b"ok\n")
+}
+
+fn acquire_single_instance_at(
     path: PathBuf,
-}
+    control_port: u16,
+) -> std::io::Result<InstanceAcquire> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
-impl Drop for InstanceLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)?;
+
+    match FileExt::try_lock_exclusive(&file) {
+        Ok(()) => {
+            let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
+            let activation_port = listener.local_addr()?.port();
+            let token = Uuid::new_v4().to_string();
+            let record = InstanceRecord {
+                protocol_version: INSTANCE_PROTOCOL_VERSION,
+                pid: std::process::id(),
+                control_port,
+                activation_port,
+                token: token.clone(),
+            };
+            write_instance_record(&mut file, &record)?;
+            Ok(InstanceAcquire::Acquired {
+                lock: InstanceLock { _file: file },
+                activation_server: ActivationServer { listener, token },
+            })
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            let record = read_instance_record(&mut file)
+                .filter(|record| record.protocol_version == INSTANCE_PROTOCOL_VERSION);
+            let activation_requested = record.as_ref().is_some_and(request_activation);
+            Ok(InstanceAcquire::AlreadyRunning(ExistingInstance {
+                pid: record.as_ref().map(|record| record.pid),
+                control_port: record.as_ref().map(|record| record.control_port),
+                activation_requested,
+            }))
+        }
+        Err(err) => Err(err),
     }
 }
 
-/// Probe whether a control API is alive on `port` by issuing a raw
-/// `GET /api/health` and checking for a 200 status line. Uses std sockets to
-/// avoid pulling an HTTP client into the app crate.
-fn instance_is_alive(port: u16) -> bool {
-    let Ok(addr) = format!("127.0.0.1:{port}").parse::<SocketAddr>() else {
-        return false;
-    };
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(400)) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(400)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
-    let req =
-        format!("GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
-    if stream.write_all(req.as_bytes()).is_err() {
-        return false;
-    }
-    let mut buf = [0u8; 256];
-    match stream.read(&mut buf) {
-        Ok(n) if n > 0 => String::from_utf8_lossy(&buf[..n]).contains("200"),
-        _ => false,
-    }
+/// Try to acquire the process-wide OcHub instance lock. A live owner is
+/// contacted through its dedicated activation channel; control API health is
+/// deliberately not involved because that port may belong to another app.
+pub fn acquire_single_instance(control_port: u16) -> std::io::Result<InstanceAcquire> {
+    acquire_single_instance_at(lock_file_path(), control_port)
 }
 
-/// Try to acquire the single-instance lock for this process's control `port`.
-///
-/// - `Ok(lock)`: we own the instance; keep `lock` alive for the process lifetime.
-/// - `Err(port)`: another live instance already holds the lock on that port.
-pub fn acquire_single_instance(port: u16) -> Result<InstanceLock, u16> {
-    let path = lock_file_path();
+#[cfg(test)]
+mod instance_lock_tests {
+    use super::*;
 
-    if let Ok(existing) = fs::read_to_string(&path) {
-        if let Ok(existing_port) = existing.trim().parse::<u16>() {
-            if instance_is_alive(existing_port) {
-                return Err(existing_port);
+    fn acquired(result: InstanceAcquire) -> (InstanceLock, ActivationServer) {
+        match result {
+            InstanceAcquire::Acquired {
+                lock,
+                activation_server,
+            } => (lock, activation_server),
+            InstanceAcquire::AlreadyRunning(existing) => {
+                panic!("expected lock acquisition, got existing instance: {existing:?}")
             }
-            // Stale lock (previous instance gone): fall through and take over.
         }
     }
 
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+    #[test]
+    fn second_instance_requests_activation_instead_of_starting() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("ochub.lock");
+        let (_lock, activation_server) =
+            acquired(acquire_single_instance_at(path.clone(), 8787).expect("first instance"));
+        let mut activation_rx = activation_server.start().expect("activation server");
+
+        let second = acquire_single_instance_at(path, 9999).expect("second instance probe");
+        let InstanceAcquire::AlreadyRunning(existing) = second else {
+            panic!("second instance must not acquire the lock");
+        };
+        assert_eq!(existing.control_port, Some(8787));
+        assert_eq!(existing.pid, Some(std::process::id()));
+        assert!(existing.activation_requested);
+        assert_eq!(activation_rx.blocking_recv(), Some(()));
     }
-    if let Err(err) = fs::write(&path, port.to_string()) {
-        // If we can't write the lock, don't block startup — just skip the guard.
-        log::warn!("写入单实例锁文件失败: {err}");
+
+    #[test]
+    fn unlocked_metadata_is_replaced_by_the_next_owner() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("ochub.lock");
+        let (lock, activation_server) =
+            acquired(acquire_single_instance_at(path.clone(), 8787).expect("first instance"));
+        drop(activation_server);
+        drop(lock);
+
+        let (_next_lock, _next_activation_server) =
+            acquired(acquire_single_instance_at(path.clone(), 9191).expect("next instance"));
+        let record: InstanceRecord =
+            serde_json::from_str(&fs::read_to_string(path).expect("read replacement metadata"))
+                .expect("parse replacement metadata");
+        assert_eq!(record.control_port, 9191);
+        assert_eq!(record.protocol_version, INSTANCE_PROTOCOL_VERSION);
     }
-    Ok(InstanceLock { path })
+
+    #[test]
+    fn unrelated_control_port_owner_does_not_claim_the_instance_lock() {
+        let blocker = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .expect("bind unrelated listener");
+        let occupied_port = blocker.local_addr().expect("unrelated address").port();
+        let temp = tempfile::tempdir().expect("temp dir");
+
+        let result = acquire_single_instance_at(temp.path().join("ochub.lock"), occupied_port)
+            .expect("instance lock must not depend on the control port");
+        assert!(matches!(result, InstanceAcquire::Acquired { .. }));
+    }
 }
 
 // ---------------------------------------------------------------------------

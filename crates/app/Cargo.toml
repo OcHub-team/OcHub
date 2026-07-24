@@ -27,3 +27,8 @@ unicode-segmentation.workspace = true
 auto-launch.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
+fs2.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "=0.26.0"
+objc = "0.2"

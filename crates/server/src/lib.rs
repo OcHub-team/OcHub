@@ -37,6 +37,14 @@ pub async fn serve(state: ServerState, addr: std::net::SocketAddr) -> anyhow::Re
     // coming online for the desktop app.
     state.app.gateway.maybe_autostart().await;
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    serve_listener(state, listener).await
+}
+
+async fn serve_listener(
+    state: ServerState,
+    listener: tokio::net::TcpListener,
+) -> anyhow::Result<()> {
+    let addr = listener.local_addr()?;
     tracing::info!("OcHub control API listening on http://{addr}");
     axum::serve(listener, build_router(state)).await?;
     Ok(())
@@ -48,4 +56,18 @@ pub async fn serve_with_app(
     addr: std::net::SocketAddr,
 ) -> anyhow::Result<()> {
     serve(ServerState::from_app(app), addr).await
+}
+
+/// Serve from a listener that the desktop shell bound synchronously. This lets
+/// the UI know whether the configured port is available before it opens while
+/// still keeping the long-running axum task on the server thread.
+///
+/// Gateway autostart is owned by the desktop shell for this entry point.
+pub async fn serve_with_app_on_listener(
+    app: Arc<ochub_core::app_state::AppState>,
+    listener: std::net::TcpListener,
+) -> anyhow::Result<()> {
+    listener.set_nonblocking(true)?;
+    let listener = tokio::net::TcpListener::from_std(listener)?;
+    serve_listener(ServerState::from_app(app), listener).await
 }

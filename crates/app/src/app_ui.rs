@@ -94,6 +94,21 @@ impl Section {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StartupNotice {
+    pub title: String,
+    pub message: String,
+}
+
+impl StartupNotice {
+    pub fn new(title: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            message: message.into(),
+        }
+    }
+}
+
 pub struct AppRoot {
     app: Arc<AppState>,
     selected_app: AppType,
@@ -109,6 +124,9 @@ pub struct AppRoot {
     confirm_delete: Option<Provider>,
     /// One-time acknowledgement shown after the first successful launch.
     show_first_run_notice: bool,
+    /// Persistent startup degradation notice, such as a control API port
+    /// conflict. Unlike a toast, this remains visible while the condition lasts.
+    startup_notice: Option<StartupNotice>,
     settings_view: Entity<SettingsView>,
     gateway_view: Entity<GatewayView>,
     mcp_view: Entity<McpView>,
@@ -230,7 +248,11 @@ impl AppRoot {
         _window.minimize_window();
     }
 
-    pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app: Arc<AppState>,
+        startup_notice: Option<StartupNotice>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
         let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
         let mcp_view = cx.new(|cx| McpView::new(app.clone(), cx));
@@ -262,6 +284,7 @@ impl AppRoot {
             editor: None,
             confirm_delete: None,
             show_first_run_notice: crate::shell_support::first_run_notice_pending(),
+            startup_notice,
             settings_view,
             gateway_view,
             mcp_view,
@@ -1984,11 +2007,69 @@ impl AppRoot {
             }
         }
     }
+
+    fn render_startup_notice(notice: StartupNotice) -> impl IntoElement {
+        div()
+            .id("startup-degradation-notice")
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap_3()
+            .px_5()
+            .py_3()
+            .flex_none()
+            .border_b_1()
+            .border_color(theme::yellow().alpha(0.32))
+            .bg(theme::yellow_soft())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(24.))
+                    .h(px(24.))
+                    .flex_none()
+                    .rounded_md()
+                    .bg(theme::yellow().alpha(0.12))
+                    .child(icon(IconName::Diamond, theme::yellow(), 15.)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_color(theme::text())
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(SharedString::from(notice.title)),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme::subtext())
+                            .text_xs()
+                            .child(SharedString::from(notice.message)),
+                    ),
+            )
+    }
 }
 
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let appearance = window.appearance();
+        let main_content = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h(px(0.))
+            .when_some(self.startup_notice.clone(), |content, notice| {
+                content.child(Self::render_startup_notice(notice))
+            })
+            .child(self.render_content(cx));
         div()
             .id("app-root")
             .flex()
@@ -2009,7 +2090,7 @@ impl Render for AppRoot {
                     .flex_1()
                     .min_h(px(0.))
                     .child(self.render_sidebar(appearance, cx))
-                    .child(self.render_content(cx)),
+                    .child(main_content),
             )
             .child(self.render_content_drag_region(cx))
             .child(self.notifications.clone())

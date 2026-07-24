@@ -33,7 +33,8 @@ mod usage_view;
 
 use std::borrow::Cow;
 use std::fs;
-use std::net::SocketAddr;
+use std::io;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -46,7 +47,7 @@ use gpui_platform::application;
 use ochub_core::db::Database;
 use ochub_core::AppState;
 
-use app_ui::AppRoot;
+use app_ui::{AppRoot, StartupNotice};
 
 struct Assets {
     base: PathBuf,
@@ -119,35 +120,111 @@ mod asset_path_tests {
     }
 }
 
-/// Spawn the axum control API on a dedicated thread with its own tokio runtime,
-/// sharing the same `AppState` as the UI.
 fn control_api_port() -> u16 {
-    std::env::var("MS_PORT")
-        .ok()
-        .and_then(|port| port.parse().ok())
+    parse_control_api_port(std::env::var("MS_PORT").ok().as_deref())
+}
+
+fn parse_control_api_port(value: Option<&str>) -> u16 {
+    value
+        .and_then(|port| port.trim().parse().ok())
+        .filter(|port| *port != 0)
         .unwrap_or(8787)
 }
 
-fn spawn_control_api(app: Arc<AppState>, port: u16) {
+fn bind_control_api(port: u16) -> std::result::Result<TcpListener, StartupNotice> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = TcpListener::bind(addr).map_err(|err| {
+        if err.kind() == io::ErrorKind::AddrInUse {
+            StartupNotice::new(
+                "控制 API 未启动",
+                format!(
+                    "端口 {port} 已被其他进程占用。OcHub 界面与转发站仍可使用；依赖控制 API 的外部集成暂不可用。请关闭占用程序后重启 OcHub，或使用 MS_PORT 指定其他端口。"
+                ),
+            )
+        } else {
+            StartupNotice::new(
+                "控制 API 未启动",
+                format!(
+                    "无法监听 127.0.0.1:{port}：{err}。OcHub 界面与转发站仍可使用，但依赖控制 API 的外部集成暂不可用。"
+                ),
+            )
+        }
+    })?;
+    listener.set_nonblocking(true).map_err(|err| {
+        StartupNotice::new(
+            "控制 API 未启动",
+            format!(
+                "无法配置 127.0.0.1:{port} 的监听器：{err}。OcHub 界面与转发站仍可使用，但依赖控制 API 的外部集成暂不可用。"
+            ),
+        )
+    })?;
+    Ok(listener)
+}
+
+/// Spawn gateway autostart and, when available, the already-bound control API
+/// listener on one dedicated tokio runtime. Binding happens synchronously in
+/// [`bind_control_api`], so the UI never mistakes a failed listener for ready.
+fn spawn_app_services(app: Arc<AppState>, control_listener: Option<TcpListener>) -> io::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(io::Error::other)?;
     std::thread::Builder::new()
         .name("ochub-server".into())
         .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(err) => {
-                    log::error!("failed to build server runtime: {err}");
-                    return;
+            runtime.block_on(async move {
+                app.gateway.maybe_autostart().await;
+                if let Some(listener) = control_listener {
+                    if let Err(err) = ochub_server::serve_with_app_on_listener(app, listener).await
+                    {
+                        log::error!("control API server error: {err}");
+                    }
                 }
-            };
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            if let Err(err) = runtime.block_on(ochub_server::serve_with_app(app, addr)) {
-                log::error!("control API server error: {err}");
-            }
+            });
         })
-        .ok();
+        .map(|_| ())
+}
+
+#[cfg(test)]
+mod control_api_startup_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_or_ephemeral_configured_ports_fall_back_to_default() {
+        assert_eq!(parse_control_api_port(None), 8787);
+        assert_eq!(parse_control_api_port(Some("")), 8787);
+        assert_eq!(parse_control_api_port(Some("invalid")), 8787);
+        assert_eq!(parse_control_api_port(Some("0")), 8787);
+        assert_eq!(parse_control_api_port(Some(" 9191 ")), 9191);
+    }
+
+    #[test]
+    fn occupied_port_returns_a_degraded_mode_notice() {
+        let blocker = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .expect("bind blocking listener");
+        let port = blocker.local_addr().expect("blocking address").port();
+
+        let notice = bind_control_api(port).expect_err("port conflict must be reported");
+        assert_eq!(notice.title, "控制 API 未启动");
+        assert!(notice.message.contains(&format!("端口 {port}")));
+        assert!(notice.message.contains("其他进程占用"));
+        assert!(notice.message.contains("界面与转发站仍可使用"));
+    }
+
+    #[test]
+    fn available_port_is_reserved_before_the_ui_starts() {
+        let probe =
+            TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).expect("bind port probe");
+        let port = probe.local_addr().expect("probe address").port();
+        drop(probe);
+
+        let listener = bind_control_api(port).expect("reserve available port");
+        assert_eq!(
+            listener.local_addr().expect("listener address").port(),
+            port
+        );
+        assert!(TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).is_err());
+    }
 }
 
 fn main() {
@@ -155,11 +232,49 @@ fn main() {
     env_logger_init();
 
     let port = control_api_port();
-    let _instance_lock = match shell_support::acquire_single_instance(port) {
-        Ok(lock) => lock,
-        Err(running_port) => {
-            println!("OcHub 已在运行（控制 API 端口 {running_port}），本次启动已退出。");
+    let (_instance_lock, mut activation_rx) = match shell_support::acquire_single_instance(port) {
+        Ok(shell_support::InstanceAcquire::Acquired {
+            lock,
+            activation_server,
+        }) => {
+            let activation_rx = match activation_server.start() {
+                Ok(receiver) => receiver,
+                Err(err) => {
+                    log::error!("failed to start instance activation listener: {err}");
+                    return;
+                }
+            };
+            (lock, activation_rx)
+        }
+        Ok(shell_support::InstanceAcquire::AlreadyRunning(existing)) => {
+            let port = existing
+                .control_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "未知".to_string());
+            let pid = existing
+                .pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "未知".to_string());
+            if existing.activation_requested {
+                println!("OcHub 已在运行（PID {pid}，控制 API 端口 {port}），已请求显示现有窗口。");
+            } else {
+                println!(
+                    "OcHub 已在运行（PID {pid}，控制 API 端口 {port}），但无法请求显示现有窗口。"
+                );
+            }
             return;
+        }
+        Err(err) => {
+            log::error!("failed to acquire single-instance lock: {err}");
+            return;
+        }
+    };
+
+    let (control_listener, mut startup_notice) = match bind_control_api(port) {
+        Ok(listener) => (Some(listener), None),
+        Err(notice) => {
+            log::warn!("{}: {}", notice.title, notice.message);
+            (None, Some(notice))
         }
     };
 
@@ -173,7 +288,15 @@ fn main() {
     let app_state = Arc::new(AppState::new(db));
     app_state.bootstrap();
 
-    spawn_control_api(app_state.clone(), port);
+    if let Err(err) = spawn_app_services(app_state.clone(), control_listener) {
+        log::error!("failed to start application services: {err}");
+        startup_notice = Some(StartupNotice::new(
+            "后台服务未启动",
+            format!(
+                "无法启动 OcHub 后台服务线程：{err}。界面仍可浏览，但控制 API 与转发站自动启动均不可用；请重启 OcHub。"
+            ),
+        ));
+    }
 
     application()
         .with_assets(Assets {
@@ -219,6 +342,7 @@ fn main() {
                 },
                 {
                     let app_state = app_state.clone();
+                    let startup_notice = startup_notice.clone();
                     move |window, cx| {
                         window
                             .observe_window_appearance(|window, cx| {
@@ -236,7 +360,7 @@ fn main() {
                                 cx.refresh_windows();
                             })
                             .detach();
-                        cx.new(|cx| AppRoot::new(app_state.clone(), cx))
+                        cx.new(|cx| AppRoot::new(app_state.clone(), startup_notice.clone(), cx))
                     }
                 },
             );
@@ -255,6 +379,12 @@ fn main() {
                     });
                 })
                 .ok();
+            cx.spawn(async move |cx| {
+                while activation_rx.recv().await.is_some() {
+                    cx.update(shell_menu::activate_first_window);
+                }
+            })
+            .detach();
             cx.activate(true);
         });
 }

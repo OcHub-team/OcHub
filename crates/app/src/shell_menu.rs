@@ -494,13 +494,30 @@ fn report_to_roots(
     }
 }
 
-fn activate_first_window(cx: &mut App) {
+pub(crate) fn activate_first_window(cx: &mut App) {
+    // `App::hide` maps to NSApplication.hide on macOS. Cocoa requires an
+    // explicit `unhide:` before `activateIgnoringOtherApps` and
+    // `makeKeyAndOrderFront` can restore the existing window.
+    #[cfg(target_os = "macos")]
+    unhide_application();
+    cx.activate(true);
     if let Some(window) = cx.windows().into_iter().next() {
         let _ = window.update(cx, |_root, window, _cx| {
             window.activate_window();
         });
     }
-    cx.activate(true);
+}
+
+#[cfg(target_os = "macos")]
+fn unhide_application() {
+    use cocoa::appkit::NSApplication;
+    use cocoa::base::{id, nil};
+    use objc::{msg_send, sel, sel_impl};
+
+    unsafe {
+        let app: id = NSApplication::sharedApplication(nil);
+        let _: () = msg_send![app, unhide: nil];
+    }
 }
 
 fn app_label(app: AppType) -> gpui::SharedString {
