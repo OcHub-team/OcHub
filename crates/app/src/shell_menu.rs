@@ -510,13 +510,11 @@ pub(crate) fn activate_first_window(cx: &mut App) {
 
 #[cfg(target_os = "macos")]
 fn unhide_application() {
-    use cocoa::appkit::NSApplication;
-    use cocoa::base::{id, nil};
-    use objc::{msg_send, sel, sel_impl};
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
 
-    unsafe {
-        let app: id = NSApplication::sharedApplication(nil);
-        let _: () = msg_send![app, unhide: nil];
+    if let Some(main_thread) = MainThreadMarker::new() {
+        NSApplication::sharedApplication(main_thread).unhide(None);
     }
 }
 

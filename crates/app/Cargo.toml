@@ -30,5 +30,5 @@ tempfile.workspace = true
 fs2.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "=0.26.0"
-objc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["libc", "NSApplication", "NSResponder", "NSRunningApplication"] }

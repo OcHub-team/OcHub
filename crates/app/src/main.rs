@@ -373,9 +373,30 @@ fn main() {
             };
             window
                 .update(cx, |_root, window, cx| {
-                    window.on_window_should_close(cx, |window, _cx| {
+                    window.on_window_should_close(cx, |window, cx| {
                         shell_support::save_window_bounds(window.window_bounds().get_bounds());
-                        true
+                        // Keep the root window alive while background services
+                        // continue running. The native close button must match
+                        // the CloseWindow action; otherwise the last window is
+                        // destroyed and a later activation has nothing to show.
+                        #[cfg(target_os = "macos")]
+                        {
+                            cx.hide();
+                            false
+                        }
+                        #[cfg(any(target_os = "windows", target_os = "linux"))]
+                        {
+                            window.minimize_window();
+                            false
+                        }
+                        #[cfg(not(any(
+                            target_os = "macos",
+                            target_os = "windows",
+                            target_os = "linux"
+                        )))]
+                        {
+                            true
+                        }
                     });
                 })
                 .ok();

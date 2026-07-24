@@ -326,6 +326,33 @@ fn request_activation(record: &InstanceRecord) -> bool {
     matches!(stream.read(&mut response), Ok(n) if &response[..n] == b"ok\n")
 }
 
+#[cfg(target_os = "macos")]
+fn request_native_activation(pid: u32) -> bool {
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    let Some(application) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+    else {
+        return false;
+    };
+
+    // Send both requests. `unhide` restores an app hidden by the window close
+    // action, while ActivateAllWindows brings every existing window forward.
+    // This originates in the second process, so it does not depend on the
+    // hidden app's GPUI event loop processing the activation channel first.
+    let unhidden = application.unhide();
+    let activated =
+        application.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
+    unhidden || activated
+}
+
+#[cfg(not(target_os = "macos"))]
+fn request_native_activation(_pid: u32) -> bool {
+    false
+}
+
 fn acquire_single_instance_at(
     path: PathBuf,
     control_port: u16,
@@ -361,7 +388,11 @@ fn acquire_single_instance_at(
         Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
             let record = read_instance_record(&mut file)
                 .filter(|record| record.protocol_version == INSTANCE_PROTOCOL_VERSION);
-            let activation_requested = record.as_ref().is_some_and(request_activation);
+            let activation_requested = record.as_ref().is_some_and(|record| {
+                let channel_requested = request_activation(record);
+                let native_requested = request_native_activation(record.pid);
+                channel_requested || native_requested
+            });
             Ok(InstanceAcquire::AlreadyRunning(ExistingInstance {
                 pid: record.as_ref().map(|record| record.pid),
                 control_port: record.as_ref().map(|record| record.control_port),
