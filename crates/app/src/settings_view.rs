@@ -430,7 +430,17 @@ impl SettingsView {
     }
 
     fn toggle_silent_startup(&mut self, cx: &mut Context<Self>) {
-        self.settings.silent_startup = !self.settings.silent_startup;
+        let target = !self.settings.silent_startup;
+        // The flag is carried on the registered command line, so an existing
+        // login item has to be rewritten for the change to mean anything.
+        if self.settings.launch_on_startup {
+            if let Err(err) = ochub_core::autostart::set_enabled(true, target) {
+                self.status = Some(SharedString::from(err.to_string()));
+                cx.notify();
+                return;
+            }
+        }
+        self.settings.silent_startup = target;
         self.persist(cx);
     }
 

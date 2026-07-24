@@ -227,6 +227,51 @@ mod control_api_startup_tests {
     }
 }
 
+/// Whether this process was started by its login item rather than by the user.
+///
+/// `ochub_core::autostart` registers [`SILENT_ARG`] on the login item, so its
+/// presence in argv is the signal. `--hidden` is accepted too because that is
+/// the spelling macOS login items use when registered through AppleScript.
+///
+/// [`SILENT_ARG`]: ochub_core::autostart::SILENT_ARG
+fn launched_by_login_item<I>(args: I) -> bool
+where
+    I: IntoIterator<Item = String>,
+{
+    args.into_iter()
+        .skip(1)
+        .any(|arg| arg == ochub_core::autostart::SILENT_ARG || arg == "--hidden")
+}
+
+#[cfg(test)]
+mod silent_startup_tests {
+    use super::*;
+
+    fn args(rest: &[&str]) -> Vec<String> {
+        std::iter::once("/path/to/ochub".to_string())
+            .chain(rest.iter().map(|s| s.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn detects_the_login_item_flag() {
+        assert!(launched_by_login_item(args(&["--silent"])));
+        assert!(launched_by_login_item(args(&["--hidden"])));
+        assert!(launched_by_login_item(args(&["--other", "--silent"])));
+    }
+
+    #[test]
+    fn a_plain_launch_is_not_silent() {
+        assert!(!launched_by_login_item(args(&[])));
+        assert!(!launched_by_login_item(args(&["--verbose"])));
+    }
+
+    #[test]
+    fn the_executable_path_is_never_treated_as_a_flag() {
+        assert!(!launched_by_login_item(vec!["--silent".to_string()]));
+    }
+}
+
 /// Keep the process-level quit policy in step with the close-behaviour setting.
 ///
 /// With "keep running on close" on, the app must outlive its windows; with it
@@ -324,6 +369,10 @@ fn main() {
             shell_menu::install(app_state.clone(), cx);
             apply_quit_mode(cx);
             let appearance_settings = ochub_core::settings::get_settings();
+            // Gate on the stored setting as well as the flag, so a stale login
+            // item cannot keep hiding the window after the user turns it off.
+            let start_hidden = launched_by_login_item(std::env::args().collect::<Vec<_>>())
+                && appearance_settings.silent_startup;
             theme::install_selected(
                 &appearance_settings.theme_family,
                 appearance_settings.theme_mode,
@@ -344,6 +393,11 @@ fn main() {
                 .unwrap_or_else(|| Bounds::centered(display_id, size(px(1200.), px(820.)), cx));
             let window = cx.open_window(
                 WindowOptions {
+                    // Create the window but never order it in: the menu bar,
+                    // Dock menu and activation channel can all surface it
+                    // later, and every observer set up below stays valid.
+                    show: !start_hidden,
+                    focus: !start_hidden,
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(640.))),
                     window_background: theme::window_background_appearance(),
@@ -439,7 +493,9 @@ fn main() {
                 }
             })
             .detach();
-            cx.activate(true);
+            if !start_hidden {
+                cx.activate(true);
+            }
         });
 }
 
