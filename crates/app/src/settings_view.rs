@@ -412,11 +412,6 @@ impl SettingsView {
         self.persist(cx);
     }
 
-    fn toggle_app_window_controls(&mut self, cx: &mut Context<Self>) {
-        self.settings.use_app_window_controls = !self.settings.use_app_window_controls;
-        self.persist(cx);
-    }
-
     fn toggle_launch_on_startup(&mut self, cx: &mut Context<Self>) {
         self.settings.launch_on_startup = !self.settings.launch_on_startup;
         self.persist(cx);
@@ -825,15 +820,6 @@ impl SettingsView {
                         "点击关闭按钮时保留后台进程，方便从系统菜单重新打开。",
                         self.settings.minimize_to_tray_on_close,
                         Self::toggle_minimize_to_tray,
-                        cx,
-                    )
-                    .into_any_element(),
-                    self.render_toggle_row(
-                        "set-window-controls",
-                        "使用应用内窗口控制",
-                        "启用 GPUI 自绘窗口控制区，适合无标题栏窗口。",
-                        self.settings.use_app_window_controls,
-                        Self::toggle_app_window_controls,
                         cx,
                     )
                     .into_any_element(),

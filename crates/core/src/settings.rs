@@ -346,8 +346,6 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub minimize_to_tray_on_close: bool,
     #[serde(default)]
-    pub use_app_window_controls: bool,
-    #[serde(default)]
     pub enable_claude_plugin_integration: bool,
     #[serde(default)]
     pub skip_claude_onboarding: bool,
@@ -455,7 +453,6 @@ impl Default for AppSettings {
         Self {
             show_in_tray: true,
             minimize_to_tray_on_close: true,
-            use_app_window_controls: false,
             enable_claude_plugin_integration: false,
             skip_claude_onboarding: false,
             launch_on_startup: false,
