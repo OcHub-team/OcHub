@@ -240,6 +240,8 @@ impl SettingsView {
         self.settings = settings::get_settings();
         if saved {
             shell_menu::refresh(&self.app, cx);
+            // The close-behaviour toggle changes when the process may exit.
+            crate::apply_quit_mode(cx);
         }
         // A toggle/save may change a block's height; re-measure (keeps scroll pos).
         self.list_state.remeasure();

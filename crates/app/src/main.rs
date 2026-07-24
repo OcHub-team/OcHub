@@ -227,6 +227,21 @@ mod control_api_startup_tests {
     }
 }
 
+/// Keep the process-level quit policy in step with the close-behaviour setting.
+///
+/// With "keep running on close" on, the app must outlive its windows; with it
+/// off, closing the last window is the user's quit gesture — and on macOS
+/// gpui's default is to stay alive, so that case has to be asked for
+/// explicitly. Re-run this whenever the setting changes.
+pub(crate) fn apply_quit_mode(cx: &mut App) {
+    let keep_running = ochub_core::settings::get_settings().minimize_to_tray_on_close;
+    cx.set_quit_mode(if keep_running {
+        gpui::QuitMode::Explicit
+    } else {
+        gpui::QuitMode::LastWindowClosed
+    });
+}
+
 fn main() {
     shell_support::setup_panic_hook();
     env_logger_init();
@@ -307,6 +322,7 @@ fn main() {
             code_editor::bind_keys(cx);
             shortcuts::bind_keys(cx);
             shell_menu::install(app_state.clone(), cx);
+            apply_quit_mode(cx);
             let appearance_settings = ochub_core::settings::get_settings();
             theme::install_selected(
                 &appearance_settings.theme_family,
@@ -375,6 +391,11 @@ fn main() {
                 .update(cx, |_root, window, cx| {
                     window.on_window_should_close(cx, |window, cx| {
                         shell_support::save_window_bounds(window.window_bounds().get_bounds());
+                        // Read fresh rather than capturing, so toggling the
+                        // setting takes effect without a restart.
+                        if !ochub_core::settings::get_settings().minimize_to_tray_on_close {
+                            return true;
+                        }
                         // Keep the root window alive while background services
                         // continue running. The native close button must match
                         // the CloseWindow action; otherwise the last window is
@@ -400,6 +421,18 @@ fn main() {
                     });
                 })
                 .ok();
+            // gpui's shutdown clears its window map directly and never consults
+            // `on_window_should_close`, so quitting (Cmd-Q, or closing with the
+            // setting off) would otherwise never persist the window bounds.
+            cx.on_app_quit(move |cx| {
+                window
+                    .update(cx, |_root, window, _cx| {
+                        shell_support::save_window_bounds(window.window_bounds().get_bounds());
+                    })
+                    .ok();
+                async {}
+            })
+            .detach();
             cx.spawn(async move |cx| {
                 while activation_rx.recv().await.is_some() {
                     cx.update(shell_menu::activate_first_window);
