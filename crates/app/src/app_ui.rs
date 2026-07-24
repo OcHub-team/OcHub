@@ -2,7 +2,11 @@
 //! can show the provider list, a provider editor, the settings panel, or the
 //! gateway panel, all wired to live `ochub-core` data via an in-process `AppState`.
 
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
     div, prelude::*, px, App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton,
@@ -143,6 +147,10 @@ pub struct AppRoot {
     /// Drives the virtualized provider list; row count follows the current
     /// app's provider set, so it is `reset` whenever the plan length changes.
     provider_list_state: ListState,
+    /// Ephemeral, presentation-only state used while a provider card is being
+    /// dragged. The persisted provider order is updated only when the drag is
+    /// dropped inside the provider list.
+    provider_drag_state: Option<ProviderDragState>,
     sidebar_scroll_handle: ScrollHandle,
 }
 
@@ -157,6 +165,305 @@ enum ProviderRow {
     GatewayCta,
     EmptyState,
     Card(usize),
+}
+
+#[derive(Clone)]
+struct DraggedProvider {
+    id: String,
+    name: SharedString,
+    base_url: SharedString,
+    source_position: usize,
+    app_icon: IconName,
+}
+
+const PROVIDER_REORDER_ANIMATION: Duration = Duration::from_millis(150);
+const PROVIDER_REORDER_HYSTERESIS: f32 = 6.;
+const PROVIDER_REORDER_EDGE_ZONE: f32 = 36.;
+const PROVIDER_REORDER_SCROLL_STEP: f32 = 16.;
+
+struct ProviderDragState {
+    source_id: String,
+    source_position: usize,
+    target_position: usize,
+    transition_started: Instant,
+    from_offsets: HashMap<String, f32>,
+    to_offsets: HashMap<String, f32>,
+}
+
+impl ProviderDragState {
+    fn new(dragged: &DraggedProvider) -> Self {
+        Self {
+            source_id: dragged.id.clone(),
+            source_position: dragged.source_position,
+            target_position: dragged.source_position,
+            transition_started: Instant::now(),
+            from_offsets: HashMap::new(),
+            to_offsets: HashMap::new(),
+        }
+    }
+
+    fn animation_progress(&self, now: Instant, reduce_motion: bool) -> f32 {
+        if reduce_motion {
+            return 1.;
+        }
+        (now.saturating_duration_since(self.transition_started)
+            .as_secs_f32()
+            / PROVIDER_REORDER_ANIMATION.as_secs_f32())
+        .clamp(0., 1.)
+    }
+
+    fn offset_for(&self, provider_id: &str, now: Instant, reduce_motion: bool) -> f32 {
+        let progress = self.animation_progress(now, reduce_motion);
+        // Quintic ease-out: quick acknowledgement, then a quiet deceleration.
+        let eased = 1. - (1. - progress).powi(5);
+        let from = self.from_offsets.get(provider_id).copied().unwrap_or(0.);
+        let to = self.to_offsets.get(provider_id).copied().unwrap_or(0.);
+        from + (to - from) * eased
+    }
+
+    fn is_animating(&self, now: Instant, reduce_motion: bool) -> bool {
+        if reduce_motion || self.animation_progress(now, false) >= 1. {
+            return false;
+        }
+        self.from_offsets
+            .keys()
+            .chain(self.to_offsets.keys())
+            .any(|provider_id| {
+                let from = self.from_offsets.get(provider_id).copied().unwrap_or(0.);
+                let to = self.to_offsets.get(provider_id).copied().unwrap_or(0.);
+                (from - to).abs() > f32::EPSILON
+            })
+    }
+
+    fn retarget(
+        &mut self,
+        target_position: usize,
+        provider_ids: &[String],
+        row_tops: &[f32],
+        now: Instant,
+        reduce_motion: bool,
+    ) {
+        let current_offsets = provider_ids
+            .iter()
+            .filter_map(|provider_id| {
+                let offset = self.offset_for(provider_id, now, reduce_motion);
+                (offset.abs() > f32::EPSILON).then(|| (provider_id.clone(), offset))
+            })
+            .collect();
+        let desired_offsets = reorder_slot_offsets(
+            provider_ids,
+            row_tops,
+            self.source_position,
+            target_position,
+        );
+
+        self.target_position = target_position;
+        self.transition_started = now;
+        self.from_offsets = if reduce_motion {
+            desired_offsets.clone()
+        } else {
+            current_offsets
+        };
+        self.to_offsets = desired_offsets;
+    }
+}
+
+fn reorder_slot_offsets(
+    provider_ids: &[String],
+    row_tops: &[f32],
+    source_position: usize,
+    target_position: usize,
+) -> HashMap<String, f32> {
+    if provider_ids.len() != row_tops.len()
+        || source_position >= provider_ids.len()
+        || target_position >= provider_ids.len()
+        || source_position == target_position
+    {
+        return HashMap::new();
+    }
+
+    let mut offsets = HashMap::new();
+    if source_position < target_position {
+        for position in (source_position + 1)..=target_position {
+            offsets.insert(
+                provider_ids[position].clone(),
+                row_tops[position - 1] - row_tops[position],
+            );
+        }
+    } else {
+        for position in target_position..source_position {
+            offsets.insert(
+                provider_ids[position].clone(),
+                row_tops[position + 1] - row_tops[position],
+            );
+        }
+    }
+    offsets
+}
+
+struct ProviderDragPreview {
+    name: SharedString,
+    base_url: SharedString,
+    app_icon: IconName,
+}
+
+impl Render for ProviderDragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_stretch()
+            .w(px(420.))
+            .rounded_md()
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme::border_strong())
+            .bg(theme::surface())
+            .shadow(theme::shadow_hover())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(32.))
+                    .flex_none()
+                    .bg(theme::accent_soft())
+                    .child(icon(IconName::DragHandle, theme::accent(), 16.)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .min_w_0()
+                    .gap_3()
+                    .px_4()
+                    .py_3()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(30.))
+                            .h(px(30.))
+                            .flex_none()
+                            .rounded_md()
+                            .bg(theme::surface_hover())
+                            .child(icon(self.app_icon, theme::subtext(), 16.)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_color(theme::text())
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(self.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child(self.base_url.clone()),
+                            ),
+                    ),
+            )
+    }
+}
+
+struct ProviderDragTooltip;
+
+impl Render for ProviderDragTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::surface())
+            .text_color(theme::subtext())
+            .text_xs()
+            .shadow_xs()
+            .child("拖动排序")
+    }
+}
+
+fn move_items_between_slots<T: Clone>(
+    items: &mut [T],
+    slots: &[usize],
+    source_position: usize,
+    target_position: usize,
+) -> bool {
+    if source_position == target_position
+        || source_position >= slots.len()
+        || target_position >= slots.len()
+        || slots.iter().any(|slot| *slot >= items.len())
+    {
+        return false;
+    }
+
+    let mut reordered: Vec<T> = slots.iter().map(|slot| items[*slot].clone()).collect();
+    let moved = reordered.remove(source_position);
+    reordered.insert(target_position, moved);
+    for (slot, item) in slots.iter().copied().zip(reordered) {
+        items[slot] = item;
+    }
+    true
+}
+
+#[cfg(test)]
+mod provider_reorder_tests {
+    use super::{move_items_between_slots, reorder_slot_offsets};
+
+    #[test]
+    fn reorders_only_sortable_slots_and_preserves_hidden_rows() {
+        let mut items = vec!["current", "alpha", "gateway", "beta", "gamma"];
+
+        assert!(move_items_between_slots(&mut items, &[1, 3, 4], 2, 0));
+        assert_eq!(items, ["current", "gamma", "gateway", "alpha", "beta"]);
+    }
+
+    #[test]
+    fn supports_moving_a_provider_toward_the_end() {
+        let mut items = vec!["alpha", "current", "beta", "gamma"];
+
+        assert!(move_items_between_slots(&mut items, &[0, 2, 3], 0, 2));
+        assert_eq!(items, ["beta", "current", "gamma", "alpha"]);
+    }
+
+    #[test]
+    fn rejects_noop_or_invalid_moves() {
+        let original = vec!["alpha", "beta", "gamma"];
+        let mut items = original.clone();
+
+        assert!(!move_items_between_slots(&mut items, &[0, 1, 2], 1, 1));
+        assert!(!move_items_between_slots(&mut items, &[0, 4], 0, 1));
+        assert_eq!(items, original);
+    }
+
+    #[test]
+    fn dragging_down_moves_intervening_cards_up_one_slot() {
+        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 0, 2);
+
+        assert_eq!(offsets.get("alpha"), None);
+        assert_eq!(offsets.get("beta"), Some(&-70.));
+        assert_eq!(offsets.get("gamma"), Some(&-80.));
+    }
+
+    #[test]
+    fn dragging_up_moves_intervening_cards_down_one_slot() {
+        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 2, 0);
+
+        assert_eq!(offsets.get("alpha"), Some(&70.));
+        assert_eq!(offsets.get("beta"), Some(&80.));
+        assert_eq!(offsets.get("gamma"), None);
+    }
 }
 
 impl AppRoot {
@@ -201,6 +508,11 @@ impl AppRoot {
     }
 
     fn cancel_active(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if cx.stop_active_drag(window) {
+            self.provider_drag_state = None;
+            cx.notify();
+            return;
+        }
         if self.confirm_delete.take().is_some() {
             cx.notify();
             return;
@@ -297,6 +609,7 @@ impl AppRoot {
             app_settings_view,
             showing_app_settings: false,
             provider_list_state: ListState::new(0, ListAlignment::Top, px(512.)),
+            provider_drag_state: None,
             sidebar_scroll_handle: ScrollHandle::new(),
         };
         cx.subscribe(
@@ -760,37 +1073,269 @@ impl AppRoot {
         cx.notify();
     }
 
-    fn visible_provider_ids(&self) -> Vec<String> {
+    fn provider_row_plan(&self) -> Vec<ProviderRow> {
+        let is_switch = !self.selected_app.is_additive_mode();
+        let current_is_gateway = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == self.current)
+            .is_some_and(Provider::is_local_gateway);
+        let direct_ixs: Vec<usize> = self
+            .providers
+            .iter()
+            .enumerate()
+            .filter(|(_, provider)| {
+                !provider.is_local_gateway() && (!is_switch || provider.id != self.current)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let gateway_ixs: Vec<usize> = self
+            .providers
+            .iter()
+            .enumerate()
+            .filter(|(_, provider)| {
+                provider.is_local_gateway() && (!is_switch || provider.id != self.current)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let supports_gateway = apply::supported_apps().contains(&self.selected_app);
+        let no_providers = self.providers.is_empty();
+
+        let mut plan = Vec::new();
+        if is_switch {
+            plan.push(ProviderRow::Hero);
+            if current_is_gateway {
+                plan.push(ProviderRow::GatewayRoutes);
+            }
+            if !direct_ixs.is_empty() {
+                plan.push(ProviderRow::DirectLabel);
+                plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
+            }
+            if supports_gateway && !current_is_gateway {
+                plan.push(ProviderRow::GatewayLabel);
+                if gateway_ixs.is_empty() {
+                    plan.push(ProviderRow::GatewayCta);
+                } else {
+                    plan.extend(gateway_ixs.iter().copied().map(ProviderRow::Card));
+                }
+            }
+            if no_providers && !supports_gateway {
+                plan.push(ProviderRow::EmptyState);
+            }
+        } else {
+            if no_providers {
+                plan.push(ProviderRow::EmptyState);
+            }
+            plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
+        }
+        plan
+    }
+
+    fn sortable_provider_slots(&self) -> Vec<usize> {
         let hide_current = !self.selected_app.is_additive_mode();
         self.providers
             .iter()
-            .filter(|provider| !hide_current || provider.id != self.current)
-            .map(|provider| provider.id.clone())
+            .enumerate()
+            .filter(|(_, provider)| {
+                !provider.is_local_gateway() && (!hide_current || provider.id != self.current)
+            })
+            .map(|(index, _)| index)
             .collect()
     }
 
-    fn move_provider(&mut self, id: String, delta: isize, cx: &mut Context<Self>) {
-        let visible = self.visible_provider_ids();
-        let Some(position) = visible.iter().position(|provider_id| provider_id == &id) else {
-            return;
-        };
-        let target = position as isize + delta;
-        if target < 0 || target as usize >= visible.len() {
+    fn sortable_provider_rows(&self) -> Vec<(String, usize)> {
+        let plan = self.provider_row_plan();
+        self.sortable_provider_slots()
+            .into_iter()
+            .filter_map(|provider_index| {
+                let row_index = plan.iter().position(
+                    |row| matches!(row, ProviderRow::Card(index) if *index == provider_index),
+                )?;
+                Some((self.providers[provider_index].id.clone(), row_index))
+            })
+            .collect()
+    }
+
+    fn begin_provider_drag(&mut self, dragged: &DraggedProvider, cx: &mut Context<Self>) {
+        self.provider_drag_state = Some(ProviderDragState::new(dragged));
+        cx.notify();
+    }
+
+    fn handle_provider_drag_move(
+        &mut self,
+        event: &gpui::DragMoveEvent<DraggedProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let dragged = event.drag(cx);
+        let source_id = dragged.id.clone();
+        let source_position = dragged.source_position;
+        if self
+            .provider_drag_state
+            .as_ref()
+            .is_none_or(|state| state.source_id != source_id)
+        {
+            self.provider_drag_state = Some(ProviderDragState::new(dragged));
+        }
+
+        let rows = self.sortable_provider_rows();
+        if rows.len() < 2 || source_position >= rows.len() {
             return;
         }
-        let target_id = &visible[target as usize];
-        let Some(source_index) = self.providers.iter().position(|provider| provider.id == id)
-        else {
+
+        let viewport = self.provider_list_state.viewport_bounds();
+        let pointer_y = event.event.position.y;
+        if viewport.size.height > px(0.) {
+            let scroll_delta = if pointer_y < viewport.top() + px(PROVIDER_REORDER_EDGE_ZONE) {
+                -PROVIDER_REORDER_SCROLL_STEP
+            } else if pointer_y > viewport.bottom() - px(PROVIDER_REORDER_EDGE_ZONE) {
+                PROVIDER_REORDER_SCROLL_STEP
+            } else {
+                0.
+            };
+            if scroll_delta != 0. {
+                self.provider_list_state.scroll_by(px(scroll_delta));
+                window.request_animation_frame();
+            }
+        }
+
+        let current_target = self
+            .provider_drag_state
+            .as_ref()
+            .map_or(source_position, |state| state.target_position);
+        let mut target_position = current_target.min(rows.len() - 1);
+        while target_position + 1 < rows.len() {
+            let next_row = rows[target_position + 1].1;
+            let Some(bounds) = self.provider_list_state.bounds_for_item(next_row) else {
+                break;
+            };
+            if pointer_y > bounds.center().y + px(PROVIDER_REORDER_HYSTERESIS) {
+                target_position += 1;
+            } else {
+                break;
+            }
+        }
+        while target_position > 0 {
+            let previous_row = rows[target_position - 1].1;
+            let Some(bounds) = self.provider_list_state.bounds_for_item(previous_row) else {
+                break;
+            };
+            if pointer_y < bounds.center().y - px(PROVIDER_REORDER_HYSTERESIS) {
+                target_position -= 1;
+            } else {
+                break;
+            }
+        }
+        if target_position == current_target {
             return;
-        };
-        let Some(target_index) = self
-            .providers
+        }
+
+        let measured_rows: Vec<_> = rows
             .iter()
-            .position(|provider| provider.id == *target_id)
+            .enumerate()
+            .filter_map(|(position, (_, row_index))| {
+                self.provider_list_state
+                    .bounds_for_item(*row_index)
+                    .map(|bounds| (position, bounds.top().as_f32(), bounds.size.height.as_f32()))
+            })
+            .collect();
+        let fallback_pitch = measured_rows
+            .windows(2)
+            .find_map(|pair| {
+                let pitch = pair[1].1 - pair[0].1;
+                (pitch > 0.).then_some(pitch)
+            })
+            .or_else(|| measured_rows.first().map(|row| row.2))
+            .unwrap_or(68.);
+        let Some(&(anchor_position, anchor_top, _)) = measured_rows.first() else {
+            return;
+        };
+        let row_tops: Vec<f32> = rows
+            .iter()
+            .enumerate()
+            .map(|(position, (_, row_index))| {
+                self.provider_list_state
+                    .bounds_for_item(*row_index)
+                    .map(|bounds| bounds.top().as_f32())
+                    .unwrap_or_else(|| {
+                        anchor_top
+                            + (position as isize - anchor_position as isize) as f32 * fallback_pitch
+                    })
+            })
+            .collect();
+        let provider_ids: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
+        if let Some(state) = self.provider_drag_state.as_mut() {
+            state.retarget(
+                target_position,
+                &provider_ids,
+                &row_tops,
+                Instant::now(),
+                cx.reduce_motion(),
+            );
+            cx.notify();
+        }
+    }
+
+    fn drop_provider_drag(
+        &mut self,
+        dragged: &DraggedProvider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target_position = self
+            .provider_drag_state
+            .as_ref()
+            .filter(|state| state.source_id == dragged.id)
+            .map_or(dragged.source_position, |state| state.target_position);
+        let dropped_inside_list = self
+            .provider_list_state
+            .viewport_bounds()
+            .contains(&window.mouse_position());
+        self.provider_drag_state = None;
+
+        let slots = self.sortable_provider_slots();
+        let target_id = slots
+            .get(target_position)
+            .and_then(|slot| self.providers.get(*slot))
+            .map(|provider| provider.id.clone());
+        if dropped_inside_list && target_position != dragged.source_position {
+            if let Some(target_id) = target_id {
+                self.reorder_provider(dragged.id.clone(), target_id, cx);
+                return;
+            }
+        }
+        cx.notify();
+    }
+
+    fn provider_drag_offset(&self, provider_id: &str, reduce_motion: bool) -> f32 {
+        self.provider_drag_state.as_ref().map_or(0., |state| {
+            state.offset_for(provider_id, Instant::now(), reduce_motion)
+        })
+    }
+
+    fn reorder_provider(&mut self, source_id: String, target_id: String, cx: &mut Context<Self>) {
+        let slots = self.sortable_provider_slots();
+        let Some(source_position) = slots
+            .iter()
+            .position(|slot| self.providers[*slot].id == source_id)
         else {
             return;
         };
-        self.providers.swap(source_index, target_index);
+        let Some(target_position) = slots
+            .iter()
+            .position(|slot| self.providers[*slot].id == target_id)
+        else {
+            return;
+        };
+        if !move_items_between_slots(
+            &mut self.providers,
+            &slots,
+            source_position,
+            target_position,
+        ) {
+            return;
+        }
+
         let updates = self
             .providers
             .iter()
@@ -1162,6 +1707,7 @@ impl AppRoot {
     fn render_provider_card(
         &self,
         provider: &Provider,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_current = !self.selected_app.is_additive_mode() && provider.id == self.current;
@@ -1170,15 +1716,16 @@ impl AppRoot {
         let edit_provider = provider.clone();
         let confirm_provider = provider.clone();
         let live_id = provider.id.clone();
-        let reorder_id_up = provider.id.clone();
-        let reorder_id_down = provider.id.clone();
-        let visible_ids = self.visible_provider_ids();
-        let visible_position = visible_ids
+        let sortable_slots = self.sortable_provider_slots();
+        let sortable_position = sortable_slots
             .iter()
-            .position(|provider_id| provider_id == &provider.id);
-        let can_move_up = !is_gateway && visible_position.is_some_and(|position| position > 0);
-        let can_move_down = !is_gateway
-            && visible_position.is_some_and(|position| position + 1 < visible_ids.len());
+            .position(|slot| self.providers[*slot].id == provider.id);
+        let is_sortable = sortable_slots.len() > 1 && sortable_position.is_some();
+        let is_drag_source = self
+            .provider_drag_state
+            .as_ref()
+            .is_some_and(|state| state.source_id == provider.id);
+        let drag_offset = self.provider_drag_offset(&provider.id, cx.reduce_motion());
         let base_url = if is_gateway {
             self.gateway_via_station_line()
         } else {
@@ -1209,14 +1756,58 @@ impl AppRoot {
         } else {
             "切换"
         };
+
+        let drag_handle = sortable_position.map(|source_position| {
+            let root = cx.entity();
+            let dragged = DraggedProvider {
+                id: provider.id.clone(),
+                name: SharedString::from(provider.name.clone()),
+                base_url: SharedString::from(base_url.clone()),
+                source_position,
+                app_icon: Self::app_icon(self.selected_app),
+            };
+            div()
+                .id(SharedString::from(format!("drag-provider-{}", provider.id)))
+                .role(gpui::Role::Button)
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(32.))
+                .flex_none()
+                .cursor_grab()
+                .aria_label(SharedString::from(format!(
+                    "拖动排序 {}，当前位置 {} / {}",
+                    provider.name,
+                    source_position + 1,
+                    sortable_slots.len()
+                )))
+                .aria_description("按住并拖动到其他连接上以调整顺序")
+                .hover(|style| style.bg(theme::surface_hover()))
+                .active(|style| style.bg(theme::accent_soft()))
+                .tooltip(|_window, cx| cx.new(|_| ProviderDragTooltip).into())
+                .child(icon(IconName::DragHandle, theme::muted(), 16.))
+                .on_drag(dragged, move |provider, _offset, _window, cx| {
+                    root.update(cx, |this, cx| {
+                        this.begin_provider_drag(provider, cx);
+                    });
+                    cx.new(|_| ProviderDragPreview {
+                        name: provider.name.clone(),
+                        base_url: provider.base_url.clone(),
+                        app_icon: provider.app_icon,
+                    })
+                })
+        });
+
         components::panel()
+            .id(SharedString::from(format!("provider-card-{}", provider.id)))
+            .relative()
+            .top(px(drag_offset))
+            .opacity(if is_drag_source { 0. } else { 1. })
             .flex()
             .flex_row()
-            .items_center()
-            .justify_between()
+            .items_stretch()
             .w_full()
-            .px_4()
-            .py_3()
+            .overflow_hidden()
             .border_color(if is_current {
                 theme::accent()
             } else {
@@ -1226,12 +1817,20 @@ impl AppRoot {
                 s.border_color(theme::border_strong())
                     .shadow(theme::shadow_hover())
             })
+            .when_some(
+                if is_sortable { drag_handle } else { None },
+                |card, handle| card.child(handle),
+            )
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
+                    .flex_1()
+                    .min_w_0()
                     .gap_3()
+                    .px_4()
+                    .py_3()
                     .child(
                         div()
                             .flex()
@@ -1298,39 +1897,10 @@ impl AppRoot {
                     .flex()
                     .flex_row()
                     .items_center()
+                    .flex_none()
                     .gap_2()
-                    .when(can_move_up, |row| {
-                        row.child(
-                            components::button(
-                                SharedString::from(format!("move-up-{}", provider.id)),
-                                "↑",
-                                ButtonTone::Ghost,
-                                ButtonSize::Sm,
-                            )
-                            .aria_label(SharedString::from(format!("上移 {}", provider.name)))
-                            .on_click(cx.listener(
-                                move |this, _event, _window, cx| {
-                                    this.move_provider(reorder_id_up.clone(), -1, cx);
-                                },
-                            )),
-                        )
-                    })
-                    .when(can_move_down, |row| {
-                        row.child(
-                            components::button(
-                                SharedString::from(format!("move-down-{}", provider.id)),
-                                "↓",
-                                ButtonTone::Ghost,
-                                ButtonSize::Sm,
-                            )
-                            .aria_label(SharedString::from(format!("下移 {}", provider.name)))
-                            .on_click(cx.listener(
-                                move |this, _event, _window, cx| {
-                                    this.move_provider(reorder_id_down.clone(), 1, cx);
-                                },
-                            )),
-                        )
-                    })
+                    .py_3()
+                    .pr_4()
                     .child(
                         components::action_button(
                             SharedString::from(format!("edit-{}", provider.id)),
@@ -1809,60 +2379,12 @@ impl AppRoot {
 
     fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.selected_app;
-        let is_switch = !app.is_additive_mode();
         let current_is_gateway = self
             .providers
             .iter()
             .find(|provider| provider.id == self.current)
             .is_some_and(Provider::is_local_gateway);
-        let direct_ixs: Vec<usize> = self
-            .providers
-            .iter()
-            .enumerate()
-            .filter(|(_, provider)| {
-                !provider.is_local_gateway() && (!is_switch || provider.id != self.current)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        let gateway_ixs: Vec<usize> = self
-            .providers
-            .iter()
-            .enumerate()
-            .filter(|(_, provider)| {
-                provider.is_local_gateway() && (!is_switch || provider.id != self.current)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        let supports_gateway = apply::supported_apps().contains(&app);
-        let no_providers = self.providers.is_empty();
-
-        let mut plan: Vec<ProviderRow> = Vec::new();
-        if is_switch {
-            plan.push(ProviderRow::Hero);
-            if current_is_gateway {
-                plan.push(ProviderRow::GatewayRoutes);
-            }
-            if !direct_ixs.is_empty() {
-                plan.push(ProviderRow::DirectLabel);
-                plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
-            }
-            if supports_gateway && !current_is_gateway {
-                plan.push(ProviderRow::GatewayLabel);
-                if gateway_ixs.is_empty() {
-                    plan.push(ProviderRow::GatewayCta);
-                } else {
-                    plan.extend(gateway_ixs.iter().copied().map(ProviderRow::Card));
-                }
-            }
-            if no_providers && !supports_gateway {
-                plan.push(ProviderRow::EmptyState);
-            }
-        } else {
-            if no_providers {
-                plan.push(ProviderRow::EmptyState);
-            }
-            plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
-        }
+        let plan = self.provider_row_plan();
         if self.provider_list_state.item_count() != plan.len() {
             self.provider_list_state.reset(plan.len());
         }
@@ -1909,7 +2431,7 @@ impl AppRoot {
 
         let list = gpui::list(
             self.provider_list_state.clone(),
-            cx.processor(move |this, ix: usize, _window, cx| {
+            cx.processor(move |this, ix: usize, window, cx| {
                 // Each row carries its own bottom spacing (the list draws no
                 // inter-item gap); pb_3 mirrors wide_column's default gap.
                 let block = div().w_full().pb_3();
@@ -1966,7 +2488,7 @@ impl AppRoot {
                         .into_any_element(),
                     Some(ProviderRow::Card(pix)) => match this.providers.get(pix) {
                         Some(provider) => {
-                            let card = this.render_provider_card(provider, cx);
+                            let card = this.render_provider_card(provider, window, cx);
                             block.child(card).into_any_element()
                         }
                         None => gpui::Empty.into_any_element(),
@@ -2059,6 +2581,17 @@ impl AppRoot {
 
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.provider_drag_state.is_some() && !cx.has_active_drag() {
+            self.provider_drag_state = None;
+        }
+        if self
+            .provider_drag_state
+            .as_ref()
+            .is_some_and(|state| state.is_animating(Instant::now(), cx.reduce_motion()))
+        {
+            window.request_animation_frame();
+        }
+
         let appearance = window.appearance();
         let main_content = div()
             .flex()
@@ -2083,6 +2616,8 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::save_active))
             .on_action(cx.listener(Self::cancel_active))
             .on_action(cx.listener(Self::close_window))
+            .on_drag_move::<DraggedProvider>(cx.listener(Self::handle_provider_drag_move))
+            .on_drop(cx.listener(Self::drop_provider_drag))
             .child(
                 div()
                     .flex()
