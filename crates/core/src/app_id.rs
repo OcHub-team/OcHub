@@ -16,6 +16,7 @@ pub mod builtin {
     pub const CLAUDE: &str = "claude";
     pub const CLAUDE_DESKTOP: &str = "claude-desktop";
     pub const CODEX: &str = "codex";
+    pub const GROKBUILD: &str = "grokbuild";
     pub const OPENCODE: &str = "opencode";
     pub const OPENCLAW: &str = "openclaw";
     pub const HERMES: &str = "hermes";
@@ -36,6 +37,9 @@ impl AppId {
         // Legacy ClaudeDesktop spellings (settings files, deeplinks, API payloads).
         if s == "claude_desktop" || s == "claudeDesktop" {
             return Ok(Self(Arc::from(builtin::CLAUDE_DESKTOP)));
+        }
+        if matches!(s, "grok-build" | "grok_build" | "grok") {
+            return Ok(Self(Arc::from(builtin::GROKBUILD)));
         }
         let valid_len = !s.is_empty() && s.len() <= 32;
         let valid_start = s
@@ -104,6 +108,7 @@ mod tests {
             builtin::CLAUDE,
             builtin::CLAUDE_DESKTOP,
             builtin::CODEX,
+            builtin::GROKBUILD,
             builtin::OPENCODE,
             builtin::OPENCLAW,
             builtin::HERMES,
@@ -122,6 +127,13 @@ mod tests {
             AppId::parse("claudeDesktop").unwrap().as_str(),
             "claude-desktop"
         );
+    }
+
+    #[test]
+    fn grokbuild_aliases_normalize() {
+        for alias in ["grok-build", "grok_build", "grok"] {
+            assert_eq!(AppId::parse(alias).unwrap().as_str(), "grokbuild");
+        }
     }
 
     #[test]

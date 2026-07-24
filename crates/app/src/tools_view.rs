@@ -2185,10 +2185,14 @@ impl Render for ToolsView {
                     })),
                 ),
             )
-            .child(layout::wide_virtual_body(gpui::list(
-                self.list_state.clone(),
-                cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
-            )))
+            .child(layout::wide_virtual_body(
+                "tools-body",
+                gpui::list(
+                    self.list_state.clone(),
+                    cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
+                ),
+                &self.list_state,
+            ))
             .when_some(self.confirm.clone(), |root, action| {
                 let (title, message, confirm_label) = match &action {
                     ConfirmAction::RestoreDbBackup(name) => (
@@ -2313,6 +2317,15 @@ fn config_status(app: &Arc<AppState>, app_type: AppType) -> Result<(bool, String
             (
                 auth_path.exists() || !config_text.trim().is_empty(),
                 codex::get_codex_config_dir().to_string_lossy().to_string(),
+            )
+        }
+        AppType::GrokBuild => {
+            let config_path = ochub_core::apps::grokbuild::get_grok_config_path();
+            (
+                config_path.exists(),
+                ochub_core::apps::grokbuild::get_grok_config_dir()
+                    .to_string_lossy()
+                    .to_string(),
             )
         }
         AppType::OpenCode => {

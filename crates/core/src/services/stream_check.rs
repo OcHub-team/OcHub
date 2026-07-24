@@ -123,6 +123,13 @@ impl StreamCheckService {
             AppType::Hermes => Self::extract_hermes_base_url(provider),
             AppType::Claude | AppType::ClaudeDesktop => Self::extract_claude_base_url(provider),
             AppType::Codex => Self::extract_codex_base_url(provider),
+            AppType::GrokBuild => provider
+                .settings_config
+                .get("config")
+                .and_then(serde_json::Value::as_str)
+                .and_then(crate::apps::grokbuild::extract_model_config)
+                .map(|config| config.base_url)
+                .ok_or_else(|| AppError::Config("Grok Build 配置缺少有效的 Base URL".to_string())),
         }
     }
 

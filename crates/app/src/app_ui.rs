@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use gpui::{
     div, prelude::*, px, App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton,
-    SharedString, Window, WindowAppearance,
+    ScrollHandle, SharedString, Window, WindowAppearance,
 };
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
@@ -125,6 +125,7 @@ pub struct AppRoot {
     /// Drives the virtualized provider list; row count follows the current
     /// app's provider set, so it is `reset` whenever the plan length changes.
     provider_list_state: ListState,
+    sidebar_scroll_handle: ScrollHandle,
 }
 
 /// Row plan for the virtualized provider list. Rebuilt每帧并被 list 的
@@ -273,6 +274,7 @@ impl AppRoot {
             app_settings_view,
             showing_app_settings: false,
             provider_list_state: ListState::new(0, ListAlignment::Top, px(512.)),
+            sidebar_scroll_handle: ScrollHandle::new(),
         };
         cx.subscribe(
             &this.app_settings_view,
@@ -1010,6 +1012,7 @@ impl AppRoot {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&self.sidebar_scroll_handle)
             .pb_4()
             .child(Self::render_sidebar_group("应用", appearance))
             .child(
@@ -1111,6 +1114,7 @@ impl AppRoot {
 
         div()
             .id("sidebar")
+            .relative()
             .flex()
             .flex_col()
             .h_full()
@@ -1123,6 +1127,10 @@ impl AppRoot {
             .shadow_xs()
             .child(self.render_sidebar_drag_region(cx))
             .child(navigation)
+            .child(crate::scrollbar::VerticalScrollbar::new(
+                "sidebar-navigation-scrollbar",
+                self.sidebar_scroll_handle.clone(),
+            ))
     }
 
     fn render_provider_card(
@@ -1944,7 +1952,11 @@ impl AppRoot {
 
         layout::page()
             .child(layout::page_header(Self::app_label(app), Some(subtitle)).child(actions))
-            .child(layout::wide_virtual_body(list))
+            .child(layout::wide_virtual_body(
+                "provider-list-body",
+                list,
+                &self.provider_list_state,
+            ))
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> gpui::AnyElement {

@@ -18,6 +18,7 @@ mod layout;
 mod mcp_view;
 mod notifications;
 mod provider_editor;
+mod scrollbar;
 mod sessions_view;
 mod settings_view;
 mod shell_menu;
@@ -205,6 +206,7 @@ fn main() {
             let window = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(960.), px(640.))),
                     window_background: theme::window_background_appearance(),
                     titlebar: Some(TitlebarOptions {
                         title: None,

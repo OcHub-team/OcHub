@@ -41,6 +41,7 @@ pub fn supported_apps() -> &'static [AppType] {
         AppType::Claude,
         AppType::ClaudeDesktop,
         AppType::Codex,
+        AppType::GrokBuild,
         AppType::OpenCode,
         AppType::OpenClaw,
         AppType::Hermes,
@@ -52,6 +53,7 @@ pub fn client_dialect(app_type: AppType) -> Dialect {
     match app_type {
         AppType::Claude | AppType::ClaudeDesktop => Dialect::Messages,
         AppType::Codex => Dialect::Responses,
+        AppType::GrokBuild => Dialect::Responses,
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Dialect::Chat,
     }
 }
@@ -206,6 +208,7 @@ fn app_label(app_type: AppType) -> &'static str {
         AppType::Claude => "Claude Code",
         AppType::ClaudeDesktop => "Claude Desktop",
         AppType::Codex => "Codex",
+        AppType::GrokBuild => "Grok Build",
         AppType::OpenCode => "OpenCode",
         AppType::OpenClaw => "OpenClaw",
         AppType::Hermes => "Hermes",
@@ -263,6 +266,28 @@ fn gateway_settings_for(
                 "auth": { "OPENAI_API_KEY": key },
                 "config": toml,
             }))
+        }
+        AppType::GrokBuild => {
+            let profile = models
+                .first()
+                .map(String::as_str)
+                .unwrap_or(crate::apps::grokbuild::DEFAULT_MODEL);
+            let mut document = toml_edit::DocumentMut::new();
+            document["models"] = toml_edit::table();
+            document["model"] = toml_edit::table();
+            document["models"]["default"] = toml_edit::value(profile);
+            document["model"]
+                .as_table_mut()
+                .expect("Grok model registry is a TOML table")
+                .insert(profile, toml_edit::Item::Table(toml_edit::Table::new()));
+            document["model"][profile]["model"] = toml_edit::value(profile);
+            document["model"][profile]["base_url"] = toml_edit::value(format!("{base_url}/v1"));
+            document["model"][profile]["name"] = toml_edit::value(GATEWAY_PROVIDER_NAME);
+            document["model"][profile]["api_key"] = toml_edit::value(key);
+            document["model"][profile]["api_backend"] = toml_edit::value("responses");
+            document["model"][profile]["context_window"] =
+                toml_edit::value(crate::apps::grokbuild::DEFAULT_CONTEXT_WINDOW);
+            Ok(json!({ "config": document.to_string() }))
         }
         AppType::OpenCode => {
             let mut config = json!({
@@ -395,7 +420,8 @@ fn apply_route_to_app(
     route: GatewayRoute,
 ) -> Result<ApplyResult, AppError> {
     let key = ensure_key_for_route(state, app_type.as_str(), Some(&route.id))?;
-    let settings = gateway_settings_for(app_type, base_url, &key.key, &route_client_models(&route))?;
+    let settings =
+        gateway_settings_for(app_type, base_url, &key.key, &route_client_models(&route))?;
 
     let provider = Provider {
         id: GATEWAY_PROVIDER_ID.to_string(),
@@ -491,6 +517,17 @@ pub fn import_provider_as_channel(
     let dialect = match app_type {
         AppType::Claude | AppType::ClaudeDesktop => Dialect::Messages,
         AppType::Codex => Dialect::Responses,
+        AppType::GrokBuild => provider
+            .settings_config
+            .get("config")
+            .and_then(serde_json::Value::as_str)
+            .and_then(crate::apps::grokbuild::extract_model_config)
+            .map(|config| match config.api_backend.as_str() {
+                "messages" => Dialect::Messages,
+                "responses" => Dialect::Responses,
+                _ => Dialect::Chat,
+            })
+            .unwrap_or(Dialect::Responses),
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Dialect::Chat,
     };
     let channel = GatewayChannel {
@@ -600,7 +637,10 @@ mod tests {
         };
         assert_eq!(
             route_client_models(&route),
-            vec!["claude-sonnet-4-6".to_string(), "claude-haiku-4-5".to_string()]
+            vec![
+                "claude-sonnet-4-6".to_string(),
+                "claude-haiku-4-5".to_string()
+            ]
         );
     }
 

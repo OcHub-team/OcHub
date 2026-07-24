@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     div, prelude::*, px, uniform_list, Context, Entity, FontWeight, HighlightStyle, MouseButton,
-    SharedString, StyledText, Window,
+    ScrollHandle, SharedString, StyledText, Window,
 };
 use ochub_core::provider_config::{
     self, bool_val, str_val, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues,
@@ -143,6 +143,7 @@ pub struct ProviderEditor {
     convert_open: bool,
     error: Option<SharedString>,
     status: Option<SharedString>,
+    form_scroll_handle: ScrollHandle,
 }
 
 impl ProviderEditor {
@@ -271,6 +272,7 @@ impl ProviderEditor {
             convert_open: false,
             error: None,
             status: None,
+            form_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -2134,15 +2136,30 @@ impl Render for ProviderEditor {
             });
 
         let form_scroll = div()
-            .id("editor-form-scroll")
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .min_w_0()
-            .pr_2()
-            .overflow_y_scroll()
-            .child(form_column.pb_6());
+            .overflow_hidden()
+            .child(
+                div()
+                    .id("editor-form-scroll")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .pr_2()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.form_scroll_handle)
+                    .child(form_column.pb_6()),
+            )
+            .child(crate::scrollbar::VerticalScrollbar::new(
+                "editor-form-scrollbar",
+                self.form_scroll_handle.clone(),
+            ));
 
         let body = div()
             .flex()

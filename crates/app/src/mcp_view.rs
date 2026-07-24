@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, Context, Entity, FontWeight, ListAlignment, ListState, SharedString,
-    Window,
+    div, prelude::*, px, Context, Entity, FontWeight, ListAlignment, ListState, ScrollHandle,
+    SharedString, Window,
 };
 use ochub_core::db::legacy_json::{McpApps, McpServer};
 use ochub_core::services::McpService;
@@ -37,6 +37,7 @@ pub struct McpView {
     /// 待确认删除的服务器（id, 名称）；`Some` 时展示确认模态。
     confirm_delete: Option<(String, String)>,
     list_state: ListState,
+    form_scroll_handle: ScrollHandle,
 }
 
 /// Row plan for the virtualized list. Rebuilt每帧并被 list 的 processor 捕获，
@@ -83,6 +84,7 @@ impl McpView {
             apps: McpApps::default(),
             confirm_delete: None,
             list_state: ListState::new(0, ListAlignment::Top, px(512.)),
+            form_scroll_handle: ScrollHandle::new(),
         };
         this.reload();
         this
@@ -286,6 +288,7 @@ impl McpView {
         let imports = [
             ("Claude", McpService::import_from_claude(&self.app)),
             ("Codex", McpService::import_from_codex(&self.app)),
+            ("Grok Build", McpService::import_from_grokbuild(&self.app)),
             ("OpenCode", McpService::import_from_opencode(&self.app)),
             ("Hermes", McpService::import_from_hermes(&self.app)),
         ];
@@ -487,6 +490,7 @@ impl McpView {
             )
             .child(layout::scroll_body(
                 "mcp-form-body",
+                &self.form_scroll_handle,
                 layout::content_column().child(
                     components::card()
                         .gap_4()
@@ -659,7 +663,11 @@ impl Render for McpView {
                         ),
                 ),
             )
-            .child(layout::virtual_body(list))
+            .child(layout::virtual_body(
+                "mcp-list-body",
+                list,
+                &self.list_state,
+            ))
             .when_some(self.confirm_delete.clone(), |root, target| {
                 let (delete_id, name) = target;
                 root.child(components::modal_overlay(

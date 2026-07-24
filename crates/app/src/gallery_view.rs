@@ -2,7 +2,7 @@
 //! component in every state so visual tuning and regression checks don't
 //! require clicking through the whole app (GPUI has no hot reload).
 
-use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, px, Context, FontWeight, ScrollHandle, SharedString, Window};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::icons::IconName;
@@ -13,6 +13,7 @@ use crate::theme;
 pub struct GalleryView {
     demo_input: gpui::Entity<TextInput>,
     secret_input: gpui::Entity<TextInput>,
+    scroll_handle: ScrollHandle,
 }
 
 impl GalleryView {
@@ -20,6 +21,7 @@ impl GalleryView {
         Self {
             demo_input: cx.new(|cx| TextInput::new(cx, "https://example.com")),
             secret_input: cx.new(|cx| TextInput::new(cx, "sk-ant-…")),
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -356,6 +358,7 @@ impl gpui::Render for GalleryView {
             ))
             .child(layout::scroll_body(
                 "gallery-scroll",
+                &self.scroll_handle,
                 layout::content_column()
                     .child(Self::section("按钮", "tone × size,统一悬停与字重", buttons))
                     .child(Self::section(

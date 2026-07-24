@@ -5,12 +5,14 @@
 //! disclosure, stat tiles, tables, pagination, status footer. Views compose
 //! these instead of hand-rolling styling so every page stays consistent.
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike};
 use gpui::{
-    div, prelude::*, px, AnyElement, App, ElementId, Entity, FontWeight, Rgba, SharedString, Window,
+    anchored, deferred, div, point, prelude::*, px, Anchor, AnyElement, App, ElementId, Entity,
+    FontWeight, MouseButton, Rgba, ScrollHandle, SharedString, Window,
 };
 
 use crate::icons::{icon, IconName};
+use crate::scrollbar::VerticalScrollbar;
 use crate::text_input::TextInput;
 use crate::theme;
 
@@ -380,11 +382,6 @@ pub fn card() -> gpui::Div {
         .p_4()
 }
 
-/// A [`card`] highlighted as the active editing surface (accent border).
-pub fn card_emphasis() -> gpui::Div {
-    card().border_color(theme::accent())
-}
-
 /// Opacity applied to disabled interactive elements. Keep call sites on this
 /// constant so the disabled look stays uniform across pages.
 pub const DISABLED_OPACITY: f32 = 0.6;
@@ -651,6 +648,430 @@ pub fn table_row(cells: Vec<AnyElement>, n_cols: usize, last: bool) -> gpui::Div
 
 // ── Pagination ──────────────────────────────────────────────────────────────
 
+pub fn datetime_filter_field(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    input: Entity<TextInput>,
+    expanded: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .aria_label(label)
+        .aria_expanded(expanded)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .cursor_pointer()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme::subtext())
+                .child(label),
+        )
+        .child(
+            div().relative().w_full().child(input).child(
+                div()
+                    .absolute()
+                    .right(px(10.))
+                    .top(px(10.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme::surface())
+                    .child(icon(
+                        IconName::Calendar,
+                        if expanded {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        },
+                        15.,
+                    )),
+            ),
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn datetime_picker(
+    id: &'static str,
+    selected: DateTime<Local>,
+    picker_year: i32,
+    picker_month: u32,
+    hour_scroll: &ScrollHandle,
+    minute_scroll: &ScrollHandle,
+    on_shift_month: impl Fn(i32, &mut Window, &mut App) + 'static,
+    on_select_date: impl Fn(NaiveDate, &mut Window, &mut App) + 'static,
+    on_select_hour: impl Fn(u32, &mut Window, &mut App) + 'static,
+    on_select_minute: impl Fn(u32, &mut Window, &mut App) + 'static,
+    on_today: impl Fn(&mut Window, &mut App) + 'static,
+    on_clear: impl Fn(&mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let on_shift_month = std::rc::Rc::new(on_shift_month);
+    let on_select_date = std::rc::Rc::new(on_select_date);
+    let on_select_hour = std::rc::Rc::new(on_select_hour);
+    let on_select_minute = std::rc::Rc::new(on_select_minute);
+    let on_today = std::rc::Rc::new(on_today);
+    let on_clear = std::rc::Rc::new(on_clear);
+    let selected_date = selected.date_naive();
+    let selected_hour = selected.hour();
+    let selected_minute = selected.minute();
+    let today = Local::now().date_naive();
+    let first_of_month = NaiveDate::from_ymd_opt(picker_year, picker_month, 1).unwrap_or(today);
+    let calendar_start =
+        first_of_month - Duration::days(first_of_month.weekday().num_days_from_sunday() as i64);
+
+    let mut weekday_header = div().grid().grid_cols(7).gap(px(2.)).w_full();
+    for weekday in ["日", "一", "二", "三", "四", "五", "六"] {
+        weekday_header = weekday_header.child(
+            div()
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme::muted())
+                .child(weekday),
+        );
+    }
+
+    let mut day_grid = div().grid().grid_cols(7).gap(px(2.)).w_full();
+    for index in 0..42 {
+        let date = calendar_start + Duration::days(index);
+        let callback = on_select_date.clone();
+        day_grid = day_grid.child(
+            calendar_day_button(
+                ElementId::Name(
+                    format!("{id}-day-{}-{}-{}", date.year(), date.month(), date.day()).into(),
+                ),
+                date,
+                date.month() == picker_month,
+                date == selected_date,
+                date == today,
+            )
+            .on_click(move |_event, window, cx| callback(date, window, cx)),
+        );
+    }
+
+    let previous_month = on_shift_month.clone();
+    let next_month = on_shift_month.clone();
+    let clear = on_clear.clone();
+    let today_callback = on_today.clone();
+    let calendar = div()
+        .w(px(236.))
+        .h_full()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .h(px(42.))
+                .px_3()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme::text())
+                        .child(SharedString::from(format!(
+                            "{picker_year}年{picker_month:02}月"
+                        ))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            calendar_nav_button(
+                                ElementId::Name(format!("{id}-previous-month").into()),
+                                "上个月",
+                                IconName::ChevronLeft,
+                            )
+                            .on_click(move |_event, window, cx| previous_month(-1, window, cx)),
+                        )
+                        .child(
+                            calendar_nav_button(
+                                ElementId::Name(format!("{id}-next-month").into()),
+                                "下个月",
+                                IconName::ChevronRight,
+                            )
+                            .on_click(move |_event, window, cx| next_month(1, window, cx)),
+                        ),
+                ),
+        )
+        .child(div().px_3().child(weekday_header).child(day_grid))
+        .child(
+            div()
+                .mt_auto()
+                .h(px(42.))
+                .px_3()
+                .border_t_1()
+                .border_color(theme::border())
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    calendar_footer_button(ElementId::Name(format!("{id}-clear").into()), "清除")
+                        .on_click(move |_event, window, cx| clear(window, cx)),
+                )
+                .child(
+                    calendar_footer_button(ElementId::Name(format!("{id}-today").into()), "今天")
+                        .on_click(move |_event, window, cx| today_callback(window, cx)),
+                ),
+        );
+
+    let hour_scroll_id = SharedString::from(format!("{id}-hours"));
+    let mut hour_options = div()
+        .id(hour_scroll_id.clone())
+        .w(px(54.))
+        .h(px(252.))
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+        .track_scroll(hour_scroll);
+    for hour in 0..24u32 {
+        let callback = on_select_hour.clone();
+        hour_options = hour_options.child(
+            time_value_button(
+                ElementId::Name(format!("{hour_scroll_id}-{hour}").into()),
+                hour,
+                hour == selected_hour,
+            )
+            .on_click(move |_event, window, cx| callback(hour, window, cx)),
+        );
+    }
+
+    let minute_scroll_id = SharedString::from(format!("{id}-minutes"));
+    let mut minute_options = div()
+        .id(minute_scroll_id.clone())
+        .w(px(54.))
+        .h(px(252.))
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+        .track_scroll(minute_scroll);
+    for minute in 0..60u32 {
+        let callback = on_select_minute.clone();
+        minute_options = minute_options.child(
+            time_value_button(
+                ElementId::Name(format!("{minute_scroll_id}-{minute}").into()),
+                minute,
+                minute == selected_minute,
+            )
+            .on_click(move |_event, window, cx| callback(minute, window, cx)),
+        );
+    }
+
+    let time_selector = div()
+        .w(px(111.))
+        .h_full()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .child(
+            div()
+                .w(px(55.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .child(time_column_label("时"))
+                .child(
+                    div()
+                        .relative()
+                        .w(px(54.))
+                        .h(px(252.))
+                        .child(hour_options)
+                        .child(VerticalScrollbar::new(
+                            ElementId::Name(format!("{id}-hours-scrollbar").into()),
+                            hour_scroll.clone(),
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .w(px(56.))
+                .border_l_1()
+                .border_color(theme::border())
+                .flex()
+                .flex_col()
+                .items_center()
+                .child(time_column_label("分"))
+                .child(
+                    div()
+                        .relative()
+                        .w(px(54.))
+                        .h(px(252.))
+                        .child(minute_options)
+                        .child(VerticalScrollbar::new(
+                            ElementId::Name(format!("{id}-minutes-scrollbar").into()),
+                            minute_scroll.clone(),
+                        )),
+                ),
+        );
+
+    div()
+        .id(ElementId::Name(format!("{id}-popover").into()))
+        .flex()
+        .w(px(348.))
+        .h(px(296.))
+        .rounded_lg()
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::overlay())
+        .shadow(theme::shadow_popover())
+        .occlude()
+        .flex_row()
+        .child(calendar)
+        .child(div().w(px(1.)).h_full().bg(theme::border()))
+        .child(time_selector)
+}
+
+fn calendar_nav_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    icon_name: IconName,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::surface_hover()))
+        .child(icon(icon_name, theme::subtext(), 14.))
+}
+
+fn calendar_day_button(
+    id: impl Into<ElementId>,
+    date: NaiveDate,
+    in_current_month: bool,
+    selected: bool,
+    today: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let day = date.day();
+    let mut button = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(SharedString::from(format!(
+            "{}年{}月{}日",
+            date.year(),
+            date.month(),
+            day
+        )))
+        .aria_selected(selected)
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .border_1()
+        .border_color(theme::surface().alpha(0.))
+        .cursor_pointer()
+        .text_sm()
+        .child(SharedString::from(day.to_string()));
+    if selected {
+        button = button
+            .bg(theme::accent_fill())
+            .border_color(theme::accent())
+            .text_color(theme::accent_text())
+            .font_weight(FontWeight::SEMIBOLD);
+    } else if today {
+        button = button
+            .border_color(theme::accent())
+            .text_color(theme::accent())
+            .font_weight(FontWeight::MEDIUM)
+            .hover(|style| style.bg(theme::accent_soft()));
+    } else if in_current_month {
+        button = button
+            .text_color(theme::text())
+            .hover(|style| style.bg(theme::surface_hover()));
+    } else {
+        button = button.text_color(theme::muted()).hover(|style| {
+            style
+                .bg(theme::surface_hover())
+                .text_color(theme::subtext())
+        });
+    }
+    button
+}
+
+fn calendar_footer_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .px_1()
+        .py_1()
+        .rounded_md()
+        .cursor_pointer()
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme::accent())
+        .hover(|style| style.bg(theme::accent_soft()))
+        .child(label)
+}
+
+fn time_column_label(label: &'static str) -> gpui::Div {
+    div()
+        .h(px(42.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme::muted())
+        .child(label)
+}
+
+fn time_value_button(
+    id: impl Into<ElementId>,
+    value: u32,
+    selected: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let button = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(SharedString::from(format!("{value:02}")))
+        .aria_selected(selected)
+        .w_full()
+        .h(px(34.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_sm()
+        .child(SharedString::from(format!("{value:02}")));
+    if selected {
+        button
+            .bg(theme::accent_fill())
+            .text_color(theme::accent_text())
+            .font_weight(FontWeight::SEMIBOLD)
+    } else {
+        button
+            .text_color(theme::text())
+            .hover(|style| style.bg(theme::surface_hover()))
+    }
+}
+
 /// Footer pagination bar: prev button, "3 / 12" label, next button. Buttons
 /// are built (and wired) at the call site with `components::button`.
 /// 解析日期输入：支持 `YYYY-MM-DD`、`YYYY/MM/DD`、`MM-DD`（按当前年补全）。
@@ -670,18 +1091,26 @@ pub fn parse_jump_date(text: &str) -> Option<NaiveDate> {
 /// “跳至”输入框由调用方持有并在构造时通过 [`TextInput::set_on_enter`]
 /// 接回车提交（本组件只负责渲染布局）。`on_select_page` 收 0-based 页码。
 /// 旧的 [`pagination`]（仅上/下页）保留给不需要跳转的简单场合。
+#[allow(clippy::too_many_arguments)]
 pub fn pagination_bar(
     id: &'static str,
     page: u32,
     total_pages: u32,
     total_items: Option<u64>,
+    page_size: u32,
+    page_sizes: &'static [u32],
+    page_size_open: bool,
     page_input: &Entity<TextInput>,
     on_select_page: impl Fn(u32, &mut Window, &mut App) + 'static,
+    on_toggle_page_size: impl Fn(&mut Window, &mut App) + 'static,
+    on_select_page_size: impl Fn(u32, &mut Window, &mut App) + 'static,
 ) -> gpui::Div {
     let total_pages = total_pages.max(1);
     let last = total_pages - 1;
     let page = page.min(last);
     let on_select_page = std::rc::Rc::new(on_select_page);
+    let on_toggle_page_size = std::rc::Rc::new(on_toggle_page_size);
+    let on_select_page_size = std::rc::Rc::new(on_select_page_size);
 
     // 页码集合：首页、末页、当前页 ±1；端点附近再补一格，间断处渲染省略号。
     let mut numbers = std::collections::BTreeSet::new();
@@ -707,7 +1136,17 @@ pub fn pagination_bar(
         .flex_wrap()
         .gap_1()
         .w_full()
-        .py_3();
+        .py_2()
+        .child(pagination_nav_button(
+            ElementId::Name(format!("{id}-previous").into()),
+            "上一页",
+            IconName::ChevronLeft,
+            page == 0,
+            {
+                let callback = on_select_page.clone();
+                move |window, cx| callback(page.saturating_sub(1), window, cx)
+            },
+        ));
 
     let mut previous: Option<u32> = None;
     for number in numbers {
@@ -748,17 +1187,122 @@ pub fn pagination_bar(
         bar = bar.child(cell.child(SharedString::from((number + 1).to_string())));
     }
 
+    bar = bar.child(pagination_nav_button(
+        ElementId::Name(format!("{id}-next").into()),
+        "下一页",
+        IconName::ChevronRight,
+        page == last,
+        {
+            let callback = on_select_page.clone();
+            move |window, cx| callback((page + 1).min(last), window, cx)
+        },
+    ));
+
+    let mut size_popover = div()
+        .id(ElementId::Name(format!("{id}-page-size-popover").into()))
+        .w(px(108.))
+        .p_1()
+        .rounded_lg()
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::overlay())
+        .shadow(theme::shadow_popover())
+        .occlude();
+    for size in page_sizes.iter().copied() {
+        let selected = size == page_size;
+        let callback = on_select_page_size.clone();
+        let option = div()
+            .id(ElementId::Name(format!("{id}-page-size-{size}").into()))
+            .role(gpui::Role::Button)
+            .aria_label(SharedString::from(format!("每页 {size} 条")))
+            .aria_selected(selected)
+            .h(px(30.))
+            .px_2()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .justify_between()
+            .cursor_pointer()
+            .text_sm()
+            .text_color(if selected {
+                theme::accent()
+            } else {
+                theme::subtext()
+            })
+            .when(selected, |option| option.bg(theme::accent_soft()))
+            .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+            .child(SharedString::from(format!("{size} 条/页")))
+            .when(selected, |option| {
+                option.child(icon(IconName::Check, theme::accent(), 12.))
+            })
+            .on_click(move |_event, window, cx| callback(size, window, cx));
+        size_popover = size_popover.child(option);
+    }
+    let close_page_size = on_toggle_page_size.clone();
+    size_popover =
+        size_popover.on_mouse_down_out(move |_event, window, cx| close_page_size(window, cx));
+    let toggle_page_size = on_toggle_page_size.clone();
+    let size_control = div()
+        .relative()
+        .flex_none()
+        .child(
+            div()
+                .id(ElementId::Name(format!("{id}-page-size").into()))
+                .role(gpui::Role::Button)
+                .aria_label("选择每页条数")
+                .aria_expanded(page_size_open)
+                .h(px(28.))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_1()
+                .rounded_md()
+                .border_1()
+                .border_color(if page_size_open {
+                    theme::accent()
+                } else {
+                    theme::border()
+                })
+                .bg(theme::surface())
+                .cursor_pointer()
+                .text_sm()
+                .text_color(theme::subtext())
+                .hover(|style| {
+                    style
+                        .border_color(theme::accent())
+                        .text_color(theme::text())
+                })
+                .child(SharedString::from(format!("{page_size} 条/页")))
+                .child(icon(IconName::ChevronDown, theme::muted(), 11.))
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    toggle_page_size(window, cx)
+                }),
+        )
+        .when(page_size_open, |control| {
+            control.child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::TopLeft)
+                        .offset(point(px(0.), px(4.)))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(size_popover),
+                )
+                .priority(20),
+            )
+        });
+
     bar.child(
         div()
             .flex()
             .flex_row()
             .items_center()
             .gap_1()
-            .ml_3()
+            .ml_2()
             .child(div().text_color(theme::subtext()).text_sm().child("跳至"))
-            .child(div().w(px(56.)).flex_none().child(page_input.clone()))
+            .child(div().w(px(48.)).flex_none().child(page_input.clone()))
             .child(div().text_color(theme::subtext()).text_sm().child("页")),
     )
+    .child(size_control)
     .child(div().flex_1())
     .when_some(total_items, |bar, total| {
         bar.child(
@@ -768,6 +1312,42 @@ pub fn pagination_bar(
                 .child(SharedString::from(format!("共 {total} 条"))),
         )
     })
+}
+
+fn pagination_nav_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    icon_name: IconName,
+    disabled: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let button = div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .child(icon(
+            icon_name,
+            if disabled {
+                theme::muted().alpha(0.45)
+            } else {
+                theme::subtext()
+            },
+            12.,
+        ));
+    if disabled {
+        button
+    } else {
+        button
+            .cursor_pointer()
+            .hover(|style| style.bg(theme::surface_hover()))
+            .on_click(move |_event, window, cx| on_click(window, cx))
+    }
 }
 
 pub fn pagination(prev: AnyElement, label: impl Into<SharedString>, next: AnyElement) -> gpui::Div {

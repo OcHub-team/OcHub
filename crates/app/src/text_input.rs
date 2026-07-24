@@ -242,6 +242,7 @@ pub struct TextInput {
     find_matches: Vec<Range<usize>>,
     find_active: Option<usize>,
     search_field: bool,
+    compact: bool,
     caret_blink: CaretBlink,
     /// 单行输入按下 Enter 时的提交回调（多行/代码模式仍插入换行）。
     on_enter: Option<EnterHandler>,
@@ -388,6 +389,7 @@ impl TextInput {
             find_matches: Vec::new(),
             find_active: None,
             search_field: false,
+            compact: false,
             caret_blink: CaretBlink::default(),
             on_enter: None,
         }
@@ -435,6 +437,12 @@ impl TextInput {
     /// Compact text field used by the editor's non-modal find bar.
     pub(crate) fn search_field(mut self) -> Self {
         self.search_field = true;
+        self
+    }
+
+    /// Compact single-line field for pagination and dense inline controls.
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
         self
     }
 
@@ -1531,10 +1539,16 @@ impl Render for TextInput {
             .text_color(theme::text())
             .text_sm()
             .line_height(px(20.))
-            .when(self.search_field, |element| element.px_2().py_1())
-            .when(!self.search_field, |element| element.px_3().py_2());
+            .when(self.search_field || self.compact, |element| {
+                element.px_2().py_1()
+            })
+            .when(!self.search_field && !self.compact, |element| {
+                element.px_3().py_2()
+            });
         if self.code {
             base.font_family("Menlo")
+                .relative()
+                .overflow_hidden()
                 .h(px(380.))
                 .items_start()
                 .child(
@@ -1546,6 +1560,10 @@ impl Render for TextInput {
                         .track_scroll(&self.scroll_handle)
                         .child(div().w_full().child(CodeElement { input: cx.entity() })),
                 )
+                .child(crate::scrollbar::VerticalScrollbar::new(
+                    ("text-input-scrollbar", cx.entity_id().as_u64()),
+                    self.scroll_handle.clone(),
+                ))
                 .when_some(find_bar, |element, bar| element.child(bar))
         } else {
             base.when(self.multiline, |s| s.h(px(132.)).items_start())

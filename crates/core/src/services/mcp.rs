@@ -37,6 +37,9 @@ impl McpService {
         if prev_apps.codex && !server.apps.codex {
             Self::remove_server_from_app(state, &server.id, &AppType::Codex)?;
         }
+        if prev_apps.grokbuild && !server.apps.grokbuild {
+            Self::remove_server_from_app(state, &server.id, &AppType::GrokBuild)?;
+        }
         if prev_apps.opencode && !server.apps.opencode {
             Self::remove_server_from_app(state, &server.id, &AppType::OpenCode)?;
         }
@@ -119,6 +122,13 @@ impl McpService {
                 // Codex uses TOML format, must use the correct function
                 mcp::sync_single_server_to_codex(&Default::default(), &server.id, &server.server)?;
             }
+            AppType::GrokBuild => {
+                mcp::sync_single_server_to_grokbuild(
+                    &Default::default(),
+                    &server.id,
+                    &server.server,
+                )?;
+            }
             AppType::OpenCode => {
                 mcp::sync_single_server_to_opencode(
                     &Default::default(),
@@ -158,6 +168,7 @@ impl McpService {
                 log::debug!("Claude Desktop 3P profiles do not use OcHub MCP sync, skipping");
             }
             AppType::Codex => mcp::remove_server_from_codex(id)?,
+            AppType::GrokBuild => mcp::remove_server_from_grokbuild(id)?,
             AppType::OpenCode => {
                 mcp::remove_server_from_opencode(id)?;
             }
@@ -393,6 +404,32 @@ impl McpService {
             }
         }
 
+        Ok(new_count)
+    }
+
+    /// 从 Grok Build 的 `[mcp_servers]` 导入 MCP。
+    pub fn import_from_grokbuild(state: &AppState) -> Result<usize, AppError> {
+        let mut temp_config = crate::db::legacy_json::MultiAppConfig::default();
+        let count = crate::mcp::import_from_grokbuild(&mut temp_config)?;
+        let mut new_count = 0;
+
+        if count > 0 {
+            if let Some(servers) = &temp_config.mcp.servers {
+                let mut existing = state.db.get_all_mcp_servers()?;
+                for server in servers.values() {
+                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                        let mut merged = existing_server.clone();
+                        merged.apps.grokbuild = true;
+                        merged
+                    } else {
+                        new_count += 1;
+                        server.clone()
+                    };
+                    state.db.save_mcp_server(&to_save)?;
+                    existing.insert(to_save.id.clone(), to_save);
+                }
+            }
+        }
         Ok(new_count)
     }
 }

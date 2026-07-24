@@ -7,8 +7,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    canvas, div, fill, point, prelude::*, px, size, App, Bounds, Context, FontWeight, IntoElement,
-    RenderOnce, Rgba, SharedString, Window,
+    canvas, div, fill, point, prelude::*, px, size, App, Bounds, ClipboardItem, Context,
+    FontWeight, IntoElement, RenderOnce, Rgba, SharedString, Window,
 };
 
 use crate::icons::{icon, IconName};
@@ -98,7 +98,10 @@ pub struct Notification {
     message: Option<SharedString>,
     source: Option<SharedString>,
     auto_dismiss_after: Option<Duration>,
-    created_at: Instant,
+    remaining: Option<Duration>,
+    countdown_started_at: Option<Instant>,
+    timer_epoch: u64,
+    hovered: bool,
 }
 
 pub struct NotificationRequest {
@@ -159,14 +162,21 @@ pub struct NotificationHost {
 struct ToastProgress {
     accent: Rgba,
     duration: Duration,
-    started_at: Instant,
+    remaining: Duration,
+    started_at: Option<Instant>,
 }
 
 impl ToastProgress {
-    fn new(accent: Rgba, duration: Duration, started_at: Instant) -> Self {
+    fn new(
+        accent: Rgba,
+        duration: Duration,
+        remaining: Duration,
+        started_at: Option<Instant>,
+    ) -> Self {
         Self {
             accent,
             duration,
+            remaining,
             started_at,
         }
     }
@@ -176,6 +186,7 @@ impl RenderOnce for ToastProgress {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let accent = self.accent;
         let duration = self.duration;
+        let remaining = self.remaining;
         let started_at = self.started_at;
 
         canvas(
@@ -187,7 +198,7 @@ impl RenderOnce for ToastProgress {
                 let progress = if cx.reduce_motion() {
                     1.
                 } else {
-                    remaining_fraction(duration, started_at.elapsed())
+                    remaining_duration_fraction(duration, remaining, started_at)
                 };
 
                 // A faint full-width rail remains visible when reduced motion is enabled.
@@ -216,7 +227,7 @@ impl RenderOnce for ToastProgress {
                     .corner_radii(px(0.5)),
                 );
 
-                if progress > 0. && !cx.reduce_motion() {
+                if progress > 0. && started_at.is_some() && !cx.reduce_motion() {
                     window.request_animation_frame();
                 }
             },
@@ -232,6 +243,18 @@ fn remaining_fraction(duration: Duration, elapsed: Duration) -> f32 {
     }
 
     (duration.saturating_sub(elapsed).as_secs_f32() / duration.as_secs_f32()).clamp(0., 1.)
+}
+
+fn remaining_duration_fraction(
+    duration: Duration,
+    remaining: Duration,
+    started_at: Option<Instant>,
+) -> f32 {
+    let elapsed = started_at.map_or(Duration::ZERO, |started_at| started_at.elapsed());
+    remaining_fraction(
+        duration,
+        duration.saturating_sub(remaining.saturating_sub(elapsed)),
+    )
 }
 
 fn auto_dismiss_timeout(
@@ -308,7 +331,7 @@ impl NotificationHost {
         self.next_id += 1;
 
         let timeout = auto_dismiss_timeout(request.level, request.persistent, request.timeout);
-        let created_at = Instant::now();
+        let countdown_started_at = timeout.map(|_| Instant::now());
         let notification = Notification {
             id,
             level: request.level,
@@ -316,7 +339,10 @@ impl NotificationHost {
             message: request.message,
             source: request.source,
             auto_dismiss_after: timeout,
-            created_at,
+            remaining: timeout,
+            countdown_started_at,
+            timer_epoch: 0,
+            hovered: false,
         };
 
         self.visible.push_front(notification.clone());
@@ -329,18 +355,64 @@ impl NotificationHost {
         }
 
         if let Some(timeout) = timeout {
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(timeout).await;
-                this.update(cx, |this, cx| {
-                    this.dismiss(id);
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
+            Self::schedule_dismiss(id, timeout, 0, cx);
         }
 
         id
+    }
+
+    fn schedule_dismiss(id: u64, timeout: Duration, timer_epoch: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(timeout).await;
+            this.update(cx, |this, cx| {
+                let should_dismiss = this.visible.iter().any(|notification| {
+                    notification.id == id
+                        && notification.timer_epoch == timer_epoch
+                        && !notification.hovered
+                });
+                if should_dismiss {
+                    this.dismiss(id);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn set_hovered(&mut self, id: u64, hovered: bool, cx: &mut Context<Self>) {
+        let mut resume = None;
+        let mut dismiss_now = false;
+        if let Some(notification) = self.visible.iter_mut().find(|item| item.id == id) {
+            if notification.hovered == hovered {
+                return;
+            }
+
+            notification.hovered = hovered;
+            notification.timer_epoch = notification.timer_epoch.wrapping_add(1);
+            if hovered {
+                if let (Some(remaining), Some(started_at)) = (
+                    notification.remaining.as_mut(),
+                    notification.countdown_started_at.take(),
+                ) {
+                    *remaining = remaining.saturating_sub(started_at.elapsed());
+                }
+            } else if let Some(remaining) = notification.remaining {
+                if remaining.is_zero() {
+                    dismiss_now = true;
+                } else {
+                    notification.countdown_started_at = Some(Instant::now());
+                    resume = Some((remaining, notification.timer_epoch));
+                }
+            }
+        }
+
+        if dismiss_now {
+            self.dismiss(id);
+        } else if let Some((remaining, timer_epoch)) = resume {
+            Self::schedule_dismiss(id, remaining, timer_epoch, cx);
+        }
+        cx.notify();
     }
 
     pub fn dismiss(&mut self, id: u64) {
@@ -370,7 +442,17 @@ impl NotificationHost {
         let (bg, accent, fg, icon_name) = notification.level.colors();
         let element_id = SharedString::from(format!("notification-{id}"));
         let auto_dismiss_after = notification.auto_dismiss_after;
-        let created_at = notification.created_at;
+        let remaining = notification.remaining;
+        let countdown_started_at = notification.countdown_started_at;
+        let copy_text = [
+            Some(notification.title.as_ref()),
+            notification.message.as_deref(),
+            notification.source.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
 
         div()
             .id(element_id)
@@ -384,6 +466,9 @@ impl NotificationHost {
             .border_color(accent.alpha(0.32))
             .bg(bg.alpha(0.96))
             .shadow(theme::shadow_popover())
+            .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                this.set_hovered(id, *hovered, cx);
+            }))
             .child(
                 div()
                     .flex()
@@ -440,23 +525,51 @@ impl NotificationHost {
                     )
                     .child(
                         div()
-                            .id(("notification-close", id))
-                            .role(gpui::Role::Button)
-                            .aria_label("关闭通知")
                             .flex()
+                            .flex_row()
                             .items_center()
-                            .justify_center()
-                            .w(px(22.))
-                            .h(px(22.))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .text_color(theme::muted())
-                            .hover(|s| s.bg(accent.alpha(0.12)).text_color(theme::text()))
-                            .child(icon(IconName::Close, theme::muted(), 13.))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.dismiss(id);
-                                cx.notify();
-                            })),
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id(("notification-copy", id))
+                                    .role(gpui::Role::Button)
+                                    .aria_label("复制通知内容")
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(22.))
+                                    .h(px(22.))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .text_color(theme::muted())
+                                    .hover(|s| s.bg(accent.alpha(0.12)).text_color(theme::text()))
+                                    .child(icon(IconName::Copy, theme::muted(), 13.))
+                                    .on_click(move |_event, _window, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copy_text.clone(),
+                                        ));
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id(("notification-close", id))
+                                    .role(gpui::Role::Button)
+                                    .aria_label("关闭通知")
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(22.))
+                                    .h(px(22.))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .text_color(theme::muted())
+                                    .hover(|s| s.bg(accent.alpha(0.12)).text_color(theme::text()))
+                                    .child(icon(IconName::Close, theme::muted(), 13.))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.dismiss(id);
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             )
             .when_some(auto_dismiss_after, |toast, timeout| {
@@ -467,7 +580,12 @@ impl NotificationHost {
                         .left(px(0.))
                         .right(px(0.))
                         .h(px(3.))
-                        .child(ToastProgress::new(accent, timeout, created_at)),
+                        .child(ToastProgress::new(
+                            accent,
+                            timeout,
+                            remaining.unwrap_or(timeout),
+                            countdown_started_at,
+                        )),
                 )
             })
     }

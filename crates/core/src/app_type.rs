@@ -19,6 +19,13 @@ pub enum AppType {
     )]
     ClaudeDesktop,
     Codex,
+    #[serde(
+        rename = "grokbuild",
+        alias = "grok-build",
+        alias = "grok_build",
+        alias = "grok"
+    )]
+    GrokBuild,
     OpenCode,
     OpenClaw,
     Hermes,
@@ -30,6 +37,7 @@ impl AppType {
             AppType::Claude => "claude",
             AppType::ClaudeDesktop => "claude-desktop",
             AppType::Codex => "codex",
+            AppType::GrokBuild => "grokbuild",
             AppType::OpenCode => "opencode",
             AppType::OpenClaw => "openclaw",
             AppType::Hermes => "hermes",
@@ -65,6 +73,7 @@ impl AppType {
             AppType::Claude,
             AppType::ClaudeDesktop,
             AppType::Codex,
+            AppType::GrokBuild,
             AppType::OpenCode,
             AppType::OpenClaw,
             AppType::Hermes,
@@ -81,6 +90,7 @@ impl FromStr for AppType {
             "claude" => Ok(AppType::Claude),
             "claude-desktop" | "claude_desktop" | "claudeDesktop" => Ok(AppType::ClaudeDesktop),
             "codex" => Ok(AppType::Codex),
+            "grokbuild" | "grok-build" | "grok_build" | "grok" => Ok(AppType::GrokBuild),
             "opencode" => Ok(AppType::OpenCode),
             "openclaw" => Ok(AppType::OpenClaw),
             "hermes" => Ok(AppType::Hermes),
@@ -113,6 +123,7 @@ mod tests {
         assert!(AppType::Hermes.is_additive_mode());
         assert!(!AppType::Claude.is_additive_mode());
         assert!(!AppType::Codex.is_additive_mode());
+        assert!(!AppType::GrokBuild.is_additive_mode());
         assert!(!AppType::ClaudeDesktop.is_additive_mode());
     }
 
@@ -122,5 +133,16 @@ mod tests {
         assert_eq!(v, "\"claude-desktop\"");
         let back: AppType = serde_json::from_str("\"claude_desktop\"").unwrap();
         assert_eq!(back, AppType::ClaudeDesktop);
+    }
+
+    #[test]
+    fn grokbuild_aliases_normalize() {
+        for alias in ["grokbuild", "grok-build", "grok_build", "grok"] {
+            assert_eq!(AppType::from_str(alias).unwrap(), AppType::GrokBuild);
+        }
+        assert_eq!(
+            serde_json::to_string(&AppType::GrokBuild).unwrap(),
+            "\"grokbuild\""
+        );
     }
 }

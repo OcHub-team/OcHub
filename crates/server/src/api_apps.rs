@@ -81,6 +81,7 @@ async fn mcp_import(
     let count = match parse_app(&app)? {
         AppType::Claude | AppType::ClaudeDesktop => McpService::import_from_claude(&s.app)?,
         AppType::Codex => McpService::import_from_codex(&s.app)?,
+        AppType::GrokBuild => McpService::import_from_grokbuild(&s.app)?,
         AppType::OpenCode => McpService::import_from_opencode(&s.app)?,
         AppType::Hermes => McpService::import_from_hermes(&s.app)?,
         AppType::OpenClaw => 0,

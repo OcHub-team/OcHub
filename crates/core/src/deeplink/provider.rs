@@ -155,6 +155,7 @@ pub(crate) fn build_provider_from_request(
     let settings_config = match app_type {
         AppType::Claude | AppType::ClaudeDesktop => build_claude_settings(request),
         AppType::Codex => build_codex_settings(request),
+        AppType::GrokBuild => build_grokbuild_settings(request),
         AppType::OpenCode => build_opencode_settings(request),
         AppType::OpenClaw => build_additive_app_settings(request),
         AppType::Hermes => build_hermes_settings(request),
@@ -396,6 +397,30 @@ requires_openai_auth = true
         },
         "config": config_toml
     })
+}
+
+fn build_grokbuild_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
+    let profile = crate::apps::grokbuild::DEFAULT_MODEL;
+    let model = request.model.as_deref().unwrap_or(profile);
+    let endpoint = get_primary_endpoint(request);
+    let name = request.name.as_deref().unwrap_or("Grok Build");
+    let mut document = toml_edit::DocumentMut::new();
+    document["models"] = toml_edit::table();
+    document["model"] = toml_edit::table();
+    document["models"]["default"] = toml_edit::value(profile);
+    document["model"]
+        .as_table_mut()
+        .expect("Grok model registry is a TOML table")
+        .insert(profile, toml_edit::Item::Table(toml_edit::Table::new()));
+    document["model"][profile]["model"] = toml_edit::value(model);
+    document["model"][profile]["base_url"] = toml_edit::value(endpoint);
+    document["model"][profile]["name"] = toml_edit::value(name);
+    document["model"][profile]["api_key"] =
+        toml_edit::value(request.api_key.as_deref().unwrap_or(""));
+    document["model"][profile]["api_backend"] = toml_edit::value("responses");
+    document["model"][profile]["context_window"] =
+        toml_edit::value(crate::apps::grokbuild::DEFAULT_CONTEXT_WINDOW);
+    json!({ "config": document.to_string() })
 }
 
 /// Build OpenCode settings configuration

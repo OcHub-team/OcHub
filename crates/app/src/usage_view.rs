@@ -27,7 +27,8 @@ use crate::layout;
 use crate::text_input::TextInput;
 use crate::theme;
 
-const LOG_PAGE_SIZE: u32 = 20;
+const DEFAULT_LOG_PAGE_SIZE: u32 = 20;
+const LOG_PAGE_SIZE_OPTIONS: &[u32] = &[20, 50, 100];
 const PRICING_APPS: [&str; 2] = ["claude", "codex"];
 const DATETIME_PICKER_GAP: f32 = 4.;
 
@@ -64,6 +65,7 @@ fn load_usage_data(
     model_filter: Option<&str>,
     status_filter: Option<u16>,
     log_page: u32,
+    log_page_size: u32,
 ) -> UsageData {
     let mut errors = Vec::new();
 
@@ -87,7 +89,7 @@ fn load_usage_data(
         start_date: start,
         end_date: end,
     };
-    let (logs, log_total) = match app.db.get_request_logs(&filters, log_page, LOG_PAGE_SIZE) {
+    let (logs, log_total) = match app.db.get_request_logs(&filters, log_page, log_page_size) {
         Ok(page) => (page.data, page.total),
         Err(err) => {
             errors.push(format!("加载请求日志失败: {err}"));
@@ -269,17 +271,21 @@ pub struct UsageView {
     status_filter: Option<u16>,
     section: UsageSection,
     log_page: u32,
+    log_page_size: u32,
     selected_log: Option<RequestLogDetail>,
     show_trend: bool,
     show_scope_options: bool,
     show_pricing: bool,
     show_stream_config: bool,
     open_filter_popover: Option<FilterPopover>,
+    log_page_size_open: bool,
     active_datetime_picker: Option<RangeEndpoint>,
     picker_year: i32,
     picker_month: u32,
     picker_hour_scroll: ScrollHandle,
     picker_minute_scroll: ScrollHandle,
+    provider_filter_scroll: ScrollHandle,
+    model_filter_scroll: ScrollHandle,
     /// 待确认删除的定价模型 ID；`Some` 时展示确认模态。
     confirm_delete_pricing: Option<String>,
     pricing_sources: BTreeMap<String, String>,
@@ -329,17 +335,21 @@ impl UsageView {
             status_filter: None,
             section: UsageSection::Logs,
             log_page: 0,
+            log_page_size: DEFAULT_LOG_PAGE_SIZE,
             selected_log: None,
             show_trend: true,
             show_scope_options: false,
             show_pricing: false,
             show_stream_config: false,
             open_filter_popover: None,
+            log_page_size_open: false,
             active_datetime_picker: None,
             picker_year: now.year(),
             picker_month: now.month(),
             picker_hour_scroll: ScrollHandle::new(),
             picker_minute_scroll: ScrollHandle::new(),
+            provider_filter_scroll: ScrollHandle::new(),
+            model_filter_scroll: ScrollHandle::new(),
             confirm_delete_pricing: None,
             pricing_sources: PRICING_APPS
                 .iter()
@@ -356,7 +366,7 @@ impl UsageView {
             stream_timeout_secs: cx.new(|cx| text_input(cx, "8", "8")),
             stream_max_retries: cx.new(|cx| text_input(cx, "1", "1")),
             stream_degraded_threshold_ms: cx.new(|cx| text_input(cx, "6000", "6000")),
-            log_page_input: cx.new(|cx| text_input(cx, "页码", "")),
+            log_page_input: cx.new(|cx| text_input(cx, "页码", "").compact()),
             range_start_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             range_end_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             load_error: false,
@@ -369,7 +379,7 @@ impl UsageView {
             let text = input_value(&this.log_page_input, cx);
             if let Ok(target) = text.parse::<u32>() {
                 if target >= 1 {
-                    let total_pages = this.log_total.div_ceil(LOG_PAGE_SIZE).max(1);
+                    let total_pages = this.log_total.div_ceil(this.log_page_size).max(1);
                     this.set_log_page((target - 1).min(total_pages - 1), cx);
                 }
             }
@@ -403,6 +413,7 @@ impl UsageView {
         let model_filter = self.model_filter.clone();
         let status_filter = self.status_filter;
         let log_page = self.log_page;
+        let log_page_size = self.log_page_size;
         cx.spawn(async move |this, cx| {
             let data = cx
                 .background_spawn(async move {
@@ -415,6 +426,7 @@ impl UsageView {
                         model_filter.as_deref(),
                         status_filter,
                         log_page,
+                        log_page_size,
                     )
                 })
                 .await;
@@ -722,7 +734,24 @@ impl UsageView {
     fn set_log_page(&mut self, page: u32, cx: &mut Context<Self>) {
         self.log_page = page;
         self.selected_log = None;
+        self.log_page_size_open = false;
         self.reload(cx);
+        cx.notify();
+    }
+
+    fn toggle_log_page_size(&mut self, cx: &mut Context<Self>) {
+        self.log_page_size_open = !self.log_page_size_open;
+        cx.notify();
+    }
+
+    fn set_log_page_size(&mut self, page_size: u32, cx: &mut Context<Self>) {
+        if self.log_page_size != page_size {
+            self.log_page_size = page_size;
+            self.log_page = 0;
+            self.selected_log = None;
+            self.reload(cx);
+        }
+        self.log_page_size_open = false;
         cx.notify();
     }
 
@@ -954,6 +983,52 @@ impl UsageView {
     }
 
     fn render_datetime_picker(
+        &self,
+        endpoint: RangeEndpoint,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let selected = self.endpoint_datetime(endpoint, cx);
+        let picker_id = match endpoint {
+            RangeEndpoint::Start => "usage-start-datetime",
+            RangeEndpoint::End => "usage-end-datetime",
+        };
+        let shift_month = cx.listener(|this, delta: &i32, _window, cx| {
+            this.shift_picker_month(*delta, cx);
+        });
+        let select_date = cx.listener(move |this, date: &NaiveDate, _window, cx| {
+            this.select_picker_date(endpoint, *date, cx);
+        });
+        let select_hour = cx.listener(move |this, hour: &u32, _window, cx| {
+            this.select_picker_hour(endpoint, *hour, cx);
+        });
+        let select_minute = cx.listener(move |this, minute: &u32, _window, cx| {
+            this.select_picker_minute(endpoint, *minute, cx);
+        });
+        let select_today = cx.listener(move |this, _event: &(), _window, cx| {
+            this.select_picker_today(endpoint, cx);
+        });
+        let clear = cx.listener(move |this, _event: &(), _window, cx| {
+            this.clear_picker_value(endpoint, cx);
+        });
+
+        components::datetime_picker(
+            picker_id,
+            selected,
+            self.picker_year,
+            self.picker_month,
+            &self.picker_hour_scroll,
+            &self.picker_minute_scroll,
+            move |delta, window, cx| shift_month(&delta, window, cx),
+            move |date, window, cx| select_date(&date, window, cx),
+            move |hour, window, cx| select_hour(&hour, window, cx),
+            move |minute, window, cx| select_minute(&minute, window, cx),
+            move |window, cx| select_today(&(), window, cx),
+            move |window, cx| clear(&(), window, cx),
+        )
+    }
+
+    #[allow(dead_code)]
+    fn render_datetime_picker_legacy(
         &self,
         endpoint: RangeEndpoint,
         cx: &mut Context<Self>,
@@ -1225,7 +1300,7 @@ impl UsageView {
             .relative()
             .w_full()
             .child(
-                datetime_filter_field(
+                components::datetime_filter_field(
                     "usage-start-datetime-field",
                     "开始时间",
                     self.range_start_input.clone(),
@@ -1261,7 +1336,7 @@ impl UsageView {
             .relative()
             .w_full()
             .child(
-                datetime_filter_field(
+                components::datetime_filter_field(
                     "usage-end-datetime-field",
                     "结束时间",
                     self.range_end_input.clone(),
@@ -1354,7 +1429,7 @@ impl UsageView {
                     deferred(
                         anchored()
                             .anchor(Anchor::TopLeft)
-                            .offset(point(px(0.), px(40.)))
+                            .offset(point(px(0.), px(4.)))
                             .snap_to_window_with_margin(px(8.))
                             .child(time_popover),
                     )
@@ -1364,9 +1439,11 @@ impl UsageView {
 
         let provider_open = self.open_filter_popover == Some(FilterPopover::Provider);
         let mut provider_popover = filter_popover_panel("usage-provider-popover", 240.)
+            .relative()
             .p_1()
             .max_h(px(280.))
             .overflow_y_scroll()
+            .track_scroll(&self.provider_filter_scroll)
             .child(
                 dropdown_option(
                     "usage-provider-all",
@@ -1393,6 +1470,10 @@ impl UsageView {
                 })),
             );
         }
+        provider_popover = provider_popover.child(crate::scrollbar::VerticalScrollbar::new(
+            "usage-provider-options-scrollbar",
+            self.provider_filter_scroll.clone(),
+        ));
         if self.provider_options.is_empty() {
             provider_popover = provider_popover.child(
                 div()
@@ -1440,7 +1521,7 @@ impl UsageView {
                     deferred(
                         anchored()
                             .anchor(Anchor::TopLeft)
-                            .offset(point(px(0.), px(40.)))
+                            .offset(point(px(0.), px(4.)))
                             .snap_to_window_with_margin(px(8.))
                             .child(provider_popover),
                     )
@@ -1450,9 +1531,11 @@ impl UsageView {
 
         let model_open = self.open_filter_popover == Some(FilterPopover::Model);
         let mut model_popover = filter_popover_panel("usage-model-popover", 240.)
+            .relative()
             .p_1()
             .max_h(px(280.))
             .overflow_y_scroll()
+            .track_scroll(&self.model_filter_scroll)
             .child(
                 dropdown_option("usage-model-all", "全部模型", self.model_filter.is_none())
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -1485,6 +1568,10 @@ impl UsageView {
                     .child("当前时间范围内暂无模型"),
             );
         }
+        model_popover = model_popover.child(crate::scrollbar::VerticalScrollbar::new(
+            "usage-model-options-scrollbar",
+            self.model_filter_scroll.clone(),
+        ));
         model_popover =
             model_popover.on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
                 if this.open_filter_popover == Some(FilterPopover::Model) {
@@ -1522,7 +1609,7 @@ impl UsageView {
                     deferred(
                         anchored()
                             .anchor(Anchor::TopLeft)
-                            .offset(point(px(0.), px(40.)))
+                            .offset(point(px(0.), px(4.)))
                             .snap_to_window_with_margin(px(8.))
                             .child(model_popover),
                     )
@@ -1585,7 +1672,7 @@ impl UsageView {
                     deferred(
                         anchored()
                             .anchor(Anchor::TopLeft)
-                            .offset(point(px(0.), px(40.)))
+                            .offset(point(px(0.), px(4.)))
                             .snap_to_window_with_margin(px(8.))
                             .child(status_popover),
                     )
@@ -2169,7 +2256,7 @@ impl UsageView {
     }
 
     fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let total_pages = self.log_total.div_ceil(LOG_PAGE_SIZE).max(1);
+        let total_pages = self.log_total.div_ceil(self.log_page_size).max(1);
         let page = self.log_page.min(total_pages - 1);
         let row_count = self.logs.len();
         let rows = self
@@ -2249,13 +2336,24 @@ impl UsageView {
         let go = cx.listener(|this, page: &u32, _window, cx| {
             this.set_log_page(*page, cx);
         });
+        let toggle_page_size = cx.listener(|this, _event: &(), _window, cx| {
+            this.toggle_log_page_size(cx);
+        });
+        let set_page_size = cx.listener(|this, page_size: &u32, _window, cx| {
+            this.set_log_page_size(*page_size, cx);
+        });
         let pagination = components::pagination_bar(
             "usage-log-pages",
             page,
             total_pages,
             Some(self.log_total as u64),
+            self.log_page_size,
+            LOG_PAGE_SIZE_OPTIONS,
+            self.log_page_size_open,
             &self.log_page_input,
             move |page, window, cx| go(&page, window, cx),
+            move |window, cx| toggle_page_size(&(), window, cx),
+            move |page_size, window, cx| set_page_size(&page_size, window, cx),
         );
 
         div()
@@ -2863,10 +2961,14 @@ impl Render for UsageView {
                     })),
                 ),
             )
-            .child(layout::wide_virtual_body(gpui::list(
-                self.list_state.clone(),
-                cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
-            )))
+            .child(layout::wide_virtual_body(
+                "usage-body",
+                gpui::list(
+                    self.list_state.clone(),
+                    cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
+                ),
+                &self.list_state,
+            ))
             .when_some(self.confirm_delete_pricing.clone(), |root, model_id| {
                 root.child(components::modal_overlay(
                     components::modal_card()
@@ -3193,51 +3295,6 @@ fn time_value_button(
             .text_color(theme::text())
             .hover(|s| s.bg(theme::surface_hover()))
     }
-}
-
-fn datetime_filter_field(
-    id: impl Into<ElementId>,
-    label: &'static str,
-    input: Entity<TextInput>,
-    expanded: bool,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .aria_label(label)
-        .aria_expanded(expanded)
-        .flex()
-        .flex_col()
-        .gap_1()
-        .w_full()
-        .cursor_pointer()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme::subtext())
-                .child(label),
-        )
-        .child(
-            div().relative().w_full().child(input).child(
-                div()
-                    .absolute()
-                    .right(px(10.))
-                    .top(px(10.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme::surface())
-                    .child(icon(
-                        IconName::Calendar,
-                        if expanded {
-                            theme::accent()
-                        } else {
-                            theme::muted()
-                        },
-                        15.,
-                    )),
-            ),
-        )
 }
 
 fn dropdown_option(
