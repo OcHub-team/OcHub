@@ -76,6 +76,12 @@ gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = 
 zed-text = { git = "https://github.com/zed-industries/zed", package = "text", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "a736da2a80964cf1b2f605bd7e8805f8da1acc52", features = ["font-kit", "runtime_shaders"] }
 
+[profile.qa]
+inherits = "release"
+opt-level = 2
+debug = 1
+incremental = true
+
 # Mirror Zed's own [patch.crates-io]: the `util` crate (pulled in via
 # `zed-text`) needs Zed's async-process fork (`Child::adopt_raw_pid`).
 [patch.crates-io]

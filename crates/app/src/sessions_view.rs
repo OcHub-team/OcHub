@@ -1361,6 +1361,9 @@ impl SessionsView {
             .max_h(px(280.))
             .overflow_y_scroll()
             .track_scroll(&self.app_filter_scroll)
+            .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+                self.app_filter_scroll.clone(),
+            ))
             .p_1()
             .child(
                 session_dropdown_option("sessions-app-all", "全部应用", self.app_filter.is_none())

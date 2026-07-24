@@ -1795,6 +1795,14 @@ impl Render for CodeEditor {
                     .h_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
+                    // Contain wheel gestures: without this, GPUI also scrolls
+                    // every scrollable ancestor under the pointer (modal body,
+                    // page), which reads as the whole page lurching.
+                    .on_scroll_wheel(cx.listener(|this, _event, _window, cx| {
+                        if this.scroll_handle.max_offset().y > px(0.) {
+                            cx.stop_propagation();
+                        }
+                    }))
                     .child(div().w_full().child(CodeEditorElement {
                         editor: cx.entity(),
                     })),

@@ -15,10 +15,10 @@ if pgrep -f "${executable_path}" >/dev/null 2>&1; then
 fi
 
 cd "${repo_root}"
-cargo build -p ochub-app
+cargo build --profile qa -p ochub-app
 
 mkdir -p "${macos_dir}" "${resources_dir}/assets"
-install -m 755 "target/debug/ochub" "${executable_path}"
+install -m 755 "target/qa/ochub" "${executable_path}"
 install -m 644 "scripts/qa/Info.plist" "${contents_dir}/Info.plist"
 rsync -a --delete "crates/app/assets/" "${resources_dir}/assets/"
 touch "${app_path}"

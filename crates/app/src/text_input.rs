@@ -229,8 +229,18 @@ pub struct TextInput {
     /// Code-editor mode: multiline rendering, monospace, line-number gutter.
     code: bool,
     /// Per-line shaped layouts captured during the last paint (code mode), used
-    /// for hit-testing and vertical cursor movement.
+    /// for hit-testing and vertical cursor movement. Only the scroll viewport
+    /// (plus overdraw) is shaped; `code_first_row` maps buffer rows onto it.
     code_lines: Vec<ShapedLine>,
+    /// Buffer row represented by `code_lines[0]`.
+    code_first_row: usize,
+    /// Cached line split of `content` (code mode). Rebuilt only when the
+    /// content changes, so scroll and caret-blink frames never re-split or
+    /// re-allocate the whole document.
+    code_line_cache: Vec<SharedString>,
+    /// The content the line cache was built from; equality-checked to detect
+    /// staleness (SharedString compare is a cheap pointer-or-memcmp).
+    code_line_cache_source: Option<SharedString>,
     /// Window-space origin of the text column (right of the gutter), last paint.
     code_origin: Option<Point<Pixels>>,
     code_line_height: Pixels,
@@ -379,6 +389,9 @@ impl TextInput {
             multiline: false,
             code: false,
             code_lines: Vec::new(),
+            code_first_row: 0,
+            code_line_cache: Vec::new(),
+            code_line_cache_source: None,
             code_origin: None,
             code_line_height: px(20.),
             scroll_handle: ScrollHandle::new(),
@@ -497,6 +510,25 @@ impl TextInput {
         (line, offset.saturating_sub(starts[line]))
     }
 
+    /// Rebuild the cached per-line split when the content changed. Code-mode
+    /// rendering reads from this cache every frame.
+    fn ensure_code_line_cache(&mut self) {
+        if self.code_line_cache_source.as_ref() == Some(&self.content) {
+            return;
+        }
+        self.code_line_cache = self
+            .content
+            .split('\n')
+            .map(|line| SharedString::from(line.to_string()))
+            .collect();
+        self.code_line_cache_source = Some(self.content.clone());
+    }
+
+    /// Shaped layout for a buffer row, if it falls inside the shaped window.
+    fn code_line(&self, row: usize) -> Option<&ShapedLine> {
+        self.code_lines.get(row.checked_sub(self.code_first_row)?)
+    }
+
     /// Hit-test a window-space point to a byte offset (code mode).
     fn code_offset_for_position(&self, position: Point<Pixels>) -> usize {
         let Some(origin) = self.code_origin else {
@@ -511,10 +543,15 @@ impl TextInput {
         if line_idx < 0 {
             line_idx = 0;
         }
-        let line_idx = (line_idx as usize).min(self.code_lines.len() - 1);
         let starts = self.line_starts();
+        let line_idx = (line_idx as usize).min(starts.len().saturating_sub(1));
         let local_x = position.x - origin.x;
-        let col = self.code_lines[line_idx].closest_index_for_x(local_x);
+        // Rows outside the shaped window (only reachable mid-drag before the
+        // follow-scroll catches up) fall back to the line start.
+        let col = self
+            .code_line(line_idx)
+            .map(|line| line.closest_index_for_x(local_x))
+            .unwrap_or(0);
         let line_len = self.line_len(line_idx, &starts);
         starts[line_idx] + col.min(line_len)
     }
@@ -530,15 +567,13 @@ impl TextInput {
             return;
         }
         let x = self
-            .code_lines
-            .get(line)
+            .code_line(line)
             .map(|l| l.x_for_index(col))
             .unwrap_or(px(0.));
         let starts = self.line_starts();
         let target = line - 1;
         let target_col = self
-            .code_lines
-            .get(target)
+            .code_line(target)
             .map(|l| l.closest_index_for_x(x))
             .unwrap_or(0);
         let offset = starts[target] + target_col.min(self.line_len(target, &starts));
@@ -557,14 +592,12 @@ impl TextInput {
             return;
         }
         let x = self
-            .code_lines
-            .get(line)
+            .code_line(line)
             .map(|l| l.x_for_index(col))
             .unwrap_or(px(0.));
         let target = line + 1;
         let target_col = self
-            .code_lines
-            .get(target)
+            .code_line(target)
             .map(|l| l.closest_index_for_x(x))
             .unwrap_or(0);
         let offset = starts[target] + target_col.min(self.line_len(target, &starts));
@@ -1558,6 +1591,15 @@ impl Render for TextInput {
                         .h_full()
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll_handle)
+                        // GPUI applies wheel deltas to every scrollable hitbox
+                        // under the pointer, so an editor nested in a scrolling
+                        // page would drag the page along. Once this editor can
+                        // scroll, the gesture belongs to it alone.
+                        .on_scroll_wheel(cx.listener(|this, _event, _window, cx| {
+                            if this.scroll_handle.max_offset().y > px(0.) {
+                                cx.stop_propagation();
+                            }
+                        }))
                         .child(div().w_full().child(CodeElement { input: cx.entity() })),
                 )
                 .child(crate::scrollbar::VerticalScrollbar::new(
@@ -1581,12 +1623,32 @@ impl Focusable for TextInput {
 
 #[cfg(test)]
 mod tests {
-    use gpui::px;
+    use gpui::{point, px, size, Bounds};
 
     use super::{
-        closest_match, display_offset, find_matches, horizontal_scroll_for_caret,
-        raw_offset_from_display, CaretBlink,
+        closest_match, code_visible_rows, display_offset, find_matches,
+        horizontal_scroll_for_caret, raw_offset_from_display, CaretBlink,
     };
+
+    #[test]
+    fn code_mode_shapes_only_viewport_rows_with_small_overdraw() {
+        let content = Bounds::new(point(px(10.), px(100.)), size(px(600.), px(20_000.)));
+        let viewport = Bounds::new(point(px(10.), px(300.)), size(px(600.), px(200.)));
+        assert_eq!(code_visible_rows(content, viewport, px(20.), 1_000), 7..23);
+    }
+
+    #[test]
+    fn code_mode_caps_first_layout_before_scroll_bounds_are_known() {
+        let content = Bounds::new(point(px(0.), px(0.)), size(px(600.), px(20_000.)));
+        assert_eq!(
+            code_visible_rows(content, Bounds::default(), px(20.), 1_000),
+            0..64
+        );
+        assert_eq!(
+            code_visible_rows(content, Bounds::default(), px(20.), 0),
+            0..0
+        );
+    }
 
     #[test]
     fn find_is_ascii_case_insensitive_and_preserves_utf8_offsets() {
@@ -1679,7 +1741,9 @@ struct CodeElement {
 }
 
 struct CodePrepaintState {
+    /// Shaped layouts for `first_row..first_row + lines.len()` only.
     lines: Vec<ShapedLine>,
+    first_row: usize,
     numbers: Vec<(ShapedLine, Pixels)>,
     selections: Vec<PaintQuad>,
     search_highlights: Vec<PaintQuad>,
@@ -1687,6 +1751,33 @@ struct CodePrepaintState {
     gutter: Pixels,
     line_height: Pixels,
     text_origin: Point<Pixels>,
+}
+
+/// Buffer rows worth shaping/painting: the scroll viewport plus a small
+/// overdraw. Falls back to a bounded prefix before the first layout pass.
+fn code_visible_rows(
+    content_bounds: Bounds<Pixels>,
+    viewport_bounds: Bounds<Pixels>,
+    line_height: Pixels,
+    row_count: usize,
+) -> Range<usize> {
+    if row_count == 0 {
+        return 0..0;
+    }
+    if viewport_bounds.size.height <= px(0.) || line_height <= px(0.) {
+        return 0..row_count.min(64);
+    }
+    const OVERDRAW: isize = 3;
+    let line_height = f32::from(line_height);
+    let first = (f32::from(viewport_bounds.top() - content_bounds.top()) / line_height).floor()
+        as isize
+        - OVERDRAW;
+    let last = (f32::from(viewport_bounds.bottom() - content_bounds.top()) / line_height).ceil()
+        as isize
+        + OVERDRAW;
+    let first = first.max(0) as usize;
+    let last = last.max(first as isize).min(row_count as isize) as usize;
+    first.min(row_count)..last
 }
 
 impl IntoElement for CodeElement {
@@ -1736,6 +1827,8 @@ impl Element for CodeElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        self.input
+            .update(cx, |input, _cx| input.ensure_code_line_cache());
         let input = self.input.read(cx);
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -1744,23 +1837,31 @@ impl Element for CodeElement {
         let muted: gpui::Hsla = theme::muted().opacity(0.85).into();
 
         let empty = input.content.is_empty();
-        let line_texts: Vec<SharedString> = if empty {
-            vec![input.placeholder.clone()]
+        let placeholder_line = [input.placeholder.clone()];
+        let line_texts: &[SharedString] = if empty {
+            &placeholder_line
         } else {
-            input
-                .content
-                .split('\n')
-                .map(|line| SharedString::from(line.to_string()))
-                .collect()
+            &input.code_line_cache
         };
         let line_count = line_texts.len();
         let digits = line_count.to_string().len().max(2);
         let gutter = px(18. + digits as f32 * 8.5);
         let text_origin = point(bounds.left() + gutter, bounds.top());
 
-        let mut lines = Vec::with_capacity(line_count);
-        let mut numbers = Vec::with_capacity(line_count);
-        for (i, text) in line_texts.iter().enumerate() {
+        // Shape only the rows the scroll viewport can show: shaping every row
+        // of a large document each frame is what made these editors janky.
+        let row_range = code_visible_rows(
+            bounds,
+            input.scroll_handle.bounds(),
+            line_height,
+            line_count,
+        );
+        let first_row = row_range.start;
+
+        let mut lines = Vec::with_capacity(row_range.len());
+        let mut numbers = Vec::with_capacity(row_range.len());
+        for i in row_range.clone() {
+            let text = &line_texts[i];
             let color = if empty { muted } else { text_color };
             let run = TextRun {
                 len: text.len(),
@@ -1799,7 +1900,8 @@ impl Element for CodeElement {
         if !empty {
             let starts = input.line_starts();
             for matched in &input.find_matches {
-                for (i, line) in lines.iter().enumerate() {
+                for (ix, line) in lines.iter().enumerate() {
+                    let i = first_row + ix;
                     let line_start = starts[i];
                     let line_end = line_start + input.line_len(i, &starts);
                     if matched.start > line_end || matched.end < line_start {
@@ -1827,7 +1929,8 @@ impl Element for CodeElement {
         let selection = input.selected_range.clone();
         if !selection.is_empty() && !empty {
             let starts = input.line_starts();
-            for (i, line) in lines.iter().enumerate() {
+            for (ix, line) in lines.iter().enumerate() {
+                let i = first_row + ix;
                 let line_start = starts[i];
                 let line_end = line_start + input.line_len(i, &starts);
                 if selection.start > line_end || selection.end < line_start {
@@ -1839,7 +1942,7 @@ impl Element for CodeElement {
                 let mut x1 = line.x_for_index(seg_end - line_start);
                 let includes_newline = selection.end > line_end;
                 if includes_newline {
-                    x1 = x1 + px(6.);
+                    x1 += px(6.);
                 }
                 if x1 > x0 {
                     let y = bounds.top() + line_height * i as f32;
@@ -1866,8 +1969,9 @@ impl Element for CodeElement {
             ))
         } else {
             let (line, col) = input.line_index_for_offset(input.cursor_offset());
-            let cursor_x = lines
-                .get(line)
+            let cursor_x = line
+                .checked_sub(first_row)
+                .and_then(|ix| lines.get(ix))
                 .map(|l| l.x_for_index(col))
                 .unwrap_or(px(0.));
             let y = bounds.top() + line_height * line as f32;
@@ -1882,6 +1986,7 @@ impl Element for CodeElement {
 
         CodePrepaintState {
             lines,
+            first_row,
             numbers,
             selections,
             search_highlights,
@@ -1927,9 +2032,9 @@ impl Element for CodeElement {
 
         let line_height = prepaint.line_height;
         let text_x = prepaint.text_origin.x;
-        for (i, line) in prepaint.lines.iter().enumerate() {
-            let y = bounds.top() + line_height * i as f32;
-            if let Some((number, num_x)) = prepaint.numbers.get(i) {
+        for (ix, line) in prepaint.lines.iter().enumerate() {
+            let y = bounds.top() + line_height * (prepaint.first_row + ix) as f32;
+            if let Some((number, num_x)) = prepaint.numbers.get(ix) {
                 number
                     .paint(
                         point(*num_x, y),
@@ -1959,9 +2064,11 @@ impl Element for CodeElement {
         }
 
         let lines = std::mem::take(&mut prepaint.lines);
+        let first_row = prepaint.first_row;
         let text_origin = prepaint.text_origin;
         self.input.update(cx, |input, _cx| {
             input.code_lines = lines;
+            input.code_first_row = first_row;
             input.code_origin = Some(text_origin);
             input.code_line_height = line_height;
             input.last_bounds = Some(bounds);

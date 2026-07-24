@@ -1182,7 +1182,10 @@ impl UsageView {
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .track_scroll(&self.picker_hour_scroll);
+            .track_scroll(&self.picker_hour_scroll)
+            .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+                self.picker_hour_scroll.clone(),
+            ));
         for hour in 0..24u32 {
             hour_options = hour_options.child(
                 time_value_button(
@@ -1207,7 +1210,10 @@ impl UsageView {
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .track_scroll(&self.picker_minute_scroll);
+            .track_scroll(&self.picker_minute_scroll)
+            .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+                self.picker_minute_scroll.clone(),
+            ));
         for minute in 0..60u32 {
             minute_options = minute_options.child(
                 time_value_button(
@@ -1444,6 +1450,9 @@ impl UsageView {
             .max_h(px(280.))
             .overflow_y_scroll()
             .track_scroll(&self.provider_filter_scroll)
+            .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+                self.provider_filter_scroll.clone(),
+            ))
             .child(
                 dropdown_option(
                     "usage-provider-all",
@@ -1536,6 +1545,9 @@ impl UsageView {
             .max_h(px(280.))
             .overflow_y_scroll()
             .track_scroll(&self.model_filter_scroll)
+            .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+                self.model_filter_scroll.clone(),
+            ))
             .child(
                 dropdown_option("usage-model-all", "全部模型", self.model_filter.is_none())
                     .on_click(cx.listener(|this, _event, _window, cx| {

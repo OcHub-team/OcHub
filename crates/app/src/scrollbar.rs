@@ -1,11 +1,11 @@
 //! Shared always-visible vertical scrollbar for tracked GPUI scroll containers.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::{
     canvas, div, point, prelude::*, px, quad, size, App, BorderStyle, Bounds, Context, Corners,
     Edges, ElementId, Hsla, IntoElement, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, RenderOnce, ScrollHandle, Window,
+    MouseUpEvent, Pixels, Point, Render, RenderOnce, ScrollHandle, ScrollWheelEvent, Task, Window,
 };
 
 use crate::theme;
@@ -24,6 +24,16 @@ pub trait ScrollableHandle: Clone + 'static {
     fn set_offset(&self, offset: Point<Pixels>);
     fn drag_started(&self) {}
     fn drag_ended(&self) {}
+}
+
+pub fn contain_vertical_scroll<T: ScrollableHandle>(
+    handle: T,
+) -> impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static {
+    move |_event, _window, cx| {
+        if handle.max_offset().y > px(0.) {
+            cx.stop_propagation();
+        }
+    }
 }
 
 impl ScrollableHandle for ScrollHandle {
@@ -157,8 +167,8 @@ struct VerticalScrollbarState<T: ScrollableHandle> {
     drag_offset: Option<Pixels>,
     hovered: bool,
     last_offset: Pixels,
-    active_until: Option<Instant>,
-    activity_epoch: u64,
+    scrolling: bool,
+    idle_task: Option<Task<()>>,
 }
 
 impl<T: ScrollableHandle> VerticalScrollbarState<T> {
@@ -169,8 +179,8 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
             drag_offset: None,
             hovered: false,
             last_offset,
-            active_until: None,
-            activity_epoch: 0,
+            scrolling: false,
+            idle_task: None,
         }
     }
 
@@ -182,20 +192,20 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
         )
     }
 
-    fn drag_to(&mut self, pointer_y: Pixels, cx: &mut Context<Self>) {
+    fn drag_to(&mut self, pointer_y: Pixels, window: &mut Window) {
         let (Some(scrollbar), Some(drag_offset)) = (self.geometry(), self.drag_offset) else {
             return;
         };
         let scroll = scroll_amount_for_thumb_top(&scrollbar, pointer_y - drag_offset);
         let current = self.handle.offset();
         self.handle.set_offset(point(current.x, -scroll));
-        cx.refresh_windows();
+        window.refresh();
     }
 
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(scrollbar) = self
@@ -211,7 +221,7 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
         } else {
             scrollbar.thumb_bounds.size.height * 0.5
         });
-        self.drag_to(event.position.y, cx);
+        self.drag_to(event.position.y, window);
         cx.stop_propagation();
         cx.notify();
     }
@@ -219,11 +229,11 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
     fn on_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.drag_offset.is_some() && event.pressed_button == Some(MouseButton::Left) {
-            self.drag_to(event.position.y, cx);
+            self.drag_to(event.position.y, window);
             cx.stop_propagation();
         }
     }
@@ -242,28 +252,19 @@ impl<T: ScrollableHandle> Render for VerticalScrollbarState<T> {
         let offset = self.handle.offset().y;
         if offset != self.last_offset {
             self.last_offset = offset;
-            self.active_until = Some(Instant::now() + SCROLL_ACTIVE_DURATION);
-            self.activity_epoch = self.activity_epoch.wrapping_add(1);
-            let activity_epoch = self.activity_epoch;
-            cx.spawn(async move |this, cx| {
+            self.scrolling = true;
+            self.idle_task = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(SCROLL_ACTIVE_DURATION).await;
                 this.update(cx, |this, cx| {
-                    if this.activity_epoch == activity_epoch {
-                        this.active_until = None;
-                        cx.notify();
-                    }
+                    this.scrolling = false;
+                    cx.notify();
                 })
                 .ok();
-            })
-            .detach();
+            }));
         }
 
         let handle = self.handle.clone();
-        let active = self.hovered
-            || self.drag_offset.is_some()
-            || self
-                .active_until
-                .is_some_and(|active_until| active_until > Instant::now());
+        let active = self.hovered || self.drag_offset.is_some() || self.scrolling;
         div()
             .id(("vertical-scrollbar", cx.entity_id().as_u64()))
             .absolute()

@@ -1013,6 +1013,9 @@ impl AppRoot {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.sidebar_scroll_handle)
+            .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+                self.sidebar_scroll_handle.clone(),
+            ))
             .pb_4()
             .child(Self::render_sidebar_group("应用", appearance))
             .child(

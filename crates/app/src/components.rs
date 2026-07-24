@@ -836,7 +836,10 @@ pub fn datetime_picker(
         .flex()
         .flex_col()
         .overflow_y_scroll()
-        .track_scroll(hour_scroll);
+        .track_scroll(hour_scroll)
+        .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+            hour_scroll.clone(),
+        ));
     for hour in 0..24u32 {
         let callback = on_select_hour.clone();
         hour_options = hour_options.child(
@@ -857,7 +860,10 @@ pub fn datetime_picker(
         .flex()
         .flex_col()
         .overflow_y_scroll()
-        .track_scroll(minute_scroll);
+        .track_scroll(minute_scroll)
+        .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+            minute_scroll.clone(),
+        ));
     for minute in 0..60u32 {
         let callback = on_select_minute.clone();
         minute_options = minute_options.child(

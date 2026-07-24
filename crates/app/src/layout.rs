@@ -12,7 +12,7 @@
 
 use gpui::{div, prelude::*, px, AnyElement, FontWeight, SharedString};
 
-use crate::scrollbar::VerticalScrollbar;
+use crate::scrollbar::{contain_vertical_scroll, VerticalScrollbar};
 use crate::theme;
 
 /// Max width of the centered content column, shared by every view so pages align.
@@ -76,6 +76,7 @@ pub fn scroll_body(
     handle: &gpui::ScrollHandle,
     column: impl IntoElement,
 ) -> gpui::Div {
+    let contained_handle = handle.clone();
     div()
         .relative()
         .flex()
@@ -96,6 +97,7 @@ pub fn scroll_body(
                 .min_w_0()
                 .overflow_y_scroll()
                 .track_scroll(handle)
+                .on_scroll_wheel(contain_vertical_scroll(contained_handle))
                 .child(column),
         )
         .child(VerticalScrollbar::new(
@@ -144,6 +146,7 @@ fn virtual_body_with_width(
     state: &gpui::ListState,
     max_width: f32,
 ) -> impl IntoElement {
+    let contained_state = state.clone();
     div()
         .relative()
         .flex()
@@ -163,6 +166,7 @@ fn virtual_body_with_width(
                 .min_h_0()
                 .w_full()
                 .max_w(px(max_width))
+                .on_scroll_wheel(contain_vertical_scroll(contained_state))
                 .child(
                     list.with_sizing_behavior(gpui::ListSizingBehavior::Auto)
                         .flex_1()

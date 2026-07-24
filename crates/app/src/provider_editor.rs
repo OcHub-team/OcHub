@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, prelude::*, px, uniform_list, Context, Entity, FontWeight, HighlightStyle, MouseButton,
-    ScrollHandle, SharedString, StyledText, Window,
+    div, prelude::*, px, relative, uniform_list, Context, Entity, FontWeight, HighlightStyle,
+    ListAlignment, ListState, MouseButton, Pixels, SharedString, StyledText, Task, Window,
 };
 use ochub_core::provider_config::{
     self, bool_val, str_val, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues,
@@ -96,14 +96,22 @@ struct PreviewCache {
 
 const PREVIEW_REFRESH_DELAY: Duration = Duration::from_millis(140);
 const EDITOR_MAX_WIDTH: f32 = 1320.;
-const EDITOR_SPLIT_MIN_WINDOW_WIDTH: f32 = 1500.;
+/// Side-by-side form + preview. 1500 left almost every real window in the
+/// cramped stacked mode; a 13" laptop should get the split.
+const EDITOR_SPLIT_MIN_WINDOW_WIDTH: f32 = 1200.;
 const EDITOR_STACK_GRID_MAX_WINDOW_WIDTH: f32 = 1050.;
+/// Preview pane share of the split row, bounded so it neither starves the
+/// form on narrow windows nor balloons on wide ones.
+const PREVIEW_SPLIT_FRACTION: f32 = 0.38;
+const PREVIEW_SPLIT_MIN_WIDTH: f32 = 400.;
+const PREVIEW_SPLIT_MAX_WIDTH: f32 = 560.;
 
 pub struct ProviderEditor {
     app: Arc<AppState>,
     app_type: AppType,
     codec: Box<dyn AppConfig>,
-    schema: Vec<FormSection>,
+    /// Shared so each frame's render iterates it without a deep clone.
+    schema: Arc<Vec<FormSection>>,
     /// Working form values; text/kv/grid inputs are pulled into this on demand.
     values: FormValues,
     /// The authoritative working document (`settingsConfig`) that form values
@@ -126,6 +134,9 @@ pub struct ProviderEditor {
     /// selection highlight only; applying a preset behaves exactly as before).
     selected_preset: Option<usize>,
     show_preview: bool,
+    /// Stacked (narrow-window) mode only: whether the preview pane is expanded
+    /// or collapsed to its one-line summary bar.
+    preview_expanded: bool,
     /// Collapsed fold regions in the preview pane: (file index, header line).
     preview_collapsed: HashSet<(usize, usize)>,
     /// Only the selected file is mounted; this keeps multi-file previews from
@@ -133,7 +144,7 @@ pub struct ProviderEditor {
     preview_active_file: usize,
     preview_cache: PreviewCache,
     preview_dirty: bool,
-    preview_refresh_epoch: usize,
+    preview_refresh_task: Option<Task<()>>,
     /// When `Some`, a modal code editor for one preview file is open.
     raw_edit: Option<RawEdit>,
     common_config_supported: bool,
@@ -143,7 +154,9 @@ pub struct ProviderEditor {
     convert_open: bool,
     error: Option<SharedString>,
     status: Option<SharedString>,
-    form_scroll_handle: ScrollHandle,
+    form_list_state: ListState,
+    form_stack_grid: bool,
+    form_official_login: bool,
 }
 
 impl ProviderEditor {
@@ -232,6 +245,7 @@ impl ProviderEditor {
             String::new()
         };
         let snippet_seed = original_snippet.clone();
+        let form_item_count = schema.len() + 3;
         let common_snippet = cx.new(|cx| {
             let mut input = TextInput::new(cx, "输入共享配置片段")
                 .code(true)
@@ -243,7 +257,7 @@ impl ProviderEditor {
             app,
             app_type,
             codec,
-            schema,
+            schema: Arc::new(schema),
             values,
             working_base,
             original_id,
@@ -259,11 +273,12 @@ impl ProviderEditor {
             next_row_id: 0,
             selected_preset: None,
             show_preview: true,
+            preview_expanded: false,
             preview_collapsed: HashSet::new(),
             preview_active_file: 0,
             preview_cache: PreviewCache::default(),
             preview_dirty: true,
-            preview_refresh_epoch: 0,
+            preview_refresh_task: None,
             raw_edit: None,
             common_config_supported,
             common_config_enabled,
@@ -272,7 +287,9 @@ impl ProviderEditor {
             convert_open: false,
             error: None,
             status: None,
-            form_scroll_handle: ScrollHandle::new(),
+            form_list_state: ListState::new(form_item_count, ListAlignment::Top, px(720.)),
+            form_stack_grid: false,
+            form_official_login: false,
         }
     }
 
@@ -385,6 +402,7 @@ impl ProviderEditor {
                 FieldKind::Select { .. } | FieldKind::Toggle => {}
             }
         }
+        self.form_list_state.remeasure();
     }
 
     fn observe_preview_input(input: &Entity<TextInput>, cx: &mut Context<Self>) {
@@ -399,23 +417,20 @@ impl ProviderEditor {
     /// document only after the user pauses briefly.
     fn schedule_preview_refresh(&mut self, cx: &mut Context<Self>) {
         self.preview_dirty = true;
-        self.preview_refresh_epoch = self.preview_refresh_epoch.wrapping_add(1);
-        let epoch = self.preview_refresh_epoch;
-        cx.spawn(async move |this, cx| {
+        self.preview_refresh_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PREVIEW_REFRESH_DELAY).await;
             this.update(cx, |this, cx| {
-                if this.preview_refresh_epoch == epoch && this.preview_dirty {
+                if this.preview_dirty {
                     cx.notify();
                 }
             })
             .ok();
-        })
-        .detach();
+        }));
     }
 
     fn invalidate_preview(&mut self, cx: &mut Context<Self>) {
         self.preview_dirty = true;
-        self.preview_refresh_epoch = self.preview_refresh_epoch.wrapping_add(1);
+        self.preview_refresh_task.take();
         cx.notify();
     }
 
@@ -628,12 +643,14 @@ impl ProviderEditor {
 
     fn set_select(&mut self, field_id: String, value: String, cx: &mut Context<Self>) {
         self.values.insert(field_id, Value::String(value));
+        self.form_list_state.remeasure();
         self.invalidate_preview(cx);
     }
 
     fn toggle_bool(&mut self, field_id: String, cx: &mut Context<Self>) {
         let cur = bool_val(&self.values, &field_id);
         self.values.insert(field_id, Value::Bool(!cur));
+        self.form_list_state.remeasure();
         self.invalidate_preview(cx);
     }
 
@@ -652,6 +669,7 @@ impl ProviderEditor {
                 Self::observe_preview_input(&row.value, cx);
             }
         }
+        self.form_list_state.remeasure();
         self.invalidate_preview(cx);
     }
 
@@ -659,6 +677,7 @@ impl ProviderEditor {
         if let Some(rows) = self.kv_rows.get_mut(&field_id) {
             rows.retain(|r| r.id != row_id);
         }
+        self.form_list_state.remeasure();
         self.invalidate_preview(cx);
     }
 
@@ -693,6 +712,7 @@ impl ProviderEditor {
                 }
             }
         }
+        self.form_list_state.remeasure();
         self.invalidate_preview(cx);
     }
 
@@ -700,6 +720,7 @@ impl ProviderEditor {
         if let Some(rows) = self.grid_rows.get_mut(&field_id) {
             rows.retain(|r| r.id != row_id);
         }
+        self.form_list_state.remeasure();
         self.invalidate_preview(cx);
     }
 
@@ -720,7 +741,7 @@ impl ProviderEditor {
     }
 
     fn columns_for(&self, field_id: &str) -> Vec<provider_config::GridColumn> {
-        for section in &self.schema {
+        for section in self.schema.iter() {
             for field in &section.fields {
                 if field.id == field_id {
                     if let FieldKind::ModelGrid { columns } = &field.kind {
@@ -1531,81 +1552,45 @@ impl ProviderEditor {
         rows
     }
 
-    fn render_preview(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut pane = components::card()
-            .p_0()
-            .min_h_0()
+    fn render_preview(
+        &self,
+        compact: bool,
+        expanded_height: Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let file_count = self.preview_cache.files.len();
+        let file_index = self.preview_active_file.min(file_count.saturating_sub(1));
+        let document = self.preview_cache.files.get(file_index).cloned();
+
+        // One header row carries everything the old three rows did: title,
+        // file switcher, per-file meta and actions. Every row saved here goes
+        // straight to visible preview lines.
+        let mut header = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_3()
             .flex_none()
-            .overflow_hidden()
-            .when(compact, |pane| pane.w_full().h(px(320.)))
-            .when(!compact, |pane| pane.w(px(420.)).h_full())
+            .border_b_1()
+            .border_color(theme::border())
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .px_4()
-                    .py_3()
-                    .border_b_1()
-                    .border_color(theme::border())
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("将写入的文件"),
-                    )
-                    .child(
-                        components::button(
-                            "editor-refresh-preview",
-                            "刷新",
-                            ButtonTone::Ghost,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                this.invalidate_preview(cx);
-                            },
-                        )),
-                    ),
+                    .flex_none()
+                    .text_color(theme::text())
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("将写入的文件"),
             );
-
-        if self.preview_cache.files.is_empty() {
-            return pane
-                .child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .text_color(theme::muted())
-                        .text_sm()
-                        .child("没有可预览的文件"),
-                )
-                .into_any_element();
-        }
-
-        if self.preview_cache.files.len() > 1 {
-            let mut tabs = div()
-                .id("preview-file-tabs")
-                .flex()
-                .flex_row()
-                .flex_none()
-                .gap_1()
-                .px_3()
-                .py_2()
-                .overflow_x_scroll()
-                .border_b_1()
-                .border_color(theme::border());
-            tabs.style().restrict_scroll_to_axis = Some(true);
-            for (index, document) in self.preview_cache.files.iter().enumerate() {
-                tabs = tabs.child(
+        if file_count > 1 {
+            for (index, file) in self.preview_cache.files.iter().enumerate() {
+                header = header.child(
                     components::button(
                         SharedString::from(format!("preview-tab-{index}")),
-                        document.filename.clone(),
-                        if index == self.preview_active_file {
+                        file.filename.clone(),
+                        if index == file_index {
                             ButtonTone::Neutral
                         } else {
                             ButtonTone::Ghost
@@ -1618,41 +1603,25 @@ impl ProviderEditor {
                     })),
                 );
             }
-            pane = pane.child(tabs);
+        } else if let Some(file) = &document {
+            header = header.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme::subtext())
+                    .text_xs()
+                    .font_family("Menlo")
+                    .child(file.filename.clone()),
+            );
         }
-
-        let file_index = self
-            .preview_active_file
-            .min(self.preview_cache.files.len().saturating_sub(1));
-        let document = self.preview_cache.files[file_index].clone();
-        let visible_count = document.visible_rows.len();
-        let metadata = SharedString::from(format!(
-            "{} 行 · {}",
-            document.line_count(),
-            format_preview_bytes(document.content.len())
-        ));
-
-        pane = pane.child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .px_4()
-                .py_3()
-                .flex_none()
-                .border_b_1()
-                .border_color(theme::border())
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme::subtext())
-                        .text_xs()
-                        .font_family("Menlo")
-                        .child(document.filename.clone()),
-                )
+        header = header.child(div().flex_1());
+        if let Some(file) = &document {
+            let metadata = SharedString::from(format!(
+                "{} 行 · {}",
+                file.line_count(),
+                format_preview_bytes(file.content.len())
+            ));
+            header = header
                 .child(
                     div()
                         .flex_none()
@@ -1660,10 +1629,7 @@ impl ProviderEditor {
                         .text_xs()
                         .child(metadata),
                 )
-                .child(components::badge(
-                    BadgeTone::Neutral,
-                    document.language_label,
-                ))
+                .child(components::badge(BadgeTone::Neutral, file.language_label))
                 .child(
                     components::button(
                         SharedString::from(format!("preview-edit-{file_index}")),
@@ -1674,9 +1640,71 @@ impl ProviderEditor {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.open_raw_edit(file_index, cx);
                     })),
-                ),
+                );
+        }
+        header = header.child(
+            components::button(
+                "editor-refresh-preview",
+                "刷新",
+                ButtonTone::Ghost,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.invalidate_preview(cx);
+            })),
         );
+        if compact {
+            header = header.child(
+                components::button(
+                    "preview-collapse",
+                    "收起",
+                    ButtonTone::Ghost,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.preview_expanded = false;
+                    cx.notify();
+                })),
+            );
+        }
 
+        let mut pane = components::card()
+            .p_0()
+            .min_h_0()
+            .flex_none()
+            .overflow_hidden()
+            .when(compact, |pane| pane.w_full().h(expanded_height))
+            .when(!compact, |pane| {
+                pane.w(relative(PREVIEW_SPLIT_FRACTION))
+                    .min_w(px(PREVIEW_SPLIT_MIN_WIDTH))
+                    .max_w(px(PREVIEW_SPLIT_MAX_WIDTH))
+                    .h_full()
+            })
+            .child(header);
+
+        // Issues sit directly under the header: they are the actionable part
+        // of this pane and must never be pushed below the fold by the code.
+        if let Some(issues) = self.render_preview_issues() {
+            pane = pane.child(issues);
+        }
+
+        let Some(document) = document else {
+            return pane
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .px_6()
+                        .text_color(theme::muted())
+                        .text_sm()
+                        .child("填写名称和 API 地址后，这里会实时显示将写入的配置内容。"),
+                )
+                .into_any_element();
+        };
+
+        let visible_count = document.visible_rows.len();
         let preview_list = uniform_list(
             SharedString::from(format!("preview-lines-{file_index}")),
             visible_count,
@@ -1688,7 +1716,7 @@ impl ProviderEditor {
         .min_h_0()
         .w_full();
 
-        pane = pane.child(
+        pane.child(
             div()
                 .flex()
                 .flex_col()
@@ -1700,47 +1728,186 @@ impl ProviderEditor {
                 .font_family("Menlo")
                 .text_color(theme::text())
                 .child(preview_list),
-        );
+        )
+        .into_any_element()
+    }
 
-        if !self.preview_cache.issues.is_empty() {
-            let mut issues = div()
-                .id("preview-issues")
+    /// Validation strip: errors first, soft severity tint per row, no inner
+    /// scroll region — the handful of issues a config can raise should simply
+    /// be visible.
+    fn render_preview_issues(&self) -> Option<gpui::AnyElement> {
+        if self.preview_cache.issues.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<&ConfigIssue> = self.preview_cache.issues.iter().collect();
+        sorted.sort_by_key(|issue| match issue.severity {
+            Severity::Error => 0u8,
+            Severity::Warning => 1,
+            Severity::Info => 2,
+        });
+        Some(
+            div()
                 .flex()
                 .flex_col()
                 .flex_none()
-                .max_h(px(120.))
-                .overflow_y_scroll()
                 .gap_1()
-                .px_4()
-                .py_3()
-                .border_t_1()
-                .border_color(theme::border());
-            for issue in &self.preview_cache.issues {
-                let (color, tag) = match issue.severity {
-                    Severity::Error => (theme::red(), "错误"),
-                    Severity::Warning => (theme::yellow(), "警告"),
-                    Severity::Info => (theme::subtext(), "提示"),
-                };
-                issues = issues.child(
+                .px_3()
+                .py_2()
+                .border_b_1()
+                .border_color(theme::border())
+                .children(sorted.into_iter().map(|issue| {
+                    let (bg, fg, tag) = match issue.severity {
+                        Severity::Error => (theme::red_soft(), theme::red(), "错误"),
+                        Severity::Warning => (theme::yellow_soft(), theme::yellow(), "警告"),
+                        Severity::Info => (theme::inset(), theme::subtext(), "提示"),
+                    };
                     div()
                         .flex()
                         .flex_row()
+                        .items_start()
                         .min_w_0()
                         .gap_2()
-                        .text_xs()
-                        .child(div().text_color(color).flex_none().child(tag))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(bg)
+                        .child(
+                            div()
+                                .flex_none()
+                                .pt(px(1.))
+                                .text_color(fg)
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(tag),
+                        )
                         .child(
                             div()
                                 .min_w_0()
                                 .text_color(theme::subtext())
+                                .text_sm()
                                 .child(SharedString::from(issue.message.clone())),
-                        ),
-                );
-            }
-            pane = pane.child(issues);
-        }
+                        )
+                }))
+                .into_any_element(),
+        )
+    }
 
-        pane.into_any_element()
+    /// Stacked-mode collapsed bar: one line naming the files plus issue
+    /// counts. Keeps narrow windows on a single scroll context until the
+    /// preview is explicitly wanted.
+    fn render_preview_summary(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (errors, warnings) = self.preview_issue_counts();
+        let files: SharedString = if self.preview_cache.files.is_empty() {
+            "填写名称和 API 地址后实时生成".into()
+        } else {
+            SharedString::from(
+                self.preview_cache
+                    .files
+                    .iter()
+                    .map(|file| file.filename.to_string())
+                    .collect::<Vec<_>>()
+                    .join("、"),
+            )
+        };
+        components::card()
+            .p_0()
+            .flex_none()
+            .overflow_hidden()
+            .child(
+                div()
+                    .id("preview-summary-expand")
+                    .role(gpui::Role::Button)
+                    .aria_label("展开写入文件预览")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_4()
+                    .py_3()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::surface_hover()))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.preview_expanded = true;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child("▸"),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(theme::text())
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("将写入的文件"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .font_family("Menlo")
+                            .child(files),
+                    )
+                    .when(errors > 0, |row| {
+                        row.child(components::badge(
+                            BadgeTone::Danger,
+                            format!("{errors} 个错误"),
+                        ))
+                    })
+                    .when(warnings > 0, |row| {
+                        row.child(components::badge(
+                            BadgeTone::Warning,
+                            format!("{warnings} 个警告"),
+                        ))
+                    }),
+            )
+    }
+
+    fn preview_issue_counts(&self) -> (usize, usize) {
+        let mut errors = 0;
+        let mut warnings = 0;
+        for issue in &self.preview_cache.issues {
+            match issue.severity {
+                Severity::Error => errors += 1,
+                Severity::Warning => warnings += 1,
+                Severity::Info => {}
+            }
+        }
+        (errors, warnings)
+    }
+
+    /// Issue-count chip rendered beside the save action: the reason a save
+    /// will fail belongs in the same eyeline as the button that commits it.
+    /// In collapsed stacked mode clicking it expands the preview pane.
+    fn render_issue_chip(
+        &self,
+        id: &'static str,
+        tone: BadgeTone,
+        label: String,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let badge = components::badge(tone, label);
+        if compact && !self.preview_expanded {
+            div()
+                .id(id)
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.preview_expanded = true;
+                    cx.notify();
+                }))
+                .child(badge)
+                .into_any_element()
+        } else {
+            badge.into_any_element()
+        }
     }
     fn render_raw_modal(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let raw = self.raw_edit.as_ref()?;
@@ -1772,17 +1939,14 @@ impl ProviderEditor {
                     .when_some(raw.error.clone(), |s, err| {
                         s.child(div().text_color(theme::red()).text_xs().child(err))
                     })
+                    // CodeEditor scrolls (and frames) itself; a second scroll
+                    // container here made wheel gestures move both layers.
                     .child(
                         div()
-                            .id("raw-editor-scroll")
                             .flex()
                             .flex_1()
                             .min_h(px(0.))
                             .w_full()
-                            .overflow_y_scroll()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme::border())
                             .child(raw.input.clone()),
                     ),
             )
@@ -1877,18 +2041,10 @@ impl ProviderEditor {
                         )),
                     ),
             )
-            .child(
-                div()
-                    .id("common-config-editor")
-                    .flex()
-                    .w_full()
-                    .max_h(px(220.))
-                    .overflow_y_scroll()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(self.common_snippet.clone()),
-            )
+            // The code-mode TextInput brings its own frame, fixed height and
+            // internal scroll (with wheel containment) — wrapping it in another
+            // scroll container stacked three scroll regions on this page.
+            .child(self.common_snippet.clone())
             .into_any_element()
     }
 
@@ -1984,6 +2140,132 @@ impl ProviderEditor {
             ))
             .child(components::field("备注", false, None, self.notes.clone()))
     }
+
+    fn render_form_intro(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let presets = self.codec.presets();
+        let mut intro = div().flex().flex_col().gap_5().w_full().min_w_0();
+        if !presets.is_empty() {
+            let names: Vec<&str> = presets.iter().map(|preset| preset.name.as_str()).collect();
+            let on_select = cx.listener(|this, index: &usize, _window, cx| {
+                this.apply_preset(*index, cx);
+            });
+            intro = intro.child(components::field(
+                "从预设开始",
+                false,
+                None,
+                components::segmented(
+                    "editor-presets",
+                    &names,
+                    self.selected_preset.unwrap_or(usize::MAX),
+                    move |index, window, cx| on_select(&index, window, cx),
+                ),
+            ));
+        }
+        intro.child(self.render_identity()).into_any_element()
+    }
+
+    fn render_form_section(
+        &self,
+        section_index: usize,
+        stack_grid: bool,
+        official_login: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(section) = self.schema.get(section_index) else {
+            return gpui::Empty.into_any_element();
+        };
+        if official_login && section.title == "端点与鉴权" {
+            return self.render_official_auth_section();
+        }
+
+        let caption = if section.advanced { "高级选项" } else { "" };
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .child(layout::section_header(section.title.clone(), caption));
+        for field in &section.fields {
+            if field.is_visible(&self.values) {
+                column = column.child(self.render_field(field, stack_grid, cx));
+            }
+        }
+        column.into_any_element()
+    }
+
+    fn render_form_tools(&self, official_login: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if official_login {
+            return gpui::Empty.into_any_element();
+        }
+        div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                components::button(
+                    "editor-fetch-models",
+                    "拉取模型",
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| this.fetch_models(cx))),
+            )
+            .child(
+                components::button(
+                    "editor-speedtest",
+                    "测试 URL",
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.speedtest_base_url(cx);
+                })),
+            )
+            .child(
+                components::button(
+                    "editor-balance",
+                    "查询余额",
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| this.query_balance(cx))),
+            )
+            .into_any_element()
+    }
+
+    fn render_form_item(
+        &self,
+        index: usize,
+        stack_grid: bool,
+        official_login: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let schema_len = self.schema.len();
+        let content = if index == 0 {
+            self.render_form_intro(cx)
+        } else if index <= schema_len {
+            self.render_form_section(index - 1, stack_grid, official_login, cx)
+        } else if index == schema_len + 1 {
+            if self.common_config_supported {
+                self.render_common_config(cx)
+            } else {
+                gpui::Empty.into_any_element()
+            }
+        } else if index == schema_len + 2 {
+            self.render_form_tools(official_login, cx)
+        } else {
+            gpui::Empty.into_any_element()
+        };
+
+        div()
+            .w_full()
+            .min_w_0()
+            .when(index < schema_len + 2, |item| item.pb_5())
+            .when(index == schema_len + 2, |item| item.pb_6())
+            .child(content)
+            .into_any_element()
+    }
 }
 
 impl Render for ProviderEditor {
@@ -1995,6 +2277,11 @@ impl Render for ProviderEditor {
         let compact_layout = window_width < px(EDITOR_SPLIT_MIN_WINDOW_WIDTH);
         let stack_grid = window_width < px(EDITOR_STACK_GRID_MAX_WINDOW_WIDTH);
         let official_login = self.uses_official_login(cx);
+        if self.form_stack_grid != stack_grid || self.form_official_login != official_login {
+            self.form_stack_grid = stack_grid;
+            self.form_official_login = official_login;
+            self.form_list_state.remeasure();
+        }
 
         let title = if self.is_editing() {
             "编辑供应商"
@@ -2006,68 +2293,50 @@ impl Render for ProviderEditor {
             crate::app_meta::label(self.app_type)
         ));
 
-        let identity = self.render_identity().into_any_element();
-        let presets = self.codec.presets();
-        let preset_picker = if presets.is_empty() {
+        // Stacked mode: the pane takes a real share of the window when
+        // expanded and folds to a one-line summary bar when not, so narrow
+        // windows keep a single scroll context.
+        let preview_height = (window.viewport_size().height * 0.45).clamp(px(320.), px(620.));
+        let preview = if !self.show_preview {
             None
-        } else {
-            let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
-            let on_select = cx.listener(|this, ix: &usize, _w, cx| this.apply_preset(*ix, cx));
+        } else if !compact_layout || self.preview_expanded {
             Some(
-                components::field(
-                    "从预设开始",
-                    false,
-                    None,
-                    components::segmented(
-                        "editor-presets",
-                        &names,
-                        self.selected_preset.unwrap_or(usize::MAX),
-                        move |ix, window, cx| on_select(&ix, window, cx),
-                    ),
-                )
-                .into_any_element(),
+                self.render_preview(compact_layout, preview_height, cx)
+                    .into_any_element(),
             )
-        };
-        let sections: Vec<gpui::AnyElement> = self
-            .schema
-            .clone()
-            .into_iter()
-            .map(|section| {
-                if official_login && section.title == "端点与鉴权" {
-                    return self.render_official_auth_section();
-                }
-                let caption = if section.advanced { "高级选项" } else { "" };
-                let mut col = div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .w_full()
-                    .child(layout::section_header(section.title.clone(), caption));
-                for field in &section.fields {
-                    if field.is_visible(&self.values) {
-                        col = col.child(self.render_field(field, stack_grid, cx));
-                    }
-                }
-                col.into_any_element()
-            })
-            .collect();
-        let preview = if self.show_preview {
-            Some(self.render_preview(compact_layout, cx).into_any_element())
         } else {
-            None
+            Some(self.render_preview_summary(cx).into_any_element())
         };
-        let common_config = self
-            .common_config_supported
-            .then(|| self.render_common_config(cx));
         let modal = self.render_raw_modal(cx);
         let convert_modal = self.render_convert_modal(cx);
 
-        let actions = div()
+        let (error_count, warning_count) = self.preview_issue_counts();
+        let mut actions = div()
             .flex()
             .flex_row()
             .flex_wrap()
+            .items_center()
             .justify_end()
-            .gap_2()
+            .gap_2();
+        if error_count > 0 {
+            actions = actions.child(self.render_issue_chip(
+                "editor-error-chip",
+                BadgeTone::Danger,
+                format!("{error_count} 个错误"),
+                compact_layout,
+                cx,
+            ));
+        }
+        if warning_count > 0 {
+            actions = actions.child(self.render_issue_chip(
+                "editor-warning-chip",
+                BadgeTone::Warning,
+                format!("{warning_count} 个警告"),
+                compact_layout,
+                cx,
+            ));
+        }
+        let actions = actions
             .child(
                 components::button(
                     "editor-convert",
@@ -2088,52 +2357,18 @@ impl Render for ProviderEditor {
                     .on_click(cx.listener(|_t, _e, _w, cx| cx.emit(EditorEvent::Cancelled))),
             );
 
-        let form_column = div()
-            .flex()
-            .flex_col()
-            .gap_5()
-            .flex_1()
-            .min_w_0()
-            .when_some(preset_picker, |s, picker| s.child(picker))
-            .child(identity)
-            .children(sections)
-            .when_some(common_config, |form, common| form.child(common))
-            .when(!official_login, |form| {
-                form.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap_2()
-                        .child(
-                            components::button(
-                                "editor-fetch-models",
-                                "拉取模型",
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(|this, _e, _w, cx| this.fetch_models(cx))),
-                        )
-                        .child(
-                            components::button(
-                                "editor-speedtest",
-                                "测试 URL",
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(|this, _e, _w, cx| this.speedtest_base_url(cx))),
-                        )
-                        .child(
-                            components::button(
-                                "editor-balance",
-                                "查询余额",
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(|this, _e, _w, cx| this.query_balance(cx))),
-                        ),
-                )
-            });
+        let form_list = gpui::list(
+            self.form_list_state.clone(),
+            cx.processor(move |this, index: usize, _window, cx| {
+                this.render_form_item(index, stack_grid, official_login, cx)
+            }),
+        )
+        .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .pr_2();
+        let contained_form_state = self.form_list_state.clone();
 
         let form_scroll = div()
             .relative()
@@ -2151,14 +2386,14 @@ impl Render for ProviderEditor {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .pr_2()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.form_scroll_handle)
-                    .child(form_column.pb_6()),
+                    .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
+                        contained_form_state,
+                    ))
+                    .child(form_list),
             )
             .child(crate::scrollbar::VerticalScrollbar::new(
                 "editor-form-scrollbar",
-                self.form_scroll_handle.clone(),
+                self.form_list_state.clone(),
             ));
 
         let body = div()

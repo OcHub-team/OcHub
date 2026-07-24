@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context as _, Result};
 use gpui::{
     canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, size, Background,
     Bounds, ColorSpace, Context, Entity, FontWeight, ListAlignment, ListState, PathBuilder,
-    PathPromptOptions, Pixels, Point, Rgba, ScrollHandle, SharedString, Window,
+    PathPromptOptions, Pixels, Point, Rgba, SharedString, Window,
 };
 use ochub_core::settings::{self, ThemeMode};
 
@@ -124,7 +124,7 @@ pub struct ThemeView {
     status: Option<SharedString>,
     editor: Option<ThemeEditor>,
     editor_list_state: ListState,
-    manager_scroll_handle: ScrollHandle,
+    manager_list_state: ListState,
     confirm_delete: Option<String>,
 }
 
@@ -167,6 +167,7 @@ impl ThemeView {
                 registry.diagnostics.len()
             ))
         });
+        let manager_item_count = Self::manager_item_count(registry.themes.len());
         Self {
             registry,
             selected_family,
@@ -178,9 +179,18 @@ impl ThemeView {
                 ListAlignment::Top,
                 px(560.),
             ),
-            manager_scroll_handle: ScrollHandle::new(),
+            manager_list_state: ListState::new(manager_item_count, ListAlignment::Top, px(720.)),
             confirm_delete: None,
         }
+    }
+
+    fn manager_item_count(theme_count: usize) -> usize {
+        1 + theme_count.div_ceil(2)
+    }
+
+    fn reset_manager_list(&self) {
+        self.manager_list_state
+            .reset(Self::manager_item_count(self.registry.themes.len()));
     }
 
     fn set_status(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -457,6 +467,7 @@ impl ThemeView {
             return;
         }
         self.registry = theme::load_registry();
+        self.reset_manager_list();
         self.editor = None;
         self.apply_selection(family.id.clone(), self.mode, window, cx);
         self.set_status(format!("已保存并应用 {}", family.name), cx);
@@ -505,6 +516,7 @@ impl ThemeView {
             this.update(cx, |this, cx| match result {
                 Ok(family) => {
                     this.registry = theme::load_registry();
+                    this.reset_manager_list();
                     this.status = Some(SharedString::from(format!(
                         "已导入 {}，浅色与深色配色均通过校验。",
                         family.name
@@ -579,6 +591,7 @@ impl ThemeView {
             cx.refresh_windows();
         }
         self.registry = theme::load_registry();
+        self.reset_manager_list();
         self.set_status(format!("已删除 {}", record.family.name), cx);
     }
 
@@ -1268,59 +1281,79 @@ impl ThemeView {
             .into_any_element()
     }
 
-    fn render_manager(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mode_listener = cx.listener(|this, index: &usize, window, cx| {
-            let mode = match *index {
-                1 => ThemeMode::Light,
-                2 => ThemeMode::Dark,
-                _ => ThemeMode::System,
-            };
-            this.set_mode(mode, window, cx);
-        });
-        let mode_control = components::segmented(
-            "theme-mode",
-            &["跟随系统", "固定浅色", "固定深色"],
-            Self::mode_index(self.mode),
-            move |index, window, cx| mode_listener(&index, window, cx),
-        );
-
-        let cards = self
-            .registry
-            .themes
-            .iter()
-            .map(|record| self.render_theme_card(record, cx))
-            .collect::<Vec<_>>();
-        let content = layout::wide_column()
-            .child(layout::section_header(
-                "显示方式",
-                "每套配色都同时包含浅色与深色；跟随系统时会在同一套配色内自动切换。",
-            ))
-            .child(
-                components::card()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .child(layout::row_label(
-                        "主题外观",
-                        "固定模式用于始终使用指定的浅色或深色外观。",
-                    ))
-                    .child(mode_control),
-            )
-            .child(layout::section_header(
-                "主题库",
-                "色板样图同时展示每套配色的浅色和深色界面。",
-            ))
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(2)
-                    .items_start()
-                    .gap_3()
-                    .w_full()
-                    .children(cards),
+    fn render_manager_item(&self, index: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if index == 0 {
+            let mode_listener = cx.listener(|this, index: &usize, window, cx| {
+                let mode = match *index {
+                    1 => ThemeMode::Light,
+                    2 => ThemeMode::Dark,
+                    _ => ThemeMode::System,
+                };
+                this.set_mode(mode, window, cx);
+            });
+            let mode_control = components::segmented(
+                "theme-mode",
+                &["跟随系统", "固定浅色", "固定深色"],
+                Self::mode_index(self.mode),
+                move |index, window, cx| mode_listener(&index, window, cx),
             );
+            return div()
+                .flex()
+                .flex_col()
+                .gap_5()
+                .w_full()
+                .pb_3()
+                .child(layout::section_header(
+                    "显示方式",
+                    "每套配色都同时包含浅色与深色；跟随系统时会在同一套配色内自动切换。",
+                ))
+                .child(
+                    components::card()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap_4()
+                        .child(layout::row_label(
+                            "主题外观",
+                            "固定模式用于始终使用指定的浅色或深色外观。",
+                        ))
+                        .child(mode_control),
+                )
+                .child(layout::section_header(
+                    "主题库",
+                    "色板样图同时展示每套配色的浅色和深色界面。",
+                ))
+                .into_any_element();
+        }
+
+        let first = (index - 1) * 2;
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap_3()
+            .w_full()
+            .pb_3();
+        for record in self.registry.themes.iter().skip(first).take(2) {
+            row = row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.render_theme_card(record, cx)),
+            );
+        }
+        if first + 1 >= self.registry.themes.len() {
+            row = row.child(div().flex_1().min_w_0());
+        }
+        row.into_any_element()
+    }
+
+    fn render_manager(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let list = gpui::list(
+            self.manager_list_state.clone(),
+            cx.processor(|this, index: usize, _window, cx| this.render_manager_item(index, cx)),
+        );
 
         layout::page()
             .relative()
@@ -1338,10 +1371,10 @@ impl ThemeView {
                     })),
                 ),
             )
-            .child(layout::scroll_body(
+            .child(layout::wide_virtual_body(
                 "theme-manager-body",
-                &self.manager_scroll_handle,
-                content,
+                list,
+                &self.manager_list_state,
             ))
             .when_some(self.confirm_delete.clone(), |root, family_id| {
                 let family_name = self

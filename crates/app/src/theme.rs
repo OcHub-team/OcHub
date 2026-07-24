@@ -76,12 +76,12 @@ impl<'de> Deserialize<'de> for ThemeColor {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ThemeWindowBackground {
+    /// Render against a fully opaque native window.
+    #[default]
+    Opaque,
     /// Use the platform's background blur. The exact blur radius and material
     /// remain system-controlled.
-    #[default]
     Blurred,
-    /// Render against a fully opaque native window.
-    Opaque,
 }
 
 impl ThemeWindowBackground {
@@ -107,7 +107,7 @@ pub struct ThemeEffects {
 
 impl ThemeEffects {
     pub const DEFAULT: Self = Self {
-        window_background: ThemeWindowBackground::Blurred,
+        window_background: ThemeWindowBackground::Opaque,
         sidebar_opacity: DEFAULT_SIDEBAR_OPACITY_PERCENT,
         content_opacity: DEFAULT_CONTENT_OPACITY_PERCENT,
     };
@@ -1318,6 +1318,7 @@ mod tests {
     #[test]
     fn glass_sidebar_foreground_stays_readable_across_backdrops() {
         let mut palette = OCHUB_DARK;
+        palette.effects.window_background = ThemeWindowBackground::Blurred;
         palette.effects.sidebar_opacity = MIN_SURFACE_OPACITY_PERCENT;
 
         let dark = adaptive_sidebar_foreground(

@@ -708,10 +708,7 @@ mod tests {
         let out = request_to_chat(&body, &ChatRequestOptions::default()).unwrap();
         let content = out["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content[0]["type"], "text");
-        assert_eq!(
-            content[1]["image_url"]["url"],
-            "data:image/png;base64,abcd"
-        );
+        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,abcd");
         assert_eq!(out["stream"], true);
         assert_eq!(out["stream_options"]["include_usage"], true);
     }
@@ -939,7 +936,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(names, vec!["message_start", "message_delta", "message_stop"]);
+        assert_eq!(
+            names,
+            vec!["message_start", "message_delta", "message_stop"]
+        );
         assert!(matches!(outs.last(), Some(Output::Done)));
     }
 }
