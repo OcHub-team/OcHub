@@ -89,6 +89,7 @@ struct VerticalScrollbarGeometry {
 
 fn vertical_scrollbar_geometry(
     viewport: Bounds<Pixels>,
+    track_right: Pixels,
     offset: Pixels,
     max_scroll: Pixels,
 ) -> Option<VerticalScrollbarGeometry> {
@@ -111,8 +112,8 @@ fn vertical_scrollbar_geometry(
     let progress =
         (f32::from((-offset).clamp(px(0.), max_scroll)) / f32::from(max_scroll)).clamp(0., 1.);
     let thumb_top = TRACK_INSET + travel * progress;
-    let track_left = viewport.right() - TRACK_WIDTH;
-    let thumb_left = viewport.right() - (TRACK_WIDTH + THUMB_WIDTH) / 2.;
+    let track_left = track_right - TRACK_WIDTH;
+    let thumb_left = track_right - (TRACK_WIDTH + THUMB_WIDTH) / 2.;
 
     Some(VerticalScrollbarGeometry {
         track_bounds: Bounds::new(
@@ -185,8 +186,10 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
     }
 
     fn geometry(&self) -> Option<VerticalScrollbarGeometry> {
+        let viewport = self.handle.viewport();
         vertical_scrollbar_geometry(
-            self.handle.viewport(),
+            viewport,
+            viewport.right(),
             self.handle.offset().y,
             self.handle.max_offset().y,
         )
@@ -210,17 +213,28 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
     ) {
         let Some(scrollbar) = self
             .geometry()
-            .filter(|scrollbar| scrollbar.track_bounds.contains(&event.position))
+            // The component's 12 px hitbox already owns the horizontal check.
+            // Geometry gets its vertical range from the tracked viewport, while
+            // painting may anchor the rail to a wider parent (for centered page
+            // content), so do not compare the pointer against the viewport's x.
+            .filter(|scrollbar| {
+                event.position.y >= scrollbar.track_bounds.top()
+                    && event.position.y <= scrollbar.track_bounds.bottom()
+            })
         else {
             return;
         };
 
         self.handle.drag_started();
-        self.drag_offset = Some(if scrollbar.thumb_bounds.contains(&event.position) {
-            event.position.y - scrollbar.thumb_bounds.top()
-        } else {
-            scrollbar.thumb_bounds.size.height * 0.5
-        });
+        self.drag_offset = Some(
+            if event.position.y >= scrollbar.thumb_bounds.top()
+                && event.position.y <= scrollbar.thumb_bounds.bottom()
+            {
+                event.position.y - scrollbar.thumb_bounds.top()
+            } else {
+                scrollbar.thumb_bounds.size.height * 0.5
+            },
+        );
         self.drag_to(event.position.y, window);
         cx.stop_propagation();
         cx.notify();
@@ -285,9 +299,10 @@ impl<T: ScrollableHandle> Render for VerticalScrollbarState<T> {
             .child(
                 canvas(
                     |_bounds, _window, _cx| (),
-                    move |_bounds, _state, window, _cx| {
+                    move |bounds, _state, window, _cx| {
                         let Some(scrollbar) = vertical_scrollbar_geometry(
                             handle.viewport(),
+                            bounds.right(),
                             handle.offset().y,
                             handle.max_offset().y,
                         ) else {
@@ -341,8 +356,11 @@ mod tests {
     #[test]
     fn thumb_maps_full_scroll_range() {
         let viewport = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(400.)));
-        let top = vertical_scrollbar_geometry(viewport, px(0.), px(1_600.)).unwrap();
-        let bottom = vertical_scrollbar_geometry(viewport, px(-1_600.), px(1_600.)).unwrap();
+        let top =
+            vertical_scrollbar_geometry(viewport, viewport.right(), px(0.), px(1_600.)).unwrap();
+        let bottom =
+            vertical_scrollbar_geometry(viewport, viewport.right(), px(-1_600.), px(1_600.))
+                .unwrap();
         assert_eq!(top.thumb_bounds.top(), top.track_bounds.top());
         assert_eq!(bottom.thumb_bounds.bottom(), bottom.track_bounds.bottom());
     }
@@ -350,6 +368,18 @@ mod tests {
     #[test]
     fn scrollbar_is_hidden_when_content_fits() {
         let viewport = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(400.)));
-        assert!(vertical_scrollbar_geometry(viewport, px(0.), px(0.)).is_none());
+        assert!(vertical_scrollbar_geometry(viewport, viewport.right(), px(0.), px(0.)).is_none());
+    }
+
+    #[test]
+    fn scrollbar_can_anchor_beyond_a_centered_viewport() {
+        let viewport = Bounds::new(point(px(100.), px(20.)), size(px(800.), px(400.)));
+        let page_right = px(1_200.);
+        let geometry =
+            vertical_scrollbar_geometry(viewport, page_right, px(0.), px(1_600.)).unwrap();
+
+        assert_eq!(geometry.track_bounds.right(), page_right);
+        assert_eq!(geometry.thumb_bounds.right(), page_right - px(2.));
+        assert_eq!(geometry.track_bounds.top(), viewport.top() + TRACK_INSET);
     }
 }

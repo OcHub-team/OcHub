@@ -156,29 +156,42 @@ fn virtual_body_with_width(
         .min_h_0()
         .w_full()
         .min_w_0()
-        .px_6()
         .child(
             div()
-                .relative()
                 .flex()
                 .flex_col()
+                .items_center()
                 .flex_1()
                 .min_h_0()
                 .w_full()
-                .max_w(px(max_width))
-                .on_scroll_wheel(contain_vertical_scroll(contained_state))
+                .min_w_0()
+                .px_6()
                 .child(
-                    list.with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_col()
                         .flex_1()
                         .min_h_0()
                         .w_full()
-                        .py_6(),
-                )
-                .child(VerticalScrollbar::new(
-                    gpui::ElementId::Name(format!("{id}-scrollbar").into()),
-                    state.clone(),
-                )),
+                        .max_w(px(max_width))
+                        .on_scroll_wheel(contain_vertical_scroll(contained_state))
+                        .child(
+                            list.with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .py_6(),
+                        ),
+                ),
         )
+        // Keep page chrome independent from the centered content column. The
+        // scrollbar belongs to the full-width viewport, so it must stay at the
+        // page edge even when the list itself is capped at `max_width`.
+        .child(VerticalScrollbar::new(
+            gpui::ElementId::Name(format!("{id}-scrollbar").into()),
+            state.clone(),
+        ))
 }
 
 /// The centered content column: left-aligned children, consistent vertical rhythm,

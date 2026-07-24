@@ -2390,11 +2390,7 @@ impl Render for ProviderEditor {
                         contained_form_state,
                     ))
                     .child(form_list),
-            )
-            .child(crate::scrollbar::VerticalScrollbar::new(
-                "editor-form-scrollbar",
-                self.form_list_state.clone(),
-            ));
+            );
 
         let body = div()
             .flex()
@@ -2409,6 +2405,7 @@ impl Render for ProviderEditor {
             .when_some(preview, |s, preview| s.child(preview));
 
         let editor_body = div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -2423,7 +2420,14 @@ impl Render for ProviderEditor {
                     .h_full()
                     .min_h_0()
                     .child(body),
-            );
+            )
+            // The form is the editor page's primary scroll context. Its rail
+            // belongs to the full-width page chrome rather than the split
+            // boundary between the form and the independent file preview.
+            .child(crate::scrollbar::VerticalScrollbar::new(
+                "editor-form-scrollbar",
+                self.form_list_state.clone(),
+            ));
 
         layout::page()
             .relative()
