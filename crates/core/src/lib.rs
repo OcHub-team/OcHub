@@ -12,6 +12,7 @@ pub mod app_id;
 pub mod app_state;
 pub mod app_store;
 pub mod app_type;
+pub mod autostart;
 pub mod apps;
 pub mod db;
 pub mod deeplink;

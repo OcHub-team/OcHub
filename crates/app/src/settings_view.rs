@@ -415,7 +415,17 @@ impl SettingsView {
     }
 
     fn toggle_launch_on_startup(&mut self, cx: &mut Context<Self>) {
-        self.settings.launch_on_startup = !self.settings.launch_on_startup;
+        let target = !self.settings.launch_on_startup;
+        // Register with the OS first: the stored flag must never claim a login
+        // item that does not exist.
+        if let Err(err) =
+            ochub_core::autostart::set_enabled(target, self.settings.silent_startup)
+        {
+            self.status = Some(SharedString::from(err.to_string()));
+            cx.notify();
+            return;
+        }
+        self.settings.launch_on_startup = target;
         self.persist(cx);
     }
 

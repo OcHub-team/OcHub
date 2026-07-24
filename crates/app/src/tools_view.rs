@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 use gpui::{
     div, prelude::*, px, App, Context, Entity, Focusable, FontWeight, ListAlignment, ListState,
     SharedString, Window,
@@ -195,13 +194,7 @@ impl ToolsView {
                 }
             })
             .collect();
-        self.auto_launch = auto_launch_handle()
-            .and_then(|handle| {
-                handle
-                    .is_enabled()
-                    .map_err(|e| AppError::Message(e.to_string()))
-            })
-            .ok();
+        self.auto_launch = ochub_core::autostart::is_enabled().ok();
         self.db_backups = load_db_backup_rows().unwrap_or_default();
     }
 
@@ -518,30 +511,28 @@ impl ToolsView {
     }
 
     fn toggle_auto_launch(&mut self, cx: &mut Context<Self>) {
-        match auto_launch_handle() {
-            Ok(handle) => {
-                let target = !self.auto_launch.unwrap_or(false);
-                let result = if target {
-                    handle.enable()
-                } else {
-                    handle.disable()
-                };
-                match result {
-                    Ok(()) => {
-                        self.auto_launch = Some(target);
-                        self.set_status(
-                            if target {
-                                "已启用开机自启"
-                            } else {
-                                "已关闭开机自启"
-                            },
-                            cx,
-                        );
-                    }
-                    Err(err) => self.set_status(format!("开机自启设置失败: {err}"), cx),
+        let target = !self.auto_launch.unwrap_or(false);
+        let silent = ochub_core::settings::get_settings().silent_startup;
+        match ochub_core::autostart::set_enabled(target, silent) {
+            Ok(()) => {
+                self.auto_launch = Some(target);
+                // The settings page shows the same OS state; keep the stored
+                // flag in step so the two surfaces cannot disagree.
+                if let Err(err) =
+                    ochub_core::settings::mutate_settings(|s| s.launch_on_startup = target)
+                {
+                    log::warn!("failed to persist launch_on_startup: {err}");
                 }
+                self.set_status(
+                    if target {
+                        "已启用开机启动"
+                    } else {
+                        "已关闭开机启动"
+                    },
+                    cx,
+                );
             }
-            Err(err) => self.set_status(format!("开机自启不可用: {err}"), cx),
+            Err(err) => self.set_status(format!("{err}"), cx),
         }
     }
 
@@ -2496,32 +2487,6 @@ fn open_path(path: &Path) -> Result<(), AppError> {
     } else {
         Err(AppError::Message(format!("打开路径失败: {status}")))
     }
-}
-
-#[cfg(target_os = "macos")]
-fn macos_app_bundle_path(exe_path: &Path) -> Option<PathBuf> {
-    let path_str = exe_path.to_string_lossy();
-    path_str.find(".app/Contents/MacOS/").map(|app_pos| {
-        let app_bundle_end = app_pos + 4;
-        PathBuf::from(&path_str[..app_bundle_end])
-    })
-}
-
-fn auto_launch_handle() -> Result<AutoLaunch, AppError> {
-    let exe_path =
-        std::env::current_exe().map_err(|e| AppError::Message(format!("无法获取应用路径: {e}")))?;
-
-    #[cfg(target_os = "macos")]
-    let app_path = macos_app_bundle_path(&exe_path).unwrap_or(exe_path);
-
-    #[cfg(not(target_os = "macos"))]
-    let app_path = exe_path;
-
-    AutoLaunchBuilder::new()
-        .set_app_name("OcHub")
-        .set_app_path(&app_path.to_string_lossy())
-        .build()
-        .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))
 }
 
 crate::notifications::impl_status_toasts!(ToolsView);

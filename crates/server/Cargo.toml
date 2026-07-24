@@ -29,7 +29,6 @@ uuid.workspace = true
 chrono.workspace = true
 log.workspace = true
 arboard.workspace = true
-auto-launch.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

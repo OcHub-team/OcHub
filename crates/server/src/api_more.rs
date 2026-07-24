@@ -12,7 +12,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 use ochub_core::apps::{claude_desktop, claude_plugin, codex, hermes, openclaw, opencode};
 use ochub_core::settings::{self, S3SyncSettings, WebDavSyncSettings};
 use ochub_core::{AppError, AppType};
@@ -870,55 +869,20 @@ async fn install_update_and_restart() -> ApiResult<Json<Value>> {
     })))
 }
 
-#[cfg(target_os = "macos")]
-fn macos_app_bundle_path(exe_path: &FsPath) -> Option<std::path::PathBuf> {
-    let path_str = exe_path.to_string_lossy();
-    path_str.find(".app/Contents/MacOS/").map(|app_pos| {
-        let app_bundle_end = app_pos + 4;
-        std::path::PathBuf::from(&path_str[..app_bundle_end])
-    })
-}
-
-fn auto_launch_handle() -> Result<AutoLaunch, AppError> {
-    let exe_path =
-        std::env::current_exe().map_err(|e| AppError::Message(format!("无法获取应用路径: {e}")))?;
-
-    #[cfg(target_os = "macos")]
-    let app_path = macos_app_bundle_path(&exe_path).unwrap_or(exe_path);
-
-    #[cfg(not(target_os = "macos"))]
-    let app_path = exe_path;
-
-    AutoLaunchBuilder::new()
-        .set_app_name("OcHub")
-        .set_app_path(&app_path.to_string_lossy())
-        .build()
-        .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))
-}
-
 #[derive(Deserialize)]
 struct AutoLaunchRequest {
     enabled: bool,
 }
 
 async fn auto_launch_status() -> ApiResult<Json<Value>> {
-    let enabled = auto_launch_handle()?
-        .is_enabled()
-        .map_err(|e| ApiError(AppError::Message(format!("获取开机自启状态失败: {e}"))))?;
+    let enabled = ochub_core::autostart::is_enabled()?;
     Ok(Json(json!({ "enabled": enabled })))
 }
 
 async fn auto_launch_set(Json(req): Json<AutoLaunchRequest>) -> ApiResult<Json<Value>> {
-    let handle = auto_launch_handle()?;
-    if req.enabled {
-        handle
-            .enable()
-            .map_err(|e| ApiError(AppError::Message(format!("启用开机自启失败: {e}"))))?;
-    } else {
-        handle
-            .disable()
-            .map_err(|e| ApiError(AppError::Message(format!("禁用开机自启失败: {e}"))))?;
-    }
+    let silent = ochub_core::settings::get_settings().silent_startup;
+    ochub_core::autostart::set_enabled(req.enabled, silent)?;
+    ochub_core::settings::mutate_settings(|s| s.launch_on_startup = req.enabled)?;
     Ok(Json(json!({ "ok": true, "enabled": req.enabled })))
 }
 
