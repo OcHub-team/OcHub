@@ -990,6 +990,7 @@ impl AppRoot {
                 Section::Usage => self.usage_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Sessions => self.sessions_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Tools => self.tools_view.update(cx, |v, _| v.reload()),
+                Section::Settings => self.settings_view.update(cx, |v, cx| v.reload(cx)),
                 _ => {}
             }
             self.flush_section_toast(section, cx);

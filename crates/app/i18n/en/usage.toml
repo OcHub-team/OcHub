@@ -168,7 +168,6 @@
 "usage.summary.requests.label" = "Total requests"
 "usage.summary.tokens.detail" = "Cache created {created} / read {read}"
 "usage.summary.tokens.label" = "Real tokens"
-"usage.time.invalid" = "Invalid time"
 "usage.trend.hover" = "{time} · ${cost} · {count} requests"
 "usage.trend.insufficient" = "Not enough data to draw a trend for this range (at least two buckets are needed)."
 "usage.trend.peak" = "Peak bucket"

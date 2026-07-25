@@ -21,7 +21,7 @@ use ochub_core::services::usage_stats::{
 };
 use ochub_core::{services, AppState, UsageSummary};
 
-use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::components::{self, format_local_timestamp, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
 use crate::icons::{icon, IconName};
 use crate::layout;
@@ -3220,19 +3220,6 @@ fn shifted_year_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
         absolute_month.div_euclid(12),
         absolute_month.rem_euclid(12) as u32 + 1,
     )
-}
-
-fn format_local_timestamp(timestamp: i64, with_seconds: bool) -> String {
-    let pattern = if with_seconds {
-        "%Y/%m/%d %H:%M:%S"
-    } else {
-        "%Y-%m-%d %H:%M"
-    };
-    Local
-        .timestamp_opt(timestamp, 0)
-        .single()
-        .map(|time| time.format(pattern).to_string())
-        .unwrap_or_else(|| raw(k::USAGE_TIME_INVALID).to_string())
 }
 
 fn parse_local_timestamp(value: &str, end_of_day: bool) -> Option<i64> {

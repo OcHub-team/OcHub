@@ -556,15 +556,20 @@ impl AppSettings {
         Self::normalize_one(&mut self.openclaw_config_dir);
         Self::normalize_one(&mut self.hermes_config_dir);
 
+        // An *enabled* destination is a user decision, so it survives even
+        // before any credentials exist — dropping it here would make picking a
+        // sync destination and then filling in the form impossible, because the
+        // choice would vanish on the way to disk. Only a never-configured,
+        // never-enabled block is discarded.
         if let Some(sync) = &mut self.webdav_sync {
             sync.normalize();
-            if sync.is_empty() {
+            if sync.is_empty() && !sync.enabled {
                 self.webdav_sync = None;
             }
         }
         if let Some(s3) = &mut self.s3_sync {
             s3.normalize();
-            if s3.is_empty() {
+            if s3.is_empty() && !s3.enabled {
                 self.s3_sync = None;
             }
         }

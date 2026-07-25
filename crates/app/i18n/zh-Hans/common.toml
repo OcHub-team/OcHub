@@ -44,6 +44,7 @@
 "common.find.next" = "下一个匹配"
 "common.find.placeholder" = "查找"
 "common.find.previous" = "上一个匹配"
+"common.time.invalid" = "无效时间"
 "common.pagination.jump.prefix" = "跳至"
 "common.pagination.jump.suffix" = "页"
 "common.pagination.next.aria" = "下一页"

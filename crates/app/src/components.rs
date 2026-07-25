@@ -7,7 +7,7 @@
 
 use std::rc::Rc;
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
 use gpui::{
     anchored, deferred, div, point, prelude::*, px, Anchor, AnyElement, App, ElementId, Entity,
     FontWeight, MouseButton, Rgba, ScrollHandle, SharedString, Window,
@@ -300,7 +300,6 @@ pub fn field_row(
 /// the bar keeps its size in every state.
 ///
 /// `id` seeds the two button ids; pass something unique to the form.
-#[allow(dead_code)]
 pub fn commit_bar(
     id: &'static str,
     dirty: bool,
@@ -490,6 +489,27 @@ fn segmented_track(
         track = track.child(item);
     }
     track
+}
+
+// ── Time ────────────────────────────────────────────────────────────────────
+
+/// A Unix timestamp as local wall-clock text.
+///
+/// Lives here rather than in one page because a raw `last_sync_at` integer is
+/// a machine value, and every page that has one needs the same answer. Pass
+/// `with_seconds` when the exact second matters (a log line, a range bound);
+/// leave it off for a status readout.
+pub fn format_local_timestamp(timestamp: i64, with_seconds: bool) -> String {
+    let pattern = if with_seconds {
+        "%Y/%m/%d %H:%M:%S"
+    } else {
+        "%Y-%m-%d %H:%M"
+    };
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|time| time.format(pattern).to_string())
+        .unwrap_or_else(|| crate::i18n::raw(k::COMMON_TIME_INVALID).to_string())
 }
 
 // ── Badges & status dots ────────────────────────────────────────────────────

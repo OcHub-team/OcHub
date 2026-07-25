@@ -371,10 +371,10 @@ pub fn toggle(on: bool) -> gpui::Div {
 
 // ── Keyboard-operable rows ──────────────────────────────────────────────────
 //
-// These primitives land ahead of their first consumer, so each entry point
-// carries `#[allow(dead_code)]` — the same arrangement as the icon registry:
-// a page should be able to reach for the right row without first having to
-// build it. Drop the attribute once a view calls the function.
+// `settings_view` is the first consumer of all four rows and of `bind_keys`.
+// A page should be able to reach for the right row without first having to
+// build it, so these landed ahead of that — the `#[allow(dead_code)]` that
+// bought them the time is gone now that they are used.
 
 actions!(ochub_row, [Activate]);
 
@@ -391,7 +391,6 @@ const ROW_KEY_CONTEXT: &str = "SettingsRow";
 /// Wiring this up is optional. The rows also handle a bare Space/Enter key press
 /// directly, and that fallback only runs when no binding consumed the keystroke,
 /// so keyboard activation works either way and never fires twice.
-#[allow(dead_code)]
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("space", Activate, Some(ROW_KEY_CONTEXT)),
@@ -496,7 +495,6 @@ fn with_activation(
 ///     move |window, cx| toggle(&(), window, cx),
 /// )
 /// ```
-#[allow(dead_code)]
 pub fn switch_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
@@ -542,7 +540,6 @@ pub fn switch_row(
 /// for small, mutually exclusive, immediately-applied sets (theme, language,
 /// log level). Past roughly five options, or when the options need explaining,
 /// a [`navigate_row`] into a sub-page is kinder.
-#[allow(dead_code)]
 pub fn select_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
@@ -602,7 +599,6 @@ pub fn select_row(
 /// the sub-page has no one-line summary. Use it whenever a setting needs more
 /// room than a row — a list to edit, options that need explaining, anything
 /// with its own validation.
-#[allow(dead_code)]
 pub fn navigate_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
@@ -665,7 +661,6 @@ pub fn navigate_row(
 /// row itself is the tab stop, and Space/Enter runs it once. Set `disabled`
 /// while the command is already running: the row leaves the tab order, the
 /// button goes inert, and a second submit becomes impossible.
-#[allow(dead_code)]
 pub fn action_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,

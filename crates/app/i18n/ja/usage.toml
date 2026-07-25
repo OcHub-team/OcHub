@@ -168,7 +168,6 @@
 "usage.summary.requests.label" = "総リクエスト数"
 "usage.summary.tokens.detail" = "キャッシュ作成 {created} / 読み取り {read}"
 "usage.summary.tokens.label" = "実トークン数"
-"usage.time.invalid" = "無効な日時"
 "usage.trend.hover" = "{time} · ${cost} · {count} 件"
 "usage.trend.insufficient" = "この期間は推移を描くにはデータが足りません（時間バケットが 2 つ以上必要です）。"
 "usage.trend.peak" = "バケット最大値"

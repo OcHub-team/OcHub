@@ -171,7 +171,6 @@
 "usage.summary.requests.label" = "总请求数"
 "usage.summary.tokens.detail" = "缓存创建 {created} / 读取 {read}"
 "usage.summary.tokens.label" = "真实 Token"
-"usage.time.invalid" = "时间无效"
 "usage.trend.hover" = "{time} · ${cost} · {count} 次"
 "usage.trend.insufficient" = "当前范围内趋势数据不足（至少需要两个时间桶）。"
 "usage.trend.peak" = "单桶峰值"
