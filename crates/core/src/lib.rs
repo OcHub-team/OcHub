@@ -19,6 +19,7 @@ pub mod deeplink;
 pub mod error;
 pub mod gateway;
 pub mod http_client;
+pub mod i18n;
 pub mod managed_auth;
 pub mod mcp;
 pub mod model;

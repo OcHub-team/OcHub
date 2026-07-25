@@ -638,6 +638,19 @@ impl TextInput {
     }
 
     /// Replace the full content, resetting the cursor to the end.
+    /// Replace the placeholder without disturbing the field's content, cursor
+    /// or focus.
+    ///
+    /// Needed because placeholders are captured when a view is constructed, and
+    /// every top-level view is built once at startup and lives for the whole
+    /// process — so after a locale switch their placeholders would otherwise
+    /// stay in the old language until the app restarted. Rebuilding the entity
+    /// instead would drop whatever the user had typed.
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = placeholder.into();
+        cx.notify();
+    }
+
     pub fn set_content(&mut self, content: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.content = content.into();
         let end = self.content.len();

@@ -627,6 +627,9 @@ impl AppRoot {
                 this.ensure_valid_selection(cx);
                 cx.notify();
             }
+            crate::settings_view::SettingsEvent::LocaleChanged => {
+                this.relocalize(cx);
+            }
         })
         .detach();
         cx.subscribe(&this.gateway_view, |this, _view, event, cx| match event {
@@ -860,6 +863,27 @@ impl AppRoot {
 
     /// If the currently selected app got disabled (or unregistered), move the
     /// selection to the first enabled app and close any per-app panels.
+    /// Push a locale change into everything a repaint cannot reach.
+    ///
+    /// `cx.refresh_windows()` (issued by the settings view) re-renders the view
+    /// tree, which covers all rendered text. It does not touch the native menu
+    /// bar and Dock menu, which live outside the window tree, nor the memoized
+    /// item heights inside each virtualized list.
+    fn relocalize(&mut self, cx: &mut Context<Self>) {
+        crate::shell_menu::refresh(&self.app, cx);
+        self.provider_list_state.remeasure();
+        self.settings_view
+            .update(cx, |view, cx| view.relocalize(cx));
+        self.tools_view.update(cx, |view, cx| view.relocalize(cx));
+        self.theme_view.update(cx, |view, cx| view.relocalize(cx));
+        self.usage_view.update(cx, |view, cx| view.relocalize(cx));
+        self.skills_view.update(cx, |view, cx| view.relocalize(cx));
+        self.mcp_view.update(cx, |view, cx| view.relocalize(cx));
+        self.sessions_view
+            .update(cx, |view, cx| view.relocalize(cx));
+        cx.notify();
+    }
+
     fn ensure_valid_selection(&mut self, cx: &mut Context<Self>) {
         let enabled = Self::visible_apps();
         if enabled.contains(&self.selected_app) {

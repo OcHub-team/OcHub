@@ -13,6 +13,7 @@ mod fold;
 mod gallery_view;
 mod gateway_view;
 mod highlight;
+mod i18n;
 mod icons;
 mod layout;
 mod mcp_view;
@@ -369,6 +370,9 @@ fn main() {
             shell_menu::install(app_state.clone(), cx);
             apply_quit_mode(cx);
             let appearance_settings = ochub_core::settings::get_settings();
+            ochub_core::i18n::install(ochub_core::i18n::resolve(
+                appearance_settings.language.as_deref(),
+            ));
             // Gate on the stored setting as well as the flag, so a stale login
             // item cannot keep hiding the window after the user turns it off.
             let start_hidden = launched_by_login_item(std::env::args().collect::<Vec<_>>())

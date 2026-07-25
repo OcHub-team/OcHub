@@ -1,0 +1,18 @@
+# English.
+#
+# Checked against zh-Hans.toml at build time: every key must be present and use
+# the same {placeholders}. Keys are sorted alphabetically.
+
+"settings.basic.language.desc" = "Interface language. \"System\" follows your OS preference."
+"settings.basic.language.label" = "Language"
+"settings.basic.language.system" = "System"
+"settings.basic.launch_startup.desc" = "Start OcHub automatically after you log in."
+"settings.basic.launch_startup.label" = "Launch at login"
+"settings.basic.minimize.desc" = "Closing the window leaves OcHub running so you can reopen it from the system menu."
+"settings.basic.minimize.label" = "Keep running when the window closes"
+"settings.basic.silent_startup.desc" = "When started at login, keep the main window hidden and leave only the system menu."
+"settings.basic.silent_startup.label" = "Start hidden"
+"settings.basic.tray.desc" = "Show provider shortcuts in the macOS menu bar and the Windows taskbar menu."
+"settings.basic.tray.label" = "Quick switch in system menus"
+"settings.sync.password.placeholder" = "Password"
+"settings.sync.username.placeholder" = "Username"

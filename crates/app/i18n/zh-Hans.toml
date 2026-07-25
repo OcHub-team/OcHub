@@ -1,0 +1,22 @@
+# Simplified Chinese — the reference catalog.
+#
+# This file defines the key set. Every other locale is checked against it at
+# build time: a missing key, or one whose {placeholders} differ, fails the
+# build. Keys are `<area>.<group>.<element>`; sort them alphabetically.
+#
+# Only user-visible prose belongs here. Element ids, settings keys and any
+# string compared with `==` are identifiers, not text.
+
+"settings.basic.language.desc" = "界面语言。跟随系统时使用系统的首选语言。"
+"settings.basic.language.label" = "语言"
+"settings.basic.language.system" = "跟随系统"
+"settings.basic.launch_startup.desc" = "登录系统后自动启动 OcHub。"
+"settings.basic.launch_startup.label" = "开机启动"
+"settings.basic.minimize.desc" = "点击关闭按钮时保留后台进程，方便从系统菜单重新打开。"
+"settings.basic.minimize.label" = "关闭窗口时后台保留"
+"settings.basic.silent_startup.desc" = "开机启动时不显示主窗口，仅保留系统菜单入口。"
+"settings.basic.silent_startup.label" = "静默启动"
+"settings.basic.tray.desc" = "在 macOS 顶栏和 Windows 任务栏菜单里显示供应商快捷入口。"
+"settings.basic.tray.label" = "系统菜单快捷切换"
+"settings.sync.password.placeholder" = "密码"
+"settings.sync.username.placeholder" = "用户名"

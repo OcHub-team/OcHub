@@ -9,11 +9,13 @@ use gpui::{
     Window,
 };
 use ochub_core::app_store;
+use ochub_core::i18n::Locale;
 use ochub_core::services::UpdateCheckResult;
 use ochub_core::settings::{self, AppSettings, S3SyncSettings, WebDavSyncSettings};
 use ochub_core::AppState;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::layout;
 use crate::shell_menu;
 use crate::text_input::TextInput;
@@ -40,6 +42,10 @@ enum SyncDownloadTarget {
 pub enum SettingsEvent {
     /// The set of enabled apps changed (sidebar/views must re-derive).
     AppsChanged,
+    /// The interface language changed. Repainting covers rendered text, but
+    /// strings captured at construction time (text-input placeholders) and
+    /// memoized list-item heights have to be refreshed explicitly.
+    LocaleChanged,
 }
 
 impl gpui::EventEmitter<SettingsEvent> for SettingsView {}
@@ -77,6 +83,25 @@ pub struct SettingsView {
 const SETTINGS_BLOCK_COUNT: usize = 6;
 
 impl SettingsView {
+    /// Re-apply the current locale to state that a repaint cannot reach.
+    ///
+    /// `refresh_windows` re-runs `render`, but gpui's virtualized lists cache
+    /// measured item heights and invalidate them only on a width change, so a
+    /// translation that changes a row's height would otherwise leave the list
+    /// scrolled to stale offsets.
+    pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        // Placeholders are captured when the input is constructed, and this
+        // view is built once at startup, so they need pushing in by hand.
+        self.webdav_username.update(cx, |input, cx| {
+            input.set_placeholder(t(k::SETTINGS_SYNC_USERNAME_PLACEHOLDER), cx)
+        });
+        self.webdav_password.update(cx, |input, cx| {
+            input.set_placeholder(t(k::SETTINGS_SYNC_PASSWORD_PLACEHOLDER), cx)
+        });
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
     pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.confirm_download.is_some() {
             window.play_system_bell();
@@ -134,9 +159,9 @@ impl SettingsView {
         let webdav = settings.webdav_sync.clone().unwrap_or_default();
         let s3 = settings.s3_sync.clone().unwrap_or_default();
         let webdav_url = cx.new(|cx| text_input(cx, "https://dav.example.com", &webdav.base_url));
-        let webdav_username = cx.new(|cx| text_input(cx, "用户名", &webdav.username));
+        let webdav_username = cx.new(|cx| text_input(cx, t(k::SETTINGS_SYNC_USERNAME_PLACEHOLDER), &webdav.username));
         let webdav_password = cx.new(|cx| {
-            let mut input = TextInput::new(cx, "密码").masked(true);
+            let mut input = TextInput::new(cx, t(k::SETTINGS_SYNC_PASSWORD_PLACEHOLDER)).masked(true);
             input.set_content(webdav.password.clone(), cx);
             input
         });
@@ -444,14 +469,32 @@ impl SettingsView {
         self.persist(cx);
     }
 
-    fn cycle_language(&mut self, cx: &mut Context<Self>) {
-        let next = match self.settings.language.as_deref() {
-            Some("en") => "zh",
-            Some("zh") => "en",
-            _ => "en",
+    /// `None` = follow the OS, then one entry per shipped locale.
+    fn language_choices() -> Vec<Option<Locale>> {
+        std::iter::once(None).chain(Locale::ALL.map(Some)).collect()
+    }
+
+    fn selected_language(&self) -> usize {
+        let current = self.settings.language.as_deref().and_then(Locale::from_tag);
+        Self::language_choices()
+            .iter()
+            .position(|choice| *choice == current)
+            .unwrap_or(0)
+    }
+
+    fn set_language(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(choice) = Self::language_choices().get(index).copied() else {
+            return;
         };
-        self.settings.language = Some(next.to_string());
+        self.settings.language = choice.map(|locale| locale.tag().to_string());
         self.persist(cx);
+        // Apply, then repaint: `refresh_windows` is what defeats gpui's
+        // element-state reuse and re-runs `render` across the whole tree.
+        ochub_core::i18n::install(ochub_core::i18n::resolve(
+            self.settings.language.as_deref(),
+        ));
+        cx.emit(SettingsEvent::LocaleChanged);
+        cx.refresh_windows();
     }
 
     fn reload_user_plugins(&mut self, cx: &mut Context<Self>) {
@@ -737,6 +780,34 @@ impl SettingsView {
             }))
     }
 
+    /// A row whose control is a single-select pill row. Unlike a click-to-cycle
+    /// row, every option and the current one are both visible, and any option
+    /// is reachable in one action.
+    fn render_choice_row(
+        &self,
+        id: &'static str,
+        label: impl Into<SharedString>,
+        description: impl Into<SharedString>,
+        options: &[&str],
+        selected: usize,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let listener = cx.listener(move |this, index: &usize, _window, cx| {
+            on_select(this, *index, cx);
+        });
+        layout::row()
+            .child(layout::row_label(label, description))
+            .child(
+                div().flex_shrink_0().child(components::segmented(
+                    id,
+                    options,
+                    selected,
+                    move |index, window, cx| listener(&index, window, cx),
+                )),
+            )
+    }
+
     fn render_input_row(
         label: &'static str,
         description: &'static str,
@@ -821,16 +892,11 @@ impl SettingsView {
     ) -> gpui::AnyElement {
         match ix {
             0 => {
-                let language = self
-                    .settings
-                    .language
-                    .clone()
-                    .unwrap_or_else(|| "auto".to_string());
                 let mut rows: Vec<gpui::AnyElement> = vec![
                     self.render_toggle_row(
                         "set-tray",
-                        "系统菜单快捷切换",
-                        "在 macOS 顶栏和 Windows 任务栏菜单里显示供应商快捷入口。",
+                        &t(k::SETTINGS_BASIC_TRAY_LABEL),
+                        &t(k::SETTINGS_BASIC_TRAY_DESC),
                         self.settings.show_in_tray,
                         Self::toggle_show_in_tray,
                         cx,
@@ -838,8 +904,8 @@ impl SettingsView {
                     .into_any_element(),
                     self.render_toggle_row(
                         "set-minimize",
-                        "关闭窗口时后台保留",
-                        "点击关闭按钮时保留后台进程，方便从系统菜单重新打开。",
+                        &t(k::SETTINGS_BASIC_MINIMIZE_LABEL),
+                        &t(k::SETTINGS_BASIC_MINIMIZE_DESC),
                         self.settings.minimize_to_tray_on_close,
                         Self::toggle_minimize_to_tray,
                         cx,
@@ -847,8 +913,8 @@ impl SettingsView {
                     .into_any_element(),
                     self.render_toggle_row(
                         "set-launch-startup",
-                        "开机启动",
-                        "记录开机启动偏好，供启动项集成读取。",
+                        &t(k::SETTINGS_BASIC_LAUNCH_STARTUP_LABEL),
+                        &t(k::SETTINGS_BASIC_LAUNCH_STARTUP_DESC),
                         self.settings.launch_on_startup,
                         Self::toggle_launch_on_startup,
                         cx,
@@ -856,21 +922,25 @@ impl SettingsView {
                     .into_any_element(),
                     self.render_toggle_row(
                         "set-silent-startup",
-                        "静默启动",
-                        "开机启动时默认隐藏主窗口。",
+                        &t(k::SETTINGS_BASIC_SILENT_STARTUP_LABEL),
+                        &t(k::SETTINGS_BASIC_SILENT_STARTUP_DESC),
                         self.settings.silent_startup,
                         Self::toggle_silent_startup,
                         cx,
                     )
                     .into_any_element(),
                 ];
+                let language_options: Vec<&str> = std::iter::once(raw(k::SETTINGS_BASIC_LANGUAGE_SYSTEM))
+                    .chain(Locale::ALL.iter().map(|locale| locale.endonym()))
+                    .collect();
                 rows.push(
-                    self.render_value_row(
+                    self.render_choice_row(
                         "set-language",
-                        "语言",
-                        "界面语言，点击在 en / zh 间切换。",
-                        language,
-                        Self::cycle_language,
+                        t(k::SETTINGS_BASIC_LANGUAGE_LABEL),
+                        t(k::SETTINGS_BASIC_LANGUAGE_DESC),
+                        &language_options,
+                        self.selected_language(),
+                        |this, index, cx| this.set_language(index, cx),
                         cx,
                     )
                     .into_any_element(),
@@ -1296,7 +1366,11 @@ fn open_url(url: &str) -> Result<(), String> {
         })
 }
 
-fn text_input(cx: &mut Context<TextInput>, placeholder: &str, value: &str) -> TextInput {
+fn text_input(
+    cx: &mut Context<TextInput>,
+    placeholder: impl Into<SharedString>,
+    value: &str,
+) -> TextInput {
     let mut input = TextInput::new(cx, placeholder);
     input.set_content(value.to_string(), cx);
     input
@@ -1304,7 +1378,7 @@ fn text_input(cx: &mut Context<TextInput>, placeholder: &str, value: &str) -> Te
 
 fn option_text_input(
     cx: &mut Context<TextInput>,
-    placeholder: &str,
+    placeholder: impl Into<SharedString>,
     value: &Option<String>,
 ) -> TextInput {
     text_input(cx, placeholder, value.as_deref().unwrap_or_default())

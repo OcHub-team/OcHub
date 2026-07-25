@@ -58,6 +58,7 @@ zip = "8.6"
 tempfile = "3"
 fs2 = "0.4"
 once_cell = "1.21"
+sys-locale = "0.3"
 rquickjs = { version = "0.12", features = ["array-buffer", "classes"] }
 log = "0.4"
 tracing = "0.1"

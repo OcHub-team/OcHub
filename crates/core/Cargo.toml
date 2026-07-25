@@ -36,6 +36,7 @@ zip.workspace = true
 rusqlite.workspace = true
 once_cell.workspace = true
 auto-launch.workspace = true
+sys-locale.workspace = true
 rquickjs.workspace = true
 log.workspace = true
 rust_decimal.workspace = true

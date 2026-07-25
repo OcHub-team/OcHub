@@ -85,6 +85,17 @@ pub struct ToolsView {
 }
 
 impl ToolsView {
+    /// Re-apply the current locale to state that a repaint cannot reach.
+    ///
+    /// `refresh_windows` re-runs `render`, but gpui's virtualized lists cache
+    /// measured item heights and invalidate them only on a width change, so a
+    /// translation that changes a row's height would otherwise leave the list
+    /// scrolled to stale offsets.
+    pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
     pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.confirm.is_some() {
             window.play_system_bell();

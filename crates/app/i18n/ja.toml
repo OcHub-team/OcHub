@@ -1,0 +1,18 @@
+# Japanese.
+#
+# Checked against zh-Hans.toml at build time: every key must be present and use
+# the same {placeholders}. Keys are sorted alphabetically.
+
+"settings.basic.language.desc" = "表示言語。「システムに合わせる」を選ぶと OS の設定に従います。"
+"settings.basic.language.label" = "言語"
+"settings.basic.language.system" = "システムに合わせる"
+"settings.basic.launch_startup.desc" = "ログイン後に OcHub を自動的に起動します。"
+"settings.basic.launch_startup.label" = "ログイン時に起動"
+"settings.basic.minimize.desc" = "閉じるボタンを押してもバックグラウンドで動作を続け、システムメニューから開き直せます。"
+"settings.basic.minimize.label" = "ウィンドウを閉じても終了しない"
+"settings.basic.silent_startup.desc" = "ログイン時の起動ではメインウィンドウを表示せず、システムメニューだけを残します。"
+"settings.basic.silent_startup.label" = "非表示で起動"
+"settings.basic.tray.desc" = "macOS のメニューバーと Windows のタスクバーメニューにプロバイダーのショートカットを表示します。"
+"settings.basic.tray.label" = "システムメニューでの切り替え"
+"settings.sync.password.placeholder" = "パスワード"
+"settings.sync.username.placeholder" = "ユーザー名"

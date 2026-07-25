@@ -175,6 +175,18 @@ pub struct SessionsView {
 }
 
 impl SessionsView {
+    /// Re-apply the current locale to state that a repaint cannot reach.
+    ///
+    /// `refresh_windows` re-runs `render`, but gpui's virtualized lists cache
+    /// measured item heights and invalidate them only on a width change, so a
+    /// translation that changes a row's height would otherwise leave the list
+    /// scrolled to stale offsets.
+    pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        self.session_list_state.remeasure();
+        self.transcript_list_state.remeasure();
+        cx.notify();
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let now = Local::now();
         let this = Self {
