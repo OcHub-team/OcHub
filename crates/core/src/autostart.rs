@@ -54,6 +54,7 @@ pub fn macos_app_bundle_path(exe_path: &Path) -> Option<PathBuf> {
 /// Only used to populate `AssociatedBundleIdentifiers`, which lets macOS 13+
 /// show the item under the app's own name in System Settings › Login Items.
 /// Purely cosmetic, so every failure degrades to `None` rather than erroring.
+#[cfg(any(target_os = "macos", test))]
 fn macos_bundle_identifier(bundle: &Path) -> Option<String> {
     let plist = std::fs::read_to_string(bundle.join("Contents/Info.plist")).ok()?;
     let key = plist.find("<key>CFBundleIdentifier</key>")?;
