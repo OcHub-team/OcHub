@@ -186,7 +186,7 @@ jobs:
           test "$(find dist -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
           (
             cd dist
-            find . -maxdepth 1 -type f -print0 |
+            find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 |
               sort -z |
               xargs -0 sha256sum |
               sed 's#  \./#  #' > SHA256SUMS
