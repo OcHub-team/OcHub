@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn github_release_urls_are_accepted() {
-        validate_download_url("https://github.com/Sleepstars/OcHub/releases/download/v0.2.0/a.dmg")
+        validate_download_url("https://github.com/OcHub-team/OcHub/releases/download/v0.2.0/a.dmg")
             .unwrap();
         // GitHub redirects release downloads to object storage.
         validate_download_url("https://objects.githubusercontent.com/foo").unwrap();

@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::{AppError, Result};
 
-pub(crate) const DEFAULT_REPO: &str = "Sleepstars/OcHub";
+pub(crate) const DEFAULT_REPO: &str = "OcHub-team/OcHub";
 
 /// Update discovery should fail fast; the app checks on a timer and a stalled
 /// request would otherwise pin a connection for the shared client's 10 minutes.

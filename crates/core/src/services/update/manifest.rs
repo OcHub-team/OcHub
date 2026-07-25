@@ -216,19 +216,19 @@ mod tests {
   "platforms": {
     "linux-x86_64": {
       "signature": "SIGDDD",
-      "url": "https://github.com/Sleepstars/OcHub/releases/download/v0.2.0/OcHub_0.2.0_amd64.AppImage"
+      "url": "https://github.com/OcHub-team/OcHub/releases/download/v0.2.0/OcHub_0.2.0_amd64.AppImage"
     },
     "darwin-aarch64": {
       "signature": "SIGAAA",
-      "url": "https://github.com/Sleepstars/OcHub/releases/download/v0.2.0/OcHub_0.2.0_macos_aarch64.app.tar.gz"
+      "url": "https://github.com/OcHub-team/OcHub/releases/download/v0.2.0/OcHub_0.2.0_macos_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
       "signature": "SIGBBB",
-      "url": "https://github.com/Sleepstars/OcHub/releases/download/v0.2.0/OcHub_0.2.0_macos_x86_64.app.tar.gz"
+      "url": "https://github.com/OcHub-team/OcHub/releases/download/v0.2.0/OcHub_0.2.0_macos_x86_64.app.tar.gz"
     },
     "windows-x86_64": {
       "signature": "SIGCCC",
-      "url": "https://github.com/Sleepstars/OcHub/releases/download/v0.2.0/OcHub_0.2.0_x64-setup.exe"
+      "url": "https://github.com/OcHub-team/OcHub/releases/download/v0.2.0/OcHub_0.2.0_x64-setup.exe"
     }
   }
 }"#;

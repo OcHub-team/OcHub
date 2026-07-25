@@ -11,15 +11,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Sleepstars/OcHub/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Sleepstars/OcHub/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/Sleepstars/OcHub/actions/workflows/release.yml"><img alt="Release" src="https://github.com/Sleepstars/OcHub/actions/workflows/release.yml/badge.svg"></a>
-  <a href="https://github.com/Sleepstars/OcHub/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Sleepstars/OcHub?display_name=tag&sort=semver"></a>
-  <a href="LICENSE"><img alt="GPL-3.0-or-later" src="https://img.shields.io/github/license/Sleepstars/OcHub"></a>
+  <a href="https://github.com/OcHub-team/OcHub/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/OcHub-team/OcHub/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/OcHub-team/OcHub/actions/workflows/release.yml"><img alt="Release" src="https://github.com/OcHub-team/OcHub/actions/workflows/release.yml/badge.svg"></a>
+  <a href="https://github.com/OcHub-team/OcHub/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/OcHub-team/OcHub?display_name=tag&sort=semver"></a>
+  <a href="LICENSE"><img alt="GPL-3.0-or-later" src="https://img.shields.io/github/license/OcHub-team/OcHub"></a>
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-31b8b5">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Sleepstars/OcHub/releases/latest">Download</a>
+  <a href="https://github.com/OcHub-team/OcHub/releases/latest">Download</a>
   ·
   <a href="#what-ochub-does">Features</a>
   ·
@@ -57,18 +57,18 @@ Every version tag is built on the matching native GitHub-hosted runner.
 Homebrew automatically selects the Apple Silicon or Intel build:
 
 ```sh
-brew install --cask sleepstars/tap/ochub
+brew install --cask ochub-team/tap/ochub
 ```
 
 Upgrade or uninstall OcHub with:
 
 ```sh
-brew upgrade --cask sleepstars/tap/ochub
+brew upgrade --cask ochub-team/tap/ochub
 brew uninstall --cask ochub
 ```
 
 The Cask is maintained in the
-[`Sleepstars/homebrew-tap`](https://github.com/Sleepstars/homebrew-tap)
+[`OcHub-team/homebrew-tap`](https://github.com/OcHub-team/homebrew-tap)
 repository and downloads the same DMG published with each GitHub Release.
 
 ### Direct downloads
@@ -107,7 +107,7 @@ a downloaded file with:
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
-gh attestation verify <downloaded-file> --repo Sleepstars/OcHub
+gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
 ```
 
 ### macOS: approving the app on first launch
@@ -123,7 +123,7 @@ System Settings route is the only one. To skip the prompt entirely, install
 without the quarantine flag:
 
 ```sh
-brew install --cask --no-quarantine sleepstars/tap/ochub
+brew install --cask --no-quarantine ochub-team/tap/ochub
 ```
 
 Updates installed from inside OcHub are never quarantined, so this is a
@@ -153,7 +153,7 @@ The repository pins Rust **1.97.1** in `rust-toolchain.toml`. Rustup selects it
 automatically:
 
 ```sh
-git clone https://github.com/Sleepstars/OcHub.git
+git clone https://github.com/OcHub-team/OcHub.git
 cd OcHub
 cargo run -p ochub-app
 ```
