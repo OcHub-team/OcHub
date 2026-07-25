@@ -17,8 +17,10 @@ use ochub_core::AppState;
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::shell_menu;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 #[derive(Clone, Copy)]
@@ -54,6 +56,7 @@ pub struct SettingsView {
     app: Arc<AppState>,
     settings: AppSettings,
     status: Option<SharedString>,
+    status_level: Option<NotificationLevel>,
     update_checking: bool,
     update_info: Option<UpdateCheckResult>,
     sync_busy: bool,
@@ -159,9 +162,16 @@ impl SettingsView {
         let webdav = settings.webdav_sync.clone().unwrap_or_default();
         let s3 = settings.s3_sync.clone().unwrap_or_default();
         let webdav_url = cx.new(|cx| text_input(cx, "https://dav.example.com", &webdav.base_url));
-        let webdav_username = cx.new(|cx| text_input(cx, t(k::SETTINGS_SYNC_USERNAME_PLACEHOLDER), &webdav.username));
+        let webdav_username = cx.new(|cx| {
+            text_input(
+                cx,
+                t(k::SETTINGS_SYNC_USERNAME_PLACEHOLDER),
+                &webdav.username,
+            )
+        });
         let webdav_password = cx.new(|cx| {
-            let mut input = TextInput::new(cx, t(k::SETTINGS_SYNC_PASSWORD_PLACEHOLDER)).masked(true);
+            let mut input =
+                TextInput::new(cx, t(k::SETTINGS_SYNC_PASSWORD_PLACEHOLDER)).masked(true);
             input.set_content(webdav.password.clone(), cx);
             input
         });
@@ -226,6 +236,7 @@ impl SettingsView {
             app,
             settings,
             status: None,
+            status_level: None,
             update_checking: false,
             update_info: None,
             sync_busy: false,
@@ -250,14 +261,33 @@ impl SettingsView {
         }
     }
 
+    /// Every status toast carries its severity explicitly. Inferring it from
+    /// the wording mis-reads several of these messages (a saved directory that
+    /// merely *suggests* a restart is not a warning) and stops working
+    /// entirely once the copy is translated.
+    fn set_status(
+        &mut self,
+        level: NotificationLevel,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.status = Some(text.into());
+        self.status_level = Some(level);
+        cx.notify();
+    }
+
     fn persist(&mut self, cx: &mut Context<Self>) {
         let saved = match settings::update_settings(self.settings.clone()) {
             Ok(()) => {
-                self.status = Some(SharedString::from("已保存"));
+                self.set_status(NotificationLevel::Success, t(k::SETTINGS_STATUS_SAVED), cx);
                 true
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("保存失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SETTINGS_STATUS_SAVE_FAILED, error = err),
+                    cx,
+                );
                 false
             }
         };
@@ -343,40 +373,53 @@ impl SettingsView {
         }
         let mut sync = self.webdav_settings_from_inputs(cx);
         if let Err(err) = settings::set_webdav_sync_settings(Some(sync.clone())) {
-            self.status = Some(SharedString::from(format!("保存 WebDAV 设置失败: {err}")));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(
+                    k::SETTINGS_SYNC_SETTINGS_SAVE_FAILED,
+                    provider = "WebDAV",
+                    error = err
+                ),
+                cx,
+            );
             return;
         }
         self.settings = settings::get_settings();
         self.sync_busy = true;
-        self.status = Some(SharedString::from(sync_start_message("WebDAV", operation)));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            sync_start_message("WebDAV", operation),
+            cx,
+        );
 
         let db = self.app.db.clone();
         cx.spawn(async move |this, cx| {
             let result = match operation {
                 SyncOperation::Test => ochub_core::services::webdav_sync::check_connection(&sync)
                     .await
-                    .map(|_| "WebDAV 连接成功".to_string()),
+                    .map(|_| tf!(k::SETTINGS_SYNC_TEST_OK, provider = "WebDAV")),
                 SyncOperation::Upload => ochub_core::services::webdav_sync::run_with_sync_lock(
                     ochub_core::services::webdav_sync::upload(&db, &mut sync),
                 )
                 .await
-                .map(|_| "WebDAV 上传完成".to_string()),
+                .map(|_| tf!(k::SETTINGS_SYNC_UPLOAD_OK, provider = "WebDAV")),
                 SyncOperation::Download => ochub_core::services::webdav_sync::run_with_sync_lock(
                     ochub_core::services::webdav_sync::download(&db, &mut sync),
                 )
                 .await
-                .map(|_| "WebDAV 下载并还原完成".to_string()),
+                .map(|_| tf!(k::SETTINGS_SYNC_DOWNLOAD_OK, provider = "WebDAV")),
             };
             this.update(cx, |this, cx| {
                 this.sync_busy = false;
                 this.settings = settings::get_settings();
-                this.status = Some(SharedString::from(match result {
-                    Ok(msg) => msg,
-                    Err(err) => format!("WebDAV 操作失败: {err}"),
-                }));
-                cx.notify();
+                match result {
+                    Ok(msg) => this.set_status(NotificationLevel::Success, msg, cx),
+                    Err(err) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_SYNC_FAILED, provider = "WebDAV", error = err),
+                        cx,
+                    ),
+                }
             })
             .ok();
         })
@@ -389,40 +432,53 @@ impl SettingsView {
         }
         let mut sync = self.s3_settings_from_inputs(cx);
         if let Err(err) = settings::set_s3_sync_settings(Some(sync.clone())) {
-            self.status = Some(SharedString::from(format!("保存 S3 设置失败: {err}")));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(
+                    k::SETTINGS_SYNC_SETTINGS_SAVE_FAILED,
+                    provider = "S3",
+                    error = err
+                ),
+                cx,
+            );
             return;
         }
         self.settings = settings::get_settings();
         self.sync_busy = true;
-        self.status = Some(SharedString::from(sync_start_message("S3", operation)));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            sync_start_message("S3", operation),
+            cx,
+        );
 
         let db = self.app.db.clone();
         cx.spawn(async move |this, cx| {
             let result = match operation {
                 SyncOperation::Test => ochub_core::services::s3_sync::check_connection(&sync)
                     .await
-                    .map(|_| "S3 连接成功".to_string()),
+                    .map(|_| tf!(k::SETTINGS_SYNC_TEST_OK, provider = "S3")),
                 SyncOperation::Upload => ochub_core::services::s3_sync::run_with_sync_lock(
                     ochub_core::services::s3_sync::upload(&db, &mut sync),
                 )
                 .await
-                .map(|_| "S3 上传完成".to_string()),
+                .map(|_| tf!(k::SETTINGS_SYNC_UPLOAD_OK, provider = "S3")),
                 SyncOperation::Download => ochub_core::services::s3_sync::run_with_sync_lock(
                     ochub_core::services::s3_sync::download(&db, &mut sync),
                 )
                 .await
-                .map(|_| "S3 下载并还原完成".to_string()),
+                .map(|_| tf!(k::SETTINGS_SYNC_DOWNLOAD_OK, provider = "S3")),
             };
             this.update(cx, |this, cx| {
                 this.sync_busy = false;
                 this.settings = settings::get_settings();
-                this.status = Some(SharedString::from(match result {
-                    Ok(msg) => msg,
-                    Err(err) => format!("S3 操作失败: {err}"),
-                }));
-                cx.notify();
+                match result {
+                    Ok(msg) => this.set_status(NotificationLevel::Success, msg, cx),
+                    Err(err) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_SYNC_FAILED, provider = "S3", error = err),
+                        cx,
+                    ),
+                }
             })
             .ok();
         })
@@ -443,11 +499,8 @@ impl SettingsView {
         let target = !self.settings.launch_on_startup;
         // Register with the OS first: the stored flag must never claim a login
         // item that does not exist.
-        if let Err(err) =
-            ochub_core::autostart::set_enabled(target, self.settings.silent_startup)
-        {
-            self.status = Some(SharedString::from(err.to_string()));
-            cx.notify();
+        if let Err(err) = ochub_core::autostart::set_enabled(target, self.settings.silent_startup) {
+            self.set_status(NotificationLevel::Error, err.to_string(), cx);
             return;
         }
         self.settings.launch_on_startup = target;
@@ -460,8 +513,7 @@ impl SettingsView {
         // login item has to be rewritten for the change to mean anything.
         if self.settings.launch_on_startup {
             if let Err(err) = ochub_core::autostart::set_enabled(true, target) {
-                self.status = Some(SharedString::from(err.to_string()));
-                cx.notify();
+                self.set_status(NotificationLevel::Error, err.to_string(), cx);
                 return;
             }
         }
@@ -490,9 +542,7 @@ impl SettingsView {
         self.persist(cx);
         // Apply, then repaint: `refresh_windows` is what defeats gpui's
         // element-state reuse and re-runs `render` across the whole tree.
-        ochub_core::i18n::install(ochub_core::i18n::resolve(
-            self.settings.language.as_deref(),
-        ));
+        ochub_core::i18n::install(ochub_core::i18n::resolve(self.settings.language.as_deref()));
         cx.emit(SettingsEvent::LocaleChanged);
         cx.refresh_windows();
     }
@@ -503,14 +553,24 @@ impl SettingsView {
             .iter()
             .filter(|p| p.is_user_manifest())
             .count();
-        self.status = Some(SharedString::from(if errors.is_empty() {
-            format!("插件已重新加载（{plugin_count} 个用户插件）")
-        } else {
-            format!(
-                "插件已重新加载（{plugin_count} 个成功，{} 个失败）",
-                errors.len()
+        // A partial reload still leaves broken manifests behind, so it is a
+        // warning rather than a clean success.
+        let (level, message) = if errors.is_empty() {
+            (
+                NotificationLevel::Success,
+                tf!(k::SETTINGS_APPS_PLUGINS_RELOADED, count = plugin_count),
             )
-        }));
+        } else {
+            (
+                NotificationLevel::Warning,
+                tf!(
+                    k::SETTINGS_APPS_PLUGINS_RELOADED_PARTIAL,
+                    loaded = plugin_count,
+                    failed = errors.len()
+                ),
+            )
+        };
+        self.set_status(level, message, cx);
         shell_menu::refresh(&self.app, cx);
         cx.emit(SettingsEvent::AppsChanged);
         self.list_state.remeasure();
@@ -520,8 +580,11 @@ impl SettingsView {
     fn open_user_plugins_dir(&mut self, cx: &mut Context<Self>) {
         let dir = ochub_core::plugin::user_plugins_dir();
         if let Err(err) = std::fs::create_dir_all(&dir) {
-            self.status = Some(SharedString::from(format!("创建插件目录失败: {err}")));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::SETTINGS_APPS_PLUGINS_DIR_CREATE_FAILED, error = err),
+                cx,
+            );
             return;
         }
         #[cfg(target_os = "macos")]
@@ -532,16 +595,27 @@ impl SettingsView {
         let result = Command::new("xdg-open").arg(&dir).status();
         match result {
             Ok(status) if status.success() => {
-                self.status = Some(SharedString::from("已打开插件目录"));
+                self.set_status(
+                    NotificationLevel::Success,
+                    t(k::SETTINGS_APPS_PLUGINS_DIR_OPENED),
+                    cx,
+                );
             }
             Ok(status) => {
-                self.status = Some(SharedString::from(format!("打开失败，状态: {status}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SETTINGS_APPS_OPEN_FAILED_STATUS, status = status),
+                    cx,
+                );
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("打开失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SETTINGS_APPS_OPEN_FAILED, error = err),
+                    cx,
+                );
             }
         }
-        cx.notify();
     }
 
     fn app_is_enabled(&self, plugin: &dyn ochub_core::plugin::AppPlugin) -> bool {
@@ -561,8 +635,12 @@ impl SettingsView {
             .filter(|p| self.app_is_enabled(p.as_ref()))
             .count();
         if currently && enabled_count <= 1 {
-            self.status = Some(SharedString::from("至少保留一个启用的应用"));
-            cx.notify();
+            // Refused, not failed: the toggle simply does not apply here.
+            self.set_status(
+                NotificationLevel::Warning,
+                t(k::SETTINGS_APPS_KEEP_ONE_ENABLED),
+                cx,
+            );
             return;
         }
 
@@ -571,8 +649,11 @@ impl SettingsView {
             .enable_all()
             .build()
         else {
-            self.status = Some(SharedString::from("操作失败: runtime 初始化失败"));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::SETTINGS_APPS_RUNTIME_INIT_FAILED),
+                cx,
+            );
             return;
         };
         let result = runtime.block_on(ochub_core::services::apps::set_app_enabled(
@@ -583,16 +664,24 @@ impl SettingsView {
         match result {
             Ok(()) => {
                 self.settings = settings::get_settings();
-                self.status = Some(SharedString::from(if currently {
-                    "已停用"
-                } else {
-                    "已启用"
-                }));
+                self.set_status(
+                    NotificationLevel::Success,
+                    if currently {
+                        t(k::SETTINGS_APPS_DISABLED)
+                    } else {
+                        t(k::SETTINGS_APPS_ENABLED)
+                    },
+                    cx,
+                );
                 shell_menu::refresh(&self.app, cx);
                 cx.emit(SettingsEvent::AppsChanged);
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("操作失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SETTINGS_APPS_ACTION_FAILED, error = err),
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -603,14 +692,19 @@ impl SettingsView {
         match app_store::set_app_config_dir_to_store(empty_as_none(&app_dir)) {
             Ok(()) => {
                 self.persist(cx);
-                self.status = Some(SharedString::from(
-                    "目录设置已保存；数据目录切换后建议重启应用。",
-                ));
-                cx.notify();
+                // The restart is advice, not a caveat on the save itself.
+                self.set_status(
+                    NotificationLevel::Success,
+                    t(k::SETTINGS_CONFIG_DIR_SAVED),
+                    cx,
+                );
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("保存数据目录失败: {err}")));
-                cx.notify();
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SETTINGS_CONFIG_DIR_SAVE_FAILED, error = err),
+                    cx,
+                );
             }
         }
     }
@@ -619,20 +713,27 @@ impl SettingsView {
         let interval_raw = input_value(&self.backup_interval_hours, cx);
         let retain_raw = input_value(&self.backup_retain_count, cx);
         let Ok(interval) = parse_optional_u32(&interval_raw) else {
-            self.status = Some(SharedString::from("备份间隔必须是正整数，或留空使用默认值"));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::SETTINGS_BACKUP_INTERVAL_INVALID),
+                cx,
+            );
             return;
         };
         let Ok(retain) = parse_optional_u32(&retain_raw) else {
-            self.status = Some(SharedString::from(
-                "备份保留数量必须是正整数，或留空使用默认值",
-            ));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::SETTINGS_BACKUP_RETAIN_INVALID),
+                cx,
+            );
             return;
         };
         if interval == Some(0) || retain == Some(0) {
-            self.status = Some(SharedString::from("备份参数必须大于 0，或留空使用默认值"));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::SETTINGS_BACKUP_VALUE_TOO_SMALL),
+                cx,
+            );
             return;
         }
 
@@ -648,8 +749,11 @@ impl SettingsView {
             return;
         }
         self.update_checking = true;
-        self.status = Some(SharedString::from("正在检查更新..."));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::SETTINGS_UPDATE_CHECKING_STATUS),
+            cx,
+        );
 
         let task = cx.background_spawn(async move {
             match tokio::runtime::Builder::new_current_thread()
@@ -659,8 +763,9 @@ impl SettingsView {
                 Ok(runtime) => {
                     runtime.block_on(ochub_core::services::update::check_for_updates(None))
                 }
-                Err(err) => Err(ochub_core::AppError::Config(format!(
-                    "构建异步运行时失败: {err}"
+                Err(err) => Err(ochub_core::AppError::Config(tf!(
+                    k::SETTINGS_UPDATE_RUNTIME_FAILED,
+                    error = err
                 ))),
             }
         });
@@ -670,19 +775,38 @@ impl SettingsView {
                 this.update_checking = false;
                 match result {
                     Ok(info) => {
-                        this.status = Some(SharedString::from(if info.has_update {
-                            format!(
-                                "发现新版本 {}，当前版本 {}。",
-                                info.latest_version.as_deref().unwrap_or("未知"),
-                                info.current_version
+                        // An available update is a neutral finding; being up to
+                        // date is the check completing with nothing to do.
+                        let (level, message) = if info.has_update {
+                            (
+                                NotificationLevel::Info,
+                                tf!(
+                                    k::SETTINGS_UPDATE_AVAILABLE,
+                                    latest = info
+                                        .latest_version
+                                        .as_deref()
+                                        .unwrap_or(raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION)),
+                                    current = info.current_version
+                                ),
                             )
                         } else {
-                            format!("已是最新版本 {}。", info.current_version)
-                        }));
+                            (
+                                NotificationLevel::Success,
+                                tf!(
+                                    k::SETTINGS_UPDATE_UP_TO_DATE,
+                                    current = info.current_version
+                                ),
+                            )
+                        };
+                        this.set_status(level, message, cx);
                         this.update_info = Some(info);
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("检查更新失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SETTINGS_UPDATE_CHECK_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -700,27 +824,40 @@ impl SettingsView {
             .unwrap_or_else(|| ochub_core::services::latest_release_url(None));
         match open_url(&url) {
             Ok(()) => {
-                self.status = Some(SharedString::from("已打开发布页"));
+                self.set_status(
+                    NotificationLevel::Success,
+                    t(k::SETTINGS_UPDATE_RELEASE_OPENED),
+                    cx,
+                );
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("打开发布页失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SETTINGS_UPDATE_RELEASE_OPEN_FAILED, error = err),
+                    cx,
+                );
             }
         }
-        cx.notify();
     }
 
     fn update_row_value(&self) -> String {
         if self.update_checking {
-            return "检查中".to_string();
+            return raw(k::SETTINGS_UPDATE_CHECKING).to_string();
         }
         if let Some(info) = &self.update_info {
             return match (info.has_update, info.latest_version.as_deref()) {
-                (true, Some(latest)) => format!("可更新到 {latest}"),
-                (true, None) => "发现新版本".to_string(),
-                (false, _) => format!("当前 {}", info.current_version),
+                (true, Some(latest)) => tf!(k::SETTINGS_UPDATE_ROW_UPGRADABLE, latest = latest),
+                (true, None) => raw(k::SETTINGS_UPDATE_ROW_NEW_VERSION).to_string(),
+                (false, _) => tf!(
+                    k::SETTINGS_UPDATE_ROW_CURRENT,
+                    version = info.current_version
+                ),
             };
         }
-        format!("当前 {}", env!("CARGO_PKG_VERSION"))
+        tf!(
+            k::SETTINGS_UPDATE_ROW_CURRENT,
+            version = env!("CARGO_PKG_VERSION")
+        )
     }
 
     fn render_toggle_row(
@@ -798,19 +935,17 @@ impl SettingsView {
         });
         layout::row()
             .child(layout::row_label(label, description))
-            .child(
-                div().flex_shrink_0().child(components::segmented(
-                    id,
-                    options,
-                    selected,
-                    move |index, window, cx| listener(&index, window, cx),
-                )),
-            )
+            .child(div().flex_shrink_0().child(components::segmented(
+                id,
+                options,
+                selected,
+                move |index, window, cx| listener(&index, window, cx),
+            )))
     }
 
     fn render_input_row(
-        label: &'static str,
-        description: &'static str,
+        label: impl Into<SharedString>,
+        description: impl Into<SharedString>,
         input: Entity<TextInput>,
     ) -> impl IntoElement {
         layout::row()
@@ -829,7 +964,7 @@ impl SettingsView {
     ) -> impl IntoElement {
         layout::row()
             .child(layout::row_label(
-                format!("{provider} 状态"),
+                tf!(k::SETTINGS_SYNC_STATUS_LABEL, provider = provider),
                 SharedString::from(status),
             ))
             .child(
@@ -841,7 +976,7 @@ impl SettingsView {
                     .child(
                         components::button(
                             format!("{provider}-save"),
-                            "保存",
+                            t(k::SETTINGS_ACTION_SAVE),
                             ButtonTone::Primary,
                             ButtonSize::Sm,
                         )
@@ -850,7 +985,7 @@ impl SettingsView {
                     .child(
                         components::button(
                             format!("{provider}-test"),
-                            "测试",
+                            t(k::SETTINGS_ACTION_TEST),
                             ButtonTone::Neutral,
                             ButtonSize::Sm,
                         )
@@ -859,7 +994,7 @@ impl SettingsView {
                     .child(
                         components::button(
                             format!("{provider}-upload"),
-                            "上传",
+                            t(k::SETTINGS_ACTION_UPLOAD),
                             ButtonTone::Neutral,
                             ButtonSize::Sm,
                         )
@@ -868,7 +1003,7 @@ impl SettingsView {
                     .child(
                         components::button(
                             format!("{provider}-download"),
-                            "下载",
+                            t(k::SETTINGS_ACTION_DOWNLOAD),
                             ButtonTone::Danger,
                             ButtonSize::Sm,
                         )
@@ -930,9 +1065,10 @@ impl SettingsView {
                     )
                     .into_any_element(),
                 ];
-                let language_options: Vec<&str> = std::iter::once(raw(k::SETTINGS_BASIC_LANGUAGE_SYSTEM))
-                    .chain(Locale::ALL.iter().map(|locale| locale.endonym()))
-                    .collect();
+                let language_options: Vec<&str> =
+                    std::iter::once(raw(k::SETTINGS_BASIC_LANGUAGE_SYSTEM))
+                        .chain(Locale::ALL.iter().map(|locale| locale.endonym()))
+                        .collect();
                 rows.push(
                     self.render_choice_row(
                         "set-language",
@@ -948,8 +1084,8 @@ impl SettingsView {
                 rows.push(
                     self.render_value_row(
                         "set-update-check",
-                        "检查更新",
-                        "查询 GitHub 最新发布版本，并和当前应用版本比较。",
+                        &t(k::SETTINGS_UPDATE_LABEL),
+                        &t(k::SETTINGS_UPDATE_DESC),
                         self.update_row_value(),
                         Self::check_updates,
                         cx,
@@ -959,15 +1095,15 @@ impl SettingsView {
                 rows.push(
                     self.render_value_row(
                         "set-update-release",
-                        "发布页",
-                        "打开最新版本发布页；当前 GPUI 版本需要手动下载安装。",
-                        "打开".to_string(),
+                        &t(k::SETTINGS_UPDATE_RELEASE_LABEL),
+                        &t(k::SETTINGS_UPDATE_RELEASE_DESC),
+                        raw(k::SETTINGS_ACTION_OPEN).to_string(),
                         Self::open_release_page,
                         cx,
                     )
                     .into_any_element(),
                 );
-                section_block("基础行为", "窗口、启动与语言偏好。", rows)
+                section_block(t(k::SETTINGS_BASIC_TITLE), t(k::SETTINGS_BASIC_DESC), rows)
             }
             1 => {
                 let mut rows: Vec<gpui::AnyElement> = ochub_core::plugin::all_plugins()
@@ -976,9 +1112,9 @@ impl SettingsView {
                         let id = plugin.id().as_str().to_string();
                         let label = plugin.display_name().to_string();
                         let description = if plugin.is_user_manifest() {
-                            format!("启用 {label} 供应商管理（用户插件）。")
+                            tf!(k::SETTINGS_APPS_PLUGIN_DESC_USER, app = label)
                         } else {
-                            format!("启用 {label} 供应商管理与配置写入。")
+                            tf!(k::SETTINGS_APPS_PLUGIN_DESC, app = label)
                         };
                         let enabled = self.app_is_enabled(plugin.as_ref());
                         self.render_toggle_row(
@@ -1003,9 +1139,10 @@ impl SettingsView {
                             .py_2()
                             .text_sm()
                             .text_color(theme::red())
-                            .child(SharedString::from(format!(
-                                "插件加载失败 {}: {}",
-                                err.path, err.message
+                            .child(SharedString::from(tf!(
+                                k::SETTINGS_APPS_PLUGIN_LOAD_FAILED,
+                                path = err.path,
+                                message = err.message
                             )))
                             .into_any_element(),
                     );
@@ -1013,8 +1150,8 @@ impl SettingsView {
                 rows.push(
                     self.render_value_row(
                         "reload-user-plugins",
-                        "重新加载插件",
-                        "重新扫描 ~/.ochub/apps/*.toml 并注册用户插件。",
+                        &t(k::SETTINGS_APPS_RELOAD_LABEL),
+                        &t(k::SETTINGS_APPS_RELOAD_DESC),
                         String::new(),
                         |this, cx| this.reload_user_plugins(cx),
                         cx,
@@ -1024,35 +1161,31 @@ impl SettingsView {
                 rows.push(
                     self.render_value_row(
                         "open-user-plugins-dir",
-                        "打开插件目录",
-                        "在文件管理器中打开用户插件目录（不存在时自动创建）。",
+                        &t(k::SETTINGS_APPS_PLUGINS_DIR_LABEL),
+                        &t(k::SETTINGS_APPS_PLUGINS_DIR_DESC),
                         String::new(),
                         |this, cx| this.open_user_plugins_dir(cx),
                         cx,
                     )
                     .into_any_element(),
                 );
-                section_block(
-                    "应用管理",
-                    "启用或停用应用。停用后不再显示、不再写入其配置文件；数据保留，可随时重新启用。用户可在插件目录放置 TOML manifest 适配新应用。",
-                    rows,
-                )
+                section_block(t(k::SETTINGS_APPS_TITLE), t(k::SETTINGS_APPS_DESC), rows)
             }
             2 => section_block(
-                "配置目录",
-                "覆盖 OcHub 数据目录；各 CLI 的配置目录已移至对应应用的「应用设置」。",
+                t(k::SETTINGS_CONFIG_DIR_TITLE),
+                t(k::SETTINGS_CONFIG_DIR_DESC),
                 vec![
                     Self::render_input_row(
-                        "OcHub 数据目录",
-                        "数据库、备份和托管技能目录；保存后建议重启应用。",
+                        t(k::SETTINGS_CONFIG_DIR_DATA_LABEL),
+                        t(k::SETTINGS_CONFIG_DIR_DATA_DESC),
                         self.app_config_dir.clone(),
                     )
                     .into_any_element(),
                     self.render_value_row(
                         "set-save-paths",
-                        "保存目录设置",
-                        "写入路径覆盖；数据目录切换后重启才能完整重新加载数据库。",
-                        "保存".to_string(),
+                        &t(k::SETTINGS_CONFIG_DIR_SAVE_LABEL),
+                        &t(k::SETTINGS_CONFIG_DIR_SAVE_DESC),
+                        raw(k::SETTINGS_ACTION_SAVE).to_string(),
                         Self::save_paths,
                         cx,
                     )
@@ -1060,32 +1193,32 @@ impl SettingsView {
                 ],
             ),
             3 => section_block(
-                "终端与备份",
-                "配置会话启动终端和本地自动备份策略。",
+                t(k::SETTINGS_TERMINAL_TITLE),
+                t(k::SETTINGS_TERMINAL_DESC),
                 vec![
                     Self::render_input_row(
-                        "首选终端",
-                        "留空自动探测；可填写 Terminal、iTerm、WezTerm、Ghostty 等名称。",
+                        t(k::SETTINGS_TERMINAL_PREFERRED_LABEL),
+                        t(k::SETTINGS_TERMINAL_PREFERRED_DESC),
                         self.preferred_terminal.clone(),
                     )
                     .into_any_element(),
                     Self::render_input_row(
-                        "备份间隔（小时）",
-                        "留空使用默认 24；用于数据库自动备份。",
+                        t(k::SETTINGS_BACKUP_INTERVAL_LABEL),
+                        t(k::SETTINGS_BACKUP_INTERVAL_DESC),
                         self.backup_interval_hours.clone(),
                     )
                     .into_any_element(),
                     Self::render_input_row(
-                        "备份保留数量",
-                        "留空使用默认 10；最小为 1。",
+                        t(k::SETTINGS_BACKUP_RETAIN_LABEL),
+                        t(k::SETTINGS_BACKUP_RETAIN_DESC),
                         self.backup_retain_count.clone(),
                     )
                     .into_any_element(),
                     self.render_value_row(
                         "set-save-terminal-backup",
-                        "保存终端与备份",
-                        "写入终端偏好、备份间隔和保留数量。",
-                        "保存".to_string(),
+                        &t(k::SETTINGS_TERMINAL_SAVE_LABEL),
+                        &t(k::SETTINGS_TERMINAL_SAVE_DESC),
+                        raw(k::SETTINGS_ACTION_SAVE).to_string(),
                         Self::save_terminal_and_backup,
                         cx,
                     )
@@ -1097,13 +1230,13 @@ impl SettingsView {
                 let webdav_status =
                     sync_status_text(webdav.enabled, webdav.auto_sync, &webdav.status);
                 section_block(
-                    "WebDAV 同步",
-                    "配置远端 WebDAV 目录，手动上传/下载本地数据库和技能快照。",
+                    t(k::SETTINGS_WEBDAV_TITLE),
+                    t(k::SETTINGS_WEBDAV_DESC),
                     vec![
                         self.render_toggle_row(
                             "webdav-enabled",
-                            "启用 WebDAV",
-                            "启用后可手动同步；自动同步需要另行打开。",
+                            &t(k::SETTINGS_WEBDAV_ENABLED_LABEL),
+                            &t(k::SETTINGS_SYNC_ENABLED_DESC),
                             webdav.enabled,
                             Self::toggle_webdav_enabled,
                             cx,
@@ -1111,40 +1244,40 @@ impl SettingsView {
                         .into_any_element(),
                         self.render_toggle_row(
                             "webdav-auto",
-                            "WebDAV 自动同步",
-                            "数据库变更后自动排队上传快照。",
+                            &t(k::SETTINGS_WEBDAV_AUTO_LABEL),
+                            &t(k::SETTINGS_SYNC_AUTO_DESC),
                             webdav.auto_sync,
                             Self::toggle_webdav_auto,
                             cx,
                         )
                         .into_any_element(),
                         Self::render_input_row(
-                            "地址",
-                            "WebDAV 服务根地址。",
+                            t(k::SETTINGS_WEBDAV_URL_LABEL),
+                            t(k::SETTINGS_WEBDAV_URL_DESC),
                             self.webdav_url.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
-                            "用户名",
-                            "WebDAV 登录用户名。",
+                            t(k::SETTINGS_WEBDAV_USERNAME_LABEL),
+                            t(k::SETTINGS_WEBDAV_USERNAME_DESC),
                             self.webdav_username.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
-                            "密码",
-                            "WebDAV 登录密码；本地 settings 文件会以 0600 权限保存。",
+                            t(k::SETTINGS_WEBDAV_PASSWORD_LABEL),
+                            t(k::SETTINGS_WEBDAV_PASSWORD_DESC),
                             self.webdav_password.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
-                            "远端目录",
-                            "同步快照保存的根目录，默认 ochub-sync。",
+                            t(k::SETTINGS_SYNC_REMOTE_ROOT_LABEL),
+                            t(k::SETTINGS_SYNC_REMOTE_ROOT_DESC),
                             self.webdav_remote_root.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
-                            "配置档",
-                            "同一远端目录下的配置档名称，默认 default。",
+                            t(k::SETTINGS_SYNC_PROFILE_LABEL),
+                            t(k::SETTINGS_SYNC_PROFILE_DESC),
                             self.webdav_profile.clone(),
                         )
                         .into_any_element(),
@@ -1165,13 +1298,13 @@ impl SettingsView {
                 let s3 = self.settings.s3_sync.clone().unwrap_or_default();
                 let s3_status = sync_status_text(s3.enabled, s3.auto_sync, &s3.status);
                 section_block(
-                    "S3 同步",
-                    "配置 S3/R2 兼容存储，手动上传/下载本地数据库和技能快照。",
+                    t(k::SETTINGS_S3_TITLE),
+                    t(k::SETTINGS_S3_DESC),
                     vec![
                         self.render_toggle_row(
                             "s3-enabled",
-                            "启用 S3",
-                            "启用后可手动同步；自动同步需要另行打开。",
+                            &t(k::SETTINGS_S3_ENABLED_LABEL),
+                            &t(k::SETTINGS_SYNC_ENABLED_DESC),
                             s3.enabled,
                             Self::toggle_s3_enabled,
                             cx,
@@ -1179,52 +1312,54 @@ impl SettingsView {
                         .into_any_element(),
                         self.render_toggle_row(
                             "s3-auto",
-                            "S3 自动同步",
-                            "数据库变更后自动排队上传快照。",
+                            &t(k::SETTINGS_S3_AUTO_LABEL),
+                            &t(k::SETTINGS_SYNC_AUTO_DESC),
                             s3.auto_sync,
                             Self::toggle_s3_auto,
                             cx,
                         )
                         .into_any_element(),
+                        // The S3 field names stay in Latin: they are the
+                        // canonical names in every S3 console and SDK.
                         Self::render_input_row(
                             "Region",
-                            "S3 区域；Cloudflare R2 常用 auto。",
+                            t(k::SETTINGS_S3_REGION_DESC),
                             self.s3_region.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
                             "Bucket",
-                            "保存同步快照的存储桶。",
+                            t(k::SETTINGS_S3_BUCKET_DESC),
                             self.s3_bucket.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
                             "Access Key ID",
-                            "S3/R2 访问密钥 ID。",
+                            t(k::SETTINGS_S3_ACCESS_KEY_DESC),
                             self.s3_access_key.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
                             "Secret Access Key",
-                            "S3/R2 访问密钥 Secret；本地 settings 文件会以 0600 权限保存。",
+                            t(k::SETTINGS_S3_SECRET_KEY_DESC),
                             self.s3_secret_key.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
                             "Endpoint",
-                            "兼容 S3 的自定义 Endpoint；AWS S3 可留空。",
+                            t(k::SETTINGS_S3_ENDPOINT_DESC),
                             self.s3_endpoint.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
-                            "远端目录",
-                            "同步快照保存的根目录，默认 ochub-sync。",
+                            t(k::SETTINGS_SYNC_REMOTE_ROOT_LABEL),
+                            t(k::SETTINGS_SYNC_REMOTE_ROOT_DESC),
                             self.s3_remote_root.clone(),
                         )
                         .into_any_element(),
                         Self::render_input_row(
-                            "配置档",
-                            "同一远端目录下的配置档名称，默认 default。",
+                            t(k::SETTINGS_SYNC_PROFILE_LABEL),
+                            t(k::SETTINGS_SYNC_PROFILE_DESC),
                             self.s3_profile.clone(),
                         )
                         .into_any_element(),
@@ -1250,7 +1385,7 @@ impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         layout::page()
             .relative()
-            .child(layout::page_header("设置", None))
+            .child(layout::page_header(t(k::SETTINGS_PAGE_TITLE), None))
             .child(layout::virtual_body(
                 "settings-body",
                 gpui::list(
@@ -1266,23 +1401,24 @@ impl Render for SettingsView {
                 };
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header(SharedString::from(format!(
-                            "下载并还原 {provider} 快照"
+                        .child(components::modal_header(SharedString::from(tf!(
+                            k::SETTINGS_CONFIRM_DOWNLOAD_TITLE,
+                            provider = provider
                         ))))
                         .child(
                             components::modal_body().child(
-                                div()
-                                    .text_color(theme::subtext())
-                                    .text_sm()
-                                    .child(SharedString::from(format!(
-                                        "确定从 {provider} 下载快照并还原到本地吗？当前本地数据将被覆盖，此操作不可撤销。"
-                                    ))),
+                                div().text_color(theme::subtext()).text_sm().child(
+                                    SharedString::from(tf!(
+                                        k::SETTINGS_CONFIRM_DOWNLOAD_BODY,
+                                        provider = provider
+                                    )),
+                                ),
                             ),
                         )
                         .child(components::modal_footer(vec![
                             components::button(
                                 "confirm-download-cancel",
-                                "取消",
+                                t(k::SETTINGS_ACTION_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -1293,7 +1429,7 @@ impl Render for SettingsView {
                             .into_any_element(),
                             components::button(
                                 "confirm-download-ok",
-                                "下载并还原",
+                                t(k::SETTINGS_CONFIRM_DOWNLOAD_CONFIRM),
                                 ButtonTone::Danger,
                                 ButtonSize::Sm,
                             )
@@ -1318,8 +1454,8 @@ impl Render for SettingsView {
 /// One settings section as a list item: section header above a grouped card, with
 /// its own bottom spacing (the virtualized list draws no inter-item gap).
 fn section_block(
-    title: &'static str,
-    description: &'static str,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
     rows: Vec<gpui::AnyElement>,
 ) -> gpui::AnyElement {
     div()
@@ -1361,7 +1497,7 @@ fn open_url(url: &str) -> Result<(), String> {
             if status.success() {
                 Ok(())
             } else {
-                Err(format!("退出状态 {status}"))
+                Err(tf!(k::SETTINGS_ERROR_EXIT_STATUS, status = status))
             }
         })
 }
@@ -1416,25 +1552,28 @@ fn parse_optional_u32(value: &str) -> Result<Option<u32>, ()> {
 
 fn sync_start_message(provider: &str, operation: SyncOperation) -> String {
     match operation {
-        SyncOperation::Test => format!("正在测试 {provider} 连接..."),
-        SyncOperation::Upload => format!("正在上传 {provider} 快照..."),
-        SyncOperation::Download => format!("正在从 {provider} 下载并还原..."),
+        SyncOperation::Test => tf!(k::SETTINGS_SYNC_START_TEST, provider = provider),
+        SyncOperation::Upload => tf!(k::SETTINGS_SYNC_START_UPLOAD, provider = provider),
+        SyncOperation::Download => tf!(k::SETTINGS_SYNC_START_DOWNLOAD, provider = provider),
     }
 }
 
+/// The mode is a whole clause rather than a fragment, so every locale is free to
+/// pick its own separator and word order when a last-error or last-sync detail
+/// is appended to it.
 fn sync_status_text(enabled: bool, auto_sync: bool, status: &settings::WebDavSyncStatus) -> String {
     let mode = match (enabled, auto_sync) {
-        (true, true) => "已启用，自动同步开启",
-        (true, false) => "已启用，自动同步关闭",
-        (false, _) => "未启用",
+        (true, true) => raw(k::SETTINGS_SYNC_STATUS_ON_AUTO),
+        (true, false) => raw(k::SETTINGS_SYNC_STATUS_ON),
+        (false, _) => raw(k::SETTINGS_SYNC_STATUS_OFF),
     };
     if let Some(err) = &status.last_error {
-        return format!("{mode}；上次错误：{err}");
+        return tf!(k::SETTINGS_SYNC_STATUS_WITH_ERROR, mode = mode, error = err);
     }
     if let Some(ts) = status.last_sync_at {
-        return format!("{mode}；上次同步 Unix 时间 {ts}");
+        return tf!(k::SETTINGS_SYNC_STATUS_WITH_TIME, mode = mode, time = ts);
     }
     mode.to_string()
 }
 
-crate::notifications::impl_status_toasts!(SettingsView);
+crate::notifications::impl_status_toasts_leveled!(SettingsView);

@@ -14,8 +14,11 @@ use ochub_core::settings::{self, AppSettings};
 use ochub_core::AppType;
 
 use crate::components::{self, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 /// Emitted when the user dismisses the panel (back to the provider list).
@@ -31,6 +34,7 @@ pub struct AppSettingsView {
     /// The app's config-dir override input (None for apps without one).
     config_dir: Option<Entity<TextInput>>,
     status: Option<SharedString>,
+    status_level: Option<NotificationLevel>,
     scroll_handle: ScrollHandle,
 }
 
@@ -60,6 +64,7 @@ impl AppSettingsView {
             settings,
             config_dir,
             status: None,
+            status_level: None,
             scroll_handle: ScrollHandle::new(),
         }
     }
@@ -70,6 +75,7 @@ impl AppSettingsView {
         self.settings = settings::get_settings();
         self.config_dir = Self::make_config_dir_input(app_type, &self.settings, cx);
         self.status = None;
+        self.status_level = None;
         cx.notify();
     }
 
@@ -87,10 +93,21 @@ impl AppSettingsView {
         }))
     }
 
+    /// Every toast carries its severity explicitly; leaving the level unset
+    /// would make the toast host guess it from the wording, which breaks as
+    /// soon as the wording is translated. Callers redraw themselves.
+    fn set_status(&mut self, level: NotificationLevel, text: impl Into<SharedString>) {
+        self.status = Some(text.into());
+        self.status_level = Some(level);
+    }
+
     fn persist(&mut self, cx: &mut Context<Self>) {
         match settings::update_settings(self.settings.clone()) {
-            Ok(()) => self.status = Some(SharedString::from("已保存")),
-            Err(err) => self.status = Some(SharedString::from(format!("保存失败: {err}"))),
+            Ok(()) => self.set_status(NotificationLevel::Success, t(k::APP_SETTINGS_STATUS_SAVED)),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::APP_SETTINGS_STATUS_SAVE_FAILED, error = err),
+            ),
         }
         self.settings = settings::get_settings();
         cx.notify();
@@ -106,11 +123,20 @@ impl AppSettingsView {
         let Some(input) = self.config_dir.as_ref() else {
             return;
         };
-        let raw = input.read(cx).content().trim().to_string();
-        let value = if raw.is_empty() { None } else { Some(raw) };
+        let entered = input.read(cx).content().trim().to_string();
+        let value = if entered.is_empty() {
+            None
+        } else {
+            Some(entered)
+        };
         write_config_dir(&mut self.settings, self.app_type, value);
         self.persist(cx);
-        self.status = Some(SharedString::from("目录已保存；建议重启应用以完整生效。"));
+        // The save succeeded; the restart is a recommendation, not a caveat that
+        // makes this a warning.
+        self.set_status(
+            NotificationLevel::Success,
+            t(k::APP_SETTINGS_STATUS_DIR_SAVED),
+        );
         cx.notify();
     }
 
@@ -136,13 +162,16 @@ impl AppSettingsView {
                 .flex_col()
                 .gap_2()
                 .w_full()
-                .child(layout::section_header("配置目录", desc))
+                .child(layout::section_header(
+                    t(k::APP_SETTINGS_CONFIG_DIR_TITLE),
+                    desc,
+                ))
                 .child(
                     components::card().gap_3().child(input.clone()).child(
                         div().flex().flex_row().justify_end().child(
                             components::button(
                                 "app-settings-save-dir",
-                                "保存目录",
+                                t(k::APP_SETTINGS_CONFIG_DIR_SAVE),
                                 ButtonTone::Primary,
                                 ButtonSize::Sm,
                             )
@@ -165,13 +194,13 @@ impl Render for AppSettingsView {
         let toggles = app_toggles(app_type);
 
         let header = layout::page_header(
-            SharedString::from(format!("{} 设置", app_label(app_type))),
-            Some("仅作用于该应用的行为与目录。".into()),
+            SharedString::from(tf!(k::APP_SETTINGS_HEADER_TITLE, app = app_label(app_type))),
+            Some(t(k::APP_SETTINGS_HEADER_SUBTITLE)),
         )
         .child(
             components::button(
                 "app-settings-back",
-                "← 返回",
+                t(k::APP_SETTINGS_HEADER_BACK),
                 ButtonTone::Neutral,
                 ButtonSize::Sm,
             )
@@ -183,12 +212,12 @@ impl Render for AppSettingsView {
         let mut column = layout::content_column();
         if !toggles.is_empty() {
             column = column.child(layout::section_header(
-                "行为",
-                "该应用切换/写入时的行为开关。",
+                t(k::APP_SETTINGS_BEHAVIOR_TITLE),
+                t(k::APP_SETTINGS_BEHAVIOR_DESC),
             ));
             let rows: Vec<gpui::AnyElement> = toggles
                 .into_iter()
-                .map(|t| self.render_toggle_row(t, cx).into_any_element())
+                .map(|toggle| self.render_toggle_row(toggle, cx).into_any_element())
                 .collect();
             column = column.child(layout::group(rows));
         }
@@ -221,15 +250,15 @@ fn app_toggles(app: AppType) -> Vec<AppToggle> {
         AppType::Claude => vec![
             AppToggle {
                 id: "app-set-claude-plugin",
-                label: "Claude 插件集成",
-                description: "允许技能和 MCP 功能写入 Claude Code 插件相关配置。",
+                label: raw(k::APP_SETTINGS_CLAUDE_PLUGIN_LABEL),
+                description: raw(k::APP_SETTINGS_CLAUDE_PLUGIN_DESC),
                 get: |s| s.enable_claude_plugin_integration,
                 set: |s, v| s.enable_claude_plugin_integration = v,
             },
             AppToggle {
                 id: "app-set-claude-onboarding",
-                label: "跳过 Claude 引导",
-                description: "自动标记 Claude Code MCP 引导已完成。",
+                label: raw(k::APP_SETTINGS_CLAUDE_ONBOARDING_LABEL),
+                description: raw(k::APP_SETTINGS_CLAUDE_ONBOARDING_DESC),
                 get: |s| s.skip_claude_onboarding,
                 set: |s, v| s.skip_claude_onboarding = v,
             },
@@ -238,15 +267,15 @@ fn app_toggles(app: AppType) -> Vec<AppToggle> {
             let mut toggles = vec![
                 AppToggle {
                     id: "app-set-codex-preserve-auth",
-                    label: "保留 Codex 官方 OAuth",
-                    description: "切换 Codex 官方供应商时保留现有 OAuth 认证信息。",
+                    label: raw(k::APP_SETTINGS_CODEX_PRESERVE_AUTH_LABEL),
+                    description: raw(k::APP_SETTINGS_CODEX_PRESERVE_AUTH_DESC),
                     get: |s| s.preserve_codex_official_auth_on_switch,
                     set: |s, v| s.preserve_codex_official_auth_on_switch = v,
                 },
                 AppToggle {
                     id: "app-set-codex-unify-history",
-                    label: "统一 Codex 会话历史",
-                    description: "将官方和第三方 Codex 会话写入统一历史位置。",
+                    label: raw(k::APP_SETTINGS_CODEX_UNIFY_HISTORY_LABEL),
+                    description: raw(k::APP_SETTINGS_CODEX_UNIFY_HISTORY_DESC),
                     get: |s| s.unify_codex_session_history,
                     set: |s, v| s.unify_codex_session_history = v,
                 },
@@ -254,8 +283,8 @@ fn app_toggles(app: AppType) -> Vec<AppToggle> {
             if settings::get_settings().unify_codex_session_history {
                 toggles.push(AppToggle {
                     id: "app-set-codex-migrate-history",
-                    label: "迁入既有 Codex 会话",
-                    description: "开启后在下一次迁移流程中导入已有官方会话历史。",
+                    label: raw(k::APP_SETTINGS_CODEX_MIGRATE_HISTORY_LABEL),
+                    description: raw(k::APP_SETTINGS_CODEX_MIGRATE_HISTORY_DESC),
                     get: |s| s.unify_codex_migrate_existing.unwrap_or(false),
                     set: |s, v| s.unify_codex_migrate_existing = Some(v),
                 });
@@ -269,24 +298,15 @@ fn app_toggles(app: AppType) -> Vec<AppToggle> {
 /// The placeholder + description for an app's config-dir override, or `None`.
 fn config_dir_meta(app: AppType) -> Option<(&'static str, &'static str)> {
     match app {
-        AppType::Claude => Some((
-            "~/.claude",
-            "默认 ~/.claude；MCP 配置会按目录名推导到相邻 JSON 文件。",
-        )),
-        AppType::Codex => Some((
-            "~/.codex",
-            "默认 ~/.codex；影响 auth.json、config.toml 和会话历史。",
-        )),
-        AppType::GrokBuild => Some((
-            "~/.grok",
-            "默认 ~/.grok；影响 config.toml、MCP 与会话历史。",
-        )),
+        AppType::Claude => Some(("~/.claude", raw(k::APP_SETTINGS_CONFIG_DIR_CLAUDE_DESC))),
+        AppType::Codex => Some(("~/.codex", raw(k::APP_SETTINGS_CONFIG_DIR_CODEX_DESC))),
+        AppType::GrokBuild => Some(("~/.grok", raw(k::APP_SETTINGS_CONFIG_DIR_GROKBUILD_DESC))),
         AppType::OpenCode => Some((
             "~/.config/opencode",
-            "默认 ~/.config/opencode；影响 opencode.json。",
+            raw(k::APP_SETTINGS_CONFIG_DIR_OPENCODE_DESC),
         )),
-        AppType::OpenClaw => Some(("~/.openclaw", "默认 ~/.openclaw；影响 openclaw.json。")),
-        AppType::Hermes => Some(("~/.hermes", "默认 ~/.hermes；影响 config.yaml。")),
+        AppType::OpenClaw => Some(("~/.openclaw", raw(k::APP_SETTINGS_CONFIG_DIR_OPENCLAW_DESC))),
+        AppType::Hermes => Some(("~/.hermes", raw(k::APP_SETTINGS_CONFIG_DIR_HERMES_DESC))),
         AppType::ClaudeDesktop => None,
     }
 }
@@ -319,4 +339,4 @@ fn app_label(app: AppType) -> gpui::SharedString {
     crate::app_meta::label(app)
 }
 
-crate::notifications::impl_status_toasts!(AppSettingsView);
+crate::notifications::impl_status_toasts_leveled!(AppSettingsView);
