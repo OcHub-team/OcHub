@@ -49,7 +49,85 @@ archive_app_bundle() {
     rm -rf "${app_path}"
 }
 
-if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+# Fail the release rather than ship a bundle that only *looks* signed.
+#
+# This is the check that would have caught the v0.1.0/v0.2.0 problem: those
+# builds packaged and published successfully while the bundle carried nothing
+# but the linker's automatic ad-hoc signature on the inner binary. `codesign`
+# then reports "code has no resources but signature indicates they must be
+# present", and macOS shows the user "已损坏 / is damaged" -- which reads as a
+# corrupt download, so people delete the app instead of reporting it. The
+# failure was invisible in CI because packaging itself succeeded.
+verify_signed() {
+    local path="$1"
+    printf 'verifying signature: %s\n' "${path}"
+    if ! codesign --verify --deep --strict --verbose=2 "${path}"; then
+        printf 'signature verification failed for %s\n' "${path}" >&2
+        exit 1
+    fi
+    codesign -dv --verbose=2 "${path}" 2>&1 | grep -E '^(Authority|TeamIdentifier|CodeDirectory)' || true
+}
+
+verify_signed_outputs() {
+    local app_path dmg_path
+    app_path="$(find "${out_dir}" -maxdepth 1 -type d -name '*.app' -print -quit)"
+    [[ -n "${app_path}" ]] && verify_signed "${app_path}"
+    while IFS= read -r dmg_path; do
+        verify_signed "${dmg_path}"
+    done < <(find "${out_dir}" -maxdepth 1 -type f -name '*.dmg')
+}
+
+# Three signing paths, in descending order of what the user experiences:
+#
+#   1. Developer ID + notarization -- the app opens with no warning at all.
+#      The only option that lets a new user install by double-clicking.
+#   2. Self-signed certificate -- Gatekeeper still refuses (its trust anchor is
+#      Apple's root, and a self-signed cert has no chain to it), so the user
+#      must approve once in System Settings > Privacy & Security. What this
+#      does buy is a *valid seal*, which turns "damaged" into "unverified
+#      developer", and a stable Designated Requirement, so per-app approvals
+#      survive an update instead of being re-asked on every new build.
+#   3. Unsigned -- the state that produces "damaged". Kept only so that a fork
+#      without any credentials can still build.
+signing_identity=""
+notarize=false
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+    signing_identity="${APPLE_SIGNING_IDENTITY}"
+    notarize=true
+    required_signing_vars=(
+        APPLE_CERTIFICATE
+        APPLE_CERTIFICATE_PASSWORD
+        APPLE_ID
+        APPLE_PASSWORD
+        APPLE_TEAM_ID
+    )
+    for variable in "${required_signing_vars[@]}"; do
+        if [[ -z "${!variable:-}" ]]; then
+            printf '%s is required when APPLE_SIGNING_IDENTITY is set.\n' "${variable}" >&2
+            exit 1
+        fi
+    done
+elif [[ -n "${MACOS_SELFSIGN_CERTIFICATE:-}" ]]; then
+    if [[ -z "${MACOS_SELFSIGN_IDENTITY:-}" ]]; then
+        printf 'MACOS_SELFSIGN_IDENTITY is required alongside MACOS_SELFSIGN_CERTIFICATE.\n' >&2
+        exit 1
+    fi
+    # A self-signed certificate is never a *valid* identity to macOS
+    # (`security find-identity -v` reports zero), so `codesign -s "<common
+    # name>"` cannot resolve it and fails with "no identity found". Referring to
+    # it by SHA-1 fingerprint is what works, which is why MACOS_SELFSIGN_IDENTITY
+    # holds a hash rather than a name.
+    signing_identity="${MACOS_SELFSIGN_IDENTITY}"
+    # cargo-packager imports APPLE_CERTIFICATE into a throwaway keychain and adds
+    # it to the search list, so reusing those variable names hands it the whole
+    # job. Notarization stays off: it is only attempted when APPLE_ID and
+    # friends are set, and Apple would reject a self-signed submission anyway.
+    export APPLE_CERTIFICATE="${MACOS_SELFSIGN_CERTIFICATE}"
+    export APPLE_CERTIFICATE_PASSWORD="${MACOS_SELFSIGN_CERTIFICATE_PASSWORD:-}"
+    printf 'signing with a self-signed certificate; Gatekeeper will still ask the user to approve once\n'
+else
+    printf 'no signing credentials; producing an UNSIGNED build\n' >&2
+    printf 'macOS will report it as damaged when downloaded with quarantine set\n' >&2
     cargo packager \
         --release \
         --packages ochub-app \
@@ -59,20 +137,6 @@ if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     archive_app_bundle
     exit 0
 fi
-
-required_signing_vars=(
-    APPLE_CERTIFICATE
-    APPLE_CERTIFICATE_PASSWORD
-    APPLE_ID
-    APPLE_PASSWORD
-    APPLE_TEAM_ID
-)
-for variable in "${required_signing_vars[@]}"; do
-    if [[ -z "${!variable:-}" ]]; then
-        printf '%s is required when APPLE_SIGNING_IDENTITY is set.\n' "${variable}" >&2
-        exit 1
-    fi
-done
 
 icons=()
 while IFS= read -r icon; do
@@ -90,7 +154,7 @@ config_json="$(
         --arg license "${repo_root}/LICENSE" \
         --arg entitlements "${repo_root}/packaging/macos/entitlements.plist" \
         --arg info_plist "${repo_root}/packaging/macos/Info.plist" \
-        --arg identity "${APPLE_SIGNING_IDENTITY}" \
+        --arg identity "${signing_identity}" \
         --argjson icons "$(printf '%s\n' "${icons[@]}" | jq -R . | jq -s .)" \
         '{
             productName: "OcHub",
@@ -124,4 +188,29 @@ config_json="$(
 )"
 
 cargo packager --config "${config_json}" --formats app,dmg
+
+# Before archiving, while the .app is still on disk. `archive_app_bundle`
+# removes it, and the tarball is what the in-app updater installs -- so an
+# unsigned .app here would be pushed to every existing install.
+verify_signed_outputs
+
+if [[ "${notarize}" == true ]]; then
+    # cargo-packager notarizes and staples the .app but only *signs* the .dmg
+    # (src/package/dmg/mod.rs). A signed-but-un-notarized disk image is still
+    # blocked when downloaded from a browser, so the DMG needs its own trip
+    # through notarytool. cc-switch hit the same gap and does exactly this.
+    while IFS= read -r dmg_path; do
+        printf 'notarizing %s\n' "${dmg_path}"
+        xcrun notarytool submit "${dmg_path}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+        # Staple, or Gatekeeper has to reach Apple to confirm the ticket and
+        # an offline user is warned anyway.
+        xcrun stapler staple "${dmg_path}"
+        xcrun stapler validate "${dmg_path}"
+    done < <(find "${out_dir}" -maxdepth 1 -type f -name '*.dmg')
+fi
+
 archive_app_bundle

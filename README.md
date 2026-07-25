@@ -110,10 +110,28 @@ sha256sum -c SHA256SUMS --ignore-missing
 gh attestation verify <downloaded-file> --repo Sleepstars/OcHub
 ```
 
-Unsigned packages remain available for testing when platform signing
-credentials have not been configured; macOS Gatekeeper or Windows SmartScreen
-may warn in that case. See the [release guide](packaging/README.md) for optional
-Developer ID notarization and Authenticode signing.
+### macOS: approving the app on first launch
+
+OcHub is not yet notarized by Apple, so macOS asks you to approve it once:
+
+1. Open OcHub. macOS says it cannot verify the developer.
+2. Go to **System Settings › Privacy & Security**, scroll to Security, and
+   click **Open Anyway**.
+
+Control-clicking the app no longer works for this on macOS 15 and later — the
+System Settings route is the only one. To skip the prompt entirely, install
+without the quarantine flag:
+
+```sh
+brew install --cask --no-quarantine sleepstars/tap/ochub
+```
+
+Updates installed from inside OcHub are never quarantined, so this is a
+one-time step rather than something you repeat on every release.
+
+Windows SmartScreen may warn for the same reason. See the
+[release guide](packaging/README.md) for Developer ID notarization and
+Authenticode signing.
 
 ## Architecture
 

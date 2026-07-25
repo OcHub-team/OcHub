@@ -50,6 +50,60 @@ apply appear in it — the macOS `.app.tar.gz` payloads, the Windows NSIS
 installer, and the Linux AppImage. A `.deb` is owned by the package manager and
 the Windows portable ZIP has no installer to re-run, so both stay check-only.
 
+## macOS signing paths
+
+`package-macos.sh` picks one of three, and verifies the result before the
+release proceeds. The verification matters: an unsigned bundle still *packages*
+successfully, so without it a release ships green while every user is told the
+app is damaged.
+
+| Configured | User experience on first launch |
+| --- | --- |
+| `APPLE_SIGNING_IDENTITY` + notarization secrets | Opens with no warning |
+| `MACOS_SELFSIGN_CERTIFICATE` + identity | "Unverified developer" — approve once in System Settings › Privacy & Security |
+| Neither | **"App is damaged"** — most users delete it |
+
+### Why unsigned reads as "damaged"
+
+Apple Silicon requires every binary to carry at least an ad-hoc signature, so
+the linker adds one automatically. That signature declares the binary belongs to
+a signed bundle, but nothing signs the bundle, so no `Contents/_CodeSignature`
+is produced. `codesign --verify` then reports *"code has no resources but
+signature indicates they must be present"*, and macOS treats a
+present-but-broken signature as tampering rather than as merely unsigned.
+
+### Self-signed certificate
+
+A stopgap until a Developer ID is available. It does **not** let users install
+by double-clicking — Gatekeeper's trust anchor is Apple's root CA and a
+self-signed certificate has no chain to it. What it buys is a valid seal
+(so "damaged" becomes the far less alarming "unverified developer") and a stable
+Designated Requirement, so a user's per-app approvals survive updates instead of
+being re-requested on every build.
+
+```sh
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 \
+    -nodes -subj "/CN=OcHub Self Signed/O=OcHub/C=CN" \
+    -addext basicConstraints=critical,CA:false \
+    -addext keyUsage=critical,digitalSignature \
+    -addext extendedKeyUsage=critical,codeSigning
+# macOS Security rejects OpenSSL 3's default PKCS#12 MAC, hence the legacy flags
+openssl pkcs12 -export -out selfsigned.p12 -inkey key.pem -in cert.pem \
+    -macalg sha1 -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES
+security find-identity -p codesigning   # copy the 40-character SHA-1
+```
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_SELFSIGN_CERTIFICATE` | `base64 -i selfsigned.p12` |
+| `MACOS_SELFSIGN_CERTIFICATE_PASSWORD` | the export password |
+| `MACOS_SELFSIGN_IDENTITY` | the certificate's **SHA-1 fingerprint** |
+
+The identity must be the fingerprint, not the common name. macOS never counts a
+self-signed certificate as a *valid* identity (`security find-identity -v`
+reports zero), so `codesign -s "OcHub Self Signed"` fails with "no identity
+found"; referring to it by hash is what works.
+
 ## Optional platform signing
 
 Unsigned packages are built when no signing secrets are configured. To enable

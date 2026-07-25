@@ -113,6 +113,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Fallback when no Developer ID is configured. Produces a valid seal
+          # so macOS stops calling the app damaged, and a stable identity so
+          # per-app approvals survive updates. Gatekeeper still asks the user
+          # to approve once; only Developer ID + notarization removes that.
+          MACOS_SELFSIGN_CERTIFICATE: ${{ secrets.MACOS_SELFSIGN_CERTIFICATE }}
+          MACOS_SELFSIGN_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SELFSIGN_CERTIFICATE_PASSWORD }}
+          MACOS_SELFSIGN_IDENTITY: ${{ secrets.MACOS_SELFSIGN_IDENTITY }}
         run: ./scripts/release/package-macos.sh dist
 
       - name: Package Windows
