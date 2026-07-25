@@ -200,6 +200,7 @@ jobs:
 
       - name: Create or update draft release
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate.outputs.tag }}
         shell: bash
