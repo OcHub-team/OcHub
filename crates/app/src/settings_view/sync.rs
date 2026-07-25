@@ -680,10 +680,9 @@ impl SettingsView {
             // tokio reactor. Awaited on gpui's executor it does not fail
             // gracefully — it panics with "there is no reactor running", and a
             // panic crossing the objc stack aborts the process.
-            let outcome = crate::core_async::run(async move {
-                perform(action, target, &db, backup).await
-            })
-            .await;
+            let outcome =
+                crate::core_async::run(async move { perform(action, target, &db, backup).await })
+                    .await;
             this.update(cx, |this, cx| {
                 this.sync_busy = false;
                 this.reload(cx);
@@ -1089,12 +1088,12 @@ mod tests {
     fn the_field_tables_match_the_structs_they_build() {
         assert_eq!(WEBDAV_FIELDS.len(), 5);
         assert_eq!(S3_FIELDS.len(), 7);
-        let webdav = webdav_from(&vec![
-            "a".into(),
-            "b".into(),
-            "c".into(),
-            "d".into(),
-            "e".into(),
+        let webdav = webdav_from(&[
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
         ]);
         assert_eq!(webdav.base_url, "a");
         assert_eq!(webdav.profile, "e");

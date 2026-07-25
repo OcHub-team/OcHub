@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+repository.workspace = true
 description = "OcHub desktop UI (GPUI)"
 
 [[bin]]
@@ -32,6 +33,51 @@ fs2.workspace = true
 [build-dependencies]
 toml.workspace = true
 
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["libc", "NSApplication", "NSResponder", "NSRunningApplication"] }
+
+[package.metadata.winresource]
+OriginalFilename = "ochub.exe"
+ProductName = "OcHub"
+FileDescription = "Native desktop manager for AI coding tools"
+LegalCopyright = "OcHub contributors"
+
+[package.metadata.packager]
+product-name = "OcHub"
+identifier = "io.github.sleepstars.ochub"
+category = "DeveloperTool"
+icons = [
+    "assets/app-icons/ochub.icns",
+    "assets/app-icons/ochub.ico",
+    "assets/app-icons/ochub-*.png",
+]
+resources = [
+    { src = "assets", target = "assets" },
+    { src = "../../LICENSE", target = "LICENSE" },
+]
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+entitlements = "../../packaging/macos/entitlements.plist"
+info-plist-path = "../../packaging/macos/Info.plist"
+
+[package.metadata.packager.nsis]
+installer-icon = "assets/app-icons/ochub.ico"
+installer-mode = "currentUser"
+languages = ["English", "SimpChinese", "Japanese"]
+
+[package.metadata.packager.deb]
+depends = [
+    "libasound2",
+    "libfontconfig1",
+    "libglib2.0-0",
+    "libvulkan1",
+    "libwayland-client0",
+    "libx11-xcb1",
+    "libxkbcommon0",
+    "libxkbcommon-x11-0",
+]

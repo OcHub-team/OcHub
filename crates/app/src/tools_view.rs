@@ -1120,10 +1120,7 @@ impl ToolsView {
     }
 
     fn toggle_hermes_memory(&mut self, kind: hermes::MemoryKind, cx: &mut Context<Self>) {
-        let limits = self
-            .hermes_limits
-            .clone()
-            .unwrap_or_else(hermes::HermesMemoryLimits::default);
+        let limits = self.hermes_limits.clone().unwrap_or_default();
         let target = match kind {
             hermes::MemoryKind::Memory => !limits.memory_enabled,
             hermes::MemoryKind::User => !limits.user_enabled,

@@ -2,9 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key>
-    <string>ochub</string>
-    <key>CFBundleIdentifier</key>
+	<key>CFBundleExecutable</key>
+	<string>ochub</string>
+	<key>CFBundleIconFile</key>
+	<string>ochub.icns</string>
+	<key>CFBundleIdentifier</key>
     <string>io.ochub.debug.qa</string>
     <key>CFBundleName</key>
     <string>OcHub QA</string>

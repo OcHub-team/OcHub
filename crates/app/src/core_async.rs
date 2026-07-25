@@ -112,7 +112,10 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             start.elapsed()
         }));
-        assert!(elapsed >= std::time::Duration::from_millis(15), "{elapsed:?}");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(15),
+            "{elapsed:?}"
+        );
     }
 
     #[test]

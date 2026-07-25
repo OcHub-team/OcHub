@@ -51,6 +51,24 @@ lint:
     cargo fmt --all
     cargo clippy --workspace --all-targets
 
+# 与 GitHub Actions 一致的只读质量门禁
+ci:
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo test --workspace --locked --no-fail-fast
+
+# 在当前 Mac 上生成 DMG（需先安装 cargo-packager）
+package-macos:
+    ./scripts/release/package-macos.sh
+
+# 在 Debian/Ubuntu 上安装构建和 AppImage 依赖
+setup-linux:
+    ./scripts/ci/install-linux-deps.sh
+
+# 在当前 Linux 上生成 AppImage + deb（需先安装 cargo-packager）
+package-linux:
+    ./scripts/release/package-linux.sh
+
 # 一次性环境准备：下载 Metal 工具链组件（需要 Xcode 26+）
 setup-metal:
     xcodebuild -downloadComponent MetalToolchain

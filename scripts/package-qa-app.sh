@@ -20,6 +20,7 @@ cargo build --profile qa -p ochub-app
 mkdir -p "${macos_dir}" "${resources_dir}/assets"
 install -m 755 "target/qa/ochub" "${executable_path}"
 install -m 644 "scripts/qa/Info.plist" "${contents_dir}/Info.plist"
+install -m 644 "crates/app/assets/app-icons/ochub.icns" "${resources_dir}/ochub.icns"
 rsync -a --delete "crates/app/assets/" "${resources_dir}/assets/"
 touch "${app_path}"
 

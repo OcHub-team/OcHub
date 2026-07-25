@@ -356,13 +356,7 @@ fn env_line(line: &str) -> Vec<Span> {
             acc.push(1, Token::Punct);
             // Everything after `=` is the raw value.
             let rest = line.len() - indent - rel - 1;
-            let value = &line[indent + rel + 1..];
-            let token = if value.starts_with('"') || value.starts_with('\'') {
-                Token::Str
-            } else {
-                Token::Str
-            };
-            acc.push(rest, token);
+            acc.push(rest, Token::Str);
         }
         None => acc.push(line.len() - indent, Token::Plain),
     }

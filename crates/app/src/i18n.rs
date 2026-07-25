@@ -131,7 +131,11 @@ mod tests {
         assert_eq!(ZH.len(), COUNT);
         assert_eq!(EN.len(), COUNT);
         assert_eq!(JA.len(), COUNT);
-        assert!(COUNT > 0, "the catalog should not be empty");
+        assert_ne!(
+            KEY_NAMES.iter().count(),
+            0,
+            "the catalog should not be empty"
+        );
         // Values may legitimately be empty: a grammatical particle that only
         // one language needs (the pagination suffix reads "跳至 [n] 页" in
         // Chinese but "Go to page [n]" in English) is correctly translated as

@@ -92,7 +92,9 @@ pub fn handle(silent: bool) -> Result<AutoLaunch, AppError> {
 
     let exe = launch_target()?;
     let mut builder = AutoLaunchBuilder::new();
-    builder.set_app_name(APP_NAME).set_app_path(&exe.to_string_lossy());
+    builder
+        .set_app_name(APP_NAME)
+        .set_app_path(&exe.to_string_lossy());
 
     let args: &[&str] = if silent { &[SILENT_ARG] } else { &[] };
     builder.set_args(args);

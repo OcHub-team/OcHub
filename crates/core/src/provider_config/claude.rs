@@ -699,8 +699,10 @@ mod tests {
 
     #[test]
     fn encode_preserves_unrelated_prior_meta() {
-        let mut prior_meta = ProviderMeta::default();
-        prior_meta.cost_multiplier = Some("1.5".into());
+        let prior_meta = ProviderMeta {
+            cost_multiplier: Some("1.5".into()),
+            ..Default::default()
+        };
         let result = ClaudeConfig.encode(&sample_values(), &Value::Null, Some(&prior_meta));
         let meta = result.meta.unwrap();
         assert_eq!(meta.cost_multiplier.as_deref(), Some("1.5"));

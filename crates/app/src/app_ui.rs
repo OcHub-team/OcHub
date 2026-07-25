@@ -459,57 +459,6 @@ fn move_items_between_slots<T: Clone>(
     true
 }
 
-#[cfg(test)]
-mod provider_reorder_tests {
-    use super::{move_items_between_slots, reorder_slot_offsets};
-
-    #[test]
-    fn reorders_only_sortable_slots_and_preserves_hidden_rows() {
-        let mut items = vec!["current", "alpha", "gateway", "beta", "gamma"];
-
-        assert!(move_items_between_slots(&mut items, &[1, 3, 4], 2, 0));
-        assert_eq!(items, ["current", "gamma", "gateway", "alpha", "beta"]);
-    }
-
-    #[test]
-    fn supports_moving_a_provider_toward_the_end() {
-        let mut items = vec!["alpha", "current", "beta", "gamma"];
-
-        assert!(move_items_between_slots(&mut items, &[0, 2, 3], 0, 2));
-        assert_eq!(items, ["beta", "current", "gamma", "alpha"]);
-    }
-
-    #[test]
-    fn rejects_noop_or_invalid_moves() {
-        let original = vec!["alpha", "beta", "gamma"];
-        let mut items = original.clone();
-
-        assert!(!move_items_between_slots(&mut items, &[0, 1, 2], 1, 1));
-        assert!(!move_items_between_slots(&mut items, &[0, 4], 0, 1));
-        assert_eq!(items, original);
-    }
-
-    #[test]
-    fn dragging_down_moves_intervening_cards_up_one_slot() {
-        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
-        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 0, 2);
-
-        assert_eq!(offsets.get("alpha"), None);
-        assert_eq!(offsets.get("beta"), Some(&-70.));
-        assert_eq!(offsets.get("gamma"), Some(&-80.));
-    }
-
-    #[test]
-    fn dragging_up_moves_intervening_cards_down_one_slot() {
-        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
-        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 2, 0);
-
-        assert_eq!(offsets.get("alpha"), Some(&70.));
-        assert_eq!(offsets.get("beta"), Some(&80.));
-        assert_eq!(offsets.get("gamma"), None);
-    }
-}
-
 impl AppRoot {
     fn save_active(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         if self.confirm_delete.is_some() {
@@ -618,7 +567,7 @@ impl AppRoot {
         let sessions_view = cx.new(|cx| SessionsView::new(app.clone(), cx));
         let tools_view = cx.new(|cx| ToolsView::new(app.clone(), cx));
         let theme_view = cx.new(ThemeView::new);
-        let gallery_view = cx.new(|cx| GalleryView::new(cx));
+        let gallery_view = cx.new(GalleryView::new);
         let initial_section = Section::from_env();
         let enabled = Self::visible_apps();
         let initial_app = std::env::var("MS_START_APP")
@@ -927,8 +876,7 @@ impl AppRoot {
         self.mcp_view.update(cx, |view, cx| view.relocalize(cx));
         self.sessions_view
             .update(cx, |view, cx| view.relocalize(cx));
-        self.gateway_view
-            .update(cx, |view, cx| view.relocalize(cx));
+        self.gateway_view.update(cx, |view, cx| view.relocalize(cx));
         // The provider editor is built per open, but it survives a locale
         // change while it is on screen, and it holds text inputs whose
         // placeholders were captured when it opened.
@@ -2842,5 +2790,56 @@ impl Render for AppRoot {
                         .into_any_element()])),
                 ))
             })
+    }
+}
+
+#[cfg(test)]
+mod provider_reorder_tests {
+    use super::{move_items_between_slots, reorder_slot_offsets};
+
+    #[test]
+    fn reorders_only_sortable_slots_and_preserves_hidden_rows() {
+        let mut items = vec!["current", "alpha", "gateway", "beta", "gamma"];
+
+        assert!(move_items_between_slots(&mut items, &[1, 3, 4], 2, 0));
+        assert_eq!(items, ["current", "gamma", "gateway", "alpha", "beta"]);
+    }
+
+    #[test]
+    fn supports_moving_a_provider_toward_the_end() {
+        let mut items = vec!["alpha", "current", "beta", "gamma"];
+
+        assert!(move_items_between_slots(&mut items, &[0, 2, 3], 0, 2));
+        assert_eq!(items, ["beta", "current", "gamma", "alpha"]);
+    }
+
+    #[test]
+    fn rejects_noop_or_invalid_moves() {
+        let original = vec!["alpha", "beta", "gamma"];
+        let mut items = original.clone();
+
+        assert!(!move_items_between_slots(&mut items, &[0, 1, 2], 1, 1));
+        assert!(!move_items_between_slots(&mut items, &[0, 4], 0, 1));
+        assert_eq!(items, original);
+    }
+
+    #[test]
+    fn dragging_down_moves_intervening_cards_up_one_slot() {
+        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 0, 2);
+
+        assert_eq!(offsets.get("alpha"), None);
+        assert_eq!(offsets.get("beta"), Some(&-70.));
+        assert_eq!(offsets.get("gamma"), Some(&-80.));
+    }
+
+    #[test]
+    fn dragging_up_moves_intervening_cards_down_one_slot() {
+        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 2, 0);
+
+        assert_eq!(offsets.get("alpha"), Some(&70.));
+        assert_eq!(offsets.get("beta"), Some(&80.));
+        assert_eq!(offsets.get("gamma"), None);
     }
 }

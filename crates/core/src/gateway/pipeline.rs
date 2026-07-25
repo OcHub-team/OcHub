@@ -117,16 +117,26 @@ struct PreparedRequest {
     upstream_model: String,
 }
 
+struct RequestConversionOptions<'a> {
+    client_model: &'a str,
+    route_model_override: Option<&'a str>,
+    reasoning: Option<&'a GatewayReasoningConfig>,
+    client_stream: bool,
+}
+
 fn prepare_request(
     inlet: Dialect,
     channel: &GatewayChannel,
     body: &Value,
-    client_model: &str,
-    route_model_override: Option<&str>,
-    reasoning: Option<&GatewayReasoningConfig>,
-    client_stream: bool,
+    options: RequestConversionOptions<'_>,
     signatures: &ochub_convert::MemorySignatureStore,
 ) -> Result<PreparedRequest, String> {
+    let RequestConversionOptions {
+        client_model,
+        route_model_override,
+        reasoning,
+        client_stream,
+    } = options;
     let upstream_model = route_model_override
         .map(str::to_string)
         .or_else(|| channel.model_override.clone())
@@ -752,10 +762,12 @@ pub async fn run(
             inlet,
             &channel,
             &body,
-            &meta.model,
-            route_model_override,
-            route.as_ref().map(|route| &route.reasoning),
-            meta.stream,
+            RequestConversionOptions {
+                client_model: &meta.model,
+                route_model_override,
+                reasoning: route.as_ref().map(|route| &route.reasoning),
+                client_stream: meta.stream,
+            },
             &state.signatures,
         ) {
             Ok(p) => p,
@@ -1024,10 +1036,12 @@ mod tests {
             Dialect::Messages,
             &channel,
             &body,
-            "client-m",
-            None,
-            None,
-            true,
+            RequestConversionOptions {
+                client_model: "client-m",
+                route_model_override: None,
+                reasoning: None,
+                client_stream: true,
+            },
             &store,
         )
         .unwrap();
@@ -1066,10 +1080,12 @@ mod tests {
             Dialect::Chat,
             &channel,
             &body,
-            "m",
-            None,
-            None,
-            true,
+            RequestConversionOptions {
+                client_model: "m",
+                route_model_override: None,
+                reasoning: None,
+                client_stream: true,
+            },
             &store,
         )
         .unwrap();
@@ -1107,10 +1123,12 @@ mod tests {
             Dialect::Messages,
             &channel,
             &body,
-            "client-m",
-            None,
-            None,
-            true,
+            RequestConversionOptions {
+                client_model: "client-m",
+                route_model_override: None,
+                reasoning: None,
+                client_stream: true,
+            },
             &store,
         )
         .unwrap();
@@ -1151,10 +1169,12 @@ mod tests {
             Dialect::Responses,
             &channel,
             &body,
-            "m",
-            None,
-            None,
-            true,
+            RequestConversionOptions {
+                client_model: "m",
+                route_model_override: None,
+                reasoning: None,
+                client_stream: true,
+            },
             &store,
         )
         .unwrap();

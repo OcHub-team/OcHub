@@ -296,6 +296,24 @@ impl Database {
     }
 }
 
+/// 复制 app 配置目录下的旁路文件（设备设置、托管 OAuth 账户）。
+/// 尽力而为：单个文件失败只告警，不影响导入结果。
+fn copy_side_files() {
+    let source_dir = crate::paths::get_legacy_ccswitch_dir();
+    let target_dir = crate::paths::get_app_config_dir();
+    for name in IMPORT_SIDE_FILES {
+        let source = source_dir.join(name);
+        let target = target_dir.join(name);
+        if !source.exists() || target.exists() {
+            continue;
+        }
+        match std::fs::copy(&source, &target) {
+            Ok(_) => log::info!("imported cc-switch side file: {name}"),
+            Err(e) => log::warn!("failed to copy cc-switch side file {name}: {e}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::Database;
@@ -434,23 +452,5 @@ mod tests {
         // 调用前已用 exists() 短路，这里验证底层不会静默建库
         assert!(result.is_err());
         assert!(!missing.exists());
-    }
-}
-
-/// 复制 app 配置目录下的旁路文件（设备设置、托管 OAuth 账户）。
-/// 尽力而为：单个文件失败只告警，不影响导入结果。
-fn copy_side_files() {
-    let source_dir = crate::paths::get_legacy_ccswitch_dir();
-    let target_dir = crate::paths::get_app_config_dir();
-    for name in IMPORT_SIDE_FILES {
-        let source = source_dir.join(name);
-        let target = target_dir.join(name);
-        if !source.exists() || target.exists() {
-            continue;
-        }
-        match std::fs::copy(&source, &target) {
-            Ok(_) => log::info!("imported cc-switch side file: {name}"),
-            Err(e) => log::warn!("failed to copy cc-switch side file {name}: {e}"),
-        }
     }
 }

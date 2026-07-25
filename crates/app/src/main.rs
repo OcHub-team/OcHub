@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! OcHub desktop application (GPUI).
 //!
 //! Initializes the `ochub-core` `AppState` (SQLite store + services), hosts the
@@ -79,15 +81,52 @@ impl AssetSource for Assets {
     }
 }
 
-/// Resolve assets from a macOS app bundle first so packaged debug builds do not
-/// reach back into a source checkout under a TCC-protected directory.
+/// Resolve packaged assets before falling back to the source checkout.
+///
+/// `cargo-packager` places resources in different roots per platform:
+/// macOS uses `Contents/Resources`, Windows keeps them beside the executable,
+/// and Linux uses `/usr/lib/<binary>` (inside `APPDIR` for AppImage).
 fn assets_base() -> PathBuf {
     if let Ok(executable) = std::env::current_exe() {
-        if let Some(bundled) = bundled_assets_path(&executable).filter(|path| path.is_dir()) {
-            return bundled;
+        let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
+        if let Some(packaged) = packaged_assets_paths(&executable, appdir.as_deref())
+            .into_iter()
+            .find(|path| path.is_dir())
+        {
+            return packaged;
         }
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
+}
+
+fn packaged_assets_paths(executable: &Path, appdir: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(bundled) = bundled_assets_path(executable) {
+        paths.push(bundled);
+    }
+
+    if let Some(executable_dir) = executable.parent() {
+        paths.push(executable_dir.join("assets"));
+    }
+
+    if let Some(executable_name) = executable.file_name() {
+        if let Some(appdir) = appdir {
+            paths.push(
+                appdir
+                    .join("usr")
+                    .join("lib")
+                    .join(executable_name)
+                    .join("assets"),
+            );
+        }
+        paths.push(
+            Path::new("/usr")
+                .join("lib")
+                .join(executable_name)
+                .join("assets"),
+        );
+    }
+    paths
 }
 
 fn bundled_assets_path(executable: &Path) -> Option<PathBuf> {
@@ -120,6 +159,22 @@ mod asset_path_tests {
             bundled_assets_path(Path::new("/workspace/target/debug/ochub")),
             None
         );
+    }
+
+    #[test]
+    fn resolves_assets_beside_a_windows_or_portable_executable() {
+        let paths = packaged_assets_paths(Path::new("/opt/ochub/ochub.exe"), None);
+        assert_eq!(paths[0], PathBuf::from("/opt/ochub/assets"));
+    }
+
+    #[test]
+    fn resolves_deb_and_appimage_resource_roots() {
+        let paths = packaged_assets_paths(
+            Path::new("/tmp/.mount_OcHub/usr/bin/ochub"),
+            Some(Path::new("/tmp/.mount_OcHub")),
+        );
+        assert!(paths.contains(&PathBuf::from("/tmp/.mount_OcHub/usr/lib/ochub/assets")));
+        assert!(paths.contains(&PathBuf::from("/usr/lib/ochub/assets")));
     }
 }
 
@@ -288,6 +343,11 @@ pub(crate) fn apply_quit_mode(cx: &mut App) {
 }
 
 fn main() {
+    if version_requested(std::env::args_os()) {
+        println!("OcHub {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     shell_support::setup_panic_hook();
     env_logger_init();
     // Startup can print and log before a window ever opens — a second launch
@@ -519,6 +579,29 @@ fn main() {
                 cx.activate(true);
             }
         });
+}
+
+fn version_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    args.into_iter()
+        .skip(1)
+        .any(|arg| arg.as_ref() == "--version" || arg.as_ref() == "-V")
+}
+
+#[cfg(test)]
+mod version_arg_tests {
+    use super::version_requested;
+
+    #[test]
+    fn recognizes_version_flags_after_the_executable() {
+        assert!(version_requested(["ochub", "--version"]));
+        assert!(version_requested(["ochub", "-V"]));
+        assert!(!version_requested(["ochub"]));
+        assert!(!version_requested(["--version"]));
+    }
 }
 
 /// Minimal stderr logger so init failures are never silent.

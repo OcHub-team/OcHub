@@ -1,0 +1,219 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Validate tag and Cargo version
+        id: release
+        shell: bash
+        run: |
+          version="$(./scripts/release/verify-tag.sh "${RELEASE_TAG}")"
+          printf 'tag=%s\n' "${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Package ${{ matrix.name }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-26
+            kind: macos
+            target: aarch64-apple-darwin
+            artifact: release-macos-arm64
+          - name: macOS Intel
+            os: macos-26-intel
+            kind: macos
+            target: x86_64-apple-darwin
+            artifact: release-macos-x64
+          - name: Windows x64
+            os: windows-2025
+            kind: windows
+            target: x86_64-pc-windows-msvc
+            artifact: release-windows-x64
+          - name: Linux x64
+            os: ubuntu-22.04
+            kind: linux
+            target: x86_64-unknown-linux-gnu
+            artifact: release-linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Install Linux build dependencies
+        if: matrix.kind == 'linux'
+        run: ./scripts/ci/install-linux-deps.sh
+
+      - name: Cache Cargo downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: cargo-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-release-${{ matrix.target }}-
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Package macOS
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./scripts/release/package-macos.sh dist
+
+      - name: Package Windows
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: ./scripts/release/package-windows.ps1 -OutDir dist -Target "${{ matrix.target }}"
+
+      - name: Package Linux
+        if: matrix.kind == 'linux'
+        shell: bash
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
+        run: ./scripts/release/package-linux.sh dist
+
+      - name: Upload macOS package
+        if: matrix.kind == 'macos'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Windows packages
+        if: matrix.kind == 'windows'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*-setup.exe
+            dist/*_portable.zip
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Linux packages
+        if: matrix.kind == 'linux'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Validate package set and write checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find dist -maxdepth 1 -type f -name '*.dmg' | wc -l)" -eq 2
+          test "$(find dist -maxdepth 1 -type f -name '*-setup.exe' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*_portable.zip' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.AppImage' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
+          (
+            cd dist
+            find . -maxdepth 1 -type f -print0 |
+              sort -z |
+              xargs -0 sha256sum |
+              sed 's#  \./#  #' > SHA256SUMS
+          )
+          find dist -maxdepth 1 -type f -print | sort
+
+      - name: Attest release packages
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: dist/*
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            is_draft="$(gh release view "${TAG}" --json isDraft --jq .isDraft)"
+            test "${is_draft}" = "true"
+          else
+            gh release create "${TAG}" \
+              --draft \
+              --generate-notes \
+              --title "OcHub ${TAG}" \
+              --verify-tag
+          fi
+          gh release upload "${TAG}" dist/* --clobber
+          gh release edit "${TAG}" --draft=false --latest

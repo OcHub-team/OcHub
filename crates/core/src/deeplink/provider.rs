@@ -121,7 +121,7 @@ pub fn import_provider_from_deeplink(
     let provider_id = provider.id.clone();
 
     // Use ProviderService to add the provider
-    ProviderService::add(state, app_type.clone(), provider, true)?;
+    ProviderService::add(state, app_type, provider, true)?;
 
     // Add extra endpoints as custom endpoints (skip first one as it's the primary)
     for ep in all_endpoints.iter().skip(1) {
@@ -129,7 +129,7 @@ pub fn import_provider_from_deeplink(
         if !normalized.is_empty() {
             if let Err(e) = ProviderService::add_custom_endpoint(
                 state,
-                app_type.clone(),
+                app_type,
                 &provider_id,
                 normalized.clone(),
             ) {
@@ -140,7 +140,7 @@ pub fn import_provider_from_deeplink(
 
     // If enabled=true, set as current provider
     if merged_request.enabled.unwrap_or(false) {
-        ProviderService::switch(state, app_type.clone(), &provider_id)?;
+        ProviderService::switch(state, app_type, &provider_id)?;
         log::info!("Provider '{provider_id}' set as current for {app_type:?}");
     }
 

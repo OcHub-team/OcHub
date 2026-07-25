@@ -783,8 +783,10 @@ mod tests {
 
     #[test]
     fn encode_preserves_prior_meta() {
-        let mut meta = ProviderMeta::default();
-        meta.custom_user_agent = Some("ms/1".into());
+        let meta = ProviderMeta {
+            custom_user_agent: Some("ms/1".into()),
+            ..Default::default()
+        };
         let result = OpenCodeConfig.encode(&sample_values(), &Value::Null, Some(&meta));
         assert_eq!(
             result.meta.and_then(|m| m.custom_user_agent),

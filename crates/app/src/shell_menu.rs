@@ -85,11 +85,7 @@ fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
             MenuItem::os_action(t(k::MENU_EDIT_CUT), Cut, OsAction::Cut),
             MenuItem::os_action(t(k::MENU_EDIT_COPY), Copy, OsAction::Copy),
             MenuItem::os_action(t(k::MENU_EDIT_PASTE), Paste, OsAction::Paste),
-            MenuItem::os_action(
-                t(k::MENU_EDIT_SELECT_ALL),
-                SelectAll,
-                OsAction::SelectAll,
-            ),
+            MenuItem::os_action(t(k::MENU_EDIT_SELECT_ALL), SelectAll, OsAction::SelectAll),
             MenuItem::separator(),
             MenuItem::action(t(k::MENU_EDIT_FIND), Find),
             MenuItem::action(t(k::MENU_EDIT_FIND_NEXT), FindNext),
@@ -356,10 +352,7 @@ fn switch_provider_from_menu(app: Arc<AppState>, action: &SwitchProviderFromMenu
                 k::MENU_SWITCH_SWITCHED_WITH_WARNINGS,
                 app = app_label(app_type),
             ),
-            Some(tf!(
-                k::MENU_SWITCH_WARNINGS,
-                count = result.warnings.len(),
-            )),
+            Some(tf!(k::MENU_SWITCH_WARNINGS, count = result.warnings.len(),)),
         ),
         Err(err) => report_to_roots(
             cx,

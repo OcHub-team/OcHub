@@ -18,8 +18,8 @@ use gpui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::icons::{icon, IconName};
 use crate::i18n::{k, raw, t};
+use crate::icons::{icon, IconName};
 use crate::theme;
 
 actions!(
@@ -353,23 +353,31 @@ pub(crate) fn render_find_bar(
                 .child(SharedString::from(counter)),
         )
         .child(
-            control("find-previous", raw(k::COMMON_FIND_PREVIOUS), IconName::ChevronLeft).on_click(
-                |_event, window, cx| {
-                    window.dispatch_action(Box::new(FindPrevious), cx);
-                },
-            ),
-        )
-        .child(
-            control("find-next", raw(k::COMMON_FIND_NEXT), IconName::ChevronRight).on_click(
-                |_event, window, cx| {
-                    window.dispatch_action(Box::new(FindNext), cx);
-                },
-            ),
-        )
-        .child(
-            control("find-close", raw(k::COMMON_FIND_CLOSE), IconName::Close).on_click(|_event, window, cx| {
-                window.dispatch_action(Box::new(CloseFind), cx);
+            control(
+                "find-previous",
+                raw(k::COMMON_FIND_PREVIOUS),
+                IconName::ChevronLeft,
+            )
+            .on_click(|_event, window, cx| {
+                window.dispatch_action(Box::new(FindPrevious), cx);
             }),
+        )
+        .child(
+            control(
+                "find-next",
+                raw(k::COMMON_FIND_NEXT),
+                IconName::ChevronRight,
+            )
+            .on_click(|_event, window, cx| {
+                window.dispatch_action(Box::new(FindNext), cx);
+            }),
+        )
+        .child(
+            control("find-close", raw(k::COMMON_FIND_CLOSE), IconName::Close).on_click(
+                |_event, window, cx| {
+                    window.dispatch_action(Box::new(CloseFind), cx);
+                },
+            ),
         )
 }
 
@@ -647,7 +655,11 @@ impl TextInput {
     /// process — so after a locale switch their placeholders would otherwise
     /// stay in the old language until the app restarted. Rebuilding the entity
     /// instead would drop whatever the user had typed.
-    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.placeholder = placeholder.into();
         cx.notify();
     }
@@ -788,7 +800,8 @@ impl TextInput {
             } else {
                 String::new()
             };
-            let input = cx.new(|cx| TextInput::new(cx, t(k::COMMON_FIND_PLACEHOLDER)).search_field());
+            let input =
+                cx.new(|cx| TextInput::new(cx, t(k::COMMON_FIND_PLACEHOLDER)).search_field());
             if !selected.is_empty() {
                 input.update(cx, |input, cx| input.set_content(selected, cx));
             }
@@ -1635,118 +1648,6 @@ impl Focusable for TextInput {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use gpui::{point, px, size, Bounds};
-
-    use super::{
-        closest_match, code_visible_rows, display_offset, find_matches,
-        horizontal_scroll_for_caret, raw_offset_from_display, CaretBlink,
-    };
-
-    #[test]
-    fn code_mode_shapes_only_viewport_rows_with_small_overdraw() {
-        let content = Bounds::new(point(px(10.), px(100.)), size(px(600.), px(20_000.)));
-        let viewport = Bounds::new(point(px(10.), px(300.)), size(px(600.), px(200.)));
-        assert_eq!(code_visible_rows(content, viewport, px(20.), 1_000), 7..23);
-    }
-
-    #[test]
-    fn code_mode_caps_first_layout_before_scroll_bounds_are_known() {
-        let content = Bounds::new(point(px(0.), px(0.)), size(px(600.), px(20_000.)));
-        assert_eq!(
-            code_visible_rows(content, Bounds::default(), px(20.), 1_000),
-            0..64
-        );
-        assert_eq!(
-            code_visible_rows(content, Bounds::default(), px(20.), 0),
-            0..0
-        );
-    }
-
-    #[test]
-    fn find_is_ascii_case_insensitive_and_preserves_utf8_offsets() {
-        assert_eq!(find_matches("你好 FoO foo", "foo"), vec![7..10, 11..14]);
-    }
-
-    #[test]
-    fn find_supports_exact_non_ascii_queries() {
-        assert_eq!(
-            find_matches("网关测试，网关正常", "网关"),
-            vec![0..6, 15..21]
-        );
-        assert!(find_matches("anything", "").is_empty());
-    }
-
-    #[test]
-    fn closest_match_wraps_to_the_first_result() {
-        let matches = vec![2..5, 10..13];
-        assert_eq!(closest_match(&matches, 4), Some(0));
-        assert_eq!(closest_match(&matches, 7), Some(1));
-        assert_eq!(closest_match(&matches, 99), Some(0));
-        assert_eq!(closest_match(&[], 0), None);
-    }
-
-    #[test]
-    fn caret_blink_restarts_and_rejects_stale_timers() {
-        let mut caret = CaretBlink::default();
-        assert!(!caret.visible());
-
-        let first_epoch = caret.set_focused(true).expect("focus starts timer");
-        assert!(caret.visible());
-        assert!(caret.tick(first_epoch));
-        assert!(!caret.visible());
-
-        let fresh_epoch = caret.reset().expect("interaction restarts timer");
-        assert!(caret.visible());
-        assert!(!caret.tick(first_epoch));
-        assert!(caret.visible());
-        assert!(caret.tick(fresh_epoch));
-        assert!(!caret.visible());
-
-        assert_eq!(caret.set_focused(false), None);
-        assert!(!caret.tick(fresh_epoch));
-        assert!(!caret.visible());
-
-        assert!(caret.set_focused(true).is_some());
-        assert!(caret.visible());
-    }
-
-    #[test]
-    fn masked_offsets_follow_unicode_characters_instead_of_raw_bytes() {
-        let raw = "a好🙂";
-        assert_eq!(display_offset(raw, true, 0), 0);
-        assert_eq!(display_offset(raw, true, 1), 3);
-        assert_eq!(display_offset(raw, true, 4), 6);
-        assert_eq!(display_offset(raw, true, raw.len()), 9);
-
-        assert_eq!(raw_offset_from_display(raw, true, 0), 0);
-        assert_eq!(raw_offset_from_display(raw, true, 3), 1);
-        assert_eq!(raw_offset_from_display(raw, true, 6), 4);
-        assert_eq!(raw_offset_from_display(raw, true, 9), raw.len());
-    }
-
-    #[test]
-    fn horizontal_scroll_keeps_the_caret_inside_the_input_viewport() {
-        assert_eq!(
-            horizontal_scroll_for_caret(px(0.), px(150.), px(160.), px(100.), true),
-            px(54.)
-        );
-        assert_eq!(
-            horizontal_scroll_for_caret(px(54.), px(20.), px(160.), px(100.), true),
-            px(16.)
-        );
-        assert_eq!(
-            horizontal_scroll_for_caret(px(54.), px(150.), px(160.), px(100.), false),
-            px(0.)
-        );
-        assert_eq!(
-            horizontal_scroll_for_caret(px(20.), px(80.), px(90.), px(100.), true),
-            px(0.)
-        );
-    }
-}
-
 /// Multiline code-editor element: shapes each logical line, paints a
 /// line-number gutter, and supports cross-line cursor/selection. Shares the
 /// `TextInput` entity (content, selection, IME) with the single-line element.
@@ -2087,5 +1988,117 @@ impl Element for CodeElement {
             input.code_line_height = line_height;
             input.last_bounds = Some(bounds);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{point, px, size, Bounds};
+
+    use super::{
+        closest_match, code_visible_rows, display_offset, find_matches,
+        horizontal_scroll_for_caret, raw_offset_from_display, CaretBlink,
+    };
+
+    #[test]
+    fn code_mode_shapes_only_viewport_rows_with_small_overdraw() {
+        let content = Bounds::new(point(px(10.), px(100.)), size(px(600.), px(20_000.)));
+        let viewport = Bounds::new(point(px(10.), px(300.)), size(px(600.), px(200.)));
+        assert_eq!(code_visible_rows(content, viewport, px(20.), 1_000), 7..23);
+    }
+
+    #[test]
+    fn code_mode_caps_first_layout_before_scroll_bounds_are_known() {
+        let content = Bounds::new(point(px(0.), px(0.)), size(px(600.), px(20_000.)));
+        assert_eq!(
+            code_visible_rows(content, Bounds::default(), px(20.), 1_000),
+            0..64
+        );
+        assert_eq!(
+            code_visible_rows(content, Bounds::default(), px(20.), 0),
+            0..0
+        );
+    }
+
+    #[test]
+    fn find_is_ascii_case_insensitive_and_preserves_utf8_offsets() {
+        assert_eq!(find_matches("你好 FoO foo", "foo"), vec![7..10, 11..14]);
+    }
+
+    #[test]
+    fn find_supports_exact_non_ascii_queries() {
+        assert_eq!(
+            find_matches("网关测试，网关正常", "网关"),
+            vec![0..6, 15..21]
+        );
+        assert!(find_matches("anything", "").is_empty());
+    }
+
+    #[test]
+    fn closest_match_wraps_to_the_first_result() {
+        let matches = vec![2..5, 10..13];
+        assert_eq!(closest_match(&matches, 4), Some(0));
+        assert_eq!(closest_match(&matches, 7), Some(1));
+        assert_eq!(closest_match(&matches, 99), Some(0));
+        assert_eq!(closest_match(&[], 0), None);
+    }
+
+    #[test]
+    fn caret_blink_restarts_and_rejects_stale_timers() {
+        let mut caret = CaretBlink::default();
+        assert!(!caret.visible());
+
+        let first_epoch = caret.set_focused(true).expect("focus starts timer");
+        assert!(caret.visible());
+        assert!(caret.tick(first_epoch));
+        assert!(!caret.visible());
+
+        let fresh_epoch = caret.reset().expect("interaction restarts timer");
+        assert!(caret.visible());
+        assert!(!caret.tick(first_epoch));
+        assert!(caret.visible());
+        assert!(caret.tick(fresh_epoch));
+        assert!(!caret.visible());
+
+        assert_eq!(caret.set_focused(false), None);
+        assert!(!caret.tick(fresh_epoch));
+        assert!(!caret.visible());
+
+        assert!(caret.set_focused(true).is_some());
+        assert!(caret.visible());
+    }
+
+    #[test]
+    fn masked_offsets_follow_unicode_characters_instead_of_raw_bytes() {
+        let raw = "a好🙂";
+        assert_eq!(display_offset(raw, true, 0), 0);
+        assert_eq!(display_offset(raw, true, 1), 3);
+        assert_eq!(display_offset(raw, true, 4), 6);
+        assert_eq!(display_offset(raw, true, raw.len()), 9);
+
+        assert_eq!(raw_offset_from_display(raw, true, 0), 0);
+        assert_eq!(raw_offset_from_display(raw, true, 3), 1);
+        assert_eq!(raw_offset_from_display(raw, true, 6), 4);
+        assert_eq!(raw_offset_from_display(raw, true, 9), raw.len());
+    }
+
+    #[test]
+    fn horizontal_scroll_keeps_the_caret_inside_the_input_viewport() {
+        assert_eq!(
+            horizontal_scroll_for_caret(px(0.), px(150.), px(160.), px(100.), true),
+            px(54.)
+        );
+        assert_eq!(
+            horizontal_scroll_for_caret(px(54.), px(20.), px(160.), px(100.), true),
+            px(16.)
+        );
+        assert_eq!(
+            horizontal_scroll_for_caret(px(54.), px(150.), px(160.), px(100.), false),
+            px(0.)
+        );
+        assert_eq!(
+            horizontal_scroll_for_caret(px(20.), px(80.), px(90.), px(100.), true),
+            px(0.)
+        );
     }
 }

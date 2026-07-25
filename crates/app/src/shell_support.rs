@@ -365,6 +365,7 @@ fn acquire_single_instance_at(
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)?;
 
     match FileExt::try_lock_exclusive(&file) {
@@ -408,6 +409,23 @@ fn acquire_single_instance_at(
 /// deliberately not involved because that port may belong to another app.
 pub fn acquire_single_instance(control_port: u16) -> std::io::Result<InstanceAcquire> {
     acquire_single_instance_at(lock_file_path(), control_port)
+}
+
+// ---------------------------------------------------------------------------
+// First-run notice — reads/writes the device-level `first_run_notice_confirmed`
+// flag via the settings service. UI is rendered by the app root.
+// ---------------------------------------------------------------------------
+
+/// Whether the first-run notice still needs to be shown (flag not yet `true`).
+pub fn first_run_notice_pending() -> bool {
+    settings::get_settings().first_run_notice_confirmed != Some(true)
+}
+
+/// Persist acknowledgement of the first-run notice.
+pub fn confirm_first_run_notice() {
+    if let Err(err) = settings::mutate_settings(|s| s.first_run_notice_confirmed = Some(true)) {
+        log::warn!("保存首次运行提示确认状态失败: {err}");
+    }
 }
 
 #[cfg(test)]
@@ -472,22 +490,5 @@ mod instance_lock_tests {
         let result = acquire_single_instance_at(temp.path().join("ochub.lock"), occupied_port)
             .expect("instance lock must not depend on the control port");
         assert!(matches!(result, InstanceAcquire::Acquired { .. }));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// First-run notice — reads/writes the device-level `first_run_notice_confirmed`
-// flag via the settings service. UI is rendered by the app root.
-// ---------------------------------------------------------------------------
-
-/// Whether the first-run notice still needs to be shown (flag not yet `true`).
-pub fn first_run_notice_pending() -> bool {
-    settings::get_settings().first_run_notice_confirmed != Some(true)
-}
-
-/// Persist acknowledgement of the first-run notice.
-pub fn confirm_first_run_notice() {
-    if let Err(err) = settings::mutate_settings(|s| s.first_run_notice_confirmed = Some(true)) {
-        log::warn!("保存首次运行提示确认状态失败: {err}");
     }
 }

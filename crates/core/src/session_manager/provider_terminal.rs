@@ -38,8 +38,8 @@ pub fn open_provider_terminal(
     let launch_cwd = resolve_launch_cwd(cwd)?;
 
     // 获取提供商配置
-    let providers = ProviderService::list(state, app_type.clone())
-        .map_err(|e| format!("获取提供商列表失败: {e}"))?;
+    let providers =
+        ProviderService::list(state, app_type).map_err(|e| format!("获取提供商列表失败: {e}"))?;
 
     let provider = providers
         .get(provider_id)

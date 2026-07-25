@@ -26,6 +26,8 @@ const LOCALES: &[(&str, &str)] = &[("zh-Hans", "ZH"), ("en", "EN"), ("ja", "JA")
 const REFERENCE: &str = "zh-Hans";
 
 fn main() {
+    configure_windows_resources();
+
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("i18n");
     println!("cargo:rerun-if-changed={}", dir.display());
 
@@ -43,7 +45,9 @@ fn main() {
         }
         for key in catalog.keys() {
             if !reference.contains_key(key) {
-                errors.push(format!("{stem}.toml: key `{key}` is not in {REFERENCE}.toml"));
+                errors.push(format!(
+                    "{stem}.toml: key `{key}` is not in {REFERENCE}.toml"
+                ));
             }
         }
         for (key, reference_text) in reference {
@@ -84,13 +88,14 @@ fn main() {
              pub(crate) const fn index(self) -> usize { self.0 as usize }\n\
          }\n\n",
     );
-    out.push_str(&format!("pub(crate) const COUNT: usize = {};\n\n", keys.len()));
+    out.push_str(&format!(
+        "pub(crate) const COUNT: usize = {};\n\n",
+        keys.len()
+    ));
 
     for (stem, table) in LOCALES {
         let catalog = &catalogs[stem];
-        out.push_str(&format!(
-            "pub(crate) static {table}: [&str; COUNT] = [\n"
-        ));
+        out.push_str(&format!("pub(crate) static {table}: [&str; COUNT] = [\n"));
         for key in &keys {
             let text = catalog.get(*key).unwrap_or_else(|| &reference[*key]);
             out.push_str(&format!("    {},\n", quote(text)));
@@ -122,6 +127,20 @@ fn main() {
     std::fs::write(&dest, out).expect("write generated catalog");
 }
 
+#[cfg(windows)]
+fn configure_windows_resources() {
+    const ICON: &str = "assets/app-icons/ochub.ico";
+
+    println!("cargo:rerun-if-changed={ICON}");
+    winresource::WindowsResource::new()
+        .set_icon(ICON)
+        .compile()
+        .expect("compile Windows application resources");
+}
+
+#[cfg(not(windows))]
+fn configure_windows_resources() {}
+
 /// Merge every `*.toml` under a locale's directory into one catalog.
 ///
 /// Splitting by area keeps each file small enough to review, and means two
@@ -152,13 +171,12 @@ fn read_catalog(dir: &Path) -> BTreeMap<String, String> {
             .to_string();
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-        let entries: BTreeMap<String, String> =
-            toml::from_str(&text).unwrap_or_else(|err| {
-                panic!(
-                    "failed to parse {} (every entry must be `\"key\" = \"text\"`): {err}",
-                    path.display()
-                )
-            });
+        let entries: BTreeMap<String, String> = toml::from_str(&text).unwrap_or_else(|err| {
+            panic!(
+                "failed to parse {} (every entry must be `\"key\" = \"text\"`): {err}",
+                path.display()
+            )
+        });
         for (key, value) in entries {
             if let Some(previous) = origin.insert(key.clone(), name.clone()) {
                 panic!(

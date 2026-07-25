@@ -1,109 +1,139 @@
-# OcHub
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/ochub-wordmark-light.png">
+    <img src="docs/assets/ochub-wordmark-dark.png" alt="OcHub" width="680">
+  </picture>
+</p>
 
-A native desktop manager for switching API providers across AI coding tools —
-**Claude Code, Claude Desktop, Codex, OpenCode, OpenClaw, and Hermes**.
+<p align="center">
+  A native desktop control center for AI coding tools.
+  Switch providers, manage shared capabilities, and run a local relay from one place.
+</p>
 
-This is a from-scratch rewrite of [`cc-switch`](https://github.com/farion1231/cc-switch)
-(originally Tauri + React) onto a new stack:
+<p align="center">
+  <a href="https://github.com/Sleepstars/OcHub/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Sleepstars/OcHub/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/Sleepstars/OcHub/actions/workflows/release.yml"><img alt="Release" src="https://github.com/Sleepstars/OcHub/actions/workflows/release.yml/badge.svg"></a>
+  <a href="https://github.com/Sleepstars/OcHub/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Sleepstars/OcHub?display_name=tag&sort=semver"></a>
+  <a href="LICENSE"><img alt="GPL-3.0-or-later" src="https://img.shields.io/github/license/Sleepstars/OcHub"></a>
+  <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-31b8b5">
+</p>
 
-- **[axum](https://github.com/tokio-rs/axum)** as the service backbone (control API + the local relay gateway), replacing Tauri's IPC/command layer.
-- **[GPUI](https://www.gpui.rs/)** (Zed's GPU-accelerated UI framework) as the native UI, replacing the Tauri webview + React frontend.
+<p align="center">
+  <a href="https://github.com/Sleepstars/OcHub/releases/latest">Download</a>
+  ·
+  <a href="#what-ochub-does">Features</a>
+  ·
+  <a href="#build-from-source">Build from source</a>
+  ·
+  <a href="packaging/README.md">Release guide</a>
+</p>
 
-OcHub owns its own data directory (`~/.ochub/`, with `ochub.db` on
-an independent schema line starting at v1). On first launch it performs a
-**one-time, read-only import** of existing cc-switch data
-(`~/.cc-switch/cc-switch.db`, tolerant of schema v11–v16+): providers, MCP
-servers, skills, usage history, settings, and managed OAuth accounts
-all carry over, and `~/.cc-switch/` is never written to. Historical Gemini
-usage rows remain readable, but Gemini CLI is no longer a managed app. OcHub
-manages live config locations such as `~/.claude`, `~/.codex`, and the
-OpenCode/OpenClaw/Hermes directories — quit the
-original cc-switch app before switching providers from OcHub, or the two
-will overwrite each other's live configs.
+> OcHub is under active pre-release development. Back up important tool
+> configuration before trying an early build.
 
-OcHub provides two connection paths:
+## What OcHub does
 
-1. **Direct connection** — automatically discovers local tool configs and
-   switches the common provider fields in place.
-2. **Relay-station mode** — adds a complete commercial relay configuration
-   (for example New API or Sub2API) with its address, key, API format, model
-   aliases, and reasoning mapping. A station can be applied to supported CLIs
-   with one click; after that, switching stations takes effect without rewriting
-   the app config again. The local conversion service and route bindings stay
-   hidden as implementation details.
+OcHub manages **Claude Code, Claude Desktop, Codex, OpenCode, OpenClaw, and
+Hermes** without requiring a browser shell or webview.
+
+| Area | Capabilities |
+| --- | --- |
+| Providers | Discover, import, edit, switch, and test direct API providers |
+| Relay station | Route supported clients through a local gateway with model aliases, reasoning mapping, failover, health checks, and usage accounting |
+| Shared tools | Manage MCP servers and reusable skills across supported clients |
+| Operations | Browse sessions, inspect usage, configure sync, and manage app behavior |
+| Migration | One-time, read-only import from compatible cc-switch databases |
+
+OcHub owns `~/.ochub/` and never writes back to `~/.cc-switch/`. It does update
+the live configuration directories of tools you explicitly manage, so quit
+cc-switch before switching providers in OcHub.
+
+## Downloads
+
+Every version tag is built on the matching native GitHub-hosted runner.
+
+| Platform | Release files |
+| --- | --- |
+| macOS Apple Silicon | ARM64 `.dmg` |
+| macOS Intel | x64 `.dmg` |
+| Windows 10/11 x64 | NSIS installer and portable `.zip` |
+| Linux x64 | AppImage and Debian `.deb` |
+
+The release also includes `SHA256SUMS` and a GitHub artifact attestation. Verify
+a downloaded file with:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify <downloaded-file> --repo Sleepstars/OcHub
+```
+
+Unsigned packages remain available for testing when platform signing
+credentials have not been configured; macOS Gatekeeper or Windows SmartScreen
+may warn in that case. See the [release guide](packaging/README.md) for optional
+Developer ID notarization and Authenticode signing.
 
 ## Architecture
 
-A Cargo workspace with three crates:
+OcHub is a Rust workspace built around GPUI and axum.
 
-| Crate | Path | Role |
-|-------|------|------|
-| `ochub-core` | `crates/core` | UI/transport-agnostic core: domain model, config/paths, SQLite store, per-app live-config writers, provider switching, MCP/skills/sessions/sync/usage services. A faithful port of cc-switch's `src-tauri/src` minus Tauri. |
-| `ochub-server` | `crates/server` | axum HTTP/JSON control API plus the in-process relay gateway (multi-dialect forwarding, channel routing, failover, health checks, and usage accounting). |
-| `ochub-app` | `crates/app` | GPUI desktop application. Embeds `ochub-core` and hosts `ochub-server` in-process. |
+| Crate | Role |
+| --- | --- |
+| `ochub-core` | Domain model, SQLite storage, provider switching, client config writers, sync, MCP, skills, sessions, usage, and auth |
+| `ochub-server` | Loopback control API and in-process relay gateway |
+| `ochub-convert` | Request and response conversion between supported API dialects |
+| `ochub-app` | Native GPUI desktop application hosting the core and server |
 
-The reference source (`cc-switch/`) and the GPUI source (`zed/`) live alongside
-the workspace and are excluded from it (`Cargo.toml` `[workspace] exclude`).
+GPUI is pinned to a tested Zed commit. Linux builds enable both Wayland and X11;
+macOS builds compile Metal shaders at runtime.
 
-## Build prerequisites (macOS)
+## Build from source
 
-GPUI renders with Metal, and Zed pins a specific Rust toolchain. Two non-obvious
-requirements:
-
-1. **Rust 1.95.0** — pinned in `rust-toolchain.toml` (matches `zed/`). Install with
-   `rustup toolchain install 1.95.0`.
-2. **Xcode + the Metal toolchain.** Building `gpui_macos` compiles Metal shaders,
-   which needs the full Xcode (not just Command Line Tools) *and* the separately
-   downloadable Metal toolchain component (Xcode 26+):
-   ```sh
-   # point the build at Xcode (per-process; no sudo) — or run `sudo xcode-select -s ...`
-   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-   # one-time: download the Metal compiler component
-   xcodebuild -downloadComponent MetalToolchain
-   ```
-
-## Building
+The repository pins Rust **1.97.1** in `rust-toolchain.toml`. Rustup selects it
+automatically:
 
 ```sh
-# Core library and headless server (no Metal/Xcode needed):
-cargo check -p ochub-core
-cargo build -p ochub-server
-
-# The GPUI desktop app (needs DEVELOPER_DIR + Metal toolchain, see above):
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo run -p ochub-app
+git clone https://github.com/Sleepstars/OcHub.git
+cd OcHub
+cargo run -p ochub-app
 ```
 
-## Status
+Platform prerequisites:
 
-A faithful, near-complete port. `ochub-core` compiles green (hundreds of tests
-passing) and contains the full cc-switch backend:
+- **macOS:** Xcode or the Xcode Command Line Tools.
+- **Windows:** Visual Studio 2022 Build Tools with the Windows SDK.
+- **Debian/Ubuntu:** run `./scripts/ci/install-linux-deps.sh`.
 
-- Domain model, config/paths, device settings
-- SQLite store — independent schema v4, backup/restore, legacy read-only import, and usage rollups
-- Provider switching + all 6 per-app live-config writers + first-launch seeding
-- MCP and common-config services
-- Skills management through the Vercel `npx -y skills` CLI
-- Relay-station mode — station-centric configuration, silent in-process
-  lifecycle, hidden per-app bindings, model/reasoning mapping, protocol
-  conversion, one-click CLI configuration, and usage accounting
-- Usage statistics, session manager, environment management, deeplink import
-- Cloud sync (WebDAV + S3, both functional) + auto-sync
-- Model-fetch / speedtest / subscription / balance / coding-plan
-- Auth — Copilot OAuth device flow, Codex OAuth, managed multi-account stores
+Useful development commands:
 
-`ochub-server` exposes the local control API. `ochub-app` is a working GPUI desktop UI
-(sidebar app-switcher, provider list with switch/import/add/edit/delete, a
-text-input component, settings panel, sessions browser, usage dashboard, and relay-station panel).
+```sh
+just check
+just test
+just ci
+just qa-app       # macOS: fixed /tmp/OCHUB-QA.app acceptance bundle
+```
 
-**Verified end-to-end:** direct switching rewrites the live configs; relay-station
-mode starts its local service silently; hidden station bindings isolate the selected
-commercial relay and map models/reasoning; official providers seed on first launch.
+To build installers locally, install the same pinned packager used by CI:
 
-The former standalone proxy, live-config takeover, failover queue, circuit-breaker
-configuration, upstream-proxy settings, UI page, and control API have been removed.
-Routing and protocol translation now have a single owner: the gateway.
+```sh
+cargo install cargo-packager --version 0.11.8 --locked
+just package-macos
+# or, on Linux:
+just package-linux
+```
+
+## Automated releases
+
+The `Release` workflow accepts only a tag that exactly matches the Cargo
+workspace version. For example, workspace version `0.1.0` must be released as
+`v0.1.0`. It builds both macOS architectures plus Windows and Linux in parallel,
+checks the expected package set, creates checksums and provenance, and then
+publishes one GitHub Release.
+
+Detailed signing secret names and local packaging commands are documented in
+[`packaging/README.md`](packaging/README.md).
 
 ## License
 
-OcHub is licensed under the **GNU General Public License v3.0 (or later)** —
-see [LICENSE](LICENSE).
+OcHub is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+This is a from-scratch GPUI + axum rewrite inspired by
+[`cc-switch`](https://github.com/farion1231/cc-switch).

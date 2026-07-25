@@ -276,7 +276,10 @@ impl CodeEditor {
             } else {
                 String::new()
             };
-            let input = cx.new(|cx| TextInput::new(cx, crate::i18n::t(crate::i18n::k::COMMON_FIND_PLACEHOLDER)).search_field());
+            let input = cx.new(|cx| {
+                TextInput::new(cx, crate::i18n::t(crate::i18n::k::COMMON_FIND_PLACEHOLDER))
+                    .search_field()
+            });
             if !selected.is_empty() {
                 input.update(cx, |input, cx| input.set_content(selected, cx));
             }
@@ -461,7 +464,7 @@ impl CodeEditor {
             let starts = self.line_starts();
             let (cursor_line, _) = self.line_index_for_offset(self.cursor_offset());
             if region.hidden().contains(&cursor_line) {
-                let offset = starts[header] + self.line_len(header, &starts);
+                let offset = starts[header] + self.line_len(header, starts);
                 self.selected_range = offset..offset;
                 self.selection_reversed = false;
             }
@@ -605,7 +608,7 @@ impl CodeEditor {
             .get(painted)
             .map(|line| line.closest_index_for_x(local_x))
             .unwrap_or(0);
-        let line_len = self.line_len(line, &starts);
+        let line_len = self.line_len(line, starts);
         starts[line] + col.min(line_len)
     }
 
@@ -662,7 +665,7 @@ impl CodeEditor {
             .map(|l| l.closest_index_for_x(x))
             .unwrap_or(col);
         let starts = self.line_starts();
-        let offset = starts[target_line] + target_col.min(self.line_len(target_line, &starts));
+        let offset = starts[target_line] + target_col.min(self.line_len(target_line, starts));
         self.move_to(offset, cx);
     }
 
@@ -696,7 +699,7 @@ impl CodeEditor {
     fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
         let (line, _) = self.line_index_for_offset(self.cursor_offset());
         let starts = self.line_starts();
-        self.move_to(starts[line] + self.line_len(line, &starts), cx);
+        self.move_to(starts[line] + self.line_len(line, starts), cx);
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -728,7 +731,7 @@ impl CodeEditor {
         let (line, _) = self.line_index_for_offset(self.cursor_offset());
         let starts = self.line_starts();
         let start = starts[line];
-        let line_text = &self.content[start..start + self.line_len(line, &starts)];
+        let line_text = &self.content[start..start + self.line_len(line, starts)];
         let indent: String = line_text
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
@@ -1410,7 +1413,7 @@ impl Element for CodeEditorElement {
         if !selection.is_empty() && !empty {
             for (row, &line_idx) in rows.iter().enumerate() {
                 let line_start = starts[line_idx];
-                let line_end = line_start + editor.line_len(line_idx, &starts);
+                let line_end = line_start + editor.line_len(line_idx, starts);
                 if selection.start > line_end || selection.end < line_start {
                     continue;
                 }
@@ -1421,7 +1424,7 @@ impl Element for CodeEditorElement {
                 let mut x1 = line.x_for_index(seg_end - line_start);
                 let includes_newline = selection.end > line_end;
                 if includes_newline {
-                    x1 = x1 + px(6.);
+                    x1 += px(6.);
                 }
                 if x1 > x0 {
                     let y = bounds.top() + line_height * (first_row + row) as f32;

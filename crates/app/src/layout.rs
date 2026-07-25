@@ -50,6 +50,9 @@ use crate::scrollbar::{contain_vertical_scroll, VerticalScrollbar};
 use crate::tf;
 use crate::theme;
 
+type RowActivation = Rc<dyn Fn(&mut Window, &mut App)>;
+type RowSelection = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
 /// Max width of the centered content column, shared by every view so pages align.
 pub const CONTENT_MAX_WIDTH: f32 = 800.;
 
@@ -463,7 +466,7 @@ fn row_frame(id: &SharedString, disabled: bool) -> gpui::Stateful<gpui::Div> {
 /// so exactly one of the two ever fires.
 fn with_activation(
     row: gpui::Stateful<gpui::Div>,
-    activate: Rc<dyn Fn(&mut Window, &mut App)>,
+    activate: RowActivation,
 ) -> gpui::Stateful<gpui::Div> {
     let from_action = activate.clone();
     row.on_action(move |_: &Activate, window, cx| from_action(window, cx))
@@ -518,7 +521,7 @@ pub fn switch_row(
     if disabled {
         return row;
     }
-    let activate: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_toggle);
+    let activate: RowActivation = Rc::new(on_toggle);
     let clicked = activate.clone();
     with_activation(
         row.cursor_pointer()
@@ -552,7 +555,7 @@ pub fn select_row(
     let id = id.into();
     let label = label.into();
     let current = options.get(selected).copied().unwrap_or_default();
-    let select: Rc<dyn Fn(usize, &mut Window, &mut App)> = Rc::new(on_select);
+    let select: RowSelection = Rc::new(on_select);
 
     let options_id = SharedString::from(format!("{id}-options"));
     let control = if disabled {
@@ -635,7 +638,7 @@ pub fn navigate_row(
     if disabled {
         return row;
     }
-    let activate: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_open);
+    let activate: RowActivation = Rc::new(on_open);
     let clicked = activate.clone();
     with_activation(
         row.cursor_pointer()
@@ -673,7 +676,7 @@ pub fn action_row(
     let id = id.into();
     let label = label.into();
     let action = action.into();
-    let activate: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_activate);
+    let activate: RowActivation = Rc::new(on_activate);
 
     let button_id = ElementId::Name(format!("{id}-button").into());
     let control = if disabled {

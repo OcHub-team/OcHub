@@ -515,25 +515,21 @@ impl ProviderService {
         let current_id = crate::settings::get_effective_current_provider(&state.db, &app_type)?;
 
         if let Some(current_id) = current_id {
-            if current_id != id {
-                if !app_type.is_additive_mode() {
-                    if let Ok(live_config) = read_live_settings(app_type) {
-                        if let Some(mut current_provider) = providers.get(&current_id).cloned() {
-                            current_provider.settings_config =
-                                strip_common_config_from_live_settings(
-                                    state.db.as_ref(),
-                                    &app_type,
-                                    &current_provider,
-                                    live_config,
-                                );
-                            if let Err(e) =
-                                state.db.save_provider(app_type.as_str(), &current_provider)
-                            {
-                                log::warn!("Backfill failed: {e}");
-                                result
-                                    .warnings
-                                    .push(format!("backfill_failed:{current_id}"));
-                            }
+            if current_id != id && !app_type.is_additive_mode() {
+                if let Ok(live_config) = read_live_settings(app_type) {
+                    if let Some(mut current_provider) = providers.get(&current_id).cloned() {
+                        current_provider.settings_config = strip_common_config_from_live_settings(
+                            state.db.as_ref(),
+                            &app_type,
+                            &current_provider,
+                            live_config,
+                        );
+                        if let Err(e) = state.db.save_provider(app_type.as_str(), &current_provider)
+                        {
+                            log::warn!("Backfill failed: {e}");
+                            result
+                                .warnings
+                                .push(format!("backfill_failed:{current_id}"));
                         }
                     }
                 }

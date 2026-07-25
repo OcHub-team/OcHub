@@ -563,11 +563,7 @@ impl SettingsView {
             return;
         }
         self.update.checking = true;
-        self.set_status(
-            NotificationLevel::Info,
-            t(k::SETTINGS_UPDATE_CHECKING),
-            cx,
-        );
+        self.set_status(NotificationLevel::Info, t(k::SETTINGS_UPDATE_CHECKING), cx);
 
         let task = cx.background_spawn(crate::core_async::run(
             ochub_core::services::update::check_for_updates(None),
