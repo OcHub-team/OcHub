@@ -52,6 +52,27 @@ cc-switch before switching providers in OcHub.
 
 Every version tag is built on the matching native GitHub-hosted runner.
 
+### Homebrew (macOS)
+
+Homebrew automatically selects the Apple Silicon or Intel build:
+
+```sh
+brew install --cask sleepstars/tap/ochub
+```
+
+Upgrade or uninstall OcHub with:
+
+```sh
+brew upgrade --cask sleepstars/tap/ochub
+brew uninstall --cask ochub
+```
+
+The Cask is maintained in the
+[`Sleepstars/homebrew-tap`](https://github.com/Sleepstars/homebrew-tap)
+repository and downloads the same DMG published with each GitHub Release.
+
+### Direct downloads
+
 | Platform | Release files |
 | --- | --- |
 | macOS Apple Silicon | ARM64 `.dmg` |
@@ -127,7 +148,8 @@ The `Release` workflow accepts only a tag that exactly matches the Cargo
 workspace version. For example, workspace version `0.1.0` must be released as
 `v0.1.0`. It builds both macOS architectures plus Windows and Linux in parallel,
 checks the expected package set, creates checksums and provenance, and then
-publishes one GitHub Release.
+publishes one GitHub Release. The Homebrew tap checks the latest release daily
+and updates the Cask version and both macOS checksums when needed.
 
 Detailed signing secret names and local packaging commands are documented in
 [`packaging/README.md`](packaging/README.md).
