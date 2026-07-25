@@ -5,6 +5,8 @@
 //! disclosure, stat tiles, tables, pagination, status footer. Views compose
 //! these instead of hand-rolling styling so every page stays consistent.
 
+use std::rc::Rc;
+
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike};
 use gpui::{
     anchored, deferred, div, point, prelude::*, px, Anchor, AnyElement, App, ElementId, Entity,
@@ -70,7 +72,33 @@ pub fn button(
     size: ButtonSize,
 ) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
-    button_base(id, label.clone(), tone, size).child(label)
+    button_base(id, label.clone(), tone, size, true).child(label)
+}
+
+/// [`button`] rendered inert: no hover response and no pointer cursor, so it
+/// reads as unavailable before it is clicked.
+///
+/// Attach no `on_click` to the result — a disabled button must not act. Use it
+/// wherever a button would otherwise be swapped for empty space, so the control
+/// keeps its position and the layout does not jump when it becomes available.
+///
+/// `muted` fades it to [`DISABLED_OPACITY`]. Pass `false` when the button sits
+/// inside a container that is already faded: gpui multiplies nested opacity, and
+/// 0.6 × 0.6 is illegible. Exactly one element per subtree should carry it.
+pub fn disabled_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    tone: ButtonTone,
+    size: ButtonSize,
+    muted: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    let button = button_base(id, label.clone(), tone, size, false).child(label);
+    if muted {
+        button.opacity(DISABLED_OPACITY)
+    } else {
+        button
+    }
 }
 
 /// Button with a leading icon.
@@ -83,7 +111,7 @@ pub fn icon_button_tone(
 ) -> gpui::Stateful<gpui::Div> {
     let (_, _, fg) = tone.colors();
     let label = label.into();
-    button_base(id, label.clone(), tone, size).child(
+    button_base(id, label.clone(), tone, size, true).child(
         div()
             .flex()
             .flex_row()
@@ -101,14 +129,14 @@ fn button_base(
     label: SharedString,
     tone: ButtonTone,
     size: ButtonSize,
+    enabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let (bg, hover_bg, fg) = tone.colors();
-    let base = div()
+    let mut base = div()
         .id(id)
         .role(gpui::Role::Button)
         .aria_label(label)
         .rounded_md()
-        .cursor_pointer()
         .bg(bg)
         .text_color(fg)
         .text_sm()
@@ -116,8 +144,10 @@ fn button_base(
             FontWeight::SEMIBOLD
         } else {
             FontWeight::MEDIUM
-        })
-        .hover(|s| s.bg(hover_bg));
+        });
+    if enabled {
+        base = base.cursor_pointer().hover(|s| s.bg(hover_bg));
+    }
     match size {
         ButtonSize::Sm => base.px_3().py_1(),
         ButtonSize::Md => base.px_4().py(px(6.)),
@@ -214,9 +244,23 @@ pub fn field_with_error(
     }
     col = col.child(control);
     if let Some(error) = error {
-        col = col.child(div().text_color(theme::red()).text_xs().child(error));
+        col = col.child(field_error(error));
     }
     col
+}
+
+/// The one inline validation message: red caption text, no box, no icon.
+///
+/// [`field_with_error`] renders exactly this below its control, so an error
+/// raised somewhere a `field` cannot reach — under a grouped row, beside a
+/// [`commit_bar`] — still looks like every other error in the app. Show it only
+/// while the input is actually invalid; a permanently visible red line reads as
+/// decoration and stops being noticed.
+pub fn field_error(message: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .text_color(theme::red())
+        .text_xs()
+        .child(message.into())
 }
 
 /// Horizontal field for grouped settings rows: semibold label + muted
@@ -239,6 +283,124 @@ pub fn field_row(
         .child(control)
 }
 
+// ── Commit bar ──────────────────────────────────────────────────────────────
+
+/// The footer of a form that **batches** its edits: a dirty indicator on the
+/// leading edge, `Discard` and `Save` on the trailing one.
+///
+/// Use it when a page collects several changes and writes them in one go, so
+/// the user can see at a glance whether anything is outstanding and can back
+/// out of the whole batch. Do **not** pair it with rows that apply immediately
+/// (`layout::switch_row`, `layout::select_row`) — a Save button next to
+/// controls that have already taken effect is the exact ambiguity these
+/// primitives exist to remove.
+///
+/// Both buttons go inert (via [`disabled_button`]) whenever there is nothing to
+/// commit or a save is already in flight, so a double submit is impossible and
+/// the bar keeps its size in every state.
+///
+/// `id` seeds the two button ids; pass something unique to the form.
+#[allow(dead_code)]
+pub fn commit_bar(
+    id: &'static str,
+    dirty: bool,
+    saving: bool,
+    on_discard: impl Fn(&mut Window, &mut App) + 'static,
+    on_save: impl Fn(&mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    let live = dirty && !saving;
+    let (tone, status) = if saving {
+        (theme::accent(), t(k::COMMON_COMMIT_BAR_SAVING))
+    } else if dirty {
+        (theme::yellow(), t(k::COMMON_COMMIT_BAR_DIRTY))
+    } else {
+        (theme::green(), t(k::COMMON_COMMIT_BAR_CLEAN))
+    };
+
+    let discard_id = ElementId::Name(SharedString::from(format!("{id}-discard")));
+    let discard = if live {
+        button(
+            discard_id,
+            t(k::COMMON_COMMIT_BAR_DISCARD),
+            ButtonTone::Neutral,
+            ButtonSize::Md,
+        )
+        .on_click(move |_event, window, cx| on_discard(window, cx))
+        .into_any_element()
+    } else {
+        disabled_button(
+            discard_id,
+            t(k::COMMON_COMMIT_BAR_DISCARD),
+            ButtonTone::Neutral,
+            ButtonSize::Md,
+            true,
+        )
+        .into_any_element()
+    };
+
+    let save_id = ElementId::Name(SharedString::from(format!("{id}-save")));
+    let save = if live {
+        button(
+            save_id,
+            t(k::COMMON_COMMIT_BAR_SAVE),
+            ButtonTone::Primary,
+            ButtonSize::Md,
+        )
+        .on_click(move |_event, window, cx| on_save(window, cx))
+        .into_any_element()
+    } else {
+        disabled_button(
+            save_id,
+            t(k::COMMON_COMMIT_BAR_SAVE),
+            ButtonTone::Primary,
+            ButtonSize::Md,
+            true,
+        )
+        .into_any_element()
+    };
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .w_full()
+        .min_w_0()
+        .px_4()
+        .py_3()
+        .bg(theme::surface())
+        .border_t_1()
+        .border_color(theme::border())
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .min_w_0()
+                .gap_2()
+                .child(status_dot_sized(tone, 6.))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme::subtext())
+                        .child(status),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .flex_none()
+                .gap_2()
+                .child(discard)
+                .child(save),
+        )
+}
+
 // ── Segmented control ───────────────────────────────────────────────────────
 
 /// Single-select pill row (the one replacement for every hand-rolled
@@ -251,8 +413,30 @@ pub fn segmented(
     selected: usize,
     on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let id = id.into();
-    let on_select = std::rc::Rc::new(on_select);
+    let on_select: SelectHandler = Rc::new(on_select);
+    segmented_track(id.into(), options, selected, Some(on_select))
+}
+
+/// [`segmented`] with the interactivity removed: same track, same raised
+/// selected pill, but no click handlers, no hover response and no pointer
+/// cursor. For a disabled row that must still show which option is in force —
+/// hiding the option set would make "why can't I change this?" harder to answer.
+pub fn segmented_readonly(
+    id: impl Into<SharedString>,
+    options: &[&str],
+    selected: usize,
+) -> gpui::Stateful<gpui::Div> {
+    segmented_track(id.into(), options, selected, None)
+}
+
+type SelectHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
+fn segmented_track(
+    id: SharedString,
+    options: &[&str],
+    selected: usize,
+    on_select: Option<SelectHandler>,
+) -> gpui::Stateful<gpui::Div> {
     let mut track = div()
         .id(id.clone())
         .flex()
@@ -283,9 +467,11 @@ pub fn segmented(
             .px_3()
             .py_1()
             .rounded_md()
-            .cursor_pointer()
             .text_sm()
             .child(SharedString::from(option.to_string()));
+        if on_select.is_some() {
+            item = item.cursor_pointer();
+        }
         if is_selected {
             item = item
                 .bg(theme::surface())
@@ -293,12 +479,14 @@ pub fn segmented(
                 .text_color(theme::text())
                 .font_weight(FontWeight::MEDIUM);
         } else {
-            item = item
-                .text_color(theme::muted())
-                .hover(|s| s.text_color(theme::subtext()));
+            item = item.text_color(theme::muted());
+            if on_select.is_some() {
+                item = item.hover(|s| s.text_color(theme::subtext()));
+            }
         }
-        let on_select = on_select.clone();
-        item = item.on_click(move |_event, window, cx| on_select(ix, window, cx));
+        if let Some(on_select) = on_select.clone() {
+            item = item.on_click(move |_event, window, cx| on_select(ix, window, cx));
+        }
         track = track.child(item);
     }
     track

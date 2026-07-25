@@ -9,10 +9,45 @@
 //!
 //! Keeping all of this in one module means pages line up (same column width, same
 //! header chrome, same card rhythm) instead of each view hand-rolling its own.
+//!
+//! # Which row do I use?
+//!
+//! [`row`] is the bare container: it draws a row and nothing else, so a page that
+//! reaches for it has to invent its own control, its own keyboard handling and
+//! its own answer to "what does clicking here do?". Prefer one of the four
+//! purpose-built rows, each of which is focusable, activates on Space/Enter, and
+//! carries a trailing control you can identify without reading the label:
+//!
+//! | Row               | Trailing control    | Activating it…                     |
+//! |-------------------|---------------------|------------------------------------|
+//! | [`switch_row`]    | toggle pill         | flips a boolean, **immediately**   |
+//! | [`select_row`]    | segmented control   | picks one of a visible option set  |
+//! | [`navigate_row`]  | chevron             | opens a sub-page; changes nothing  |
+//! | [`action_row`]    | button              | runs a command (save, sync, reset) |
+//!
+//! The distinctions are the point. A switch that needed a separate Save button
+//! would be a lie; an action dressed as a settings row makes a destructive
+//! command look like a preference. If a row would *write* something, it gets a
+//! button — [`action_row`] with [`crate::components::ButtonTone::Danger`] when
+//! the write is destructive. If a page batches its edits instead of applying
+//! them per row, end it with [`crate::components::commit_bar`].
+//!
+//! Rows that only *display* a value are still plain [`row`] + [`row_label`]:
+//! they are not interactive, so making them focusable would put a tab stop on
+//! something that cannot be operated.
 
-use gpui::{div, prelude::*, px, AnyElement, FontWeight, SharedString};
+use std::rc::Rc;
 
+use gpui::{
+    actions, div, prelude::*, px, AnyElement, App, ElementId, FontWeight, KeyBinding, KeyDownEvent,
+    SharedString, Window,
+};
+
+use crate::components::{self, ButtonSize, ButtonTone, DISABLED_OPACITY};
+use crate::i18n::k;
+use crate::icons::{icon, IconName};
 use crate::scrollbar::{contain_vertical_scroll, VerticalScrollbar};
+use crate::tf;
 use crate::theme;
 
 /// Max width of the centered content column, shared by every view so pages align.
@@ -332,4 +367,343 @@ pub fn toggle(on: bool) -> gpui::Div {
                 .rounded_full()
                 .bg(theme::surface()),
         )
+}
+
+// ── Keyboard-operable rows ──────────────────────────────────────────────────
+//
+// These primitives land ahead of their first consumer, so each entry point
+// carries `#[allow(dead_code)]` — the same arrangement as the icon registry:
+// a page should be able to reach for the right row without first having to
+// build it. Drop the attribute once a view calls the function.
+
+actions!(ochub_row, [Activate]);
+
+/// The keymap context every interactive row publishes. Scoping the Space/Enter
+/// bindings to it keeps them off text inputs, which need those keys themselves.
+const ROW_KEY_CONTEXT: &str = "SettingsRow";
+
+/// Register Space/Enter as "activate the focused row".
+///
+/// Call once from `main.rs`, **after** `text_input::bind_keys`: an unscoped
+/// `enter` binding is already registered there, and ties in the keymap are
+/// broken by registration order.
+///
+/// Wiring this up is optional. The rows also handle a bare Space/Enter key press
+/// directly, and that fallback only runs when no binding consumed the keystroke,
+/// so keyboard activation works either way and never fires twice.
+#[allow(dead_code)]
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("space", Activate, Some(ROW_KEY_CONTEXT)),
+        KeyBinding::new("enter", Activate, Some(ROW_KEY_CONTEXT)),
+    ]);
+}
+
+/// A bare Space/Enter press — no modifiers, not a key repeat.
+///
+/// Holding a key down would otherwise toggle a switch dozens of times, and
+/// `cmd-enter` belongs to whichever page-level command claimed it.
+fn is_activation_key(event: &KeyDownEvent) -> bool {
+    !event.is_held
+        && !event.keystroke.modifiers.modified()
+        && matches!(event.keystroke.key.as_str(), "space" | "enter")
+}
+
+/// The shared frame behind every interactive row: same geometry as [`row`],
+/// plus focus, hover and disabled handling.
+///
+/// The focus ring is a 1px border and the padding is 1px short of [`row`]'s
+/// `px_4`/`py_3` to pay for it, so a focused row occupies exactly the same box
+/// as an unfocused one and the card's rhythm never shifts under the keyboard.
+///
+/// A disabled row is inert by construction rather than by suppression: it is
+/// muted to [`DISABLED_OPACITY`], it never calls `focusable`, so it is not a tab
+/// stop and cannot receive a key press, and each row builder returns before
+/// attaching any click, action or key handler. Its trailing control is likewise
+/// built in a handler-free variant, so there is nothing left to fire.
+///
+/// `id` is the caller's row id, which the four builders treat as a namespace:
+/// the row itself is `{id}-row`, its trailing control `{id}-options` or
+/// `{id}-button`. gpui keys the row's focus handle off that id, so it must be
+/// unique within the window and stable across frames — a focused row whose id
+/// changes loses focus mid-interaction.
+fn row_frame(id: &SharedString, disabled: bool) -> gpui::Stateful<gpui::Div> {
+    let frame = div()
+        .id(ElementId::Name(format!("{id}-row").into()))
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .gap_4()
+        .px(px(15.))
+        .py(px(11.))
+        .rounded_md()
+        .border_1()
+        .border_color(theme::surface().alpha(0.));
+    if disabled {
+        frame.opacity(DISABLED_OPACITY)
+    } else {
+        frame
+            .focusable()
+            .tab_stop(true)
+            .key_context(ROW_KEY_CONTEXT)
+            .hover(|style| style.bg(theme::inset()))
+            .focus(|style| style.bg(theme::inset()).border_color(theme::accent()))
+    }
+}
+
+/// Wire a row's keyboard activation.
+///
+/// Two paths on purpose. The [`Activate`] action is the idiomatic gpui route —
+/// it is what a keymap, a command palette or an assistive technology can see —
+/// and it fires when [`bind_keys`] has been called. The raw key handler is the
+/// fallback for a build that never registered those bindings. gpui stops
+/// propagation as soon as an action listener runs, and key-down listeners are
+/// dispatched only after every matching binding has been offered the keystroke,
+/// so exactly one of the two ever fires.
+fn with_activation(
+    row: gpui::Stateful<gpui::Div>,
+    activate: Rc<dyn Fn(&mut Window, &mut App)>,
+) -> gpui::Stateful<gpui::Div> {
+    let from_action = activate.clone();
+    row.on_action(move |_: &Activate, window, cx| from_action(window, cx))
+        .on_key_down(move |event, window, cx| {
+            if is_activation_key(event) {
+                cx.stop_propagation();
+                activate(window, cx);
+            }
+        })
+}
+
+/// A row whose control is a **switch**: activating it flips `on` and the change
+/// takes effect immediately. Reach for it whenever a setting is a boolean and
+/// there is nothing to confirm.
+///
+/// Anywhere in the row activates — click, Space or Enter — and the whole row is
+/// announced as a `Switch` carrying its on/off state, so the pill is a readout
+/// rather than the only target. If the change needs confirming, or costs
+/// something to undo, it is an [`action_row`], not a switch.
+///
+/// ```ignore
+/// let toggle = cx.listener(|this, _: &(), _window, cx| this.toggle_tray(cx));
+/// layout::switch_row(
+///     "tray",
+///     t(k::SETTINGS_TRAY_LABEL),
+///     t(k::SETTINGS_TRAY_DESCRIPTION),
+///     self.tray_enabled,
+///     false,
+///     move |window, cx| toggle(&(), window, cx),
+/// )
+/// ```
+#[allow(dead_code)]
+pub fn switch_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    on: bool,
+    disabled: bool,
+    on_toggle: impl Fn(&mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let id = id.into();
+    let label = label.into();
+    let row = row_frame(&id, disabled)
+        .role(gpui::Role::Switch)
+        .aria_label(label.clone())
+        .aria_toggled(if on {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .child(row_label(label, description))
+        .child(toggle(on));
+    if disabled {
+        return row;
+    }
+    let activate: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_toggle);
+    let clicked = activate.clone();
+    with_activation(
+        row.cursor_pointer()
+            .on_click(move |_event, window, cx| clicked(window, cx)),
+        activate,
+    )
+}
+
+/// A row whose control is a **segmented control**: every option and the current
+/// one are both on screen, and any option is one click away.
+///
+/// This replaces click-to-cycle rows. Cycling hides the option set — you cannot
+/// tell how many choices exist, what the next one will be, or how to go back —
+/// and it costs `n - 1` clicks to reach the option before the current one.
+///
+/// Mouse users click the option they want. Keyboard users tab to the row and
+/// press Space or Enter to advance to the next option, wrapping at the end; the
+/// row is announced as a radio group whose value is the current option. Use it
+/// for small, mutually exclusive, immediately-applied sets (theme, language,
+/// log level). Past roughly five options, or when the options need explaining,
+/// a [`navigate_row`] into a sub-page is kinder.
+#[allow(dead_code)]
+pub fn select_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    options: &[&str],
+    selected: usize,
+    disabled: bool,
+    on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let id = id.into();
+    let label = label.into();
+    let current = options.get(selected).copied().unwrap_or_default();
+    let select: Rc<dyn Fn(usize, &mut Window, &mut App)> = Rc::new(on_select);
+
+    let options_id = SharedString::from(format!("{id}-options"));
+    let control = if disabled {
+        components::segmented_readonly(options_id, options, selected).into_any_element()
+    } else {
+        let clicked = select.clone();
+        components::segmented(options_id, options, selected, move |index, window, cx| {
+            clicked(index, window, cx)
+        })
+        .into_any_element()
+    };
+
+    let row = row_frame(&id, disabled)
+        .role(gpui::Role::RadioGroup)
+        .aria_label(SharedString::from(tf!(
+            k::COMMON_ROW_SELECT_ARIA,
+            label = label,
+            value = current
+        )))
+        .child(row_label(label, description))
+        .child(div().flex_none().child(control));
+    if disabled {
+        return row;
+    }
+
+    // Keyboard activation advances one step so a single key can walk the whole
+    // set; the options stay visible throughout, so where it lands is never a
+    // surprise the way a cycling row's next value is.
+    let next = if options.is_empty() {
+        0
+    } else {
+        (selected + 1) % options.len()
+    };
+    with_activation(row, Rc::new(move |window, cx| select(next, window, cx)))
+}
+
+/// A row that **drills in**: activating it opens a sub-page. It changes nothing
+/// by itself, and the trailing chevron says so.
+///
+/// The chevron is what separates this from every other row: it points onward
+/// rather than presenting a control, so nobody has to guess whether clicking
+/// will read or write. `value` optionally previews what is configured inside
+/// ("3 rules", "Custom"), muted and ahead of the chevron; leave it `None` when
+/// the sub-page has no one-line summary. Use it whenever a setting needs more
+/// room than a row — a list to edit, options that need explaining, anything
+/// with its own validation.
+#[allow(dead_code)]
+pub fn navigate_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    value: Option<SharedString>,
+    disabled: bool,
+    on_open: impl Fn(&mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let id = id.into();
+    let label = label.into();
+    let row = row_frame(&id, disabled)
+        .role(gpui::Role::Button)
+        .aria_label(SharedString::from(tf!(
+            k::COMMON_ROW_NAVIGATE_ARIA,
+            label = label
+        )))
+        .child(row_label(label, description))
+        .when_some(value, |row, value| {
+            row.child(
+                div()
+                    .flex_none()
+                    .max_w(px(200.))
+                    .truncate()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(value),
+            )
+        })
+        .child(div().flex_none().flex().items_center().child(icon(
+            IconName::ChevronRight,
+            theme::muted(),
+            14.,
+        )));
+    if disabled {
+        return row;
+    }
+    let activate: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_open);
+    let clicked = activate.clone();
+    with_activation(
+        row.cursor_pointer()
+            .on_click(move |_event, window, cx| clicked(window, cx)),
+        activate,
+    )
+}
+
+/// A row that **runs a command**: activating it writes, syncs, resets or
+/// deletes. The trailing control is a real [`crate::components::button`],
+/// because a button is the one shape users already read as "this does
+/// something".
+///
+/// Never disguise a command as a settings row. A save that looks like a
+/// preference is the worst case: the row reads as state, so a user expects a
+/// click to change what it displays, and instead it commits. Pass
+/// [`ButtonTone::Danger`] for anything destructive and
+/// [`ButtonTone::Primary`] for the one obvious action on the page; everything
+/// else is [`ButtonTone::Neutral`].
+///
+/// Only the button responds to the mouse — clicking the label does nothing, so
+/// there is no invisible hit area that fires a command. From the keyboard the
+/// row itself is the tab stop, and Space/Enter runs it once. Set `disabled`
+/// while the command is already running: the row leaves the tab order, the
+/// button goes inert, and a second submit becomes impossible.
+#[allow(dead_code)]
+pub fn action_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    action: impl Into<SharedString>,
+    tone: ButtonTone,
+    disabled: bool,
+    on_activate: impl Fn(&mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let id = id.into();
+    let label = label.into();
+    let action = action.into();
+    let activate: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_activate);
+
+    let button_id = ElementId::Name(format!("{id}-button").into());
+    let control = if disabled {
+        // `row_frame` already fades the whole row, and gpui multiplies nested
+        // opacity — fading the button again would leave it barely legible.
+        components::disabled_button(button_id, action.clone(), tone, ButtonSize::Sm, false)
+            .into_any_element()
+    } else {
+        let clicked = activate.clone();
+        components::button(button_id, action.clone(), tone, ButtonSize::Sm)
+            .on_click(move |_event, window, cx| clicked(window, cx))
+            .into_any_element()
+    };
+
+    let row = row_frame(&id, disabled)
+        .role(gpui::Role::Button)
+        .aria_label(SharedString::from(tf!(
+            k::COMMON_ROW_ACTION_ARIA,
+            label = label,
+            action = action
+        )))
+        .child(row_label(label, description))
+        .child(div().flex_none().child(control));
+    if disabled {
+        return row;
+    }
+    with_activation(row, activate)
 }

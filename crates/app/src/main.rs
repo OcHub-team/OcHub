@@ -378,6 +378,7 @@ fn main() {
             text_input::bind_keys(cx);
             code_editor::bind_keys(cx);
             shortcuts::bind_keys(cx);
+            layout::bind_keys(cx);
             shell_menu::install(app_state.clone(), cx);
             apply_quit_mode(cx);
             // The locale is already installed (see the top of `main`); this only
