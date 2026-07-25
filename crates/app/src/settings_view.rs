@@ -57,6 +57,7 @@ use crate::tf;
 use crate::theme;
 
 use root::UpdateState;
+use search::RowId;
 use sync::{SyncDraft, SyncTarget};
 
 /// Events the settings view emits for the app shell.
@@ -104,6 +105,8 @@ pub struct SettingsView {
     sync_scroll: ScrollHandle,
     search: Entity<TextInput>,
     query: SharedString,
+    /// At most one adaptive select row may have its dropdown open.
+    open_select_row: Option<RowId>,
     update: UpdateState,
     /// Per-app in-flight set, so only the row being toggled goes inert.
     toggling: HashSet<String>,
@@ -139,6 +142,7 @@ impl SettingsView {
             sync_scroll: ScrollHandle::new(),
             search,
             query: SharedString::default(),
+            open_select_row: None,
             update: UpdateState::default(),
             toggling: HashSet::new(),
             draft: None,
@@ -157,6 +161,7 @@ impl SettingsView {
             let content = input.read(cx).content();
             if content != this.query {
                 this.query = content;
+                this.open_select_row = None;
                 this.root_list.reset(this.root_block_count());
                 cx.notify();
             }
@@ -225,6 +230,10 @@ impl SettingsView {
             cx.notify();
             return;
         }
+        if self.open_select_row.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.page == Page::Root && !self.query.is_empty() {
             self.clear_search(cx);
             return;
@@ -250,6 +259,7 @@ impl SettingsView {
     }
 
     fn enter(&mut self, page: Page, cx: &mut Context<Self>) {
+        self.open_select_row = None;
         if page != Page::Sync {
             self.close_sync();
         } else if self.draft.is_none() {

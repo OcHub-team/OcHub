@@ -51,7 +51,28 @@ use crate::tf;
 use crate::theme;
 
 type RowActivation = Rc<dyn Fn(&mut Window, &mut App)>;
-type RowSelection = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+type RowSelectEventHandler = Rc<dyn Fn(SelectRowEvent, &mut Window, &mut App)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectRowState {
+    pub disabled: bool,
+    pub dropdown_open: bool,
+}
+
+impl SelectRowState {
+    pub fn new(disabled: bool, dropdown_open: bool) -> Self {
+        Self {
+            disabled,
+            dropdown_open,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectRowEvent {
+    Open(bool),
+    Select(usize),
+}
 
 /// Max width of the centered content column, shared by every view so pages align.
 pub const CONTENT_MAX_WIDTH: f32 = 800.;
@@ -530,66 +551,102 @@ pub fn switch_row(
     )
 }
 
-/// A row whose control is a **segmented control**: every option and the current
-/// one are both on screen, and any option is one click away.
+/// A row whose control adapts to the option set: compact choices stay in a
+/// segmented control, while long or numerous choices use a dropdown.
 ///
 /// This replaces click-to-cycle rows. Cycling hides the option set — you cannot
 /// tell how many choices exist, what the next one will be, or how to go back —
 /// and it costs `n - 1` clicks to reach the option before the current one.
 ///
 /// Mouse users click the option they want. Keyboard users tab to the row and
-/// press Space or Enter to advance to the next option, wrapping at the end; the
-/// row is announced as a radio group whose value is the current option. Use it
-/// for small, mutually exclusive, immediately-applied sets (theme, language,
-/// log level). Past roughly five options, or when the options need explaining,
-/// a [`navigate_row`] into a sub-page is kinder.
+/// press Space or Enter: segmented controls advance to the next value, while a
+/// dropdown opens its option list. Use a [`navigate_row`] instead when each
+/// option needs a full explanation or its own configuration.
 pub fn select_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     description: impl Into<SharedString>,
     options: &[&str],
     selected: usize,
-    disabled: bool,
-    on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
+    state: SelectRowState,
+    on_event: impl Fn(SelectRowEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let id = id.into();
     let label = label.into();
     let current = options.get(selected).copied().unwrap_or_default();
-    let select: RowSelection = Rc::new(on_select);
+    let event: RowSelectEventHandler = Rc::new(on_event);
+    let use_dropdown = components::select_prefers_dropdown(options);
 
     let options_id = SharedString::from(format!("{id}-options"));
-    let control = if disabled {
+    let control = if use_dropdown {
+        if state.disabled {
+            components::select_dropdown_readonly(options_id, options, selected).into_any_element()
+        } else {
+            let event = event.clone();
+            components::select_dropdown(
+                options_id,
+                options,
+                selected,
+                state.dropdown_open,
+                move |dropdown_event, window, cx| match dropdown_event {
+                    components::SelectDropdownEvent::Open(open) => {
+                        event(SelectRowEvent::Open(open), window, cx)
+                    }
+                    components::SelectDropdownEvent::Select(index) => {
+                        event(SelectRowEvent::Select(index), window, cx)
+                    }
+                },
+            )
+            .into_any_element()
+        }
+    } else if state.disabled {
         components::segmented_readonly(options_id, options, selected).into_any_element()
     } else {
-        let clicked = select.clone();
+        let event = event.clone();
         components::segmented(options_id, options, selected, move |index, window, cx| {
-            clicked(index, window, cx)
+            event(SelectRowEvent::Select(index), window, cx)
         })
         .into_any_element()
     };
 
-    let row = row_frame(&id, disabled)
-        .role(gpui::Role::RadioGroup)
+    let mut row = row_frame(&id, state.disabled)
         .aria_label(SharedString::from(tf!(
             k::COMMON_ROW_SELECT_ARIA,
             label = label,
             value = current
         )))
         .child(row_label(label, description))
-        .child(div().flex_none().child(control));
-    if disabled {
+        .child(
+            div()
+                .flex_none()
+                .when(use_dropdown, |slot| slot.w(px(240.)).max_w_full())
+                .child(control),
+        );
+    if !use_dropdown {
+        row = row.role(gpui::Role::RadioGroup);
+    }
+    if state.disabled {
         return row;
     }
 
-    // Keyboard activation advances one step so a single key can walk the whole
-    // set; the options stay visible throughout, so where it lands is never a
-    // surprise the way a cycling row's next value is.
-    let next = if options.is_empty() {
-        0
+    let activate = if use_dropdown {
+        let event = event.clone();
+        Rc::new(move |window: &mut Window, cx: &mut App| {
+            event(SelectRowEvent::Open(!state.dropdown_open), window, cx)
+        }) as RowActivation
     } else {
-        (selected + 1) % options.len()
+        // Keyboard activation advances one step so a single key can walk a
+        // compact segmented set whose options all remain visible.
+        let next = if options.is_empty() {
+            0
+        } else {
+            (selected + 1) % options.len()
+        };
+        Rc::new(move |window: &mut Window, cx: &mut App| {
+            event(SelectRowEvent::Select(next), window, cx)
+        })
     };
-    with_activation(row, Rc::new(move |window, cx| select(next, window, cx)))
+    with_activation(row, activate)
 }
 
 /// A row that **drills in**: activating it opens a sub-page. It changes nothing

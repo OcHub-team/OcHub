@@ -136,6 +136,8 @@ pub struct ProviderEditor {
     /// Index of the last applied preset (drives the preset segmented control's
     /// selection highlight only; applying a preset behaves exactly as before).
     selected_preset: Option<usize>,
+    /// Field id of the one schema select whose dropdown is currently open.
+    open_select_field: Option<String>,
     show_preview: bool,
     /// Stacked (narrow-window) mode only: whether the preview pane is expanded
     /// or collapsed to its one-line summary bar.
@@ -208,6 +210,8 @@ impl ProviderEditor {
             self.close_convert(cx);
         } else if self.raw_edit.is_some() {
             self.close_raw_edit(cx);
+        } else if self.open_select_field.take().is_some() {
+            cx.notify();
         } else {
             cx.emit(EditorEvent::Cancelled);
         }
@@ -311,6 +315,7 @@ impl ProviderEditor {
             grid_rows: HashMap::new(),
             next_row_id: 0,
             selected_preset: None,
+            open_select_field: None,
             show_preview: true,
             preview_expanded: false,
             preview_collapsed: HashSet::new(),
@@ -561,6 +566,7 @@ impl ProviderEditor {
             self.grid_rows.clear();
             self.build_inputs(cx);
             self.selected_preset = Some(index);
+            self.open_select_field = None;
             self.invalidate_preview(cx);
         }
     }
@@ -703,6 +709,7 @@ impl ProviderEditor {
     // ---- mutation handlers --------------------------------------------------
 
     fn set_select(&mut self, field_id: String, value: String, cx: &mut Context<Self>) {
+        self.open_select_field = None;
         self.values.insert(field_id, Value::String(value));
         self.form_list_state.remeasure();
         self.invalidate_preview(cx);
@@ -1232,12 +1239,48 @@ impl ProviderEditor {
                 let selected = options.iter().position(|o| o.value == current).unwrap_or(0);
                 let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
                 let values: Vec<String> = options.iter().map(|o| o.value.clone()).collect();
-                let fid = field.id.clone();
-                let on_select = cx.listener(move |this, ix: &usize, _w, cx| {
-                    if let Some(value) = values.get(*ix).cloned() {
-                        this.set_select(fid.clone(), value, cx);
-                    }
-                });
+                let selector = if components::select_prefers_dropdown(&labels) {
+                    let fid = field.id.clone();
+                    let open = self.open_select_field.as_deref() == Some(field.id.as_str());
+                    let on_event = cx.listener(
+                        move |this, event: &components::SelectDropdownEvent, _window, cx| {
+                            match *event {
+                                components::SelectDropdownEvent::Open(open) => {
+                                    this.open_select_field =
+                                        if open { Some(fid.clone()) } else { None };
+                                    cx.notify();
+                                }
+                                components::SelectDropdownEvent::Select(index) => {
+                                    if let Some(value) = values.get(index).cloned() {
+                                        this.set_select(fid.clone(), value, cx);
+                                    }
+                                }
+                            }
+                        },
+                    );
+                    components::select_dropdown(
+                        SharedString::from(format!("select-{}", field.id)),
+                        &labels,
+                        selected,
+                        open,
+                        move |event, window, cx| on_event(&event, window, cx),
+                    )
+                    .into_any_element()
+                } else {
+                    let fid = field.id.clone();
+                    let on_select = cx.listener(move |this, ix: &usize, _window, cx| {
+                        if let Some(value) = values.get(*ix).cloned() {
+                            this.set_select(fid.clone(), value, cx);
+                        }
+                    });
+                    components::segmented(
+                        SharedString::from(format!("select-{}", field.id)),
+                        &labels,
+                        selected,
+                        move |ix, window, cx| on_select(&ix, window, cx),
+                    )
+                    .into_any_element()
+                };
                 let mut control = div()
                     .flex()
                     .flex_col()
@@ -1245,12 +1288,7 @@ impl ProviderEditor {
                     .w_full()
                     .min_w_0()
                     .gap_1()
-                    .child(components::segmented(
-                        SharedString::from(format!("select-{}", field.id)),
-                        &labels,
-                        selected,
-                        move |ix, window, cx| on_select(&ix, window, cx),
-                    ));
+                    .child(selector);
                 // The per-option hint (previously baked into each pill label)
                 // is shown for the selected option beneath the control.
                 if let Some(hint) = options.get(selected).and_then(|o| o.hint.as_ref()) {

@@ -40,20 +40,29 @@ pub(super) fn switch(
     .into_any_element()
 }
 
-/// A segmented control: every option visible, any option one click away.
+/// An adaptive select: short lists stay segmented, long lists open a dropdown.
 pub(super) fn select(
     cx: &mut Context<SettingsView>,
     row: RowId,
     options: &[&str],
     selected: usize,
-    disabled: bool,
+    state: layout::SelectRowState,
     desc_override: Option<SharedString>,
     handler: impl Fn(&mut SettingsView, usize, &mut Context<SettingsView>) + 'static,
 ) -> AnyElement {
     let entry = entry(row);
-    let activate = cx.listener(
-        move |this: &mut SettingsView, index: &usize, _window: &mut Window, cx| {
-            handler(this, *index, cx)
+    let on_event = cx.listener(
+        move |this: &mut SettingsView, event: &layout::SelectRowEvent, _window: &mut Window, cx| {
+            match *event {
+                layout::SelectRowEvent::Open(open) => {
+                    this.open_select_row = if open { Some(row) } else { None };
+                    cx.notify();
+                }
+                layout::SelectRowEvent::Select(index) => {
+                    this.open_select_row = None;
+                    handler(this, index, cx);
+                }
+            }
         },
     );
     layout::select_row(
@@ -62,8 +71,8 @@ pub(super) fn select(
         desc_override.unwrap_or_else(|| t(entry.desc)),
         options,
         selected,
-        disabled,
-        move |index, window, cx| activate(&index, window, cx),
+        state,
+        move |event, window, cx| on_event(&event, window, cx),
     )
     .into_any_element()
 }

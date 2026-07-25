@@ -491,6 +491,197 @@ fn segmented_track(
     track
 }
 
+// ── Select dropdown ────────────────────────────────────────────────────────
+
+/// A selection control should stop laying every option out horizontally once
+/// either the list itself is long or the labels would make a compact list wrap.
+///
+/// The weighted character count treats non-ASCII glyphs as roughly two Latin
+/// characters, which is close enough for deciding between the two controls
+/// without coupling schema data to a particular font or window width.
+pub fn select_prefers_dropdown(options: &[&str]) -> bool {
+    if options.len() >= 5 {
+        return true;
+    }
+    if options.len() < 3 {
+        return false;
+    }
+    let label_units: usize = options
+        .iter()
+        .map(|label| {
+            label
+                .chars()
+                .map(|character| if character.is_ascii() { 1 } else { 2 })
+                .sum::<usize>()
+        })
+        .sum();
+    label_units >= 32
+}
+
+/// The two state changes emitted by [`select_dropdown`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectDropdownEvent {
+    Open(bool),
+    Select(usize),
+}
+
+type SelectDropdownHandler = Rc<dyn Fn(SelectDropdownEvent, &mut Window, &mut App)>;
+
+/// A compact single-select trigger with a popover list. The owner keeps the
+/// open state so virtualized forms can unmount/remount the control without
+/// hiding mutable state inside a short-lived element.
+pub fn select_dropdown(
+    id: impl Into<SharedString>,
+    options: &[&str],
+    selected: usize,
+    open: bool,
+    on_event: impl Fn(SelectDropdownEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    select_dropdown_control(id.into(), options, selected, open, Some(Rc::new(on_event)))
+}
+
+/// Read-only counterpart used by disabled settings rows.
+pub fn select_dropdown_readonly(
+    id: impl Into<SharedString>,
+    options: &[&str],
+    selected: usize,
+) -> gpui::Stateful<gpui::Div> {
+    select_dropdown_control(id.into(), options, selected, false, None)
+}
+
+fn select_dropdown_control(
+    id: SharedString,
+    options: &[&str],
+    selected: usize,
+    open: bool,
+    on_event: Option<SelectDropdownHandler>,
+) -> gpui::Stateful<gpui::Div> {
+    let current = options.get(selected).copied().unwrap_or_default();
+    let mut trigger = div()
+        .id(ElementId::Name(format!("{id}-trigger").into()))
+        .role(gpui::Role::ComboBox)
+        .aria_label(SharedString::from(current.to_string()))
+        .aria_expanded(open)
+        .w_full()
+        .min_w_0()
+        .h(px(38.))
+        .px_3()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(if open {
+            theme::accent()
+        } else {
+            theme::border_strong()
+        })
+        .bg(theme::surface())
+        .text_sm()
+        .text_color(theme::text())
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .child(SharedString::from(current.to_string())),
+        )
+        .child(icon(IconName::ChevronDown, theme::muted(), 13.));
+    if let Some(handler) = on_event.clone() {
+        trigger = trigger
+            .cursor_pointer()
+            .hover(|style| style.border_color(theme::accent()).bg(theme::panel()))
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                handler(SelectDropdownEvent::Open(!open), window, cx)
+            });
+    }
+
+    let mut control = div()
+        .id(ElementId::Name(format!("{id}-control").into()))
+        .relative()
+        .w_full()
+        .min_w_0()
+        .child(trigger);
+    let Some(handler) = on_event else {
+        return control;
+    };
+    if !open {
+        return control;
+    }
+
+    let mut menu = div()
+        .id(ElementId::Name(format!("{id}-menu").into()))
+        .role(gpui::Role::List)
+        .w_full()
+        .min_w(px(220.))
+        .max_h(px(280.))
+        .overflow_y_scroll()
+        .p_1()
+        .rounded_lg()
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::overlay())
+        .shadow(theme::shadow_popover())
+        .occlude();
+    for (index, option) in options.iter().enumerate() {
+        let is_selected = index == selected;
+        let callback = handler.clone();
+        let mut item = div()
+            .id(ElementId::Name(format!("{id}-option-{index}").into()))
+            .role(gpui::Role::ListBoxOption)
+            .aria_label(SharedString::from((*option).to_string()))
+            .aria_selected(is_selected)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .min_h(px(34.))
+            .px_3()
+            .py_1p5()
+            .rounded_md()
+            .cursor_pointer()
+            .text_sm()
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .child(SharedString::from((*option).to_string())),
+            );
+        if is_selected {
+            item = item
+                .bg(theme::accent_soft())
+                .text_color(theme::accent())
+                .font_weight(FontWeight::MEDIUM)
+                .child(icon(IconName::Check, theme::accent(), 13.));
+        } else {
+            item = item
+                .text_color(theme::subtext())
+                .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()));
+        }
+        menu = menu.child(item.on_click(move |_event, window, cx| {
+            callback(SelectDropdownEvent::Select(index), window, cx)
+        }));
+    }
+    let dismiss = handler;
+    menu = menu.on_mouse_down_out(move |_event, window, cx| {
+        dismiss(SelectDropdownEvent::Open(false), window, cx)
+    });
+
+    control = control.child(
+        deferred(
+            anchored()
+                .anchor(Anchor::TopLeft)
+                .offset(point(px(0.), px(4.)))
+                .snap_to_window_with_margin(px(8.))
+                .child(menu),
+        )
+        .priority(30),
+    );
+    control
+}
+
 // ── Time ────────────────────────────────────────────────────────────────────
 
 /// A Unix timestamp as local wall-clock text.
@@ -1658,4 +1849,27 @@ pub fn pagination(prev: AnyElement, label: impl Into<SharedString>, next: AnyEle
                 .child(label.into()),
         )
         .child(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_prefers_dropdown;
+
+    #[test]
+    fn short_compact_selects_stay_segmented() {
+        assert!(!select_prefers_dropdown(&["关闭", "WebDAV", "S3"]));
+        assert!(!select_prefers_dropdown(&["Bearer", "API Key"]));
+    }
+
+    #[test]
+    fn long_or_numerous_selects_use_a_dropdown() {
+        assert!(select_prefers_dropdown(&[
+            "仅 API 转发站",
+            "仅 ChatGPT 账号登录",
+            "ChatGPT 登录 + API 转发站",
+        ]));
+        assert!(select_prefers_dropdown(&[
+            "自动", "Terminal", "iTerm2", "Ghostty", "Warp",
+        ]));
+    }
 }

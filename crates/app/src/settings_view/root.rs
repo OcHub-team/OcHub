@@ -203,7 +203,7 @@ impl SettingsView {
                     row,
                     &options,
                     self.selected_language(),
-                    false,
+                    layout::SelectRowState::new(false, self.open_select_row == Some(row)),
                     None,
                     |this, index, cx| this.set_language(index, cx),
                 )
@@ -217,7 +217,7 @@ impl SettingsView {
                     row,
                     &options,
                     selected,
-                    false,
+                    layout::SelectRowState::new(false, self.open_select_row == Some(row)),
                     None,
                     move |this, index, cx| {
                         let Some(value) = values.get(index).cloned() else {
@@ -312,7 +312,7 @@ impl SettingsView {
                     row,
                     &options,
                     selected,
-                    false,
+                    layout::SelectRowState::new(false, self.open_select_row == Some(row)),
                     None,
                     move |this, index, cx| {
                         let Some(hours) = values.get(index).copied() else {
@@ -334,7 +334,7 @@ impl SettingsView {
                     row,
                     &options,
                     selected,
-                    false,
+                    layout::SelectRowState::new(false, self.open_select_row == Some(row)),
                     None,
                     move |this, index, cx| {
                         let Some(count) = values.get(index).copied() else {
@@ -359,7 +359,7 @@ impl SettingsView {
                     row,
                     &options,
                     selected,
-                    self.sync_busy,
+                    layout::SelectRowState::new(self.sync_busy, self.open_select_row == Some(row)),
                     None,
                     |this, index, cx| this.set_sync_target(index, cx),
                 )
