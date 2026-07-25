@@ -23,6 +23,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  # Compiled into the binary as the only key the in-app updater will accept.
+  # A repository variable rather than a secret: it is a public key, and having
+  # it visible makes it auditable against the signatures in a release. Unset
+  # builds still check for updates but refuse to install them.
+  OCHUB_UPDATER_PUBKEY: ${{ vars.OCHUB_UPDATER_PUBKEY }}
 
 jobs:
   validate:
@@ -125,12 +130,28 @@ jobs:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
         run: ./scripts/release/package-linux.sh dist
 
+      # Signs the payloads the in-app updater downloads. The public half is
+      # compiled into the binary (OCHUB_UPDATER_PUBKEY), so an unsigned or
+      # foreign-signed package is rejected by the client before it is installed
+      # -- which is what stops a compromised release from pushing arbitrary
+      # code to every install. Unset secret => unsigned build that can still
+      # check for updates but refuses to self-install.
+      - name: Sign updater payloads
+        shell: bash
+        env:
+          OCHUB_SIGNING_PRIVATE_KEY: ${{ secrets.OCHUB_SIGNING_PRIVATE_KEY }}
+          OCHUB_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.OCHUB_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: ./scripts/release/sign-updater-artifacts.sh dist
+
       - name: Upload macOS package
         if: matrix.kind == 'macos'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ matrix.artifact }}
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/*.app.tar.gz
+            dist/*.sig
           if-no-files-found: error
           retention-days: 1
 
@@ -142,6 +163,7 @@ jobs:
           path: |
             dist/*-setup.exe
             dist/*_portable.zip
+            dist/*.sig
           if-no-files-found: error
           retention-days: 1
 
@@ -153,6 +175,7 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.deb
+            dist/*.sig
           if-no-files-found: error
           retention-days: 1
 
@@ -184,6 +207,8 @@ jobs:
           test "$(find dist -maxdepth 1 -type f -name '*_portable.zip' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -type f -name '*.AppImage' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
+          # Updater payloads: one .app.tar.gz per macOS arch.
+          test "$(find dist -maxdepth 1 -type f -name '*.app.tar.gz' | wc -l)" -eq 2
           (
             cd dist
             find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 |
@@ -192,6 +217,74 @@ jobs:
               sed 's#  \./#  #' > SHA256SUMS
           )
           find dist -maxdepth 1 -type f -print | sort
+
+      # The manifest the in-app updater fetches from
+      # releases/latest/download/latest.json. It is served over TLS but is not
+      # itself signed: it only names URLs, and every payload it points at must
+      # still verify against the key compiled into the client. A rewritten
+      # manifest therefore cannot install anything, and the client separately
+      # refuses versions that are not newer to close off a downgrade.
+      #
+      # Only formats the client can actually apply appear here; .deb, .rpm and
+      # the Windows portable zip are downloads for humans.
+      - name: Generate latest.json
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          base_url="https://github.com/${REPO}/releases/download/${TAG}"
+
+          # Map a signed payload onto its manifest platform key. Unlike the
+          # reference cc-switch app, which ships one universal macOS build and
+          # points both darwin keys at it, OcHub builds per architecture, so
+          # each key gets its own file.
+          platform_key() {
+            case "$1" in
+            *macos_aarch64.app.tar.gz) echo "darwin-aarch64" ;;
+            *macos_x86_64.app.tar.gz) echo "darwin-x86_64" ;;
+            *-setup.exe) echo "windows-x86_64" ;;
+            *.AppImage) echo "linux-x86_64" ;;
+            *) echo "" ;;
+            esac
+          }
+
+          entries=""
+          shopt -s nullglob
+          for sig in dist/*.sig; do
+            payload="${sig%.sig}"
+            name="$(basename "${payload}")"
+            key="$(platform_key "${name}")"
+            if [ -z "${key}" ]; then
+              printf 'skipping unmapped payload: %s\n' "${name}" >&2
+              continue
+            fi
+            entry="$(jq -cn \
+              --arg key "${key}" \
+              --arg signature "$(cat "${sig}")" \
+              --arg url "${base_url}/${name}" \
+              '{($key): {signature: $signature, url: $url}}')"
+            entries="${entries}${entry}"$'\n'
+            printf 'mapped %s -> %s\n' "${name}" "${key}"
+          done
+
+          if [ -z "${entries}" ]; then
+            printf 'no signed updater payloads; skipping latest.json\n' >&2
+            printf 'Releases without it are check-only in the client.\n' >&2
+            exit 0
+          fi
+
+          printf '%s' "${entries}" | jq -s \
+            --arg version "${VERSION}" \
+            --arg notes "Release ${TAG}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: add}' \
+            > dist/latest.json
+
+          echo "Generated latest.json:"
+          cat dist/latest.json
 
       - name: Attest release packages
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4

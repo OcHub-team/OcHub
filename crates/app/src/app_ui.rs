@@ -553,6 +553,87 @@ impl AppRoot {
         _window.minimize_window();
     }
 
+    /// Poll for a new release in the background, at most once a day.
+    ///
+    /// The first check is delayed so it competes with nothing at launch, and
+    /// the loop then re-evaluates hourly — the day-level spacing itself lives
+    /// in `auto_check_due`, keyed off a persisted timestamp, so quitting and
+    /// relaunching does not re-check every time.
+    ///
+    /// A found version is announced once and then recorded, so the same release
+    /// never nags twice. Nothing is downloaded here; installing stays an
+    /// explicit click in settings.
+    fn spawn_auto_update_check(&self, cx: &mut Context<Self>) {
+        /// Long enough that startup work is done before a request goes out.
+        const FIRST_DELAY: Duration = Duration::from_secs(30);
+        /// The day-level gate is `auto_check_due`; this only decides how often
+        /// we re-ask it, so a process left running for days still checks.
+        const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FIRST_DELAY).await;
+            loop {
+                let settings = ochub_core::settings::get_settings();
+                let now = chrono::Utc::now().timestamp();
+                if ochub_core::services::update::auto_check_due(
+                    settings.auto_update_check,
+                    settings.last_update_check_at,
+                    now,
+                ) {
+                    let result = crate::core_async::run(
+                        ochub_core::services::update::check_for_updates(None),
+                    )
+                    .await;
+                    match result {
+                        Ok(info) => {
+                            let notify = ochub_core::services::update::should_notify(
+                                &info,
+                                settings.skipped_update_version.as_deref(),
+                            );
+                            let latest = info.latest_version.clone();
+                            // Record before announcing: a failure to draw the
+                            // toast must not turn into a check every hour.
+                            let _ = ochub_core::settings::mutate_settings(|settings| {
+                                settings.last_update_check_at = Some(now);
+                                if notify {
+                                    settings.skipped_update_version = latest.clone();
+                                }
+                            });
+                            if notify {
+                                let version = info.latest_version.clone().unwrap_or_else(|| {
+                                    raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION).to_string()
+                                });
+                                if this
+                                    .update(cx, |this, cx| {
+                                        this.notifications.update(cx, |host, cx| {
+                                            host.info(
+                                                tf!(
+                                                    k::SETTINGS_UPDATE_AVAILABLE,
+                                                    latest = version,
+                                                    current = info.current_version
+                                                ),
+                                                cx,
+                                            );
+                                        });
+                                    })
+                                    .is_err()
+                                {
+                                    // The window is gone; so is the loop's point.
+                                    return;
+                                }
+                            }
+                        }
+                        // Offline is the common case here, so this stays a log
+                        // line rather than a toast the user did not ask for.
+                        Err(error) => log::debug!("[Update] automatic check failed: {error}"),
+                    }
+                }
+                cx.background_executor().timer(POLL_INTERVAL).await;
+            }
+        })
+        .detach();
+    }
+
     pub fn new(
         app: Arc<AppState>,
         startup_notice: Option<StartupNotice>,
@@ -634,6 +715,7 @@ impl AppRoot {
         .detach();
         this.connect_toast_sources(cx);
         this.reload(cx);
+        this.spawn_auto_update_check(cx);
         if initial_section == Section::Providers
             && std::env::var("MS_START_EDITOR")
                 .map(|value| value.eq_ignore_ascii_case("add"))

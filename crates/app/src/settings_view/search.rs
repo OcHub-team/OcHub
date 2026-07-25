@@ -33,6 +33,7 @@ pub(super) enum RowId {
     SyncTarget,
     SyncAuto,
     SyncOpen,
+    AboutAutoUpdate,
     AboutUpdate,
     AboutRelease,
 }
@@ -177,6 +178,13 @@ pub(super) fn entry(row: RowId) -> &'static RowEntry {
                 "备份", "同期",
             ],
         },
+        RowId::AboutAutoUpdate => &RowEntry {
+            id: "about-auto-update",
+            group: k::SETTINGS_ABOUT_TITLE,
+            label: k::SETTINGS_ABOUT_AUTOUPDATE_LABEL,
+            desc: k::SETTINGS_ABOUT_AUTOUPDATE_DESC,
+            keywords: &["auto", "update", "自动", "更新", "自動"],
+        },
         RowId::AboutUpdate => &RowEntry {
             id: "about-update",
             group: k::SETTINGS_ABOUT_TITLE,
@@ -292,6 +300,7 @@ mod tests {
         RowId::SyncTarget,
         RowId::SyncAuto,
         RowId::SyncOpen,
+        RowId::AboutAutoUpdate,
         RowId::AboutUpdate,
         RowId::AboutRelease,
     ];

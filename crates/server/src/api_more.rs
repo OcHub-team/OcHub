@@ -859,14 +859,51 @@ async fn restart_app() -> ApiResult<Json<Value>> {
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Download, verify, and install the newest release, then exit so the updated
+/// build starts.
+///
+/// Install channels that cannot replace themselves — a `.deb`, a Windows
+/// portable unzip, a `cargo run` build — and builds with no signing key
+/// compiled in report `ok: false` with the release page instead of attempting
+/// a best-effort install. See `ochub_core::services::update::channel`.
 async fn install_update_and_restart() -> ApiResult<Json<Value>> {
-    let url = ochub_core::services::latest_release_url(None);
-    open_url(&url)?;
-    Ok(Json(json!({
-        "ok": false,
-        "url": url,
-        "reason": "当前 GPUI/Axum 版本没有内置安装器，已打开发布页，请手动安装更新后重启"
-    })))
+    use ochub_core::services::update;
+
+    let prepared = match update::install::prepare(None, None).await {
+        Ok(Some(prepared)) => prepared,
+        // Already current: report it rather than restarting for nothing.
+        Ok(None) => {
+            return Ok(Json(json!({
+                "ok": false,
+                "upToDate": true,
+                "version": update::current_version(),
+            })))
+        }
+        Err(error) => {
+            let url = ochub_core::services::latest_release_url(None);
+            return Ok(Json(json!({
+                "ok": false,
+                "url": url,
+                "reason": error.to_string(),
+            })));
+        }
+    };
+
+    let version = prepared.version.clone();
+    update::apply_and_arm_restart(prepared).map_err(ApiError)?;
+
+    // The relaunch is already armed and waits for this PID to disappear, so the
+    // response has to reach the client before the exit. A thread rather than a
+    // task, so a busy runtime cannot delay it.
+    std::thread::Builder::new()
+        .name("OcHub-update-exit".to_string())
+        .spawn(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            std::process::exit(0);
+        })
+        .map_err(|e| ApiError(AppError::Message(format!("创建退出任务失败: {e}"))))?;
+
+    Ok(Json(json!({ "ok": true, "version": version })))
 }
 
 #[derive(Deserialize)]

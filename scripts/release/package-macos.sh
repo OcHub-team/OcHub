@@ -18,13 +18,45 @@ version="$(
 cargo build --release --locked --target "${target}" -p ochub-app
 "target/${target}/release/ochub" --version
 
+# The updater payload is a tarred .app rather than the .dmg: mounting a disk
+# image to update means hdiutil, an extra failure mode, and a copy of a copy.
+# `tar` also preserves the symlinks and extended attributes that a signed
+# bundle needs to stay verifiable. The .dmg stays the download for humans.
+archive_app_bundle() {
+    local app_path
+    app_path="$(find "${out_dir}" -maxdepth 1 -type d -name '*.app' -print -quit)"
+    if [[ -z "${app_path}" ]]; then
+        printf 'no .app produced in %s; cannot build updater artifact\n' "${out_dir}" >&2
+        exit 1
+    fi
+
+    local arch
+    case "${target}" in
+    aarch64-*) arch="aarch64" ;;
+    x86_64-*) arch="x86_64" ;;
+    *)
+        printf 'unsupported target for updater artifact: %s\n' "${target}" >&2
+        exit 1
+        ;;
+    esac
+
+    local tarball="${out_dir}/OcHub_${version}_macos_${arch}.app.tar.gz"
+    tar -czf "${tarball}" -C "${out_dir}" "$(basename "${app_path}")"
+    printf 'updater artifact: %s\n' "${tarball}"
+
+    # The .app itself is not a release asset; leaving it behind would be
+    # uploaded alongside the tarball it duplicates.
+    rm -rf "${app_path}"
+}
+
 if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     cargo packager \
         --release \
         --packages ochub-app \
-        --formats dmg \
+        --formats app,dmg \
         --out-dir "${out_dir}" \
         --target "${target}"
+    archive_app_bundle
     exit 0
 fi
 
@@ -91,4 +123,5 @@ config_json="$(
         }'
 )"
 
-cargo packager --config "${config_json}" --formats dmg
+cargo packager --config "${config_json}" --formats app,dmg
+archive_app_bundle

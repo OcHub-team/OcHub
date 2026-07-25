@@ -80,6 +80,28 @@ repository and downloads the same DMG published with each GitHub Release.
 | Windows 10/11 x64 | NSIS installer and portable `.zip` |
 | Linux x64 | AppImage and Debian `.deb` |
 
+### Updating
+
+OcHub checks for a new release shortly after launch and once a day after that,
+and can install one from **Settings → About → Check for updates** without
+leaving the app. Turn the check off with the toggle in the same group.
+
+Downloaded packages are verified against a signing key compiled into the
+binary, and a version that is not newer than the running one is refused, so the
+update channel cannot be used to push unsigned code or to roll an install
+backwards.
+
+Two install methods stay check-only, because self-updating them would fight the
+system that owns them:
+
+| Install | In-app update |
+| --- | --- |
+| macOS `.dmg`, Windows installer, Linux AppImage | Yes |
+| Debian package | No — use `apt`, so dpkg's records stay accurate |
+| Windows portable ZIP | No — there is no installer to re-run |
+
+Those two report the reason in the settings row and link to the release page.
+
 The release also includes `SHA256SUMS` and a GitHub artifact attestation. Verify
 a downloaded file with:
 

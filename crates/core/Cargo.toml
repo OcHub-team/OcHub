@@ -47,6 +47,7 @@ tokio.workspace = true
 axum.workspace = true
 bytes.workspace = true
 reqwest.workspace = true
+minisign-verify.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

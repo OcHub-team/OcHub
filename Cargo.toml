@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 authors = ["OcHub contributors"]
@@ -52,6 +52,7 @@ uuid = { version = "1.11", features = ["v4"] }
 unicode-segmentation = "1"
 base64 = "0.22"
 sha2 = "0.11"
+minisign-verify = "0.2.5"
 hmac = "0.13"
 flate2 = "1"
 zip = "8.6"

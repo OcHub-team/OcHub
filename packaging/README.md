@@ -12,6 +12,44 @@ The tag is rejected when it does not exactly match the workspace version.
 Transient workflow artifacts are kept for one day; the durable files live in
 the GitHub Release.
 
+## Updater signing key
+
+The in-app updater installs a downloaded package only after verifying it
+against a minisign public key compiled into the binary. This is separate from
+platform code signing and from `SHA256SUMS`: those checksums live in the same
+release as the packages, so they detect a corrupted download but not a forged
+release. Without this key pair, builds still check for updates and still report
+new versions — they refuse to install, and point at the release page instead.
+
+Generate a key pair once, using the packager already pinned above:
+
+```sh
+cargo packager signer generate --path ochub-updater.key
+```
+
+Then configure:
+
+| Where | Name | Value |
+| --- | --- | --- |
+| Repository **variable** | `OCHUB_UPDATER_PUBKEY` | contents of `ochub-updater.key.pub` |
+| Repository **secret** | `OCHUB_SIGNING_PRIVATE_KEY` | contents of `ochub-updater.key` |
+| Repository **secret** | `OCHUB_SIGNING_PRIVATE_KEY_PASSWORD` | the password, if one was set |
+
+The public key is a repository *variable* rather than a secret on purpose: it
+is public by construction, and keeping it readable lets anyone check that a
+release's signatures match the key shipped in the binary.
+
+Keep the private key backed up outside the repository. Losing it means no
+existing install can verify a future release, and every user has to reinstall
+by hand; rotating it has the same effect, because the old public key is baked
+into every binary already in the field.
+
+Signed releases additionally publish `latest.json`, which the updater fetches
+from `releases/latest/download/latest.json`. Only formats the updater can
+apply appear in it — the macOS `.app.tar.gz` payloads, the Windows NSIS
+installer, and the Linux AppImage. A `.deb` is owned by the package manager and
+the Windows portable ZIP has no installer to re-run, so both stay check-only.
+
 ## Optional platform signing
 
 Unsigned packages are built when no signing secrets are configured. To enable

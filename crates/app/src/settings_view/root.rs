@@ -32,6 +32,28 @@ use super::{Page, SettingsEvent, SettingsView};
 pub(super) struct UpdateState {
     pub checking: bool,
     pub info: Option<UpdateCheckResult>,
+    /// Set once the user starts an install. Blocks a second one and switches
+    /// the row's description to download progress.
+    pub installing: bool,
+    /// Bytes downloaded and, when the server sent a length, the total.
+    pub progress: Option<(u64, Option<u64>)>,
+}
+
+impl UpdateState {
+    /// Whether the row's button should install rather than check.
+    fn can_install(&self) -> bool {
+        self.info
+            .as_ref()
+            .is_some_and(|info| info.has_update && info.can_self_install)
+    }
+
+    /// Download progress as a whole percentage, when the total is known.
+    fn percent(&self) -> Option<u64> {
+        match self.progress {
+            Some((done, Some(total))) if total > 0 => Some(done.saturating_mul(100) / total),
+            _ => None,
+        }
+    }
 }
 
 impl SettingsView {
@@ -129,6 +151,7 @@ impl SettingsView {
             }
             5 => {
                 let group = vec![
+                    self.render_row(RowId::AboutAutoUpdate, cx),
                     self.render_row(RowId::AboutUpdate, cx),
                     self.render_row(RowId::AboutRelease, cx),
                 ];
@@ -160,6 +183,7 @@ impl SettingsView {
             RowId::SyncTarget,
             RowId::SyncAuto,
             RowId::SyncOpen,
+            RowId::AboutAutoUpdate,
             RowId::AboutUpdate,
             RowId::AboutRelease,
         ]);
@@ -364,15 +388,43 @@ impl SettingsView {
                     |this, cx| this.go(Page::Sync, cx),
                 )
             }
-            RowId::AboutUpdate => rows::act(
+            RowId::AboutAutoUpdate => rows::switch(
                 cx,
                 row,
-                t(k::SETTINGS_ABOUT_UPDATE_ACTION),
-                ButtonTone::Neutral,
-                self.update.checking,
-                Some(self.update_row_description()),
-                |this, cx| this.check_updates(cx),
+                self.settings.auto_update_check,
+                false,
+                None,
+                |this, cx| this.toggle_auto_update_check(cx),
             ),
+            // One button, two jobs: check until something is found, then
+            // install it. Matches the reference cc-switch behaviour, where the
+            // same control changes meaning once an update is known.
+            RowId::AboutUpdate => {
+                let installable = self.update.can_install();
+                rows::act(
+                    cx,
+                    row,
+                    if installable {
+                        t(k::SETTINGS_UPDATE_INSTALL)
+                    } else {
+                        t(k::SETTINGS_ABOUT_UPDATE_ACTION)
+                    },
+                    if installable {
+                        ButtonTone::Primary
+                    } else {
+                        ButtonTone::Neutral
+                    },
+                    self.update.checking || self.update.installing,
+                    Some(self.update_row_description()),
+                    move |this, cx| {
+                        if installable {
+                            this.install_update(cx)
+                        } else {
+                            this.check_updates(cx)
+                        }
+                    },
+                )
+            }
             RowId::AboutRelease => {
                 // Primary only once there is something to go and get.
                 let tone = if self
@@ -463,6 +515,11 @@ impl SettingsView {
         }
     }
 
+    fn toggle_auto_update_check(&mut self, cx: &mut Context<Self>) {
+        let target = !self.settings.auto_update_check;
+        self.write(move |settings| settings.auto_update_check = target, cx);
+    }
+
     fn toggle_tray(&mut self, cx: &mut Context<Self>) {
         let target = !self.settings.show_in_tray;
         if self.write(move |settings| settings.show_in_tray = target, cx) {
@@ -535,8 +592,32 @@ impl SettingsView {
     // ── Updates ─────────────────────────────────────────────────────────────
 
     fn update_row_description(&self) -> SharedString {
+        if self.update.installing {
+            return match self.update.percent() {
+                // The last progress callback fires before the signature check,
+                // so a stuck "100%" would look like a hang. Name what is
+                // actually happening instead.
+                Some(100) => t(k::SETTINGS_UPDATE_VERIFYING),
+                Some(percent) => SharedString::from(tf!(
+                    k::SETTINGS_UPDATE_DOWNLOADING,
+                    percent = percent.to_string()
+                )),
+                // Nothing downloaded yet, or the server sent no content-length.
+                None => t(k::SETTINGS_UPDATE_INSTALLING),
+            };
+        }
         if self.update.checking {
             return t(k::SETTINGS_UPDATE_CHECKING);
+        }
+        // An update exists but this install cannot apply it itself: say why
+        // here rather than offering a button that opens a browser instead.
+        if let Some(info) = &self.update.info {
+            if info.has_update && !info.can_self_install {
+                return SharedString::from(tf!(
+                    k::SETTINGS_UPDATE_MANUAL_ONLY,
+                    channel = info.install_channel.clone()
+                ));
+            }
         }
         match &self.update.info {
             Some(info) if info.has_update => SharedString::from(tf!(
@@ -603,6 +684,105 @@ impl SettingsView {
                     Err(err) => this.set_status(
                         NotificationLevel::Error,
                         tf!(k::SETTINGS_UPDATE_CHECK_FAILED, error = err),
+                        cx,
+                    ),
+                }
+                this.root_list.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Download, verify, install, and restart.
+    ///
+    /// The download and signature check run on a background thread; only when
+    /// they succeed does anything get replaced. Quitting is left to
+    /// [`gpui::App::quit`] rather than `process::exit` so GPUI's own shutdown
+    /// handlers still run — the window bounds saved in `main.rs` would
+    /// otherwise be lost on every update, and the single-instance lock and
+    /// gateway port would be released late enough to race the relaunch.
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        if self.update.installing {
+            return;
+        }
+        self.update.installing = true;
+        self.update.progress = None;
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::SETTINGS_UPDATE_INSTALLING),
+            cx,
+        );
+
+        // Progress arrives from the download thread; `report` hops back to the
+        // UI thread to touch view state.
+        let (progress_tx, mut progress_rx) =
+            futures::channel::mpsc::unbounded::<(u64, Option<u64>)>();
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some(update) = progress_rx.next().await {
+                this.update(cx, |this, cx| {
+                    this.update.progress = Some(update);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+
+        let task = cx.background_spawn(crate::core_async::run(async move {
+            let report = Box::new(move |done: u64, total: Option<u64>| {
+                let _ = progress_tx.unbounded_send((done, total));
+            });
+            ochub_core::services::update::install::prepare(None, Some(report)).await
+        }));
+
+        cx.spawn(async move |this, cx| {
+            let prepared = task.await;
+            this.update(cx, |this, cx| {
+                this.update.installing = false;
+                this.update.progress = None;
+                match prepared {
+                    Ok(Some(prepared)) => {
+                        let version = prepared.version.clone();
+                        match ochub_core::services::update::apply_and_arm_restart(prepared) {
+                            Ok(()) => {
+                                this.set_status(
+                                    NotificationLevel::Success,
+                                    tf!(k::SETTINGS_UPDATE_INSTALLED, version = version),
+                                    cx,
+                                );
+                                // The relaunch watcher is already waiting on
+                                // this PID, so a clean quit is all that is
+                                // left. Give the status line a moment first.
+                                cx.spawn(async move |_this, cx| {
+                                    cx.background_executor()
+                                        .timer(std::time::Duration::from_millis(600))
+                                        .await;
+                                    cx.update(|cx| cx.quit());
+                                })
+                                .detach();
+                            }
+                            Err(err) => this.set_status(
+                                NotificationLevel::Error,
+                                tf!(k::SETTINGS_UPDATE_INSTALL_FAILED, error = err),
+                                cx,
+                            ),
+                        }
+                    }
+                    // The manifest turned out not to be newer after all.
+                    Ok(None) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::SETTINGS_UPDATE_UP_TO_DATE,
+                            current = ochub_core::services::update::current_version()
+                        ),
+                        cx,
+                    ),
+                    Err(err) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_UPDATE_INSTALL_FAILED, error = err),
                         cx,
                     ),
                 }

@@ -354,6 +354,18 @@ pub struct AppSettings {
     pub launch_on_startup: bool,
     #[serde(default)]
     pub silent_startup: bool,
+    /// Check GitHub for a newer release shortly after launch and daily after.
+    /// On by default: a stale desktop app is how users end up on known bugs.
+    #[serde(default = "default_true")]
+    pub auto_update_check: bool,
+    /// A version the user dismissed. Suppresses the notification for that
+    /// version only, so the next release still gets through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update_version: Option<String>,
+    /// Unix seconds of the last completed check, used to space them out across
+    /// restarts rather than checking on every launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update_check_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -458,6 +470,9 @@ impl Default for AppSettings {
             skip_claude_onboarding: false,
             launch_on_startup: false,
             silent_startup: false,
+            auto_update_check: true,
+            skipped_update_version: None,
+            last_update_check_at: None,
             usage_confirmed: None,
             stream_check_confirmed: None,
             preserve_codex_official_auth_on_switch: false,
