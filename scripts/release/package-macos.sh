@@ -124,6 +124,14 @@ elif [[ -n "${MACOS_SELFSIGN_CERTIFICATE:-}" ]]; then
     # friends are set, and Apple would reject a self-signed submission anyway.
     export APPLE_CERTIFICATE="${MACOS_SELFSIGN_CERTIFICATE}"
     export APPLE_CERTIFICATE_PASSWORD="${MACOS_SELFSIGN_CERTIFICATE_PASSWORD:-}"
+    # These must be *absent*, not merely empty. cargo-packager decides whether
+    # to notarize with `env::var_os(...)`, which returns Some("") for a variable
+    # that is set but blank -- and GitHub Actions sets every `secrets.X` it is
+    # handed to the empty string when the secret does not exist. Leaving them in
+    # the environment makes it submit to notarytool with blank credentials and
+    # fail the build with "Team ID must be at least 3 characters".
+    unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_KEYCHAIN_PROFILE
+    unset APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
     printf 'signing with a self-signed certificate; Gatekeeper will still ask the user to approve once\n'
 else
     printf 'no signing credentials; producing an UNSIGNED build\n' >&2
