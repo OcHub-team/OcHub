@@ -276,7 +276,7 @@ impl CodeEditor {
             } else {
                 String::new()
             };
-            let input = cx.new(|cx| TextInput::new(cx, "查找").search_field());
+            let input = cx.new(|cx| TextInput::new(cx, crate::i18n::t(crate::i18n::k::COMMON_FIND_PLACEHOLDER)).search_field());
             if !selected.is_empty() {
                 input.update(cx, |input, cx| input.set_content(selected, cx));
             }

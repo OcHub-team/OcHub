@@ -30,9 +30,12 @@ use crate::components;
 use crate::components::{BadgeTone, ButtonSize, ButtonTone};
 use crate::fold::{fold_regions, FoldRegion};
 use crate::highlight::{self, Lang};
+use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::text_input::{TextInput, TextInputEvent};
+use crate::tf;
 use crate::theme;
 
 /// Outcome of the editor, observed by the host view via `cx.subscribe`.
@@ -154,12 +157,44 @@ pub struct ProviderEditor {
     convert_open: bool,
     error: Option<SharedString>,
     status: Option<SharedString>,
+    /// Severity of whichever toast `take_toast` will hand over next. Always
+    /// set alongside `error`/`status` so the host never has to guess it from
+    /// the wording.
+    status_level: Option<NotificationLevel>,
     form_list_state: ListState,
     form_stack_grid: bool,
     form_official_login: bool,
 }
 
 impl ProviderEditor {
+    /// Re-apply the current locale to state that a repaint cannot reach.
+    ///
+    /// A `TextInput` captures its placeholder when it is constructed, and this
+    /// editor outlives a language change while it is open, so the placeholders
+    /// have to be pushed in by hand. The form is a virtualized list whose item
+    /// heights are memoized until the width changes, so a translation that
+    /// makes a row taller or shorter also needs an explicit remeasure.
+    ///
+    /// The schema-driven inputs are deliberately left alone: their
+    /// placeholders come from `ochub_core::provider_config`, which owns that
+    /// text and is translated there.
+    pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        self.provider_id.update(cx, |input, cx| {
+            input.set_placeholder(t(k::PROVIDER_EDITOR_IDENTITY_ID_PLACEHOLDER), cx)
+        });
+        self.name.update(cx, |input, cx| {
+            input.set_placeholder(t(k::PROVIDER_EDITOR_IDENTITY_NAME_PLACEHOLDER), cx)
+        });
+        self.notes.update(cx, |input, cx| {
+            input.set_placeholder(t(k::PROVIDER_EDITOR_IDENTITY_NOTES_PLACEHOLDER), cx)
+        });
+        self.common_snippet.update(cx, |input, cx| {
+            input.set_placeholder(t(k::PROVIDER_EDITOR_COMMON_CONFIG_SNIPPET_PLACEHOLDER), cx)
+        });
+        self.form_list_state.remeasure();
+        cx.notify();
+    }
+
     pub(crate) fn shortcut_save(&mut self, cx: &mut Context<Self>) {
         if self.raw_edit.is_some() {
             self.apply_raw_edit(cx);
@@ -247,9 +282,10 @@ impl ProviderEditor {
         let snippet_seed = original_snippet.clone();
         let form_item_count = schema.len() + 3;
         let common_snippet = cx.new(|cx| {
-            let mut input = TextInput::new(cx, "输入共享配置片段")
-                .code(true)
-                .multiline(true);
+            let mut input =
+                TextInput::new(cx, t(k::PROVIDER_EDITOR_COMMON_CONFIG_SNIPPET_PLACEHOLDER))
+                    .code(true)
+                    .multiline(true);
             input.set_content(snippet_seed, cx);
             input
         });
@@ -262,11 +298,14 @@ impl ProviderEditor {
             working_base,
             original_id,
             original_provider,
-            provider_id: cx.new(|cx| TextInput::new(cx, "可选供应商 ID")),
-            name: cx.new(|cx| TextInput::new(cx, "供应商名称")),
+            provider_id: cx
+                .new(|cx| TextInput::new(cx, t(k::PROVIDER_EDITOR_IDENTITY_ID_PLACEHOLDER))),
+            name: cx.new(|cx| TextInput::new(cx, t(k::PROVIDER_EDITOR_IDENTITY_NAME_PLACEHOLDER))),
             website_url: cx.new(|cx| TextInput::new(cx, "https://example.com")),
             category: cx.new(|cx| TextInput::new(cx, "aggregator / official / third_party")),
-            notes: cx.new(|cx| TextInput::new(cx, "备注").multiline(true)),
+            notes: cx.new(|cx| {
+                TextInput::new(cx, t(k::PROVIDER_EDITOR_IDENTITY_NOTES_PLACEHOLDER)).multiline(true)
+            }),
             text_inputs: HashMap::new(),
             kv_rows: HashMap::new(),
             grid_rows: HashMap::new(),
@@ -287,6 +326,7 @@ impl ProviderEditor {
             convert_open: false,
             error: None,
             status: None,
+            status_level: None,
             form_list_state: ListState::new(form_item_count, ListAlignment::Top, px(720.)),
             form_stack_grid: false,
             form_official_login: false,
@@ -585,7 +625,10 @@ impl ProviderEditor {
                 self.grid_rows.clear();
                 self.build_inputs(cx);
                 self.raw_edit = None;
-                self.status = Some(SharedString::from("已应用文件编辑"));
+                self.set_status(
+                    NotificationLevel::Success,
+                    t(k::PROVIDER_EDITOR_RAW_APPLIED),
+                );
                 self.invalidate_preview(cx);
             }
             Err(e) => {
@@ -637,6 +680,24 @@ impl ProviderEditor {
 
     fn is_editing(&self) -> bool {
         self.original_id.is_some()
+    }
+
+    // ---- toasts -------------------------------------------------------------
+
+    /// Post a status toast with its severity stated outright. Guessing the
+    /// severity from the wording mis-reads several of these messages (an empty
+    /// model list is not a failure) and stops working altogether once the copy
+    /// is translated. Callers still drive the redraw, exactly as before.
+    fn set_status(&mut self, level: NotificationLevel, text: impl Into<SharedString>) {
+        self.status = Some(text.into());
+        self.status_level = Some(level);
+    }
+
+    /// The error channel outranks `status` in [`crate::notifications::ToastSource`],
+    /// and everything on it is a failed or refused action — always an error toast.
+    fn set_error(&mut self, text: impl Into<SharedString>) {
+        self.error = Some(text.into());
+        self.status_level = Some(NotificationLevel::Error);
     }
 
     // ---- mutation handlers --------------------------------------------------
@@ -756,7 +817,7 @@ impl ProviderEditor {
     fn do_save(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).content().trim().to_string();
         if name.is_empty() {
-            self.error = Some(SharedString::from("名称不能为空"));
+            self.set_error(t(k::PROVIDER_EDITOR_IDENTITY_NAME_REQUIRED));
             cx.notify();
             return;
         }
@@ -767,7 +828,10 @@ impl ProviderEditor {
             .codec
             .validate_for_category(&self.values, category.as_deref());
         if let Some(err) = issues.iter().find(|i| i.severity == Severity::Error) {
-            self.error = Some(SharedString::from(format!("配置无效：{}", err.message)));
+            self.set_error(tf!(
+                k::PROVIDER_EDITOR_SAVE_CONFIG_INVALID,
+                message = err.message
+            ));
             cx.notify();
             return;
         }
@@ -785,7 +849,7 @@ impl ProviderEditor {
                     self.app_type.as_str(),
                     snippet.clone(),
                 ) {
-                    self.error = Some(SharedString::from(format!("通用配置片段无效: {err}")));
+                    self.set_error(tf!(k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID, error = err));
                     cx.notify();
                     return;
                 }
@@ -833,7 +897,7 @@ impl ProviderEditor {
         match result {
             Ok(_) => cx.emit(EditorEvent::Saved),
             Err(err) => {
-                self.error = Some(SharedString::from(format!("保存失败: {err}")));
+                self.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = err));
                 cx.notify();
             }
         }
@@ -852,12 +916,15 @@ impl ProviderEditor {
         let base_url = self.field_text("base_url", cx);
         let api_key = self.field_text("api_key", cx);
         if base_url.is_empty() || api_key.is_empty() {
-            self.error = Some(SharedString::from("拉取模型需要基础 URL 和 API 密钥"));
+            self.set_error(t(k::PROVIDER_EDITOR_MODELS_NEEDS_CREDENTIALS));
             cx.notify();
             return;
         }
         self.error = None;
-        self.status = Some(SharedString::from("正在拉取模型列表..."));
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::PROVIDER_EDITOR_MODELS_FETCHING),
+        );
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = ochub_core::services::model_fetch::fetch_models(
@@ -873,14 +940,26 @@ impl ProviderEditor {
                             .map(|m| m.id.as_str())
                             .collect::<Vec<_>>()
                             .join(", ");
-                        this.status = Some(SharedString::from(if preview.is_empty() {
-                            "没有返回模型".to_string()
+                        // An empty list is a successful call with nothing to
+                        // show, not a failure and not a plain progress note.
+                        if preview.is_empty() {
+                            this.set_status(
+                                NotificationLevel::Warning,
+                                t(k::PROVIDER_EDITOR_MODELS_NONE),
+                            );
                         } else {
-                            format!("拉取到 {} 个模型：{preview}", models.len())
-                        }));
+                            this.set_status(
+                                NotificationLevel::Success,
+                                tf!(
+                                    k::PROVIDER_EDITOR_MODELS_FETCHED,
+                                    count = models.len(),
+                                    models = preview
+                                ),
+                            );
+                        }
                     }
                     Err(err) => {
-                        this.error = Some(SharedString::from(format!("拉取模型失败: {err}")));
+                        this.set_error(tf!(k::PROVIDER_EDITOR_MODELS_FETCH_FAILED, error = err));
                         this.status = None;
                     }
                 }
@@ -894,12 +973,15 @@ impl ProviderEditor {
     fn speedtest_base_url(&mut self, cx: &mut Context<Self>) {
         let base_url = self.field_text("base_url", cx);
         if base_url.is_empty() {
-            self.error = Some(SharedString::from("测速需要基础 URL"));
+            self.set_error(t(k::PROVIDER_EDITOR_SPEEDTEST_NEEDS_BASE_URL));
             cx.notify();
             return;
         }
         self.error = None;
-        self.status = Some(SharedString::from("正在测试端点延迟..."));
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::PROVIDER_EDITOR_SPEEDTEST_TESTING),
+        );
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result =
@@ -908,28 +990,44 @@ impl ProviderEditor {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(results) => {
-                        let msg = results
+                        let (level, msg) = results
                             .first()
                             .map(|item| {
                                 if let Some(err) = &item.error {
-                                    format!("测速失败：{err}")
+                                    (
+                                        NotificationLevel::Error,
+                                        tf!(k::PROVIDER_EDITOR_SPEEDTEST_FAILED, error = err),
+                                    )
                                 } else {
-                                    format!(
-                                        "测速成功：HTTP {}，{} ms",
-                                        item.status
-                                            .map(|s| s.to_string())
-                                            .unwrap_or_else(|| "未知".to_string()),
-                                        item.latency
-                                            .map(|v| v.to_string())
-                                            .unwrap_or_else(|| "未知".to_string())
+                                    let unknown = raw(k::PROVIDER_EDITOR_COMMON_UNKNOWN);
+                                    (
+                                        NotificationLevel::Success,
+                                        tf!(
+                                            k::PROVIDER_EDITOR_SPEEDTEST_OK,
+                                            status = item
+                                                .status
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| unknown.to_string()),
+                                            latency = item
+                                                .latency
+                                                .map(|v| v.to_string())
+                                                .unwrap_or_else(|| unknown.to_string())
+                                        ),
                                     )
                                 }
                             })
-                            .unwrap_or_else(|| "没有测速结果".to_string());
-                        this.status = Some(SharedString::from(msg));
+                            // The call came back with nothing to report: a
+                            // caveat, not a failed request.
+                            .unwrap_or_else(|| {
+                                (
+                                    NotificationLevel::Warning,
+                                    raw(k::PROVIDER_EDITOR_SPEEDTEST_NO_RESULT).to_string(),
+                                )
+                            });
+                        this.set_status(level, msg);
                     }
                     Err(err) => {
-                        this.error = Some(SharedString::from(format!("测速失败: {err}")));
+                        this.set_error(tf!(k::PROVIDER_EDITOR_SPEEDTEST_FAILED, error = err));
                         this.status = None;
                     }
                 }
@@ -944,22 +1042,28 @@ impl ProviderEditor {
         let base_url = self.field_text("base_url", cx);
         let api_key = self.field_text("api_key", cx);
         if base_url.is_empty() || api_key.is_empty() {
-            self.error = Some(SharedString::from("查询余额需要基础 URL 和 API 密钥"));
+            self.set_error(t(k::PROVIDER_EDITOR_BALANCE_NEEDS_CREDENTIALS));
             cx.notify();
             return;
         }
         self.error = None;
-        self.status = Some(SharedString::from("正在查询余额..."));
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::PROVIDER_EDITOR_BALANCE_QUERYING),
+        );
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = ochub_core::services::balance::get_balance(&base_url, &api_key).await;
             this.update(cx, |this, cx| {
                 match result {
                     Ok(result) => {
-                        this.status = Some(SharedString::from(format_usage_result(&result)))
+                        // The call succeeded; the payload decides whether that
+                        // is a balance, an empty quota, or a reported failure.
+                        let (level, text) = format_usage_result(&result);
+                        this.set_status(level, text);
                     }
                     Err(err) => {
-                        this.error = Some(SharedString::from(format!("余额查询失败: {err}")));
+                        this.set_error(tf!(k::PROVIDER_EDITOR_BALANCE_FAILED, error = err));
                         this.status = None;
                     }
                 }
@@ -990,11 +1094,17 @@ impl ProviderEditor {
             Ok(snippet) => {
                 self.common_snippet
                     .update(cx, |input, cx| input.set_content(snippet, cx));
-                self.status = Some(SharedString::from("已从当前配置提取通用配置片段"));
+                self.set_status(
+                    NotificationLevel::Success,
+                    t(k::PROVIDER_EDITOR_COMMON_CONFIG_EXTRACTED),
+                );
                 self.error = None;
             }
             Err(err) => {
-                self.error = Some(SharedString::from(format!("提取失败: {err}")));
+                self.set_error(tf!(
+                    k::PROVIDER_EDITOR_COMMON_CONFIG_EXTRACT_FAILED,
+                    error = err
+                ));
                 self.status = None;
             }
         }
@@ -1019,9 +1129,13 @@ impl ProviderEditor {
         let base_name = self.name.read(cx).content().trim().to_string();
         let source_label = crate::app_meta::label(self.app_type);
         let name = if base_name.is_empty() {
-            format!("来自 {source_label} 的配置")
+            tf!(k::PROVIDER_EDITOR_CONVERT_COPY_NAME, app = source_label)
         } else {
-            format!("{base_name}（来自 {source_label}）")
+            tf!(
+                k::PROVIDER_EDITOR_CONVERT_COPY_NAME_SUFFIXED,
+                name = base_name,
+                app = source_label
+            )
         };
         let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
         let mut provider = Provider::with_id(
@@ -1037,14 +1151,17 @@ impl ProviderEditor {
         match ProviderService::add(&self.app, target, provider, false) {
             Ok(_) => {
                 self.convert_open = false;
-                self.status = Some(SharedString::from(format!(
-                    "已复制到 {}",
-                    crate::app_meta::label(target)
-                )));
+                self.set_status(
+                    NotificationLevel::Success,
+                    tf!(
+                        k::PROVIDER_EDITOR_CONVERT_COPIED,
+                        app = crate::app_meta::label(target)
+                    ),
+                );
                 self.error = None;
             }
             Err(err) => {
-                self.error = Some(SharedString::from(format!("复制失败: {err}")));
+                self.set_error(tf!(k::PROVIDER_EDITOR_CONVERT_FAILED, error = err));
                 self.status = None;
             }
         }
@@ -1067,7 +1184,10 @@ impl ProviderEditor {
             .flex_col()
             .gap_3()
             .w_full()
-            .child(layout::section_header("登录与鉴权", "官方供应商"))
+            .child(layout::section_header(
+                t(k::PROVIDER_EDITOR_OFFICIAL_SECTION_TITLE),
+                t(k::PROVIDER_EDITOR_OFFICIAL_SECTION_CAPTION),
+            ))
             .child(
                 components::card()
                     .flex()
@@ -1080,13 +1200,16 @@ impl ProviderEditor {
                             .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(format!("使用 {app_label} 官方登录"))),
+                            .child(SharedString::from(tf!(
+                                k::PROVIDER_EDITOR_OFFICIAL_TITLE,
+                                app = app_label
+                            ))),
                     )
                     .child(
                         div()
                             .text_color(theme::muted())
                             .text_xs()
-                            .child("沿用工具自身的登录状态，不写入第三方 Base URL 或 API Key。"),
+                            .child(t(k::PROVIDER_EDITOR_OFFICIAL_DESC)),
                     ),
             )
             .into_any_element()
@@ -1185,7 +1308,7 @@ impl ProviderEditor {
                             div().flex_none().child(
                                 components::icon_button_tone(
                                     SharedString::from(format!("kv-del-{field_id}-{rid}")),
-                                    "删除",
+                                    t(k::PROVIDER_EDITOR_ROW_DELETE),
                                     IconName::Trash,
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,
@@ -1204,7 +1327,7 @@ impl ProviderEditor {
         col.child(
             components::button(
                 SharedString::from(format!("kv-add-{field_id}")),
-                "+ 添加",
+                t(k::PROVIDER_EDITOR_KV_ADD),
                 ButtonTone::Neutral,
                 ButtonSize::Sm,
             )
@@ -1304,7 +1427,7 @@ impl ProviderEditor {
                         div().flex().flex_row().justify_end().child(
                             components::icon_button_tone(
                                 SharedString::from(format!("grid-del-{field_id}-{rid}")),
-                                "删除",
+                                t(k::PROVIDER_EDITOR_ROW_DELETE),
                                 IconName::Trash,
                                 ButtonTone::Ghost,
                                 ButtonSize::Sm,
@@ -1323,7 +1446,7 @@ impl ProviderEditor {
             return col.child(
                 components::button(
                     SharedString::from(format!("grid-add-{field_id}")),
-                    "+ 添加模型",
+                    t(k::PROVIDER_EDITOR_GRID_ADD_MODEL),
                     ButtonTone::Neutral,
                     ButtonSize::Sm,
                 )
@@ -1410,7 +1533,7 @@ impl ProviderEditor {
                     div().flex_none().child(
                         components::icon_button_tone(
                             SharedString::from(format!("grid-del-{field_id}-{rid}")),
-                            "删除",
+                            t(k::PROVIDER_EDITOR_ROW_DELETE),
                             IconName::Trash,
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
@@ -1427,7 +1550,7 @@ impl ProviderEditor {
         col.child(
             components::button(
                 SharedString::from(format!("grid-add-{field_id}")),
-                "+ 添加模型",
+                t(k::PROVIDER_EDITOR_GRID_ADD_MODEL),
                 ButtonTone::Neutral,
                 ButtonSize::Sm,
             )
@@ -1582,7 +1705,7 @@ impl ProviderEditor {
                     .text_color(theme::text())
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("将写入的文件"),
+                    .child(t(k::PROVIDER_EDITOR_PREVIEW_TITLE)),
             );
         if file_count > 1 {
             for (index, file) in self.preview_cache.files.iter().enumerate() {
@@ -1616,10 +1739,10 @@ impl ProviderEditor {
         }
         header = header.child(div().flex_1());
         if let Some(file) = &document {
-            let metadata = SharedString::from(format!(
-                "{} 行 · {}",
-                file.line_count(),
-                format_preview_bytes(file.content.len())
+            let metadata = SharedString::from(tf!(
+                k::PROVIDER_EDITOR_PREVIEW_METADATA,
+                lines = file.line_count(),
+                size = format_preview_bytes(file.content.len())
             ));
             header = header
                 .child(
@@ -1633,7 +1756,7 @@ impl ProviderEditor {
                 .child(
                     components::button(
                         SharedString::from(format!("preview-edit-{file_index}")),
-                        "编辑",
+                        t(k::PROVIDER_EDITOR_PREVIEW_EDIT),
                         ButtonTone::Ghost,
                         ButtonSize::Sm,
                     )
@@ -1645,7 +1768,7 @@ impl ProviderEditor {
         header = header.child(
             components::button(
                 "editor-refresh-preview",
-                "刷新",
+                t(k::PROVIDER_EDITOR_PREVIEW_REFRESH),
                 ButtonTone::Ghost,
                 ButtonSize::Sm,
             )
@@ -1657,7 +1780,7 @@ impl ProviderEditor {
             header = header.child(
                 components::button(
                     "preview-collapse",
-                    "收起",
+                    t(k::PROVIDER_EDITOR_PREVIEW_COLLAPSE),
                     ButtonTone::Ghost,
                     ButtonSize::Sm,
                 )
@@ -1699,7 +1822,7 @@ impl ProviderEditor {
                         .px_6()
                         .text_color(theme::muted())
                         .text_sm()
-                        .child("填写名称和 API 地址后，这里会实时显示将写入的配置内容。"),
+                        .child(t(k::PROVIDER_EDITOR_PREVIEW_EMPTY)),
                 )
                 .into_any_element();
         };
@@ -1757,9 +1880,21 @@ impl ProviderEditor {
                 .border_color(theme::border())
                 .children(sorted.into_iter().map(|issue| {
                     let (bg, fg, tag) = match issue.severity {
-                        Severity::Error => (theme::red_soft(), theme::red(), "错误"),
-                        Severity::Warning => (theme::yellow_soft(), theme::yellow(), "警告"),
-                        Severity::Info => (theme::inset(), theme::subtext(), "提示"),
+                        Severity::Error => (
+                            theme::red_soft(),
+                            theme::red(),
+                            raw(k::PROVIDER_EDITOR_ISSUE_ERROR_TAG),
+                        ),
+                        Severity::Warning => (
+                            theme::yellow_soft(),
+                            theme::yellow(),
+                            raw(k::PROVIDER_EDITOR_ISSUE_WARNING_TAG),
+                        ),
+                        Severity::Info => (
+                            theme::inset(),
+                            theme::subtext(),
+                            raw(k::PROVIDER_EDITOR_ISSUE_INFO_TAG),
+                        ),
                     };
                     div()
                         .flex()
@@ -1798,7 +1933,7 @@ impl ProviderEditor {
     fn render_preview_summary(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (errors, warnings) = self.preview_issue_counts();
         let files: SharedString = if self.preview_cache.files.is_empty() {
-            "填写名称和 API 地址后实时生成".into()
+            t(k::PROVIDER_EDITOR_PREVIEW_SUMMARY_EMPTY)
         } else {
             SharedString::from(
                 self.preview_cache
@@ -1806,7 +1941,7 @@ impl ProviderEditor {
                     .iter()
                     .map(|file| file.filename.to_string())
                     .collect::<Vec<_>>()
-                    .join("、"),
+                    .join(raw(k::PROVIDER_EDITOR_PREVIEW_FILE_JOIN)),
             )
         };
         components::card()
@@ -1817,7 +1952,7 @@ impl ProviderEditor {
                 div()
                     .id("preview-summary-expand")
                     .role(gpui::Role::Button)
-                    .aria_label("展开写入文件预览")
+                    .aria_label(t(k::PROVIDER_EDITOR_PREVIEW_EXPAND_ARIA))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -1843,7 +1978,7 @@ impl ProviderEditor {
                             .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("将写入的文件"),
+                            .child(t(k::PROVIDER_EDITOR_PREVIEW_TITLE)),
                     )
                     .child(
                         div()
@@ -1858,13 +1993,13 @@ impl ProviderEditor {
                     .when(errors > 0, |row| {
                         row.child(components::badge(
                             BadgeTone::Danger,
-                            format!("{errors} 个错误"),
+                            tf!(k::PROVIDER_EDITOR_ISSUE_ERROR_COUNT, count = errors),
                         ))
                     })
                     .when(warnings > 0, |row| {
                         row.child(components::badge(
                             BadgeTone::Warning,
-                            format!("{warnings} 个警告"),
+                            tf!(k::PROVIDER_EDITOR_ISSUE_WARNING_COUNT, count = warnings),
                         ))
                     }),
             )
@@ -1918,7 +2053,7 @@ impl ProviderEditor {
                 components::modal_header(raw.filename.clone()).child(
                     components::icon_button_tone(
                         "raw-close",
-                        "关闭",
+                        t(k::PROVIDER_EDITOR_RAW_CLOSE),
                         IconName::Close,
                         ButtonTone::Ghost,
                         ButtonSize::Sm,
@@ -1934,7 +2069,7 @@ impl ProviderEditor {
                         div()
                             .text_color(theme::muted())
                             .text_xs()
-                            .child("直接编辑文件内容，应用后会同步回上方表单。"),
+                            .child(t(k::PROVIDER_EDITOR_RAW_DESC)),
                     )
                     .when_some(raw.error.clone(), |s, err| {
                         s.child(div().text_color(theme::red()).text_xs().child(err))
@@ -1951,12 +2086,22 @@ impl ProviderEditor {
                     ),
             )
             .child(components::modal_footer(vec![
-                components::button("raw-cancel", "取消", ButtonTone::Neutral, ButtonSize::Sm)
-                    .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)))
-                    .into_any_element(),
-                components::button("raw-apply", "应用", ButtonTone::Primary, ButtonSize::Sm)
-                    .on_click(cx.listener(|this, _e, _w, cx| this.apply_raw_edit(cx)))
-                    .into_any_element(),
+                components::button(
+                    "raw-cancel",
+                    t(k::PROVIDER_EDITOR_RAW_CANCEL),
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)))
+                .into_any_element(),
+                components::button(
+                    "raw-apply",
+                    t(k::PROVIDER_EDITOR_RAW_APPLY),
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _e, _w, cx| this.apply_raw_edit(cx)))
+                .into_any_element(),
             ]));
         Some(
             // The overlay occludes the page (the card occludes the overlay), so
@@ -1978,7 +2123,10 @@ impl ProviderEditor {
             .flex_col()
             .gap_3()
             .w_full()
-            .child(layout::section_header("通用配置", "跨供应商共享片段"))
+            .child(layout::section_header(
+                t(k::PROVIDER_EDITOR_COMMON_CONFIG_SECTION_TITLE),
+                t(k::PROVIDER_EDITOR_COMMON_CONFIG_SECTION_CAPTION),
+            ))
             .child(
                 div()
                     .flex()
@@ -1995,13 +2143,13 @@ impl ProviderEditor {
                                 div()
                                     .text_color(theme::text())
                                     .text_sm()
-                                    .child("应用通用配置到此供应商"),
+                                    .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_TOGGLE_LABEL)),
                             )
                             .child(
                                 div()
                                     .text_color(theme::muted())
                                     .text_xs()
-                                    .child("写入工具配置时会合并下方共享片段。"),
+                                    .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_TOGGLE_DESC)),
                             ),
                     )
                     .child(
@@ -2025,12 +2173,12 @@ impl ProviderEditor {
                         div()
                             .text_color(theme::muted())
                             .text_xs()
-                            .child("此片段按应用共享，供所有已启用的供应商使用。"),
+                            .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_SHARED_DESC)),
                     )
                     .child(
                         components::button(
                             "common-config-extract",
-                            "从当前配置提取",
+                            t(k::PROVIDER_EDITOR_COMMON_CONFIG_EXTRACT),
                             ButtonTone::Neutral,
                             ButtonSize::Sm,
                         )
@@ -2085,20 +2233,22 @@ impl ProviderEditor {
         Some(
             components::modal_overlay(
                 components::modal_card()
-                    .child(components::modal_header("复制到其他应用"))
+                    .child(components::modal_header(t(
+                        k::PROVIDER_EDITOR_CONVERT_TITLE,
+                    )))
                     .child(
                         components::modal_body()
                             .child(
                                 div()
                                     .text_color(theme::muted())
                                     .text_xs()
-                                    .child("使用目标应用的格式重新生成，并另存为新供应商。"),
+                                    .child(t(k::PROVIDER_EDITOR_CONVERT_DESC)),
                             )
                             .child(targets),
                     )
                     .child(components::modal_footer(vec![components::button(
                         "convert-cancel",
-                        "取消",
+                        t(k::PROVIDER_EDITOR_CONVERT_CANCEL),
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
                     )
@@ -2117,28 +2267,38 @@ impl ProviderEditor {
             .flex_col()
             .gap_4()
             .w_full()
-            .child(components::field("名称", true, None, self.name.clone()))
+            .child(components::field(
+                t(k::PROVIDER_EDITOR_IDENTITY_NAME_LABEL),
+                true,
+                None,
+                self.name.clone(),
+            ))
             .when(!self.is_editing(), |s| {
                 s.child(components::field(
-                    "供应商 ID（可选）",
+                    t(k::PROVIDER_EDITOR_IDENTITY_ID_LABEL),
                     false,
                     None,
                     self.provider_id.clone(),
                 ))
             })
             .child(components::field(
-                "网站 URL",
+                t(k::PROVIDER_EDITOR_IDENTITY_WEBSITE_LABEL),
                 false,
                 None,
                 self.website_url.clone(),
             ))
             .child(components::field(
-                "分类",
+                t(k::PROVIDER_EDITOR_IDENTITY_CATEGORY_LABEL),
                 false,
                 None,
                 self.category.clone(),
             ))
-            .child(components::field("备注", false, None, self.notes.clone()))
+            .child(components::field(
+                t(k::PROVIDER_EDITOR_IDENTITY_NOTES_LABEL),
+                false,
+                None,
+                self.notes.clone(),
+            ))
     }
 
     fn render_form_intro(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -2150,7 +2310,7 @@ impl ProviderEditor {
                 this.apply_preset(*index, cx);
             });
             intro = intro.child(components::field(
-                "从预设开始",
+                t(k::PROVIDER_EDITOR_FORM_PRESETS_LABEL),
                 false,
                 None,
                 components::segmented(
@@ -2178,7 +2338,11 @@ impl ProviderEditor {
             return self.render_official_auth_section();
         }
 
-        let caption = if section.advanced { "高级选项" } else { "" };
+        let caption = if section.advanced {
+            raw(k::PROVIDER_EDITOR_FORM_ADVANCED_CAPTION)
+        } else {
+            ""
+        };
         let mut column = div()
             .flex()
             .flex_col()
@@ -2205,7 +2369,7 @@ impl ProviderEditor {
             .child(
                 components::button(
                     "editor-fetch-models",
-                    "拉取模型",
+                    t(k::PROVIDER_EDITOR_TOOLS_FETCH_MODELS),
                     ButtonTone::Neutral,
                     ButtonSize::Sm,
                 )
@@ -2214,7 +2378,7 @@ impl ProviderEditor {
             .child(
                 components::button(
                     "editor-speedtest",
-                    "测试 URL",
+                    t(k::PROVIDER_EDITOR_TOOLS_SPEEDTEST),
                     ButtonTone::Neutral,
                     ButtonSize::Sm,
                 )
@@ -2225,7 +2389,7 @@ impl ProviderEditor {
             .child(
                 components::button(
                     "editor-balance",
-                    "查询余额",
+                    t(k::PROVIDER_EDITOR_TOOLS_BALANCE),
                     ButtonTone::Neutral,
                     ButtonSize::Sm,
                 )
@@ -2284,13 +2448,13 @@ impl Render for ProviderEditor {
         }
 
         let title = if self.is_editing() {
-            "编辑供应商"
+            t(k::PROVIDER_EDITOR_PAGE_TITLE_EDIT)
         } else {
-            "新增供应商"
+            t(k::PROVIDER_EDITOR_PAGE_TITLE_ADD)
         };
-        let subtitle = SharedString::from(format!(
-            "目标应用：{}",
-            crate::app_meta::label(self.app_type)
+        let subtitle = SharedString::from(tf!(
+            k::PROVIDER_EDITOR_PAGE_SUBTITLE,
+            app = crate::app_meta::label(self.app_type)
         ));
 
         // Stacked mode: the pane takes a real share of the window when
@@ -2322,7 +2486,7 @@ impl Render for ProviderEditor {
             actions = actions.child(self.render_issue_chip(
                 "editor-error-chip",
                 BadgeTone::Danger,
-                format!("{error_count} 个错误"),
+                tf!(k::PROVIDER_EDITOR_ISSUE_ERROR_COUNT, count = error_count),
                 compact_layout,
                 cx,
             ));
@@ -2331,7 +2495,10 @@ impl Render for ProviderEditor {
             actions = actions.child(self.render_issue_chip(
                 "editor-warning-chip",
                 BadgeTone::Warning,
-                format!("{warning_count} 个警告"),
+                tf!(
+                    k::PROVIDER_EDITOR_ISSUE_WARNING_COUNT,
+                    count = warning_count
+                ),
                 compact_layout,
                 cx,
             ));
@@ -2340,7 +2507,7 @@ impl Render for ProviderEditor {
             .child(
                 components::button(
                     "editor-convert",
-                    "复制到应用",
+                    t(k::PROVIDER_EDITOR_ACTION_CONVERT),
                     ButtonTone::Neutral,
                     ButtonSize::Md,
                 )
@@ -2349,12 +2516,22 @@ impl Render for ProviderEditor {
                 })),
             )
             .child(
-                components::button("editor-save", "保存", ButtonTone::Primary, ButtonSize::Md)
-                    .on_click(cx.listener(|this, _e, _w, cx| this.do_save(cx))),
+                components::button(
+                    "editor-save",
+                    t(k::PROVIDER_EDITOR_ACTION_SAVE),
+                    ButtonTone::Primary,
+                    ButtonSize::Md,
+                )
+                .on_click(cx.listener(|this, _e, _w, cx| this.do_save(cx))),
             )
             .child(
-                components::button("editor-cancel", "取消", ButtonTone::Neutral, ButtonSize::Md)
-                    .on_click(cx.listener(|_t, _e, _w, cx| cx.emit(EditorEvent::Cancelled))),
+                components::button(
+                    "editor-cancel",
+                    t(k::PROVIDER_EDITOR_ACTION_CANCEL),
+                    ButtonTone::Neutral,
+                    ButtonSize::Md,
+                )
+                .on_click(cx.listener(|_t, _e, _w, cx| cx.emit(EditorEvent::Cancelled))),
             );
 
         let form_list = gpui::list(
@@ -2517,41 +2694,68 @@ fn format_preview_bytes(bytes: usize) -> String {
     }
 }
 
-fn format_usage_result(result: &UsageResult) -> String {
+/// The message *and* its severity: a balance response can report a failure, an
+/// empty quota, or real numbers, and the toast host must not have to guess
+/// which from the wording.
+fn format_usage_result(result: &UsageResult) -> (NotificationLevel, String) {
     if !result.success {
-        return result
-            .error
-            .as_ref()
-            .map(|err| format!("余额查询失败：{err}"))
-            .unwrap_or_else(|| "余额查询失败".to_string());
+        return (
+            NotificationLevel::Error,
+            result
+                .error
+                .as_ref()
+                .map(|err| tf!(k::PROVIDER_EDITOR_BALANCE_FAILED, error = err))
+                .unwrap_or_else(|| raw(k::PROVIDER_EDITOR_BALANCE_FAILED_PLAIN).to_string()),
+        );
     }
     let Some(data) = &result.data else {
-        return "余额查询成功，但没有返回额度数据".to_string();
+        return (
+            NotificationLevel::Warning,
+            raw(k::PROVIDER_EDITOR_BALANCE_NO_DATA).to_string(),
+        );
     };
     let parts = data
         .iter()
         .take(3)
         .map(|item| {
-            let name = item.plan_name.as_deref().unwrap_or("默认计划");
+            let name = item
+                .plan_name
+                .as_deref()
+                .unwrap_or(raw(k::PROVIDER_EDITOR_BALANCE_DEFAULT_PLAN));
             let remaining = item
                 .remaining
                 .map(|value| format!("{value:.4}"))
-                .unwrap_or_else(|| "未知".to_string());
+                .unwrap_or_else(|| raw(k::PROVIDER_EDITOR_COMMON_UNKNOWN).to_string());
             let unit = item.unit.as_deref().unwrap_or("");
-            format!("{name}: 剩余 {remaining}{unit}")
+            tf!(
+                k::PROVIDER_EDITOR_BALANCE_ITEM,
+                name = name,
+                remaining = remaining,
+                unit = unit
+            )
         })
         .collect::<Vec<_>>()
-        .join("；");
+        .join(raw(k::PROVIDER_EDITOR_BALANCE_ITEM_JOIN));
     if parts.is_empty() {
-        "余额查询成功，但没有返回额度数据".to_string()
+        (
+            NotificationLevel::Warning,
+            raw(k::PROVIDER_EDITOR_BALANCE_NO_DATA).to_string(),
+        )
     } else {
-        parts
+        (NotificationLevel::Success, parts)
     }
 }
 
+// Not `impl_status_toasts_leveled!`: this view has two message slots, and the
+// error channel outranks `status`. `status_level` is set alongside whichever
+// slot was written, so it always describes the message `take_toast` hands over.
 impl crate::notifications::ToastSource for ProviderEditor {
     fn take_toast(&mut self) -> Option<SharedString> {
         self.error.take().or_else(|| self.status.take())
+    }
+
+    fn take_toast_level(&mut self) -> Option<NotificationLevel> {
+        self.status_level.take()
     }
 }
 

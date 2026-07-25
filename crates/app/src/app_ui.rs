@@ -885,6 +885,14 @@ impl AppRoot {
         self.mcp_view.update(cx, |view, cx| view.relocalize(cx));
         self.sessions_view
             .update(cx, |view, cx| view.relocalize(cx));
+        self.gateway_view
+            .update(cx, |view, cx| view.relocalize(cx));
+        // The provider editor is built per open, but it survives a locale
+        // change while it is on screen, and it holds text inputs whose
+        // placeholders were captured when it opened.
+        if let Some(editor) = self.editor.clone() {
+            editor.update(cx, |view, cx| view.relocalize(cx));
+        }
         cx.notify();
     }
 

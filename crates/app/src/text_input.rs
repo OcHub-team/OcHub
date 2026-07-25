@@ -19,6 +19,7 @@ use gpui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::icons::{icon, IconName};
+use crate::i18n::{k, raw, t};
 use crate::theme;
 
 actions!(
@@ -352,21 +353,21 @@ pub(crate) fn render_find_bar(
                 .child(SharedString::from(counter)),
         )
         .child(
-            control("find-previous", "上一个匹配", IconName::ChevronLeft).on_click(
+            control("find-previous", raw(k::COMMON_FIND_PREVIOUS), IconName::ChevronLeft).on_click(
                 |_event, window, cx| {
                     window.dispatch_action(Box::new(FindPrevious), cx);
                 },
             ),
         )
         .child(
-            control("find-next", "下一个匹配", IconName::ChevronRight).on_click(
+            control("find-next", raw(k::COMMON_FIND_NEXT), IconName::ChevronRight).on_click(
                 |_event, window, cx| {
                     window.dispatch_action(Box::new(FindNext), cx);
                 },
             ),
         )
         .child(
-            control("find-close", "关闭查找", IconName::Close).on_click(|_event, window, cx| {
+            control("find-close", raw(k::COMMON_FIND_CLOSE), IconName::Close).on_click(|_event, window, cx| {
                 window.dispatch_action(Box::new(CloseFind), cx);
             }),
         )
@@ -787,7 +788,7 @@ impl TextInput {
             } else {
                 String::new()
             };
-            let input = cx.new(|cx| TextInput::new(cx, "查找").search_field());
+            let input = cx.new(|cx| TextInput::new(cx, t(k::COMMON_FIND_PLACEHOLDER)).search_field());
             if !selected.is_empty() {
                 input.update(cx, |input, cx| input.set_content(selected, cx));
             }

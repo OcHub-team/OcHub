@@ -22,9 +22,12 @@ use ochub_core::services::usage_stats::{
 use ochub_core::{services, AppState, UsageSummary};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::icons::{icon, IconName};
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 const DEFAULT_LOG_PAGE_SIZE: u32 = 20;
@@ -76,7 +79,7 @@ fn load_usage_data(
         {
             Ok(summary) => Some(summary),
             Err(err) => {
-                errors.push(format!("加载用量失败: {err}"));
+                errors.push(tf!(k::USAGE_STATUS_LOAD_FAILED, error = err));
                 None
             }
         };
@@ -92,7 +95,7 @@ fn load_usage_data(
     let (logs, log_total) = match app.db.get_request_logs(&filters, log_page, log_page_size) {
         Ok(page) => (page.data, page.total),
         Err(err) => {
-            errors.push(format!("加载请求日志失败: {err}"));
+            errors.push(tf!(k::USAGE_STATUS_LOGS_LOAD_FAILED, error = err));
             (Vec::new(), 0)
         }
     };
@@ -183,22 +186,19 @@ enum UsageRange {
 }
 
 impl UsageRange {
-    fn all() -> &'static [(Self, &'static str)] {
-        &[
-            (Self::Today, "今天"),
-            (Self::SevenDays, "最近 1 周"),
-            (Self::ThirtyDays, "最近 30 天"),
-        ]
+    /// The quick picks offered by the time popover, in display order. `Custom`
+    /// is not one of them: it only exists once a range has been typed in.
+    fn all() -> &'static [Self] {
+        &[Self::Today, Self::SevenDays, Self::ThirtyDays]
     }
 
     fn label(self) -> &'static str {
-        if matches!(self, Self::Custom { .. }) {
-            return "自定义";
-        }
-        Self::all()
-            .iter()
-            .find_map(|(range, label)| (*range == self).then_some(*label))
-            .unwrap_or("今天")
+        raw(match self {
+            Self::Today => k::USAGE_RANGE_TODAY,
+            Self::SevenDays => k::USAGE_RANGE_SEVEN_DAYS,
+            Self::ThirtyDays => k::USAGE_RANGE_THIRTY_DAYS,
+            Self::Custom { .. } => k::USAGE_RANGE_CUSTOM,
+        })
     }
 
     fn bounds(self) -> (Option<i64>, Option<i64>) {
@@ -240,12 +240,20 @@ enum RangeEndpoint {
 }
 
 impl UsageSection {
-    fn all() -> &'static [(Self, &'static str, IconName)] {
+    fn all() -> &'static [(Self, IconName)] {
         &[
-            (Self::Logs, "请求日志", IconName::Message),
-            (Self::Providers, "Provider 统计", IconName::Cloud),
-            (Self::Models, "模型统计", IconName::Chart),
+            (Self::Logs, IconName::Message),
+            (Self::Providers, IconName::Cloud),
+            (Self::Models, IconName::Chart),
         ]
+    }
+
+    fn label(self) -> &'static str {
+        raw(match self {
+            Self::Logs => k::USAGE_SECTION_LOGS,
+            Self::Providers => k::USAGE_SECTION_PROVIDERS,
+            Self::Models => k::USAGE_SECTION_MODELS,
+        })
     }
 }
 
@@ -264,6 +272,7 @@ pub struct UsageView {
     pricing: Vec<ModelPricingInfo>,
     stream_config: StreamCheckConfig,
     status: Option<SharedString>,
+    status_level: Option<NotificationLevel>,
     range: UsageRange,
     app_filter: Option<String>,
     provider_filter: Option<String>,
@@ -318,6 +327,12 @@ impl UsageView {
     /// translation that changes a row's height would otherwise leave the list
     /// scrolled to stale offsets.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        // The placeholder is captured when the input is constructed, and this
+        // view is built once at startup, so it needs pushing in by hand. The
+        // other inputs hold examples and numbers, which do not translate.
+        self.log_page_input.update(cx, |input, cx| {
+            input.set_placeholder(t(k::USAGE_PAGINATION_PAGE_PLACEHOLDER), cx)
+        });
         self.list_state.remeasure();
         cx.notify();
     }
@@ -339,6 +354,7 @@ impl UsageView {
             pricing: Vec::new(),
             stream_config: StreamCheckConfig::default(),
             status: None,
+            status_level: None,
             range: UsageRange::Today,
             app_filter: None,
             provider_filter: None,
@@ -377,7 +393,8 @@ impl UsageView {
             stream_timeout_secs: cx.new(|cx| text_input(cx, "8", "8")),
             stream_max_retries: cx.new(|cx| text_input(cx, "1", "1")),
             stream_degraded_threshold_ms: cx.new(|cx| text_input(cx, "6000", "6000")),
-            log_page_input: cx.new(|cx| text_input(cx, "页码", "").compact()),
+            log_page_input: cx
+                .new(|cx| text_input(cx, raw(k::USAGE_PAGINATION_PAGE_PLACEHOLDER), "").compact()),
             range_start_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             range_end_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             load_error: false,
@@ -411,6 +428,27 @@ impl UsageView {
             input.set_on_enter(move |window, cx| apply_end(&(), window, cx));
         });
         this
+    }
+
+    /// Every status toast carries its severity explicitly. Guessing it from the
+    /// wording mis-reads several of these messages — a finished session sync
+    /// that merely mentions skipped files is not a warning — and stops working
+    /// entirely once the copy is translated.
+    fn set_status(
+        &mut self,
+        level: NotificationLevel,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.status = Some(text.into());
+        self.status_level = Some(level);
+        cx.notify();
+    }
+
+    /// Drop the current toast without emitting a new one.
+    fn clear_status(&mut self) {
+        self.status = None;
+        self.status_level = None;
     }
 
     /// Kick off a background reload of everything the page shows. The queries
@@ -449,11 +487,15 @@ impl UsageView {
     fn apply_data(&mut self, data: UsageData, cx: &mut Context<Self>) {
         if data.errors.is_empty() {
             if self.load_error {
-                self.status = None;
+                self.clear_status();
                 self.load_error = false;
             }
         } else {
-            self.status = Some(SharedString::from(data.errors.join("；")));
+            self.set_status(
+                NotificationLevel::Error,
+                data.errors.join(raw(k::USAGE_STATUS_ERROR_SEPARATOR)),
+                cx,
+            );
             self.load_error = true;
         }
         self.summary = data.summary;
@@ -689,22 +731,27 @@ impl UsageView {
         let start_text = input_value(&self.range_start_input, cx);
         let end_text = input_value(&self.range_end_input, cx);
         let Some(start) = parse_local_timestamp(&start_text, false) else {
-            self.status = Some(SharedString::from(
-                "开始时间格式不正确，请使用 YYYY/MM/DD HH:mm:ss",
-            ));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::USAGE_FILTER_ERROR_START_FORMAT),
+                cx,
+            );
             return;
         };
         let Some(end) = parse_local_timestamp(&end_text, true) else {
-            self.status = Some(SharedString::from(
-                "结束时间格式不正确，请使用 YYYY/MM/DD HH:mm:ss",
-            ));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::USAGE_FILTER_ERROR_END_FORMAT),
+                cx,
+            );
             return;
         };
         if start > end {
-            self.status = Some(SharedString::from("开始时间不能晚于结束时间"));
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::USAGE_FILTER_ERROR_RANGE_ORDER),
+                cx,
+            );
             return;
         }
         self.open_filter_popover = None;
@@ -776,11 +823,15 @@ impl UsageView {
                 match detail {
                     Ok(detail) => {
                         this.selected_log = detail;
-                        this.status = None;
+                        this.clear_status();
                     }
                     Err(err) => {
                         this.selected_log = None;
-                        this.status = Some(SharedString::from(format!("读取请求详情失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::USAGE_STATUS_DETAIL_LOAD_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 this.list_state.remeasure();
@@ -792,8 +843,7 @@ impl UsageView {
     }
 
     fn sync_sessions(&mut self, cx: &mut Context<Self>) {
-        self.status = Some(SharedString::from("正在同步会话…"));
-        cx.notify();
+        self.set_status(NotificationLevel::Info, t(k::USAGE_STATUS_SYNCING), cx);
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -832,17 +882,32 @@ impl UsageView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.status = Some(SharedString::from(format!(
-                    "会话同步完成: 导入 {} 条，跳过 {} 条，扫描 {} 个文件{}",
-                    result.imported,
-                    result.skipped,
-                    result.files_scanned,
-                    if result.errors.is_empty() {
-                        String::new()
-                    } else {
-                        format!("，{} 个错误", result.errors.len())
-                    }
-                )));
+                // A sync that finished with per-file errors still imported what
+                // it could, so it is a warning rather than a failure.
+                let level = if result.errors.is_empty() {
+                    NotificationLevel::Success
+                } else {
+                    NotificationLevel::Warning
+                };
+                // Two whole sentences rather than one with an appended clause:
+                // only the reporting language knows where the error count goes.
+                let summary = if result.errors.is_empty() {
+                    tf!(
+                        k::USAGE_STATUS_SYNC_DONE,
+                        imported = result.imported,
+                        skipped = result.skipped,
+                        files = result.files_scanned,
+                    )
+                } else {
+                    tf!(
+                        k::USAGE_STATUS_SYNC_DONE_WITH_ERRORS,
+                        imported = result.imported,
+                        skipped = result.skipped,
+                        files = result.files_scanned,
+                        errors = result.errors.len(),
+                    )
+                };
+                this.set_status(level, summary, cx);
                 this.load_error = false;
                 this.reload(cx);
                 cx.notify();
@@ -892,11 +957,19 @@ impl UsageView {
             &cache_creation,
         ) {
             Ok(()) => {
-                self.status = Some(SharedString::from(format!("已保存模型定价: {model_id}")));
+                self.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::USAGE_PRICING_SAVED, model = model_id),
+                    cx,
+                );
                 self.reload(cx);
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("保存模型定价失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::USAGE_PRICING_SAVE_FAILED, error = err),
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -905,11 +978,19 @@ impl UsageView {
     fn delete_pricing(&mut self, model_id: String, cx: &mut Context<Self>) {
         match self.app.db.delete_model_pricing(&model_id) {
             Ok(()) => {
-                self.status = Some(SharedString::from(format!("已删除模型定价: {model_id}")));
+                self.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::USAGE_PRICING_DELETED, model = model_id),
+                    cx,
+                );
                 self.reload(cx);
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("删除模型定价失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::USAGE_PRICING_DELETE_FAILED, error = err),
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -960,10 +1041,18 @@ impl UsageView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.status = Some(SharedString::from(match result {
-                    Ok(()) => "计费默认配置已保存".to_string(),
-                    Err(err) => format!("保存计费默认配置失败: {err}"),
-                }));
+                match result {
+                    Ok(()) => this.set_status(
+                        NotificationLevel::Success,
+                        t(k::USAGE_PRICING_DEFAULTS_SAVED),
+                        cx,
+                    ),
+                    Err(err) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::USAGE_PRICING_DEFAULTS_SAVE_FAILED, error = err),
+                        cx,
+                    ),
+                }
                 cx.notify();
             })
             .ok();
@@ -975,8 +1064,7 @@ impl UsageView {
         let config = match parse_stream_config(self, cx) {
             Ok(config) => config,
             Err(err) => {
-                self.status = Some(SharedString::from(err));
-                cx.notify();
+                self.set_status(NotificationLevel::Error, err, cx);
                 return;
             }
         };
@@ -984,10 +1072,14 @@ impl UsageView {
         match self.app.db.save_stream_check_config(&config) {
             Ok(()) => {
                 self.stream_config = config;
-                self.status = Some(SharedString::from("模型检测参数已保存"));
+                self.set_status(NotificationLevel::Success, t(k::USAGE_STREAM_SAVED), cx);
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("保存检测参数失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::USAGE_STREAM_SAVE_FAILED, error = err),
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -1055,7 +1147,16 @@ impl UsageView {
             first_of_month - Duration::days(first_of_month.weekday().num_days_from_sunday() as i64);
 
         let mut weekday_header = div().grid().grid_cols(7).gap(px(2.)).w_full();
-        for weekday in ["日", "一", "二", "三", "四", "五", "六"] {
+        // The calendar starts on Sunday, so the initials follow that order.
+        for weekday in [
+            t(k::COMMON_CALENDAR_WEEKDAY_SUN),
+            t(k::COMMON_CALENDAR_WEEKDAY_MON),
+            t(k::COMMON_CALENDAR_WEEKDAY_TUE),
+            t(k::COMMON_CALENDAR_WEEKDAY_WED),
+            t(k::COMMON_CALENDAR_WEEKDAY_THU),
+            t(k::COMMON_CALENDAR_WEEKDAY_FRI),
+            t(k::COMMON_CALENDAR_WEEKDAY_SAT),
+        ] {
             weekday_header = weekday_header.child(
                 div()
                     .h(px(24.))
@@ -1116,9 +1217,10 @@ impl UsageView {
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text())
-                            .child(SharedString::from(format!(
-                                "{}年{:02}月",
-                                self.picker_year, self.picker_month
+                            .child(SharedString::from(tf!(
+                                k::COMMON_CALENDAR_MONTH_TITLE,
+                                year = self.picker_year,
+                                month = picker_month_label(self.picker_month)
                             ))),
                     )
                     .child(
@@ -1130,7 +1232,7 @@ impl UsageView {
                             .child(
                                 calendar_nav_button(
                                     "usage-picker-previous-month",
-                                    "上个月",
+                                    raw(k::COMMON_CALENDAR_PREVIOUS_MONTH_ARIA),
                                     IconName::ChevronLeft,
                                 )
                                 .on_click(cx.listener(
@@ -1142,7 +1244,7 @@ impl UsageView {
                             .child(
                                 calendar_nav_button(
                                     "usage-picker-next-month",
-                                    "下个月",
+                                    raw(k::COMMON_CALENDAR_NEXT_MONTH_ARIA),
                                     IconName::ChevronRight,
                                 )
                                 .on_click(cx.listener(
@@ -1167,14 +1269,22 @@ impl UsageView {
                     .items_center()
                     .justify_between()
                     .child(
-                        calendar_footer_button("usage-picker-clear", "清除").on_click(cx.listener(
+                        calendar_footer_button(
+                            "usage-picker-clear",
+                            t(k::COMMON_CALENDAR_CLEAR_LABEL),
+                        )
+                        .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.clear_picker_value(endpoint, cx);
                             },
                         )),
                     )
                     .child(
-                        calendar_footer_button("usage-picker-today", "今天").on_click(cx.listener(
+                        calendar_footer_button(
+                            "usage-picker-today",
+                            t(k::COMMON_CALENDAR_TODAY_LABEL),
+                        )
+                        .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.select_picker_today(endpoint, cx);
                             },
@@ -1250,7 +1360,7 @@ impl UsageView {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .child(time_column_label("时"))
+                    .child(time_column_label(raw(k::COMMON_CALENDAR_HOUR_LABEL)))
                     .child(hour_options),
             )
             .child(
@@ -1261,7 +1371,7 @@ impl UsageView {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .child(time_column_label("分"))
+                    .child(time_column_label(raw(k::COMMON_CALENDAR_MINUTE_LABEL)))
                     .child(minute_options),
             );
 
@@ -1285,8 +1395,10 @@ impl UsageView {
     }
 
     fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        const STATUS_FILTERS: [(Option<u16>, &str); 6] = [
-            (None, "全部状态"),
+        // Not a `const`: the "all" label is a catalog lookup, and the status
+        // codes below it are numbers rather than prose.
+        let status_filters: [(Option<u16>, &'static str); 6] = [
+            (None, raw(k::USAGE_FILTER_STATUS_ALL)),
             (Some(200), "200"),
             (Some(400), "400"),
             (Some(401), "401"),
@@ -1296,12 +1408,12 @@ impl UsageView {
 
         let time_open = self.open_filter_popover == Some(FilterPopover::Time);
         let mut quick_ranges = div().flex().flex_row().flex_wrap().gap_2();
-        for (ix, (range, label)) in UsageRange::all().iter().enumerate() {
+        for (ix, range) in UsageRange::all().iter().enumerate() {
             let range = *range;
             quick_ranges = quick_ranges.child(
                 quick_range_button(
                     ElementId::Name(format!("usage-quick-range-{ix}").into()),
-                    *label,
+                    range.label(),
                     self.range == range,
                 )
                 .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -1319,7 +1431,7 @@ impl UsageView {
             .child(
                 components::datetime_filter_field(
                     "usage-start-datetime-field",
-                    "开始时间",
+                    raw(k::USAGE_FILTER_RANGE_START_LABEL),
                     self.range_start_input.clone(),
                     start_picker_open,
                 )
@@ -1355,7 +1467,7 @@ impl UsageView {
             .child(
                 components::datetime_filter_field(
                     "usage-end-datetime-field",
-                    "结束时间",
+                    raw(k::USAGE_FILTER_RANGE_END_LABEL),
                     self.range_end_input.clone(),
                     end_picker_open,
                 )
@@ -1387,16 +1499,16 @@ impl UsageView {
         let time_popover = filter_popover_panel("usage-time-popover", 300.)
             .gap_3()
             .p_3()
-            .child(filter_section_label("快捷选择"))
+            .child(filter_section_label(raw(k::USAGE_FILTER_TIME_QUICK_PICKS)))
             .child(quick_ranges)
             .child(div().w_full().h(px(1.)).bg(theme::border()))
-            .child(filter_section_label("自定义范围"))
+            .child(filter_section_label(raw(k::USAGE_FILTER_TIME_CUSTOM_RANGE)))
             .child(start_datetime_control)
             .child(end_datetime_control)
             .child(
                 components::button(
                     "usage-apply-range",
-                    "确定",
+                    t(k::USAGE_FILTER_TIME_APPLY),
                     ButtonTone::Primary,
                     ButtonSize::Md,
                 )
@@ -1467,7 +1579,7 @@ impl UsageView {
             .child(
                 dropdown_option(
                     "usage-provider-all",
-                    "全部 Provider",
+                    t(k::USAGE_FILTER_PROVIDER_ALL),
                     self.provider_filter.is_none(),
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -1501,7 +1613,7 @@ impl UsageView {
                     .py_2()
                     .text_xs()
                     .text_color(theme::muted())
-                    .child("当前时间范围内暂无 Provider"),
+                    .child(t(k::USAGE_FILTER_PROVIDER_EMPTY)),
             );
         }
         provider_popover =
@@ -1519,7 +1631,7 @@ impl UsageView {
                     "usage-provider-filter",
                     self.provider_filter
                         .clone()
-                        .unwrap_or_else(|| "全部 Provider".to_string()),
+                        .unwrap_or_else(|| raw(k::USAGE_FILTER_PROVIDER_ALL).to_string()),
                     IconName::Cloud,
                     provider_open,
                     180.,
@@ -1560,11 +1672,15 @@ impl UsageView {
                 self.model_filter_scroll.clone(),
             ))
             .child(
-                dropdown_option("usage-model-all", "全部模型", self.model_filter.is_none())
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.open_filter_popover = None;
-                        this.set_model_filter(None, cx);
-                    })),
+                dropdown_option(
+                    "usage-model-all",
+                    t(k::USAGE_FILTER_MODEL_ALL),
+                    self.model_filter.is_none(),
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.open_filter_popover = None;
+                    this.set_model_filter(None, cx);
+                })),
             );
         for (ix, model) in self.model_options.iter().enumerate() {
             let selected = self.model_filter.as_deref() == Some(model.as_str());
@@ -1588,7 +1704,7 @@ impl UsageView {
                     .py_2()
                     .text_xs()
                     .text_color(theme::muted())
-                    .child("当前时间范围内暂无模型"),
+                    .child(t(k::USAGE_FILTER_MODEL_EMPTY)),
             );
         }
         model_popover = model_popover.child(crate::scrollbar::VerticalScrollbar::new(
@@ -1610,7 +1726,7 @@ impl UsageView {
                     "usage-model-filter",
                     self.model_filter
                         .clone()
-                        .unwrap_or_else(|| "全部模型".to_string()),
+                        .unwrap_or_else(|| raw(k::USAGE_FILTER_MODEL_ALL).to_string()),
                     IconName::Layers,
                     model_open,
                     180.,
@@ -1642,7 +1758,7 @@ impl UsageView {
 
         let status_open = self.open_filter_popover == Some(FilterPopover::Status);
         let mut status_popover = filter_popover_panel("usage-status-popover", 148.).p_1();
-        for (ix, (status, label)) in STATUS_FILTERS.iter().enumerate() {
+        for (ix, (status, label)) in status_filters.iter().enumerate() {
             let status = *status;
             status_popover = status_popover.child(
                 dropdown_option(
@@ -1663,10 +1779,10 @@ impl UsageView {
                     cx.notify();
                 }
             }));
-        let status_label = STATUS_FILTERS
+        let status_label = status_filters
             .iter()
             .find_map(|(status, label)| (self.status_filter == *status).then_some(*label))
-            .unwrap_or("全部状态");
+            .unwrap_or_else(|| raw(k::USAGE_FILTER_STATUS_ALL));
         let status_control = div()
             .relative()
             .flex_none()
@@ -1724,7 +1840,7 @@ impl UsageView {
                     s.child(
                         components::button(
                             "usage-clear-filters",
-                            "重置",
+                            t(k::USAGE_FILTER_RESET),
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
                         )
@@ -1750,40 +1866,40 @@ impl UsageView {
     }
 
     fn render_data_sources(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let sources = self
-            .data_sources
-            .iter()
-            .map(|source| {
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(icon(
-                        data_source_icon(&source.data_source),
-                        theme::subtext(),
-                        13.,
-                    ))
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_xs()
-                            .child(SharedString::from(data_source_label(&source.data_source))),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(SharedString::from(format!("{} 次", source.request_count))),
-                    )
-            })
-            .collect::<Vec<_>>();
+        let sources =
+            self.data_sources
+                .iter()
+                .map(|source| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_1p5()
+                        .rounded_md()
+                        .bg(theme::surface())
+                        .border_1()
+                        .border_color(theme::border())
+                        .child(icon(
+                            data_source_icon(&source.data_source),
+                            theme::subtext(),
+                            13.,
+                        ))
+                        .child(
+                            div()
+                                .text_color(theme::text())
+                                .text_xs()
+                                .child(SharedString::from(data_source_label(&source.data_source))),
+                        )
+                        .child(div().text_color(theme::muted()).text_xs().child(
+                            SharedString::from(tf!(
+                                k::USAGE_DATA_SOURCE_REQUESTS,
+                                count = source.request_count
+                            )),
+                        ))
+                })
+                .collect::<Vec<_>>();
 
         div()
             .flex()
@@ -1808,14 +1924,14 @@ impl UsageView {
                             .text_color(theme::subtext())
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("数据源"),
+                            .child(t(k::USAGE_DATA_SOURCE_TITLE)),
                     )
                     .children(sources),
             )
             .child(
                 components::icon_button_tone(
                     "usage-sync-sessions",
-                    "同步会话",
+                    t(k::USAGE_DATA_SOURCE_SYNC),
                     IconName::Refresh,
                     ButtonTone::Neutral,
                     ButtonSize::Sm,
@@ -1836,36 +1952,41 @@ impl UsageView {
                 .child(components::stat_tile(
                     Some(IconName::Message),
                     theme::green(),
-                    "总请求数",
+                    t(k::USAGE_SUMMARY_REQUESTS_LABEL),
                     summary.total_requests.to_string(),
-                    format!("成功率 {:.1}%", summary.success_rate),
+                    tf!(
+                        k::USAGE_SUMMARY_REQUESTS_DETAIL,
+                        rate = format!("{:.1}", summary.success_rate)
+                    ),
                 ))
                 .child(components::stat_tile(
                     Some(IconName::Diamond),
                     theme::peach(),
-                    "总成本",
+                    t(k::USAGE_SUMMARY_COST_LABEL),
                     format!("${}", format_money(&summary.total_cost, 6)),
-                    format!(
-                        "输入 {} / 输出 {}",
-                        summary.total_input_tokens, summary.total_output_tokens
+                    tf!(
+                        k::USAGE_SUMMARY_COST_DETAIL,
+                        input = summary.total_input_tokens,
+                        output = summary.total_output_tokens
                     ),
                 ))
                 .child(components::stat_tile(
                     Some(IconName::Layers),
                     theme::accent(),
-                    "真实 Token",
+                    t(k::USAGE_SUMMARY_TOKENS_LABEL),
                     summary.real_total_tokens.to_string(),
-                    format!(
-                        "缓存创建 {} / 读取 {}",
-                        summary.total_cache_creation_tokens, summary.total_cache_read_tokens
+                    tf!(
+                        k::USAGE_SUMMARY_TOKENS_DETAIL,
+                        created = summary.total_cache_creation_tokens,
+                        read = summary.total_cache_read_tokens
                     ),
                 ))
                 .child(components::stat_tile(
                     Some(IconName::Cloud),
                     theme::teal(),
-                    "缓存命中",
+                    t(k::USAGE_SUMMARY_CACHE_LABEL),
                     format!("{cache_hit_rate:.1}%"),
-                    "重复输入复用比例".to_string(),
+                    t(k::USAGE_SUMMARY_CACHE_DETAIL),
                 ))
         });
 
@@ -1912,10 +2033,10 @@ impl UsageView {
                                     .child(SharedString::from(app_label(&item.app_type))),
                             )
                             .child(div().text_color(theme::muted()).text_xs().child(
-                                SharedString::from(format!(
-                                    "{} 次 · ${}",
-                                    item.summary.total_requests,
-                                    format_money(&item.summary.total_cost, 4)
+                                SharedString::from(tf!(
+                                    k::USAGE_BREAKDOWN_ROW_DETAIL,
+                                    count = item.summary.total_requests,
+                                    cost = format_money(&item.summary.total_cost, 4)
                                 )),
                             )),
                     )
@@ -1957,14 +2078,14 @@ impl UsageView {
                         div()
                             .text_color(theme::text())
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("按应用拆分"),
+                            .child(t(k::USAGE_BREAKDOWN_TITLE)),
                     ),
             )
             .when(rows.is_empty(), |s| {
                 s.child(components::empty_state(
                     IconName::Layers,
-                    "还没有用量",
-                    "当前筛选范围内还没有用量。",
+                    t(k::USAGE_BREAKDOWN_EMPTY_TITLE),
+                    t(k::USAGE_BREAKDOWN_EMPTY_HINT),
                     None,
                 ))
             })
@@ -1986,11 +2107,11 @@ impl UsageView {
         let hover_labels: Vec<SharedString> = visible
             .iter()
             .map(|stat| {
-                SharedString::from(format!(
-                    "{} · ${} · {} 次",
-                    trend_bucket_label(&stat.date),
-                    format_money(&stat.total_cost, 4),
-                    stat.request_count
+                SharedString::from(tf!(
+                    k::USAGE_TREND_HOVER,
+                    time = trend_bucket_label(&stat.date),
+                    cost = format_money(&stat.total_cost, 4),
+                    count = stat.request_count
                 ))
             })
             .collect();
@@ -2038,7 +2159,7 @@ impl UsageView {
                                 div()
                                     .text_color(theme::text())
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("使用趋势"),
+                                    .child(t(k::USAGE_TREND_TITLE)),
                             ),
                     )
                     .child(
@@ -2053,7 +2174,7 @@ impl UsageView {
                     div()
                         .text_color(theme::muted())
                         .text_xs()
-                        .child("当前范围内趋势数据不足（至少需要两个时间桶）。"),
+                        .child(t(k::USAGE_TREND_INSUFFICIENT)),
                 )
             })
             .when(values.len() >= 2, |s| {
@@ -2064,12 +2185,12 @@ impl UsageView {
                         .items_center()
                         .gap_4()
                         .child(Self::trend_stat(
-                            "累计成本",
+                            raw(k::USAGE_TREND_TOTAL_COST),
                             format_money(&format!("{total_cost}"), 3),
                         ))
                         .child(div().w(px(1.)).h(px(26.)).bg(theme::border()))
                         .child(Self::trend_stat(
-                            "单桶峰值",
+                            raw(k::USAGE_TREND_PEAK),
                             format_money(&format!("{peak_cost}"), 3),
                         )),
                 )
@@ -2137,14 +2258,14 @@ impl UsageView {
     fn render_section_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let labels: Vec<&str> = UsageSection::all()
             .iter()
-            .map(|(_, label, _)| *label)
+            .map(|(section, _)| section.label())
             .collect();
         let selected = UsageSection::all()
             .iter()
-            .position(|(section, _, _)| *section == self.section)
+            .position(|(section, _)| *section == self.section)
             .unwrap_or(0);
         let on_select = cx.listener(|this, ix: &usize, _window, cx| {
-            if let Some((section, _, _)) = UsageSection::all().get(*ix) {
+            if let Some((section, _)) = UsageSection::all().get(*ix) {
                 this.set_section(*section, cx);
             }
         });
@@ -2186,7 +2307,10 @@ impl UsageView {
                     format!("usage-provider-row-{provider}").into(),
                 ))
                 .role(gpui::Role::Button)
-                .aria_label(SharedString::from(format!("筛选 Provider {provider}")))
+                .aria_label(SharedString::from(tf!(
+                    k::USAGE_PROVIDERS_ROW_ARIA,
+                    name = provider
+                )))
                 .aria_selected(self.provider_filter.as_deref() == Some(provider.as_str()))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::surface_hover()))
@@ -2199,22 +2323,22 @@ impl UsageView {
         components::card()
             .p_0()
             .child(table_title(
-                "Provider 统计",
-                "点击行会把整个面板缩小到该 Provider 的统计口径。",
+                raw(k::USAGE_PROVIDERS_TITLE),
+                t(k::USAGE_PROVIDERS_SUBTITLE),
             ))
             .child(components::table_header(&[
-                "Provider",
-                "请求",
-                "Token",
-                "成本",
-                "成功率",
-                "均延迟",
+                raw(k::USAGE_PROVIDERS_COL_PROVIDER),
+                raw(k::USAGE_PROVIDERS_COL_REQUESTS),
+                raw(k::USAGE_PROVIDERS_COL_TOKENS),
+                raw(k::USAGE_PROVIDERS_COL_COST),
+                raw(k::USAGE_PROVIDERS_COL_SUCCESS_RATE),
+                raw(k::USAGE_PROVIDERS_COL_LATENCY),
             ]))
             .when(rows.is_empty(), |s| {
                 s.child(components::empty_state(
                     IconName::Cloud,
-                    "暂无数据",
-                    "当前筛选范围内没有 Provider 统计。",
+                    t(k::USAGE_EMPTY_NO_DATA),
+                    t(k::USAGE_PROVIDERS_EMPTY_HINT),
                     None,
                 ))
             })
@@ -2244,7 +2368,10 @@ impl UsageView {
                 )
                 .id(ElementId::Name(format!("usage-model-row-{model}").into()))
                 .role(gpui::Role::Button)
-                .aria_label(SharedString::from(format!("筛选模型 {model}")))
+                .aria_label(SharedString::from(tf!(
+                    k::USAGE_MODELS_ROW_ARIA,
+                    name = model
+                )))
                 .aria_selected(self.model_filter.as_deref() == Some(model.as_str()))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::surface_hover()))
@@ -2257,21 +2384,21 @@ impl UsageView {
         components::card()
             .p_0()
             .child(table_title(
-                "模型统计",
-                "模型按有效计价模型聚合，价格与请求详情保持同一口径。",
+                raw(k::USAGE_MODELS_TITLE),
+                t(k::USAGE_MODELS_SUBTITLE),
             ))
             .child(components::table_header(&[
-                "模型",
-                "请求",
-                "Token",
-                "总成本",
-                "均成本",
+                raw(k::USAGE_MODELS_COL_MODEL),
+                raw(k::USAGE_MODELS_COL_REQUESTS),
+                raw(k::USAGE_MODELS_COL_TOKENS),
+                raw(k::USAGE_MODELS_COL_COST),
+                raw(k::USAGE_MODELS_COL_AVG_COST),
             ]))
             .when(rows.is_empty(), |s| {
                 s.child(components::empty_state(
                     IconName::Chart,
-                    "暂无数据",
-                    "当前筛选范围内没有模型统计。",
+                    t(k::USAGE_EMPTY_NO_DATA),
+                    t(k::USAGE_MODELS_EMPTY_HINT),
                     None,
                 ))
             })
@@ -2315,10 +2442,10 @@ impl UsageView {
                     vec![
                         time_cell.into_any_element(),
                         text_cell(effective_model_label(log)).into_any_element(),
-                        text_cell(format!(
-                            "入 {} / 出 {}",
-                            fresh_input_tokens(log),
-                            log.output_tokens
+                        text_cell(tf!(
+                            k::USAGE_LOGS_TOKENS,
+                            input = fresh_input_tokens(log),
+                            output = log.output_tokens
                         ))
                         .into_any_element(),
                         text_cell(format!(
@@ -2344,9 +2471,10 @@ impl UsageView {
                     format!("usage-log-row-{request_id}").into(),
                 ))
                 .role(gpui::Role::Button)
-                .aria_label(SharedString::from(format!(
-                    "查看请求详情 {} {}",
-                    log.model, log.status_code
+                .aria_label(SharedString::from(tf!(
+                    k::USAGE_LOGS_ROW_ARIA,
+                    model = log.model,
+                    status = log.status_code
                 )))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::surface_hover()))
@@ -2387,26 +2515,26 @@ impl UsageView {
                 components::card()
                     .p_0()
                     .child(table_title(
-                        "请求日志",
-                        format!(
-                            "第 {} / {} 页 · 共 {} 条",
-                            page + 1,
-                            total_pages,
-                            self.log_total
+                        raw(k::USAGE_LOGS_TITLE),
+                        tf!(
+                            k::USAGE_LOGS_SUBTITLE,
+                            page = page + 1,
+                            pages = total_pages,
+                            total = self.log_total
                         ),
                     ))
                     .child(components::table_header(&[
-                        "时间 / 来源",
-                        "计价模型",
-                        "Token",
-                        "成本 / 延迟",
-                        "状态",
+                        raw(k::USAGE_LOGS_COL_TIME),
+                        raw(k::USAGE_LOGS_COL_MODEL),
+                        raw(k::USAGE_LOGS_COL_TOKENS),
+                        raw(k::USAGE_LOGS_COL_COST),
+                        raw(k::USAGE_LOGS_COL_STATUS),
                     ]))
                     .when(rows.is_empty(), |s| {
                         s.child(components::empty_state(
                             IconName::Message,
-                            "暂无数据",
-                            "当前筛选范围内没有请求日志。",
+                            t(k::USAGE_EMPTY_NO_DATA),
+                            t(k::USAGE_LOGS_EMPTY_HINT),
                             None,
                         ))
                     })
@@ -2436,7 +2564,7 @@ impl UsageView {
                         div()
                             .text_color(theme::text())
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("请求详情"),
+                            .child(t(k::USAGE_DETAIL_TITLE)),
                     ),
             )
             .child(
@@ -2444,52 +2572,88 @@ impl UsageView {
                     .grid()
                     .grid_cols(3)
                     .gap_3()
-                    .child(detail_cell("请求 ID", log.request_id.clone()))
-                    .child(detail_cell("时间", full_time(log.created_at)))
-                    .child(detail_cell("应用", log.app_type.clone()))
                     .child(detail_cell(
-                        "Provider",
+                        raw(k::USAGE_DETAIL_REQUEST_ID),
+                        log.request_id.clone(),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_TIME),
+                        full_time(log.created_at),
+                    ))
+                    .child(detail_cell(raw(k::USAGE_DETAIL_APP), log.app_type.clone()))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_PROVIDER),
                         format!("{provider} · {}", log.provider_id.clone()),
                     ))
-                    .child(detail_cell("模型", log.model.clone()))
+                    .child(detail_cell(raw(k::USAGE_DETAIL_MODEL), log.model.clone()))
                     .when_some(log.request_model.clone(), |s, value| {
-                        s.child(detail_cell("请求模型", value))
+                        s.child(detail_cell(raw(k::USAGE_DETAIL_REQUEST_MODEL), value))
                     })
                     .when_some(log.pricing_model.clone(), |s, value| {
-                        s.child(detail_cell("计价模型", value))
+                        s.child(detail_cell(raw(k::USAGE_DETAIL_PRICING_MODEL), value))
                     })
                     .child(detail_cell(
-                        "输入 Token",
+                        raw(k::USAGE_DETAIL_INPUT_TOKENS),
                         fresh_input_tokens(&log).to_string(),
                     ))
-                    .child(detail_cell("输出 Token", log.output_tokens.to_string()))
-                    .child(detail_cell("缓存读取", log.cache_read_tokens.to_string()))
                     .child(detail_cell(
-                        "缓存写入",
+                        raw(k::USAGE_DETAIL_OUTPUT_TOKENS),
+                        log.output_tokens.to_string(),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_CACHE_READ),
+                        log.cache_read_tokens.to_string(),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_CACHE_WRITE),
                         log.cache_creation_tokens.to_string(),
                     ))
-                    .child(detail_cell("输入成本", format!("${}", log.input_cost_usd)))
-                    .child(detail_cell("输出成本", format!("${}", log.output_cost_usd)))
                     .child(detail_cell(
-                        "缓存读取成本",
+                        raw(k::USAGE_DETAIL_INPUT_COST),
+                        format!("${}", log.input_cost_usd),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_OUTPUT_COST),
+                        format!("${}", log.output_cost_usd),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_CACHE_READ_COST),
                         format!("${}", log.cache_read_cost_usd),
                     ))
                     .child(detail_cell(
-                        "缓存写入成本",
+                        raw(k::USAGE_DETAIL_CACHE_WRITE_COST),
                         format!("${}", log.cache_creation_cost_usd),
                     ))
-                    .child(detail_cell("总成本", format!("${}", log.total_cost_usd)))
-                    .child(detail_cell("成本倍率", format!("×{}", log.cost_multiplier)))
-                    .child(detail_cell("延迟", format!("{}ms", log.latency_ms)))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_TOTAL_COST),
+                        format!("${}", log.total_cost_usd),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_MULTIPLIER),
+                        format!("×{}", log.cost_multiplier),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_LATENCY),
+                        format!("{}ms", log.latency_ms),
+                    ))
                     .when_some(log.first_token_ms, |s, value| {
-                        s.child(detail_cell("首 Token", format!("{value}ms")))
+                        s.child(detail_cell(
+                            raw(k::USAGE_DETAIL_FIRST_TOKEN),
+                            format!("{value}ms"),
+                        ))
                     })
                     .when_some(log.duration_ms, |s, value| {
-                        s.child(detail_cell("持续时间", format!("{value}ms")))
+                        s.child(detail_cell(
+                            raw(k::USAGE_DETAIL_DURATION),
+                            format!("{value}ms"),
+                        ))
                     })
-                    .child(detail_cell("状态", log.status_code.to_string()))
                     .child(detail_cell(
-                        "来源",
+                        raw(k::USAGE_DETAIL_STATUS),
+                        log.status_code.to_string(),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_SOURCE),
                         log.data_source.unwrap_or_else(|| "proxy".into()),
                     )),
             )
@@ -2503,7 +2667,7 @@ impl UsageView {
                         .border_color(theme::red())
                         .text_color(theme::red())
                         .text_xs()
-                        .child(SharedString::from(format!("错误信息: {err}"))),
+                        .child(SharedString::from(tf!(k::USAGE_DETAIL_ERROR, error = err))),
                 )
             })
     }
@@ -2554,7 +2718,7 @@ impl UsageView {
             .bg(theme::surface())
             .border_1()
             .border_color(theme::border())
-            .child(section_label("Provider 快捷筛选"))
+            .child(section_label(raw(k::USAGE_SCOPE_PROVIDER_LABEL)))
             .child(
                 div()
                     .flex()
@@ -2563,7 +2727,7 @@ impl UsageView {
                     .gap_2()
                     .children(provider_chips),
             )
-            .child(section_label("模型快捷筛选"))
+            .child(section_label(raw(k::USAGE_SCOPE_MODEL_LABEL)))
             .child(
                 div()
                     .flex()
@@ -2596,7 +2760,7 @@ impl UsageView {
                             .into_any_element(),
                         components::icon_button_tone(
                             ElementId::Name(format!("pricing-edit-{}", item.model_id).into()),
-                            "编辑",
+                            t(k::USAGE_PRICING_EDIT),
                             IconName::Settings,
                             ButtonTone::Neutral,
                             ButtonSize::Sm,
@@ -2607,7 +2771,7 @@ impl UsageView {
                         .into_any_element(),
                         components::button(
                             ElementId::Name(format!("pricing-delete-{}", item.model_id).into()),
-                            "删除",
+                            t(k::USAGE_PRICING_DELETE),
                             ButtonTone::Danger,
                             ButtonSize::Sm,
                         )
@@ -2628,7 +2792,7 @@ impl UsageView {
 
         components::card()
             .gap_4()
-            .child(section_label("计费默认配置"))
+            .child(section_label(raw(k::USAGE_PRICING_DEFAULTS_TITLE)))
             .child(Self::pricing_defaults_header())
             .children(
                 PRICING_APPS
@@ -2640,7 +2804,7 @@ impl UsageView {
                 div().flex().flex_row().child(
                     components::icon_button_tone(
                         "usage-save-pricing-defaults",
-                        "保存计费默认配置",
+                        t(k::USAGE_PRICING_DEFAULTS_SAVE),
                         IconName::Check,
                         ButtonTone::Primary,
                         ButtonSize::Sm,
@@ -2650,44 +2814,44 @@ impl UsageView {
                     })),
                 ),
             )
-            .child(section_label("模型定价表"))
+            .child(section_label(raw(k::USAGE_PRICING_TABLE_TITLE)))
             .child(
                 div()
                     .grid()
                     .grid_cols(3)
                     .gap_3()
                     .child(components::field(
-                        "模型 ID",
+                        t(k::USAGE_PRICING_FIELD_MODEL_ID),
                         false,
                         None,
                         self.pricing_model_id.clone(),
                     ))
                     .child(components::field(
-                        "显示名称",
+                        t(k::USAGE_PRICING_FIELD_DISPLAY_NAME),
                         false,
                         None,
                         self.pricing_display_name.clone(),
                     ))
                     .child(components::field(
-                        "输入 / 百万",
+                        t(k::USAGE_PRICING_FIELD_INPUT),
                         false,
                         None,
                         self.pricing_input_cost.clone(),
                     ))
                     .child(components::field(
-                        "输出 / 百万",
+                        t(k::USAGE_PRICING_FIELD_OUTPUT),
                         false,
                         None,
                         self.pricing_output_cost.clone(),
                     ))
                     .child(components::field(
-                        "缓存读 / 百万",
+                        t(k::USAGE_PRICING_FIELD_CACHE_READ),
                         false,
                         None,
                         self.pricing_cache_read_cost.clone(),
                     ))
                     .child(components::field(
-                        "缓存写 / 百万",
+                        t(k::USAGE_PRICING_FIELD_CACHE_WRITE),
                         false,
                         None,
                         self.pricing_cache_creation_cost.clone(),
@@ -2697,7 +2861,7 @@ impl UsageView {
                 div().flex().flex_row().child(
                     components::icon_button_tone(
                         "usage-save-pricing",
-                        "保存模型定价",
+                        t(k::USAGE_PRICING_SAVE),
                         IconName::Check,
                         ButtonTone::Primary,
                         ButtonSize::Sm,
@@ -2711,24 +2875,26 @@ impl UsageView {
                 components::card()
                     .p_0()
                     .child(table_title(
-                        "已有模型定价",
-                        "最多显示前 12 条；可编辑后保存，也可删除。",
+                        raw(k::USAGE_PRICING_LIST_TITLE),
+                        t(k::USAGE_PRICING_LIST_SUBTITLE),
                     ))
+                    // The last two columns hold the edit and delete buttons,
+                    // which label themselves.
                     .child(components::table_header(&[
-                        "模型 ID",
-                        "显示名称",
-                        "输入",
-                        "输出",
-                        "读缓存",
-                        "写缓存",
+                        raw(k::USAGE_PRICING_COL_MODEL_ID),
+                        raw(k::USAGE_PRICING_COL_DISPLAY_NAME),
+                        raw(k::USAGE_PRICING_COL_INPUT),
+                        raw(k::USAGE_PRICING_COL_OUTPUT),
+                        raw(k::USAGE_PRICING_COL_CACHE_READ),
+                        raw(k::USAGE_PRICING_COL_CACHE_WRITE),
                         "",
                         "",
                     ]))
                     .when(pricing_rows.is_empty(), |s| {
                         s.child(components::empty_state(
                             IconName::Diamond,
-                            "暂无数据",
-                            "还没有已保存的模型定价。",
+                            t(k::USAGE_EMPTY_NO_DATA),
+                            t(k::USAGE_PRICING_EMPTY_HINT),
                             None,
                         ))
                     })
@@ -2751,9 +2917,9 @@ impl UsageView {
             .flex_row()
             .items_center()
             .gap_3()
-            .child(header_cell("应用").w(px(100.)))
-            .child(header_cell("默认倍率").w(px(96.)))
-            .child(header_cell("计价模型来源"))
+            .child(header_cell(raw(k::USAGE_PRICING_DEFAULTS_COL_APP)).w(px(100.)))
+            .child(header_cell(raw(k::USAGE_PRICING_DEFAULTS_COL_MULTIPLIER)).w(px(96.)))
+            .child(header_cell(raw(k::USAGE_PRICING_DEFAULTS_COL_SOURCE)))
     }
 
     fn render_pricing_default_row(
@@ -2793,7 +2959,10 @@ impl UsageView {
             .child(div().w(px(96.)).child(input))
             .child(components::segmented(
                 SharedString::from(format!("pricing-source-{app}")),
-                &["按响应模型计费", "按请求模型计费"],
+                &[
+                    raw(k::USAGE_PRICING_SOURCE_RESPONSE),
+                    raw(k::USAGE_PRICING_SOURCE_REQUEST),
+                ],
                 if source == "response" { 0 } else { 1 },
                 move |ix, window, cx| on_source(&ix, window, cx),
             ))
@@ -2809,7 +2978,7 @@ impl UsageView {
                     .bg(theme::surface_hover())
                     .text_color(theme::subtext())
                     .text_xs()
-                    .child("连通检测只确认供应商地址可达；收到任意响应即视为可达，不代表鉴权或模型配置一定正确。"),
+                    .child(t(k::USAGE_STREAM_NOTICE)),
             )
             .child(
                 div()
@@ -2817,19 +2986,19 @@ impl UsageView {
                     .grid_cols(3)
                     .gap_3()
                     .child(components::field(
-                        "探测超时（秒）",
+                        t(k::USAGE_STREAM_FIELD_TIMEOUT),
                         false,
                         None,
                         self.stream_timeout_secs.clone(),
                     ))
                     .child(components::field(
-                        "最大重试次数",
+                        t(k::USAGE_STREAM_FIELD_RETRIES),
                         false,
                         None,
                         self.stream_max_retries.clone(),
                     ))
                     .child(components::field(
-                        "降级阈值（毫秒）",
+                        t(k::USAGE_STREAM_FIELD_THRESHOLD),
                         false,
                         None,
                         self.stream_degraded_threshold_ms.clone(),
@@ -2839,7 +3008,7 @@ impl UsageView {
                 div().flex().flex_row().child(
                     components::icon_button_tone(
                         "usage-save-stream-config",
-                        "保存检测参数",
+                        t(k::USAGE_STREAM_SAVE),
                         IconName::Check,
                         ButtonTone::Primary,
                         ButtonSize::Sm,
@@ -2873,8 +3042,8 @@ impl UsageView {
                 .child(
                     components::disclosure(
                         "usage-trend-toggle",
-                        "趋势图",
-                        format!("{} 个时间桶 · Token 与成本变化", self.daily.len()),
+                        t(k::USAGE_TREND_TOGGLE_TITLE),
+                        tf!(k::USAGE_TREND_TOGGLE_DETAIL, count = self.daily.len()),
                         self.show_trend,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -2892,8 +3061,8 @@ impl UsageView {
                 .child(
                     components::disclosure(
                         "usage-scope-toggle",
-                        "Provider / 模型候选",
-                        "从当前范围内真实有数据的条目里快速筛选。",
+                        t(k::USAGE_SCOPE_TOGGLE_TITLE),
+                        t(k::USAGE_SCOPE_TOGGLE_DETAIL),
                         self.show_scope_options,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -2917,8 +3086,8 @@ impl UsageView {
                 .child(
                     components::disclosure(
                         "usage-pricing-toggle",
-                        "模型定价配置",
-                        format!("{} 条定价 · 支持默认倍率和计价模型来源", self.pricing.len()),
+                        t(k::USAGE_PRICING_TOGGLE_TITLE),
+                        tf!(k::USAGE_PRICING_TOGGLE_DETAIL, count = self.pricing.len()),
                         self.show_pricing,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -2938,12 +3107,12 @@ impl UsageView {
                 .child(
                     components::disclosure(
                         "usage-stream-toggle",
-                        "模型检测参数",
-                        format!(
-                            "超时 {}s · 重试 {} · 降级阈值 {}ms",
-                            self.stream_config.timeout_secs,
-                            self.stream_config.max_retries,
-                            self.stream_config.degraded_threshold_ms
+                        t(k::USAGE_STREAM_TOGGLE_TITLE),
+                        tf!(
+                            k::USAGE_STREAM_TOGGLE_DETAIL,
+                            timeout = self.stream_config.timeout_secs,
+                            retries = self.stream_config.max_retries,
+                            threshold = self.stream_config.degraded_threshold_ms
                         ),
                         self.show_stream_config,
                     )
@@ -2967,22 +3136,21 @@ impl Render for UsageView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(
-                    "用量",
-                    Some("模型、成本、缓存、请求日志、定价与检测配置。".into()),
-                )
-                .child(
-                    components::icon_button_tone(
-                        "usage-refresh",
-                        "刷新",
-                        IconName::Refresh,
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.reload(cx);
-                    })),
-                ),
+                layout::page_header(t(k::USAGE_HEADER_TITLE), Some(t(k::USAGE_HEADER_SUBTITLE)))
+                    .child(
+                        components::icon_button_tone(
+                            "usage-refresh",
+                            t(k::USAGE_HEADER_REFRESH),
+                            IconName::Refresh,
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.reload(cx);
+                            },
+                        )),
+                    ),
             )
             .child(layout::wide_virtual_body(
                 "usage-body",
@@ -2995,12 +3163,13 @@ impl Render for UsageView {
             .when_some(self.confirm_delete_pricing.clone(), |root, model_id| {
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("删除模型定价"))
+                        .child(components::modal_header(t(k::USAGE_CONFIRM_DELETE_TITLE)))
                         .child(
                             components::modal_body().child(
                                 div().text_color(theme::subtext()).text_sm().child(
-                                    SharedString::from(format!(
-                                        "确定删除模型定价「{model_id}」吗？此操作不可撤销。"
+                                    SharedString::from(tf!(
+                                        k::USAGE_CONFIRM_DELETE_MESSAGE,
+                                        name = model_id
                                     )),
                                 ),
                             ),
@@ -3008,7 +3177,7 @@ impl Render for UsageView {
                         .child(components::modal_footer(vec![
                             components::button(
                                 "usage-confirm-delete-cancel",
-                                "取消",
+                                t(k::USAGE_CONFIRM_DELETE_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -3019,7 +3188,7 @@ impl Render for UsageView {
                             .into_any_element(),
                             components::button(
                                 "usage-confirm-delete-ok",
-                                "删除",
+                                t(k::USAGE_CONFIRM_DELETE_CONFIRM),
                                 ButtonTone::Danger,
                                 ButtonSize::Sm,
                             )
@@ -3063,7 +3232,7 @@ fn format_local_timestamp(timestamp: i64, with_seconds: bool) -> String {
         .timestamp_opt(timestamp, 0)
         .single()
         .map(|time| time.format(pattern).to_string())
-        .unwrap_or_else(|| "时间无效".to_string())
+        .unwrap_or_else(|| raw(k::USAGE_TIME_INVALID).to_string())
 }
 
 fn parse_local_timestamp(value: &str, end_of_day: bool) -> Option<i64> {
@@ -3184,6 +3353,29 @@ fn quick_range_button(
     }
 }
 
+/// The month as the calendar header spells it: a name in English, digits in
+/// Chinese and Japanese. Mirrors `components::datetime_picker`, which owns the
+/// picker this legacy one is kept alongside.
+fn picker_month_label(month: u32) -> String {
+    match month {
+        1 => raw(k::COMMON_CALENDAR_MONTH_NAME_01),
+        2 => raw(k::COMMON_CALENDAR_MONTH_NAME_02),
+        3 => raw(k::COMMON_CALENDAR_MONTH_NAME_03),
+        4 => raw(k::COMMON_CALENDAR_MONTH_NAME_04),
+        5 => raw(k::COMMON_CALENDAR_MONTH_NAME_05),
+        6 => raw(k::COMMON_CALENDAR_MONTH_NAME_06),
+        7 => raw(k::COMMON_CALENDAR_MONTH_NAME_07),
+        8 => raw(k::COMMON_CALENDAR_MONTH_NAME_08),
+        9 => raw(k::COMMON_CALENDAR_MONTH_NAME_09),
+        10 => raw(k::COMMON_CALENDAR_MONTH_NAME_10),
+        11 => raw(k::COMMON_CALENDAR_MONTH_NAME_11),
+        12 => raw(k::COMMON_CALENDAR_MONTH_NAME_12),
+        // Unreachable for a real date; keeps the pre-catalog `{month:02}`.
+        other => return format!("{other:02}"),
+    }
+    .to_string()
+}
+
 fn calendar_nav_button(
     id: impl Into<ElementId>,
     label: &'static str,
@@ -3215,11 +3407,11 @@ fn calendar_day_button(
     let mut button = div()
         .id(id)
         .role(gpui::Role::Button)
-        .aria_label(SharedString::from(format!(
-            "{}年{}月{}日",
-            date.year(),
-            date.month(),
-            day
+        .aria_label(SharedString::from(tf!(
+            k::COMMON_CALENDAR_DAY_ARIA,
+            year = date.year(),
+            month = date.month(),
+            day = day
         )))
         .aria_selected(selected)
         .w(px(28.))
@@ -3381,13 +3573,13 @@ fn parse_stream_config(
     Ok(StreamCheckConfig {
         timeout_secs: input_value(&this.stream_timeout_secs, cx)
             .parse::<u64>()
-            .map_err(|_| "探测超时必须是非负数字".to_string())?,
+            .map_err(|_| raw(k::USAGE_STREAM_ERROR_TIMEOUT).to_string())?,
         max_retries: input_value(&this.stream_max_retries, cx)
             .parse::<u32>()
-            .map_err(|_| "最大重试次数必须是非负数字".to_string())?,
+            .map_err(|_| raw(k::USAGE_STREAM_ERROR_RETRIES).to_string())?,
         degraded_threshold_ms: input_value(&this.stream_degraded_threshold_ms, cx)
             .parse::<u64>()
-            .map_err(|_| "降级阈值必须是非负数字".to_string())?,
+            .map_err(|_| raw(k::USAGE_STREAM_ERROR_THRESHOLD).to_string())?,
     })
 }
 
@@ -3566,15 +3758,17 @@ fn app_tone(app_type: &str) -> gpui::Rgba {
     }
 }
 
+/// The stored `data_source` ids are matched as identifiers; only the label
+/// shown next to them is translated, and an unknown id falls back to itself.
 fn data_source_label(source: &str) -> String {
     match source {
-        "gateway" => "转发站请求",
-        "proxy" => "旧版本地请求",
-        "session_log" => "Claude 会话",
-        "codex_db" => "Codex 数据库",
-        "codex_session" => "Codex 会话",
-        "gemini_session" => "Gemini 会话",
-        "opencode_session" => "OpenCode 会话",
+        "gateway" => raw(k::USAGE_DATA_SOURCE_GATEWAY),
+        "proxy" => raw(k::USAGE_DATA_SOURCE_PROXY),
+        "session_log" => raw(k::USAGE_DATA_SOURCE_SESSION_LOG),
+        "codex_db" => raw(k::USAGE_DATA_SOURCE_CODEX_DB),
+        "codex_session" => raw(k::USAGE_DATA_SOURCE_CODEX_SESSION),
+        "gemini_session" => raw(k::USAGE_DATA_SOURCE_GEMINI_SESSION),
+        "opencode_session" => raw(k::USAGE_DATA_SOURCE_OPENCODE_SESSION),
         other => other,
     }
     .to_string()
@@ -3659,4 +3853,4 @@ mod tests {
     }
 }
 
-crate::notifications::impl_status_toasts!(UsageView);
+crate::notifications::impl_status_toasts_leveled!(UsageView);

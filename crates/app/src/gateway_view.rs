@@ -21,10 +21,12 @@ use ochub_core::services::provider::ProviderService;
 use ochub_core::{AppState, AppType};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::icons::{icon, IconName};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 /// Events the app shell reacts to (navigation requests).
@@ -108,6 +110,62 @@ pub struct GatewayView {
 impl EventEmitter<GatewayEvent> for GatewayView {}
 
 impl GatewayView {
+    /// Re-apply the current locale to state that a repaint cannot reach.
+    ///
+    /// `refresh_windows` re-runs `render`, which covers every label the page
+    /// draws. It does not reach the open editor: a `TextInput` captures its
+    /// placeholder when it is constructed, and the inline field errors were
+    /// resolved when a save was refused, so both otherwise survive in the
+    /// language they were made in. The station list is a plain scroll body
+    /// rather than a virtualized list, so there are no memoized item heights
+    /// to invalidate here.
+    pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor.as_mut() else {
+            cx.notify();
+            return;
+        };
+
+        // Which fields are flagged does not change — only the wording does.
+        if editor.name_error.is_some() {
+            editor.name_error = Some(t(k::GATEWAY_EDITOR_ERROR_NAME));
+        }
+        if editor.budget_error.is_some() {
+            editor.budget_error = Some(t(k::GATEWAY_EDITOR_ERROR_BUDGET));
+        }
+        if editor.rules_error.is_some() {
+            editor.rules_error = Some(t(k::GATEWAY_EDITOR_ERROR_RULES));
+        }
+
+        // The base URL and the four budget inputs hint at a format
+        // (`https://api.example.com`, `4096`) rather than at prose, so they
+        // read the same in every language and are left alone.
+        let mut placeholders: Vec<(Entity<TextInput>, SharedString)> = vec![
+            (editor.name.clone(), t(k::GATEWAY_EDITOR_NAME_PLACEHOLDER)),
+            (
+                editor.api_key.clone(),
+                t(k::GATEWAY_EDITOR_API_KEY_PLACEHOLDER),
+            ),
+            (
+                editor.default_model.clone(),
+                t(k::GATEWAY_EDITOR_DEFAULT_MODEL_PLACEHOLDER),
+            ),
+        ];
+        for rule in &editor.rules {
+            placeholders.push((
+                rule.client_model.clone(),
+                t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_PLACEHOLDER),
+            ));
+            placeholders.push((
+                rule.station_model.clone(),
+                t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER),
+            ));
+        }
+        for (input, placeholder) in placeholders {
+            input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        }
+        cx.notify();
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             app,
@@ -293,9 +351,20 @@ impl GatewayView {
             self.next_rule_id += 1;
             rule_editors.push(ModelRuleEditor {
                 id,
-                client_model: cx.new(|cx| text_input(cx, "CLI 使用的模型名", &rule.model)),
-                station_model: cx
-                    .new(|cx| text_input(cx, "转发站实际模型名", &rule.upstream_model)),
+                client_model: cx.new(|cx| {
+                    text_input(
+                        cx,
+                        t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_PLACEHOLDER),
+                        &rule.model,
+                    )
+                }),
+                station_model: cx.new(|cx| {
+                    text_input(
+                        cx,
+                        t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER),
+                        &rule.upstream_model,
+                    )
+                }),
             });
         }
 
@@ -303,10 +372,18 @@ impl GatewayView {
             channel_id,
             route_id,
             created_at,
-            name: cx.new(|cx| text_input(cx, "例如：New API 主站", &name)),
+            name: cx.new(|cx| text_input(cx, t(k::GATEWAY_EDITOR_NAME_PLACEHOLDER), &name)),
             base_url: cx.new(|cx| text_input(cx, "https://api.example.com", &base_url)),
-            api_key: cx.new(|cx| text_input(cx, "转发站 API Key", &api_key).masked(true)),
-            default_model: cx.new(|cx| text_input(cx, "例如：claude-sonnet-4-6", &default_model)),
+            api_key: cx.new(|cx| {
+                text_input(cx, t(k::GATEWAY_EDITOR_API_KEY_PLACEHOLDER), &api_key).masked(true)
+            }),
+            default_model: cx.new(|cx| {
+                text_input(
+                    cx,
+                    t(k::GATEWAY_EDITOR_DEFAULT_MODEL_PLACEHOLDER),
+                    &default_model,
+                )
+            }),
             dialect,
             rules: rule_editors,
             reasoning_mode: reasoning.mode,
@@ -323,20 +400,23 @@ impl GatewayView {
             rules_error: None,
         });
         // The editor renders pinned above the list; jump there so clicking
-        // "编辑" on a card far down the page visibly responds.
+        // Edit on a card far down the page visibly responds.
         self.scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
     }
 
-    fn toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+    /// Every status toast carries its severity explicitly. Guessing it from the
+    /// wording mis-reads several of these messages — a relay that is disabled
+    /// refuses the apply, it does not succeed — and stops working altogether
+    /// once the copy is translated.
+    fn set_status(
+        &mut self,
+        level: NotificationLevel,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.status = Some(text.into());
-        self.status_level = None;
-        cx.notify();
-    }
-
-    fn toast_warning(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.status = Some(text.into());
-        self.status_level = Some(NotificationLevel::Warning);
+        self.status_level = Some(level);
         cx.notify();
     }
 
@@ -346,8 +426,12 @@ impl GatewayView {
         if let Some(editor) = &mut self.editor {
             editor.rules.push(ModelRuleEditor {
                 id,
-                client_model: cx.new(|cx| TextInput::new(cx, "CLI 使用的模型名")),
-                station_model: cx.new(|cx| TextInput::new(cx, "转发站实际模型名")),
+                client_model: cx.new(|cx| {
+                    TextInput::new(cx, t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_PLACEHOLDER))
+                }),
+                station_model: cx.new(|cx| {
+                    TextInput::new(cx, t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER))
+                }),
             });
             cx.notify();
         }
@@ -367,7 +451,7 @@ impl GatewayView {
         let name = input_value(&editor.name, cx);
         let base_url = input_value(&editor.base_url, cx);
         let name_error: Option<SharedString> = if name.is_empty() || base_url.is_empty() {
-            Some("请填写转发站名称和 API 地址。".into())
+            Some(t(k::GATEWAY_EDITOR_ERROR_NAME))
         } else {
             None
         };
@@ -386,7 +470,7 @@ impl GatewayView {
                 (low, medium, high, max)
             }
             _ => {
-                budget_error = Some("四档预算需为正整数，且从低到高依次递增。".into());
+                budget_error = Some(t(k::GATEWAY_EDITOR_ERROR_BUDGET));
                 (0, 0, 0, 0)
             }
         };
@@ -400,7 +484,7 @@ impl GatewayView {
                 continue;
             }
             if client_model.is_empty() || station_model.is_empty() {
-                rules_error = Some("每条模型映射都要填写两端的模型名。".into());
+                rules_error = Some(t(k::GATEWAY_EDITOR_ERROR_RULES));
                 break;
             }
             rules.push(GatewayModelRule {
@@ -473,14 +557,19 @@ impl GatewayView {
             .and_then(|_| self.app.db.upsert_gateway_route(&route));
         match result {
             Ok(()) => {
-                self.status = Some(format!("转发站「{name}」已保存").into());
+                self.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::GATEWAY_STATUS_SAVED, name = name),
+                    cx,
+                );
                 self.editor = None;
                 self.reload(cx);
             }
-            Err(err) => {
-                self.status = Some(format!("保存转发站失败：{err}").into());
-                cx.notify();
-            }
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::GATEWAY_STATUS_SAVE_FAILED, error = err),
+                cx,
+            ),
         }
     }
 
@@ -505,20 +594,19 @@ impl GatewayView {
             .and_then(|_| self.app.db.upsert_gateway_route(&route))
         {
             Ok(()) => {
-                self.status = Some(
-                    if enabled {
-                        format!("转发站「{}」已启用", channel.name)
-                    } else {
-                        format!("转发站「{}」已停用", channel.name)
-                    }
-                    .into(),
-                );
+                let message = if enabled {
+                    tf!(k::GATEWAY_STATUS_ENABLED, name = channel.name)
+                } else {
+                    tf!(k::GATEWAY_STATUS_DISABLED, name = channel.name)
+                };
+                self.set_status(NotificationLevel::Success, message, cx);
                 self.reload(cx);
             }
-            Err(err) => {
-                self.status = Some(format!("更新转发站失败：{err}").into());
-                cx.notify();
-            }
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::GATEWAY_STATUS_UPDATE_FAILED, error = err),
+                cx,
+            ),
         }
     }
 
@@ -552,13 +640,14 @@ impl GatewayView {
         });
         match result {
             Ok(()) => {
-                self.status = Some("转发站已删除".into());
+                self.set_status(NotificationLevel::Success, t(k::GATEWAY_STATUS_DELETED), cx);
                 self.reload(cx);
             }
-            Err(err) => {
-                self.status = Some(format!("删除转发站失败：{err}").into());
-                cx.notify();
-            }
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::GATEWAY_STATUS_DELETE_FAILED, error = err),
+                cx,
+            ),
         }
     }
 
@@ -573,14 +662,19 @@ impl GatewayView {
             Ok((channel, route))
         }) {
             Ok((channel, _)) => {
-                self.status = Some(format!("已导入转发站「{}」", channel.name).into());
+                self.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::GATEWAY_STATUS_IMPORTED, name = channel.name),
+                    cx,
+                );
                 self.show_imports = false;
                 self.reload(cx);
             }
-            Err(err) => {
-                self.status = Some(format!("导入转发站失败：{err}").into());
-                cx.notify();
-            }
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::GATEWAY_STATUS_IMPORT_FAILED, error = err),
+                cx,
+            ),
         }
     }
 
@@ -597,36 +691,44 @@ impl GatewayView {
             return;
         };
         if !station.channel.enabled || !station.route.enabled {
-            self.toast_warning("转发站已停用，打开卡片右上角的开关后再应用。", cx);
+            self.set_status(
+                NotificationLevel::Warning,
+                t(k::GATEWAY_STATUS_DISABLED_BLOCKED),
+                cx,
+            );
             return;
         }
         if !apply::dialect_compatible(station.channel.dialect, app_type) {
-            self.toast_warning(
-                format!(
-                    "无法应用到 {}：「{}」的接口格式暂不支持该工具",
-                    crate::app_meta::label(app_type),
-                    station.channel.name
+            self.set_status(
+                NotificationLevel::Warning,
+                tf!(
+                    k::GATEWAY_STATUS_DIALECT_UNSUPPORTED,
+                    app = crate::app_meta::label(app_type),
+                    name = station.channel.name,
                 ),
                 cx,
             );
             return;
         }
         if let Err(err) = self.app.db.upsert_gateway_route(&station.route) {
-            self.status = Some(format!("准备转发站配置失败：{err}").into());
-            cx.notify();
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::GATEWAY_STATUS_PREPARE_FAILED, error = err),
+                cx,
+            );
             return;
         }
 
         self.applying = Some((route_id.clone(), app_type));
-        self.status = Some(
-            format!(
-                "正在把「{}」应用到 {}…",
-                station.channel.name,
-                crate::app_meta::label(app_type)
-            )
-            .into(),
+        self.set_status(
+            NotificationLevel::Info,
+            tf!(
+                k::GATEWAY_STATUS_APPLYING,
+                name = station.channel.name,
+                app = crate::app_meta::label(app_type),
+            ),
+            cx,
         );
-        cx.notify();
 
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
@@ -655,20 +757,22 @@ impl GatewayView {
                 this.applying = None;
                 match result {
                     Ok(applied) => {
-                        this.status = Some(
-                            format!(
-                                "已把「{}」应用到 {}",
-                                applied.route_name,
-                                crate::app_meta::label(app_type)
-                            )
-                            .into(),
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(
+                                k::GATEWAY_STATUS_APPLIED,
+                                name = applied.route_name,
+                                app = crate::app_meta::label(app_type),
+                            ),
+                            cx,
                         );
                         this.reload(cx);
                     }
-                    Err(err) => {
-                        this.status = Some(format!("应用转发站失败：{err}").into());
-                        cx.notify();
-                    }
+                    Err(err) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::GATEWAY_STATUS_APPLY_FAILED, error = err),
+                        cx,
+                    ),
                 }
             })
             .ok();
@@ -716,7 +820,11 @@ impl GatewayView {
                     }
                     Err(err) => {
                         this.show_connection = false;
-                        this.status = Some(format!("获取连接信息失败：{err}").into());
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::GATEWAY_STATUS_CONNECTION_INFO_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -786,20 +894,27 @@ impl GatewayView {
     fn disconnect_app(&mut self, app_type: AppType, cx: &mut Context<Self>) {
         match ProviderService::delete(&self.app, app_type, apply::GATEWAY_PROVIDER_ID) {
             Ok(()) => {
-                self.toast(
-                    format!("已断开 {} 与转发站的连接", crate::app_meta::label(app_type)),
+                self.set_status(
+                    NotificationLevel::Success,
+                    tf!(
+                        k::GATEWAY_STATUS_DISCONNECTED,
+                        app = crate::app_meta::label(app_type)
+                    ),
                     cx,
                 );
                 self.reload(cx);
             }
-            Err(err) => self.toast_warning(format!("断开失败：{err}"), cx),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::GATEWAY_STATUS_DISCONNECT_FAILED, error = err),
+                cx,
+            ),
         }
     }
 
     fn copy_to_clipboard(&mut self, value: String, done: &'static str, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(value));
-        self.status = Some(done.into());
-        cx.notify();
+        self.set_status(NotificationLevel::Success, done, cx);
     }
 
     fn render_import_candidate(
@@ -858,7 +973,7 @@ impl GatewayView {
                         candidate.app_type.as_str(),
                         candidate.provider_id
                     )),
-                    "导入",
+                    t(k::GATEWAY_IMPORT_ACTION),
                     ButtonTone::Neutral,
                     ButtonSize::Sm,
                 )
@@ -889,11 +1004,11 @@ impl GatewayView {
                     .iter()
                     .find(|station| station.route.id == route_id)
                     .map(|station| station.channel.name.clone())
-                    .unwrap_or_else(|| "未知转发站".to_string());
+                    .unwrap_or_else(|| raw(k::GATEWAY_SUMMARY_UNKNOWN).to_string());
                 let action = if app_type.is_additive_mode() {
                     components::button(
                         SharedString::from(format!("summary-disconnect-{}", app_type.as_str())),
-                        "断开",
+                        t(k::GATEWAY_SUMMARY_DISCONNECT),
                         ButtonTone::Ghost,
                         ButtonSize::Sm,
                     )
@@ -904,7 +1019,7 @@ impl GatewayView {
                 } else {
                     components::button(
                         SharedString::from(format!("summary-switch-{}", app_type.as_str())),
-                        "前往切换",
+                        t(k::GATEWAY_ACTION_SWITCH),
                         ButtonTone::Ghost,
                         ButtonSize::Sm,
                     )
@@ -944,7 +1059,12 @@ impl GatewayView {
                 .flex_wrap()
                 .items_center()
                 .gap_4()
-                .child(div().text_color(theme::muted()).text_xs().child("当前连接"))
+                .child(
+                    div()
+                        .text_color(theme::muted())
+                        .text_xs()
+                        .child(t(k::GATEWAY_SUMMARY_TITLE)),
+                )
                 .children(items)
                 .into_any_element(),
         )
@@ -952,15 +1072,15 @@ impl GatewayView {
 
     fn render_connection_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let panel = components::card().gap_3().child(section_title(
-            "其他工具接入",
-            "任何使用 OpenAI Chat 接口的工具，填入以下本机地址和密钥即可接入。",
+            t(k::GATEWAY_CONNECTION_TITLE),
+            t(k::GATEWAY_CONNECTION_DESCRIPTION),
         ));
         let panel = match self.connection_info.clone() {
             None => panel.child(div().text_color(theme::muted()).text_sm().child(
                 if self.connection_loading {
-                    "正在启动本地转发服务…"
+                    t(k::GATEWAY_CONNECTION_LOADING)
                 } else {
-                    "连接信息暂不可用。"
+                    t(k::GATEWAY_CONNECTION_UNAVAILABLE)
                 },
             )),
             Some(info) => {
@@ -985,7 +1105,7 @@ impl GatewayView {
                                     .text_color(theme::muted())
                                     .text_xs()
                                     .w(px(40.))
-                                    .child("地址"),
+                                    .child(t(k::GATEWAY_CONNECTION_URL_LABEL)),
                             )
                             .child(
                                 div()
@@ -996,7 +1116,7 @@ impl GatewayView {
                             .child(
                                 components::button(
                                     "connection-copy-url",
-                                    "复制",
+                                    t(k::GATEWAY_ACTION_COPY),
                                     ButtonTone::Neutral,
                                     ButtonSize::Sm,
                                 )
@@ -1004,7 +1124,7 @@ impl GatewayView {
                                     move |this, _event, _window, cx| {
                                         this.copy_to_clipboard(
                                             url_for_copy.clone(),
-                                            "已复制地址",
+                                            raw(k::GATEWAY_STATUS_URL_COPIED),
                                             cx,
                                         );
                                     },
@@ -1023,7 +1143,7 @@ impl GatewayView {
                                     .text_color(theme::muted())
                                     .text_xs()
                                     .w(px(40.))
-                                    .child("密钥"),
+                                    .child(t(k::GATEWAY_CONNECTION_KEY_LABEL)),
                             )
                             .child(
                                 div()
@@ -1035,9 +1155,9 @@ impl GatewayView {
                                 components::button(
                                     "connection-reveal-key",
                                     if self.reveal_connection_key {
-                                        "隐藏"
+                                        t(k::GATEWAY_ACTION_HIDE)
                                     } else {
-                                        "显示"
+                                        t(k::GATEWAY_ACTION_SHOW)
                                     },
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,
@@ -1052,13 +1172,17 @@ impl GatewayView {
                             .child(
                                 components::button(
                                     "connection-copy-key",
-                                    "复制",
+                                    t(k::GATEWAY_ACTION_COPY),
                                     ButtonTone::Neutral,
                                     ButtonSize::Sm,
                                 )
                                 .on_click(cx.listener(
                                     move |this, _event, _window, cx| {
-                                        this.copy_to_clipboard(key.clone(), "已复制密钥", cx);
+                                        this.copy_to_clipboard(
+                                            key.clone(),
+                                            raw(k::GATEWAY_STATUS_KEY_COPIED),
+                                            cx,
+                                        );
                                     },
                                 )),
                             ),
@@ -1066,9 +1190,12 @@ impl GatewayView {
             }
         };
         panel
-            .child(div().text_color(theme::muted()).text_xs().child(
-                "此密钥由 OcHub 在本机生成和验证，仅本机有效，不能用于其他电脑或服务；请求会经由当前已启用的转发站转发。",
-            ))
+            .child(
+                div()
+                    .text_color(theme::muted())
+                    .text_xs()
+                    .child(t(k::GATEWAY_CONNECTION_NOTE)),
+            )
             .into_any_element()
     }
 
@@ -1080,18 +1207,22 @@ impl GatewayView {
         let route_id_for_delete = route_id.clone();
         let station_name_for_delete = station.channel.name.clone();
         let reasoning = match station.route.reasoning.mode {
-            GatewayReasoningMode::Auto => "思考强度自动映射",
-            GatewayReasoningMode::Passthrough => "思考参数原样传递",
-            GatewayReasoningMode::Disabled => "关闭思考参数",
+            GatewayReasoningMode::Auto => raw(k::GATEWAY_CARD_REASONING_AUTO),
+            GatewayReasoningMode::Passthrough => raw(k::GATEWAY_CARD_REASONING_PASSTHROUGH),
+            GatewayReasoningMode::Disabled => raw(k::GATEWAY_CARD_REASONING_DISABLED),
         };
         let model_summary = match (
             station.route.default_model.as_deref(),
             station.route.model_rules.len(),
         ) {
-            (Some(model), 0) => format!("默认模型 {model}"),
-            (Some(model), count) => format!("默认模型 {model} · {count} 条模型映射"),
-            (None, 0) => "模型名原样传递".to_string(),
-            (None, count) => format!("{count} 条模型映射"),
+            (Some(model), 0) => tf!(k::GATEWAY_CARD_MODEL_DEFAULT, model = model),
+            (Some(model), count) => tf!(
+                k::GATEWAY_CARD_MODEL_DEFAULT_WITH_RULES,
+                model = model,
+                count = count,
+            ),
+            (None, 0) => raw(k::GATEWAY_CARD_MODEL_PASSTHROUGH).to_string(),
+            (None, count) => tf!(k::GATEWAY_CARD_MODEL_RULES, count = count),
         };
 
         let app_buttons: Vec<gpui::AnyElement> = apply::supported_apps()
@@ -1112,7 +1243,10 @@ impl GatewayView {
                         app_type.as_str()
                     )),
                     if active {
-                        SharedString::from(format!("{} 已应用", crate::app_meta::label(app_type)))
+                        SharedString::from(tf!(
+                            k::GATEWAY_CARD_APPLIED,
+                            app = crate::app_meta::label(app_type)
+                        ))
                     } else {
                         crate::app_meta::label(app_type)
                     },
@@ -1183,13 +1317,22 @@ impl GatewayView {
                                         dialect_label(station.channel.dialect),
                                     ))
                                     .when(station.channel.imported_from.is_some(), |row| {
-                                        row.child(components::badge(BadgeTone::Neutral, "已导入"))
+                                        row.child(components::badge(
+                                            BadgeTone::Neutral,
+                                            t(k::GATEWAY_CARD_BADGE_IMPORTED),
+                                        ))
                                     })
                                     .when(editing, |row| {
-                                        row.child(components::badge(BadgeTone::Accent, "编辑中"))
+                                        row.child(components::badge(
+                                            BadgeTone::Accent,
+                                            t(k::GATEWAY_CARD_BADGE_EDITING),
+                                        ))
                                     })
                                     .when(!enabled, |row| {
-                                        row.child(components::badge(BadgeTone::Warning, "已停用"))
+                                        row.child(components::badge(
+                                            BadgeTone::Warning,
+                                            t(k::GATEWAY_CARD_BADGE_DISABLED),
+                                        ))
                                     }),
                             )
                             .child(
@@ -1218,9 +1361,9 @@ impl GatewayView {
                                         station.channel.id
                                     )))
                                     .role(gpui::Role::Switch)
-                                    .aria_label(SharedString::from(format!(
-                                        "启停转发站 {}",
-                                        station.channel.name
+                                    .aria_label(SharedString::from(tf!(
+                                        k::GATEWAY_CARD_TOGGLE_ARIA,
+                                        name = station.channel.name
                                     )))
                                     .aria_toggled(if enabled {
                                         gpui::Toggled::True
@@ -1238,7 +1381,7 @@ impl GatewayView {
                                         "station-edit-{}",
                                         station.channel.id
                                     )),
-                                    "编辑",
+                                    t(k::GATEWAY_ACTION_EDIT),
                                     ButtonTone::Neutral,
                                     ButtonSize::Sm,
                                 )
@@ -1254,7 +1397,7 @@ impl GatewayView {
                                         "station-delete-{}",
                                         station.channel.id
                                     )),
-                                    "删除",
+                                    t(k::GATEWAY_ACTION_DELETE),
                                     ButtonTone::Danger,
                                     ButtonSize::Sm,
                                 )
@@ -1283,7 +1426,7 @@ impl GatewayView {
                             .text_color(theme::muted())
                             .text_xs()
                             .mr_1()
-                            .child("应用到"),
+                            .child(t(k::GATEWAY_CARD_APPLY_TO)),
                     )
                     .children(app_buttons),
             )
@@ -1306,8 +1449,9 @@ impl GatewayView {
                 editor.dialect = dialect;
             }
             if dialect == Dialect::Chat {
-                this.toast_warning(
-                    "OpenAI Chat 格式不支持思考签名等高级能力；应用到 Claude Code、Codex 等工具时会自动转换，思考内容不参与后续对话。",
+                this.set_status(
+                    NotificationLevel::Warning,
+                    t(k::GATEWAY_STATUS_CHAT_DIALECT_CAVEAT),
                     cx,
                 );
             } else {
@@ -1342,13 +1486,13 @@ impl GatewayView {
                     .gap_2()
                     .w_full()
                     .child(div().flex_1().min_w(px(220.)).child(components::field(
-                        "CLI 模型名",
+                        t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_LABEL),
                         false,
                         None,
                         rule.client_model.clone(),
                     )))
                     .child(div().flex_1().min_w(px(220.)).child(components::field(
-                        "转发站模型名",
+                        t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_LABEL),
                         false,
                         None,
                         rule.station_model.clone(),
@@ -1356,7 +1500,7 @@ impl GatewayView {
                     .child(
                         components::icon_button_tone(
                             SharedString::from(format!("station-rule-delete-{rule_id}")),
-                            "删除模型映射",
+                            t(k::GATEWAY_EDITOR_RULE_DELETE),
                             IconName::Trash,
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
@@ -1372,14 +1516,14 @@ impl GatewayView {
             .collect();
 
         let probe_help: SharedString = match editor.probe {
-            ProbeState::Idle => {
-                "选择转发站服务端使用的接口格式，不确定时点「检测」自动识别。".into()
-            }
-            ProbeState::Running => "正在检测接口格式…".into(),
-            ProbeState::Detected(dialect) => {
-                format!("已检测到 {}，如不符可手动修改。", dialect_label(dialect)).into()
-            }
-            ProbeState::Failed => "无法自动检测，请按转发站文档选择。".into(),
+            ProbeState::Idle => t(k::GATEWAY_EDITOR_DIALECT_HELP_IDLE),
+            ProbeState::Running => t(k::GATEWAY_EDITOR_DIALECT_HELP_RUNNING),
+            ProbeState::Detected(dialect) => tf!(
+                k::GATEWAY_EDITOR_DIALECT_HELP_DETECTED,
+                dialect = dialect_label(dialect)
+            )
+            .into(),
+            ProbeState::Failed => t(k::GATEWAY_EDITOR_DIALECT_HELP_FAILED),
         };
         components::card()
             .gap_5()
@@ -1402,9 +1546,9 @@ impl GatewayView {
                                     .iter()
                                     .any(|station| station.channel.id == editor.channel_id)
                                 {
-                                    "编辑转发站"
+                                    t(k::GATEWAY_EDITOR_TITLE_EDIT)
                                 } else {
-                                    "添加转发站"
+                                    t(k::GATEWAY_EDITOR_TITLE_ADD)
                                 },
                             ),
                     )
@@ -1416,7 +1560,7 @@ impl GatewayView {
                             .child(
                                 components::button(
                                     "station-editor-cancel-top",
-                                    "取消 Esc",
+                                    t(k::GATEWAY_EDITOR_CANCEL),
                                     ButtonTone::Neutral,
                                     ButtonSize::Sm,
                                 )
@@ -1430,7 +1574,7 @@ impl GatewayView {
                             .child(
                                 components::button(
                                     "station-editor-save-top",
-                                    "保存 ⌘S",
+                                    t(k::GATEWAY_EDITOR_SAVE),
                                     ButtonTone::Primary,
                                     ButtonSize::Sm,
                                 )
@@ -1443,8 +1587,8 @@ impl GatewayView {
                     ),
             )
             .child(section_title(
-                "连接信息",
-                "填写商业转发站提供的统一地址和访问密钥。",
+                t(k::GATEWAY_EDITOR_CONNECTION_TITLE),
+                t(k::GATEWAY_EDITOR_CONNECTION_DESCRIPTION),
             ))
             .child(
                 div()
@@ -1458,7 +1602,7 @@ impl GatewayView {
                             .flex_1()
                             .min_w(px(220.))
                             .child(components::field_with_error(
-                                "名称",
+                                t(k::GATEWAY_EDITOR_NAME_LABEL),
                                 true,
                                 None,
                                 editor.name_error.clone(),
@@ -1466,7 +1610,7 @@ impl GatewayView {
                             )),
                     )
                     .child(div().flex_1().min_w(px(280.)).child(components::field(
-                        "API 地址",
+                        t(k::GATEWAY_EDITOR_BASE_URL_LABEL),
                         true,
                         None,
                         editor.base_url.clone(),
@@ -1486,9 +1630,9 @@ impl GatewayView {
                                     components::button(
                                         "station-key-reveal",
                                         if editor.reveal_key {
-                                            "隐藏"
+                                            t(k::GATEWAY_ACTION_HIDE)
                                         } else {
-                                            "显示"
+                                            t(k::GATEWAY_ACTION_SHOW)
                                         },
                                         ButtonTone::Ghost,
                                         ButtonSize::Sm,
@@ -1503,7 +1647,7 @@ impl GatewayView {
                     ),
             )
             .child(components::field(
-                "转发站接口格式",
+                t(k::GATEWAY_EDITOR_DIALECT_LABEL),
                 false,
                 Some(probe_help),
                 div()
@@ -1522,9 +1666,9 @@ impl GatewayView {
                         components::button(
                             "station-dialect-detect",
                             if editor.probe == ProbeState::Running {
-                                "检测中…"
+                                t(k::GATEWAY_EDITOR_DIALECT_DETECTING)
                             } else {
-                                "检测"
+                                t(k::GATEWAY_EDITOR_DIALECT_DETECT)
                             },
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
@@ -1537,13 +1681,13 @@ impl GatewayView {
                     ),
             ))
             .child(section_title(
-                "模型",
-                "设置默认模型，或把 CLI 熟悉的模型名映射到转发站模型。",
+                t(k::GATEWAY_EDITOR_MODELS_TITLE),
+                t(k::GATEWAY_EDITOR_MODELS_DESCRIPTION),
             ))
             .child(components::field(
-                "默认模型（可选）",
+                t(k::GATEWAY_EDITOR_DEFAULT_MODEL_LABEL),
                 false,
-                Some("填写后，无论 CLI 请求什么模型，未命中映射时都使用此模型。".into()),
+                Some(t(k::GATEWAY_EDITOR_DEFAULT_MODEL_HELP)),
                 editor.default_model.clone(),
             ))
             .child(
@@ -1559,12 +1703,12 @@ impl GatewayView {
                             .text_color(theme::subtext())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("模型映射"),
+                            .child(t(k::GATEWAY_EDITOR_RULES_TITLE)),
                     )
                     .child(
                         components::button(
                             "station-add-rule",
-                            "添加映射",
+                            t(k::GATEWAY_EDITOR_RULES_ADD),
                             ButtonTone::Neutral,
                             ButtonSize::Sm,
                         )
@@ -1584,20 +1728,24 @@ impl GatewayView {
                     div()
                         .text_color(theme::muted())
                         .text_xs()
-                        .child("没有映射时，CLI 传入的模型名会原样发送给转发站。"),
+                        .child(t(k::GATEWAY_EDITOR_RULES_EMPTY)),
                 )
             })
             .child(section_title(
-                "思考强度",
-                "统一不同 CLI 与转发站之间的思考强度和预算档位。",
+                t(k::GATEWAY_EDITOR_REASONING_TITLE),
+                t(k::GATEWAY_EDITOR_REASONING_DESCRIPTION),
             ))
             .child(components::field(
-                "处理方式",
+                t(k::GATEWAY_EDITOR_REASONING_LABEL),
                 false,
                 None,
                 components::segmented(
                     "station-reasoning",
-                    &["自动映射", "原样传递", "关闭思考"],
+                    &[
+                        raw(k::GATEWAY_EDITOR_REASONING_OPTION_AUTO),
+                        raw(k::GATEWAY_EDITOR_REASONING_OPTION_PASSTHROUGH),
+                        raw(k::GATEWAY_EDITOR_REASONING_OPTION_DISABLED),
+                    ],
                     reasoning_index,
                     move |index, window, cx| on_reasoning_select(&index, window, cx),
                 ),
@@ -1624,7 +1772,7 @@ impl GatewayView {
                                     div().flex_1().min_w(px(150.)).child(components::field(
                                         label,
                                         false,
-                                        Some("预算 (token)".into()),
+                                        Some(t(k::GATEWAY_EDITOR_REASONING_BUDGET_HELP)),
                                         input,
                                     ))
                                 }),
@@ -1672,15 +1820,15 @@ impl Render for GatewayView {
                     components::card()
                         .gap_3()
                         .child(section_title(
-                            "从现有配置导入",
-                            "OcHub 已自动识别带 API Key 的本地连接，选择一项即可转成转发站配置。",
+                            t(k::GATEWAY_IMPORT_TITLE),
+                            t(k::GATEWAY_IMPORT_DESCRIPTION),
                         ))
                         .when(self.import_candidates.is_empty(), |panel| {
                             panel.child(
                                 div()
                                     .text_color(theme::muted())
                                     .text_sm()
-                                    .child("没有发现可导入的配置。"),
+                                    .child(t(k::GATEWAY_IMPORT_EMPTY)),
                             )
                         })
                         .when(!import_rows.is_empty(), |panel| {
@@ -1693,12 +1841,12 @@ impl Render for GatewayView {
             .when(station_count == 0 && self.editor.is_none(), |column| {
                 column.child(components::empty_state(
                     IconName::Cloud,
-                    "还没有转发站",
-                    "添加 New API、Sub2API 或其他兼容服务，配置完成后即可一键应用到 CLI。",
+                    t(k::GATEWAY_EMPTY_TITLE),
+                    t(k::GATEWAY_EMPTY_HINT),
                     Some(
                         components::button(
                             "station-empty-add",
-                            "添加转发站",
+                            t(k::GATEWAY_ACTION_ADD),
                             ButtonTone::Primary,
                             ButtonSize::Md,
                         )
@@ -1714,68 +1862,62 @@ impl Render for GatewayView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(
-                    "转发站",
-                    Some(
-                        "集中管理转发站，一键应用到已启用的 AI 工具；其他工具可复制连接信息手动接入。"
-                            .into(),
+                layout::page_header(t(k::GATEWAY_PAGE_TITLE), Some(t(k::GATEWAY_PAGE_SUBTITLE)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                components::button(
+                                    "station-connection-toggle",
+                                    if self.show_connection {
+                                        t(k::GATEWAY_PAGE_CONNECTION_HIDE)
+                                    } else {
+                                        t(k::GATEWAY_PAGE_CONNECTION_SHOW)
+                                    },
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.toggle_connection_panel(cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                components::button(
+                                    "station-import-toggle",
+                                    if self.show_imports {
+                                        t(k::GATEWAY_PAGE_IMPORT_HIDE)
+                                    } else {
+                                        t(k::GATEWAY_PAGE_IMPORT_SHOW)
+                                    },
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.show_imports = !this.show_imports;
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                components::button(
+                                    "station-add",
+                                    t(k::GATEWAY_ACTION_ADD),
+                                    ButtonTone::Primary,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.open_editor(None, cx);
+                                    },
+                                )),
+                            ),
                     ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap_2()
-                        .child(
-                            components::button(
-                                "station-connection-toggle",
-                                if self.show_connection {
-                                    "收起接入信息"
-                                } else {
-                                    "其他工具接入"
-                                },
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(
-                                |this, _event, _window, cx| {
-                                    this.toggle_connection_panel(cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            components::button(
-                                "station-import-toggle",
-                                if self.show_imports {
-                                    "收起导入"
-                                } else {
-                                    "从现有配置导入"
-                                },
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(
-                                |this, _event, _window, cx| {
-                                    this.show_imports = !this.show_imports;
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(
-                            components::button(
-                                "station-add",
-                                "添加转发站",
-                                ButtonTone::Primary,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(
-                                |this, _event, _window, cx| {
-                                    this.open_editor(None, cx);
-                                },
-                            )),
-                        ),
-                ),
             )
             .child(layout::scroll_body_tracked(
                 "relay-stations-body",
@@ -1787,16 +1929,18 @@ impl Render for GatewayView {
                     .iter()
                     .map(|app| crate::app_meta::label(*app).to_string())
                     .collect::<Vec<_>>()
-                    .join("、");
+                    .join(raw(k::GATEWAY_DELETE_BLOCKED_SEPARATOR));
                 let first_app = apps.first().copied();
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("无法删除"))
+                        .child(components::modal_header(t(k::GATEWAY_DELETE_BLOCKED_TITLE)))
                         .child(
                             components::modal_body().child(
                                 div().text_color(theme::subtext()).text_sm().child(
-                                    SharedString::from(format!(
-                                        "{labels} 正在使用转发站「{name}」。先把这些工具切换到其他转发站或直接连接，再删除。"
+                                    SharedString::from(tf!(
+                                        k::GATEWAY_DELETE_BLOCKED_MESSAGE,
+                                        apps = labels,
+                                        name = name,
                                     )),
                                 ),
                             ),
@@ -1804,7 +1948,7 @@ impl Render for GatewayView {
                         .child(components::modal_footer(vec![
                             components::button(
                                 "station-blocked-close",
-                                "知道了",
+                                t(k::GATEWAY_DELETE_BLOCKED_ACKNOWLEDGE),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -1815,7 +1959,7 @@ impl Render for GatewayView {
                             .into_any_element(),
                             components::button(
                                 "station-blocked-switch",
-                                "前往切换",
+                                t(k::GATEWAY_ACTION_SWITCH),
                                 ButtonTone::Primary,
                                 ButtonSize::Sm,
                             )
@@ -1833,12 +1977,13 @@ impl Render for GatewayView {
             .when_some(self.confirm_delete.clone(), |root, (route_id, name)| {
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("删除转发站"))
+                        .child(components::modal_header(t(k::GATEWAY_CONFIRM_DELETE_TITLE)))
                         .child(
                             components::modal_body().child(
                                 div().text_color(theme::subtext()).text_sm().child(
-                                    SharedString::from(format!(
-                                        "确定删除转发站「{name}」吗？此操作不可撤销。"
+                                    SharedString::from(tf!(
+                                        k::GATEWAY_CONFIRM_DELETE_MESSAGE,
+                                        name = name
                                     )),
                                 ),
                             ),
@@ -1846,7 +1991,7 @@ impl Render for GatewayView {
                         .child(components::modal_footer(vec![
                             components::button(
                                 "station-delete-cancel",
-                                "取消",
+                                t(k::GATEWAY_ACTION_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -1857,7 +2002,7 @@ impl Render for GatewayView {
                             .into_any_element(),
                             components::button(
                                 "station-delete-confirm",
-                                "删除",
+                                t(k::GATEWAY_ACTION_DELETE),
                                 ButtonTone::Danger,
                                 ButtonSize::Sm,
                             )
@@ -1872,7 +2017,10 @@ impl Render for GatewayView {
     }
 }
 
-fn section_title(title: &'static str, description: &'static str) -> gpui::Div {
+fn section_title(
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+) -> gpui::Div {
     div()
         .flex()
         .flex_col()
@@ -1882,13 +2030,13 @@ fn section_title(title: &'static str, description: &'static str) -> gpui::Div {
                 .text_color(theme::text())
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
+                .child(title.into()),
         )
         .child(
             div()
                 .text_color(theme::muted())
                 .text_xs()
-                .child(description),
+                .child(description.into()),
         )
 }
 
@@ -1905,7 +2053,11 @@ fn dialect_label(dialect: Dialect) -> &'static str {
     }
 }
 
-fn text_input(cx: &mut Context<TextInput>, placeholder: &str, value: &str) -> TextInput {
+fn text_input(
+    cx: &mut Context<TextInput>,
+    placeholder: impl Into<SharedString>,
+    value: &str,
+) -> TextInput {
     let mut input = TextInput::new(cx, placeholder);
     input.set_content(value.to_string(), cx);
     input

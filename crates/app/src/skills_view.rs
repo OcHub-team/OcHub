@@ -18,9 +18,12 @@ use ochub_core::services::SkillService;
 use ochub_core::{AppState, AppType};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 /// 每次市场搜索的分页大小。
@@ -94,6 +97,7 @@ pub struct SkillsView {
     /// 待确认的破坏性操作；`Some` 时展示确认模态。
     confirm: Option<ConfirmAction>,
     status: Option<SharedString>,
+    status_level: Option<NotificationLevel>,
     list_state: ListState,
 }
 
@@ -105,14 +109,26 @@ impl SkillsView {
     /// translation that changes a row's height would otherwise leave the list
     /// scrolled to stale offsets.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        // Placeholders are captured when the input is constructed, and this
+        // view is built once at startup, so they need pushing in by hand.
+        self.search_input.update(cx, |input, cx| {
+            input.set_placeholder(t(k::SKILLS_INSTALLED_SEARCH_PLACEHOLDER), cx)
+        });
+        self.market_input.update(cx, |input, cx| {
+            input.set_placeholder(t(k::SKILLS_MARKET_SEARCH_PLACEHOLDER), cx)
+        });
+        self.repo_input.update(cx, |input, cx| {
+            input.set_placeholder(t(k::SKILLS_REPO_INPUT_PLACEHOLDER), cx)
+        });
         self.list_state.remeasure();
         cx.notify();
     }
 
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
-        let search_input = cx.new(|cx| TextInput::new(cx, "搜索已安装技能"));
-        let market_input = cx.new(|cx| TextInput::new(cx, "搜索 skills.sh 市场，回车搜索"));
-        let repo_input = cx.new(|cx| TextInput::new(cx, "owner/repo 或 owner/repo@branch"));
+        let search_input =
+            cx.new(|cx| TextInput::new(cx, t(k::SKILLS_INSTALLED_SEARCH_PLACEHOLDER)));
+        let market_input = cx.new(|cx| TextInput::new(cx, t(k::SKILLS_MARKET_SEARCH_PLACEHOLDER)));
+        let repo_input = cx.new(|cx| TextInput::new(cx, t(k::SKILLS_REPO_INPUT_PLACEHOLDER)));
         let mut this = Self {
             app,
             tab: SkillsTab::Installed,
@@ -139,6 +155,7 @@ impl SkillsView {
             last_filter: SharedString::default(),
             confirm: None,
             status: None,
+            status_level: None,
             list_state: ListState::new(0, ListAlignment::Top, px(512.)),
         };
 
@@ -181,7 +198,11 @@ impl SkillsView {
             Ok(list) => self.skills = list,
             Err(err) => {
                 self.skills = Vec::new();
-                self.status = Some(SharedString::from(format!("加载技能失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SKILLS_STATUS_LOAD_FAILED, error = err),
+                    cx,
+                );
             }
         }
         self.repos = self.app.db.get_skill_repos().unwrap_or_default();
@@ -217,7 +238,7 @@ impl SkillsView {
                 let branch = skill.repo_branch.as_deref().unwrap_or("main");
                 format!("{owner}/{name}@{branch}")
             }
-            _ => "本地安装".to_string(),
+            _ => raw(k::SKILLS_SOURCE_LOCAL).to_string(),
         }
     }
 
@@ -226,8 +247,18 @@ impl SkillsView {
         cx.notify();
     }
 
-    fn set_status(&mut self, msg: impl Into<SharedString>, cx: &mut Context<Self>) {
+    /// Every status toast carries its severity explicitly. Guessing it from the
+    /// wording mis-reads several of these messages (a partial batch update is
+    /// not a clean success) and stops working entirely once the copy is
+    /// translated.
+    fn set_status(
+        &mut self,
+        level: NotificationLevel,
+        msg: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.status = Some(msg.into());
+        self.status_level = Some(level);
         cx.notify();
     }
 
@@ -243,7 +274,9 @@ impl SkillsView {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|err| anyhow::anyhow!("创建异步运行时失败: {err}"))?;
+                .map_err(|err| {
+                    anyhow::anyhow!(tf!(k::SKILLS_STATUS_RUNTIME_FAILED, error = err))
+                })?;
             runtime.block_on(fut)
         })
     }
@@ -316,8 +349,11 @@ impl SkillsView {
             return;
         }
         self.checking_updates = true;
-        self.status = Some(SharedString::from("正在检查技能更新..."));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::SKILLS_STATUS_CHECKING_UPDATES),
+            cx,
+        );
 
         let app = self.app.clone();
         let task = Self::spawn_tokio(cx, async move {
@@ -333,14 +369,27 @@ impl SkillsView {
                             .into_iter()
                             .map(|update| (update.id.clone(), update))
                             .collect();
-                        this.status = Some(SharedString::from(if this.updates.is_empty() {
-                            "所有远程技能都是最新版本".to_string()
+                        // Nothing to do is a clean result; pending updates are
+                        // neutral news, not a warning.
+                        let (level, message) = if this.updates.is_empty() {
+                            (
+                                NotificationLevel::Success,
+                                raw(k::SKILLS_STATUS_ALL_UP_TO_DATE).to_string(),
+                            )
                         } else {
-                            format!("发现 {} 个技能可更新", this.updates.len())
-                        }));
+                            (
+                                NotificationLevel::Info,
+                                tf!(k::SKILLS_STATUS_UPDATES_FOUND, count = this.updates.len()),
+                            )
+                        };
+                        this.set_status(level, message, cx);
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("检查更新失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_CHECK_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 this.refresh_list(cx);
@@ -355,8 +404,7 @@ impl SkillsView {
             return;
         }
         self.updating.insert(id.clone());
-        self.status = Some(SharedString::from("正在更新技能..."));
-        cx.notify();
+        self.set_status(NotificationLevel::Info, t(k::SKILLS_STATUS_UPDATING), cx);
 
         let app = self.app.clone();
         let task_id = id.clone();
@@ -369,12 +417,20 @@ impl SkillsView {
                 this.updating.remove(&id);
                 match result {
                     Ok(skill) => {
-                        this.status = Some(SharedString::from(format!("{} 已更新", skill.name)));
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::SKILLS_STATUS_UPDATED, name = skill.name),
+                            cx,
+                        );
                         this.updates.remove(&id);
                         this.reload(cx);
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("更新失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_UPDATE_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -394,11 +450,11 @@ impl SkillsView {
         for id in &ids {
             self.updating.insert(id.clone());
         }
-        self.status = Some(SharedString::from(format!(
-            "正在更新 {} 个技能...",
-            ids.len()
-        )));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            tf!(k::SKILLS_STATUS_UPDATING_MANY, count = ids.len()),
+            cx,
+        );
 
         let app = self.app.clone();
         let task = Self::spawn_tokio(cx, async move {
@@ -423,19 +479,32 @@ impl SkillsView {
                         for (id, _) in &ok_ids {
                             this.updates.remove(id);
                         }
-                        this.status = Some(SharedString::from(if errors.is_empty() {
-                            format!("已更新 {} 个技能", ok_ids.len())
-                        } else {
-                            format!(
-                                "已更新 {} 个技能，{} 个失败: {}",
-                                ok_ids.len(),
-                                errors.len(),
-                                errors.join("; ")
+                        // A batch that left some skills behind is a warning, not
+                        // the clean success the leading "已更新" suggests.
+                        let (level, message) = if errors.is_empty() {
+                            (
+                                NotificationLevel::Success,
+                                tf!(k::SKILLS_STATUS_UPDATED_MANY, count = ok_ids.len()),
                             )
-                        }));
+                        } else {
+                            (
+                                NotificationLevel::Warning,
+                                tf!(
+                                    k::SKILLS_STATUS_UPDATED_PARTIAL,
+                                    count = ok_ids.len(),
+                                    failed = errors.len(),
+                                    details = errors.join(raw(k::SKILLS_STATUS_ERROR_SEPARATOR)),
+                                ),
+                            )
+                        };
+                        this.set_status(level, message, cx);
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("批量更新失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_UPDATE_ALL_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 this.reload(cx);
@@ -469,15 +538,23 @@ impl SkillsView {
                 this.toggling.remove(&key);
                 match result {
                     Ok(()) => {
-                        this.status = Some(SharedString::from(format!(
-                            "已{}{}",
-                            if enabled { "启用 " } else { "停用 " },
-                            Self::app_label(app_type)
-                        )));
+                        // Whole sentences per branch: the verb cannot be swapped
+                        // into a Chinese frame and still read as English.
+                        let app = Self::app_label(app_type);
+                        let message = if enabled {
+                            tf!(k::SKILLS_STATUS_APP_ENABLED, app = app)
+                        } else {
+                            tf!(k::SKILLS_STATUS_APP_DISABLED, app = app)
+                        };
+                        this.set_status(NotificationLevel::Success, message, cx);
                         this.reload(cx);
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("切换失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_TOGGLE_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -492,8 +569,11 @@ impl SkillsView {
             return;
         }
         self.uninstalling.insert(id.clone());
-        self.status = Some(SharedString::from("正在卸载技能..."));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::SKILLS_STATUS_UNINSTALLING),
+            cx,
+        );
 
         let app = self.app.clone();
         let task_id = id.clone();
@@ -508,10 +588,18 @@ impl SkillsView {
                 this.updating.remove(&id);
                 match result {
                     Ok(_) => {
-                        this.status = Some(SharedString::from("技能已卸载"));
+                        this.set_status(
+                            NotificationLevel::Success,
+                            t(k::SKILLS_STATUS_UNINSTALLED),
+                            cx,
+                        );
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("卸载失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_UNINSTALL_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 this.reload(cx);
@@ -531,11 +619,16 @@ impl SkillsView {
                     _ => None,
                 });
         let Some(url) = url else {
-            self.set_status("该技能没有关联仓库", cx);
+            // Refused rather than failed: a local skill simply has no repo.
+            self.set_status(NotificationLevel::Warning, t(k::SKILLS_STATUS_NO_REPO), cx);
             return;
         };
         if let Err(err) = open_url(&url) {
-            self.set_status(format!("打开仓库失败: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::SKILLS_STATUS_OPEN_REPO_FAILED, error = err),
+                cx,
+            );
         }
     }
 
@@ -543,12 +636,20 @@ impl SkillsView {
         let path = match SkillService::get_ssot_dir() {
             Ok(dir) => dir.join(directory),
             Err(err) => {
-                self.set_status(format!("获取技能目录失败: {err}"), cx);
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SKILLS_STATUS_SKILL_DIR_FAILED, error = err),
+                    cx,
+                );
                 return;
             }
         };
         if let Err(err) = open_path(&path) {
-            self.set_status(format!("打开目录失败: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::SKILLS_STATUS_OPEN_DIR_FAILED, error = err),
+                cx,
+            );
         }
     }
 
@@ -557,7 +658,12 @@ impl SkillsView {
     fn run_market_search(&mut self, append: bool, cx: &mut Context<Self>) {
         let query = self.market_input.read(cx).content().trim().to_string();
         if query.is_empty() {
-            self.set_status("请输入搜索关键词", cx);
+            // Refused, not failed: nothing was attempted.
+            self.set_status(
+                NotificationLevel::Warning,
+                t(k::SKILLS_STATUS_SEARCH_QUERY_REQUIRED),
+                cx,
+            );
             return;
         }
         if self.searching_market {
@@ -565,8 +671,11 @@ impl SkillsView {
         }
         self.searching_market = true;
         let offset = if append { self.market_results.len() } else { 0 };
-        self.status = Some(SharedString::from("正在搜索技能市场..."));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::SKILLS_STATUS_SEARCHING_MARKET),
+            cx,
+        );
 
         let task = Self::spawn_tokio(cx, async move {
             SkillService::search_skills_sh(&query, MARKET_PAGE_SIZE, offset).await
@@ -583,14 +692,19 @@ impl SkillsView {
                         } else {
                             this.market_results = found.skills;
                         }
-                        this.status = Some(SharedString::from(format!(
-                            "找到 {} 个技能（已加载 {}）",
-                            this.market_total,
-                            this.market_results.len()
-                        )));
+                        let message = tf!(
+                            k::SKILLS_STATUS_MARKET_FOUND,
+                            total = this.market_total,
+                            loaded = this.market_results.len(),
+                        );
+                        this.set_status(NotificationLevel::Success, message, cx);
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("市场搜索失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_MARKET_SEARCH_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 this.refresh_list(cx);
@@ -605,8 +719,7 @@ impl SkillsView {
             return;
         }
         self.discovering = true;
-        self.status = Some(SharedString::from("正在从技能仓库发现可安装技能..."));
-        cx.notify();
+        self.set_status(NotificationLevel::Info, t(k::SKILLS_STATUS_DISCOVERING), cx);
 
         let app = self.app.clone();
         let task = Self::spawn_tokio(cx, async move {
@@ -624,11 +737,18 @@ impl SkillsView {
                     Ok(skills) => {
                         let count = skills.len();
                         this.discoverable = skills;
-                        this.status =
-                            Some(SharedString::from(format!("发现 {count} 个可安装技能")));
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::SKILLS_STATUS_DISCOVERED, count = count),
+                            cx,
+                        );
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("发现技能失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_DISCOVER_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 this.refresh_list(cx);
@@ -656,8 +776,11 @@ impl SkillsView {
         }
         let key = skill.key.clone();
         self.installing.insert(key.clone());
-        self.status = Some(SharedString::from(format!("正在安装 {}...", skill.name)));
-        cx.notify();
+        self.set_status(
+            NotificationLevel::Info,
+            tf!(k::SKILLS_STATUS_INSTALLING, name = skill.name),
+            cx,
+        );
 
         let app = self.app.clone();
         let target_app = self.selected_app;
@@ -672,15 +795,20 @@ impl SkillsView {
                 this.installing.remove(&key);
                 match result {
                     Ok(installed) => {
-                        this.status = Some(SharedString::from(format!(
-                            "{} 已安装到 {}",
-                            installed.name,
-                            Self::app_label(target_app)
-                        )));
+                        let message = tf!(
+                            k::SKILLS_STATUS_INSTALLED,
+                            name = installed.name,
+                            app = Self::app_label(target_app),
+                        );
+                        this.set_status(NotificationLevel::Success, message, cx);
                         this.reload(cx);
                     }
                     Err(err) => {
-                        this.status = Some(SharedString::from(format!("安装失败: {err}")));
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_INSTALL_FAILED, error = err),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -707,14 +835,21 @@ impl SkillsView {
     // ── 仓库管理 ────────────────────────────────────────────────────────────
 
     fn add_repo(&mut self, cx: &mut Context<Self>) {
-        let raw = self.repo_input.read(cx).content().trim().to_string();
-        if raw.is_empty() {
-            self.set_status("请输入仓库，如 anthropics/skills 或 owner/repo@branch", cx);
+        // Named `input` rather than `raw`: `i18n::raw` is in scope here.
+        let input = self.repo_input.read(cx).content().trim().to_string();
+        if input.is_empty() {
+            // Refused, not failed: nothing was attempted.
+            self.set_status(
+                NotificationLevel::Warning,
+                t(k::SKILLS_STATUS_REPO_INPUT_REQUIRED),
+                cx,
+            );
             return;
         }
-        let Some(repo) = parse_repo_input(&raw) else {
+        let Some(repo) = parse_repo_input(&input) else {
             self.set_status(
-                "无法识别仓库格式，支持 owner/repo、owner/repo@branch 或 GitHub 链接",
+                NotificationLevel::Warning,
+                t(k::SKILLS_STATUS_REPO_INPUT_INVALID),
                 cx,
             );
             return;
@@ -724,21 +859,36 @@ impl SkillsView {
             .iter()
             .any(|r| r.owner == repo.owner && r.name == repo.name)
         {
-            self.set_status(format!("仓库 {}/{} 已存在", repo.owner, repo.name), cx);
+            self.set_status(
+                NotificationLevel::Warning,
+                tf!(
+                    k::SKILLS_STATUS_REPO_EXISTS,
+                    owner = repo.owner,
+                    name = repo.name,
+                ),
+                cx,
+            );
             return;
         }
         match self.app.db.save_skill_repo(&repo) {
             Ok(()) => {
-                self.status = Some(SharedString::from(format!(
-                    "已添加仓库 {}/{}@{}",
-                    repo.owner, repo.name, repo.branch
-                )));
+                let message = tf!(
+                    k::SKILLS_STATUS_REPO_ADDED,
+                    owner = repo.owner,
+                    name = repo.name,
+                    branch = repo.branch,
+                );
+                self.set_status(NotificationLevel::Success, message, cx);
                 self.repo_input
                     .update(cx, |input, cx| input.set_content("", cx));
                 self.repos = self.app.db.get_skill_repos().unwrap_or_default();
                 self.discover_skills(cx);
             }
-            Err(err) => self.set_status(format!("添加仓库失败: {err}"), cx),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::SKILLS_STATUS_REPO_ADD_FAILED, error = err),
+                cx,
+            ),
         }
         self.refresh_list(cx);
     }
@@ -759,15 +909,21 @@ impl SkillsView {
         match self.app.db.save_skill_repo(&toggled) {
             Ok(()) => {
                 self.repos = self.app.db.get_skill_repos().unwrap_or_default();
-                self.status = Some(SharedString::from(format!(
-                    "仓库 {}/{} 已{}",
-                    owner,
-                    name,
-                    if toggled.enabled { "启用" } else { "停用" }
-                )));
+                // One whole sentence per branch; the verb is not a fragment
+                // that other languages can slot into the same frame.
+                let message = if toggled.enabled {
+                    tf!(k::SKILLS_STATUS_REPO_ENABLED, owner = owner, name = name)
+                } else {
+                    tf!(k::SKILLS_STATUS_REPO_DISABLED, owner = owner, name = name)
+                };
+                self.set_status(NotificationLevel::Success, message, cx);
                 self.discover_skills(cx);
             }
-            Err(err) => self.set_status(format!("更新仓库失败: {err}"), cx),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::SKILLS_STATUS_REPO_UPDATE_FAILED, error = err),
+                cx,
+            ),
         }
         self.refresh_list(cx);
     }
@@ -776,10 +932,18 @@ impl SkillsView {
         match self.app.db.delete_skill_repo(&owner, &name) {
             Ok(()) => {
                 self.repos = self.app.db.get_skill_repos().unwrap_or_default();
-                self.status = Some(SharedString::from(format!("已删除仓库 {owner}/{name}")));
+                self.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::SKILLS_STATUS_REPO_DELETED, owner = owner, name = name),
+                    cx,
+                );
                 self.discover_skills(cx);
             }
-            Err(err) => self.set_status(format!("删除仓库失败: {err}"), cx),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::SKILLS_STATUS_REPO_DELETE_FAILED, error = err),
+                cx,
+            ),
         }
         self.refresh_list(cx);
     }
@@ -788,8 +952,8 @@ impl SkillsView {
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let labels = [
-            format!("已安装 ({})", self.skills.len()),
-            "发现".to_string(),
+            tf!(k::SKILLS_TAB_INSTALLED, count = self.skills.len()),
+            raw(k::SKILLS_TAB_DISCOVER).to_string(),
         ];
         let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         let selected = match self.tab {
@@ -833,7 +997,12 @@ impl SkillsView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            .child(div().text_color(theme::muted()).text_xs().child("安装到"))
+            .child(
+                div()
+                    .text_color(theme::muted())
+                    .text_xs()
+                    .child(t(k::SKILLS_TARGET_LABEL)),
+            )
             .child(components::segmented(
                 SharedString::from(id),
                 &label_refs,
@@ -854,16 +1023,16 @@ impl SkillsView {
             .child(tile(components::stat_tile(
                 Some(IconName::Blocks),
                 theme::accent(),
-                "已安装",
+                t(k::SKILLS_STATS_INSTALLED_LABEL),
                 self.skills.len().to_string(),
-                "技能库中的技能总数",
+                t(k::SKILLS_STATS_INSTALLED_DETAIL),
             )))
             .child(tile(components::stat_tile(
                 Some(IconName::Cloud),
                 theme::teal(),
-                "远程来源",
+                t(k::SKILLS_STATS_REMOTE_LABEL),
                 remote_count.to_string(),
-                "可检查更新的远程技能",
+                t(k::SKILLS_STATS_REMOTE_DETAIL),
             )))
             .child(tile(components::stat_tile(
                 Some(IconName::Refresh),
@@ -872,21 +1041,21 @@ impl SkillsView {
                 } else {
                     theme::yellow()
                 },
-                "更新状态",
+                t(k::SKILLS_STATS_UPDATES_LABEL),
                 if self.checking_updates {
-                    "检查中".to_string()
+                    raw(k::SKILLS_STATS_UPDATES_CHECKING).to_string()
                 } else {
                     match self.updates.len() {
-                        0 => "最新".to_string(),
-                        count => format!("{count} 个可更新"),
+                        0 => raw(k::SKILLS_STATS_UPDATES_LATEST).to_string(),
+                        count => tf!(k::SKILLS_STATS_UPDATES_AVAILABLE, count = count),
                     }
                 },
                 if self.checking_updates {
-                    "正在对比远程版本"
+                    raw(k::SKILLS_STATS_UPDATES_DETAIL_CHECKING)
                 } else if self.updates.is_empty() {
-                    "所有远程技能均为最新"
+                    raw(k::SKILLS_STATS_UPDATES_DETAIL_LATEST)
                 } else {
-                    "可在下方逐个或一键更新"
+                    raw(k::SKILLS_STATS_UPDATES_DETAIL_AVAILABLE)
                 },
             )))
     }
@@ -897,9 +1066,9 @@ impl SkillsView {
             components::button(
                 "skill-check-updates",
                 if self.checking_updates {
-                    "检查中..."
+                    raw(k::SKILLS_INSTALLED_CHECK_UPDATES_BUSY)
                 } else {
-                    "检查更新"
+                    raw(k::SKILLS_INSTALLED_CHECK_UPDATES)
                 },
                 ButtonTone::Neutral,
                 ButtonSize::Sm,
@@ -913,9 +1082,9 @@ impl SkillsView {
                 components::button(
                     "skill-update-all",
                     if self.updating_all {
-                        "更新中...".to_string()
+                        raw(k::SKILLS_ACTION_UPDATE_BUSY).to_string()
                     } else {
-                        format!("全部更新 ({})", self.updates.len())
+                        tf!(k::SKILLS_INSTALLED_UPDATE_ALL, count = self.updates.len())
                     },
                     if self.updating_all {
                         ButtonTone::Neutral
@@ -944,7 +1113,7 @@ impl SkillsView {
         if self.skills.is_empty() {
             let goto_discover = components::button(
                 "skill-empty-discover",
-                "去发现技能",
+                t(k::SKILLS_INSTALLED_EMPTY_ACTION),
                 ButtonTone::Primary,
                 ButtonSize::Sm,
             )
@@ -954,15 +1123,15 @@ impl SkillsView {
             .into_any_element();
             col = col.child(components::empty_state(
                 IconName::Blocks,
-                "还没有安装技能",
-                "从技能市场或仓库安装第一个技能。",
+                t(k::SKILLS_INSTALLED_EMPTY_TITLE),
+                t(k::SKILLS_INSTALLED_EMPTY_HINT),
                 Some(goto_discover),
             ));
         } else if self.installed_indices(&filter).is_empty() {
             col = col.child(components::empty_state(
                 IconName::Search,
-                "没有匹配的技能",
-                "换个关键词试试。",
+                t(k::SKILLS_INSTALLED_NO_MATCHES_TITLE),
+                t(k::SKILLS_INSTALLED_NO_MATCHES_HINT),
                 None,
             ));
         }
@@ -976,7 +1145,12 @@ impl SkillsView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            .child(div().text_color(theme::muted()).text_xs().child("同步到"));
+            .child(
+                div()
+                    .text_color(theme::muted())
+                    .text_xs()
+                    .child(t(k::SKILLS_CARD_SYNC_TO)),
+            );
         for app_type in Self::skill_apps() {
             let enabled = skill.apps.is_enabled_for(&app_type);
             let key = format!("{}:{}", skill.id, app_type.as_str());
@@ -986,7 +1160,10 @@ impl SkillsView {
             let chip = div()
                 .id(SharedString::from(format!("skill-app-{key}")))
                 .role(gpui::Role::Button)
-                .aria_label(SharedString::from(format!("{label} 同步开关")))
+                .aria_label(SharedString::from(tf!(
+                    k::SKILLS_CARD_APP_TOGGLE_ARIA,
+                    app = label
+                )))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -1017,9 +1194,9 @@ impl SkillsView {
                 .cursor_pointer()
                 .hover(|s| s.border_color(theme::accent().alpha(0.6)))
                 .child(if busy {
-                    SharedString::from(format!("{label} ..."))
+                    SharedString::from(tf!(k::SKILLS_CARD_APP_TOGGLE_BUSY, app = label))
                 } else if enabled {
-                    SharedString::from(format!("{label} ✓"))
+                    SharedString::from(tf!(k::SKILLS_CARD_APP_TOGGLE_ENABLED, app = label))
                 } else {
                     label.clone()
                 })
@@ -1050,10 +1227,10 @@ impl SkillsView {
 
         let mut meta = vec![Self::source_label(skill)];
         if let Some(installed_at) = format_ts(skill.installed_at) {
-            meta.push(format!("安装于 {installed_at}"));
+            meta.push(tf!(k::SKILLS_CARD_INSTALLED_AT, time = installed_at));
         }
         if let Some(updated_at) = format_ts(skill.updated_at) {
-            meta.push(format!("更新于 {updated_at}"));
+            meta.push(tf!(k::SKILLS_CARD_UPDATED_AT, time = updated_at));
         }
 
         components::card()
@@ -1092,10 +1269,17 @@ impl SkillsView {
                                 } else {
                                     BadgeTone::Neutral
                                 },
-                                if remote { "远程" } else { "本地" },
+                                if remote {
+                                    raw(k::SKILLS_BADGE_REMOTE)
+                                } else {
+                                    raw(k::SKILLS_BADGE_LOCAL)
+                                },
                             ))
                             .when(update.is_some(), |s| {
-                                s.child(components::badge(BadgeTone::Warning, "可更新"))
+                                s.child(components::badge(
+                                    BadgeTone::Warning,
+                                    t(k::SKILLS_BADGE_UPDATE_AVAILABLE),
+                                ))
                             }),
                     )
                     .child(
@@ -1109,7 +1293,7 @@ impl SkillsView {
                                 s.child(
                                     components::button(
                                         SharedString::from(format!("skill-repo-{}", skill.id)),
-                                        "仓库",
+                                        t(k::SKILLS_ACTION_REPO),
                                         ButtonTone::Ghost,
                                         ButtonSize::Sm,
                                     )
@@ -1123,7 +1307,7 @@ impl SkillsView {
                             .child(
                                 components::button(
                                     SharedString::from(format!("skill-dir-{}", skill.id)),
-                                    "目录",
+                                    t(k::SKILLS_ACTION_DIRECTORY),
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,
                                 )
@@ -1138,9 +1322,9 @@ impl SkillsView {
                                     components::button(
                                         SharedString::from(format!("skill-update-{}", skill.id)),
                                         if is_updating {
-                                            "更新中..."
+                                            raw(k::SKILLS_ACTION_UPDATE_BUSY)
                                         } else {
-                                            "更新"
+                                            raw(k::SKILLS_ACTION_UPDATE)
                                         },
                                         if is_updating {
                                             ButtonTone::Neutral
@@ -1160,9 +1344,9 @@ impl SkillsView {
                                 components::button(
                                     SharedString::from(format!("skill-uninstall-{}", skill.id)),
                                     if is_uninstalling {
-                                        "卸载中..."
+                                        raw(k::SKILLS_ACTION_UNINSTALL_BUSY)
                                     } else {
-                                        "卸载"
+                                        raw(k::SKILLS_ACTION_UNINSTALL)
                                     },
                                     if is_uninstalling {
                                         ButtonTone::Neutral
@@ -1203,14 +1387,14 @@ impl SkillsView {
                     div()
                         .text_color(theme::muted())
                         .text_xs()
-                        .child(SharedString::from(format!(
-                            "本地 {} → 远程 {}",
-                            update
+                        .child(SharedString::from(tf!(
+                            k::SKILLS_CARD_HASH_COMPARE,
+                            local = update
                                 .current_hash
                                 .as_deref()
                                 .map(short_hash)
-                                .unwrap_or("未知".to_string()),
-                            short_hash(&update.remote_hash)
+                                .unwrap_or_else(|| raw(k::SKILLS_CARD_HASH_UNKNOWN).to_string()),
+                            remote = short_hash(&update.remote_hash),
                         ))),
                 )
             })
@@ -1242,7 +1426,10 @@ impl SkillsView {
             .w_full()
             .child(components::segmented(
                 "skills-discover-mode",
-                &["市场搜索", "仓库浏览"],
+                &[
+                    raw(k::SKILLS_DISCOVER_MODE_MARKET),
+                    raw(k::SKILLS_DISCOVER_MODE_REPOS),
+                ],
                 mode_selected,
                 move |ix, window, cx| on_mode(&ix, window, cx),
             ))
@@ -1255,8 +1442,8 @@ impl SkillsView {
             .flex_col()
             .gap_3()
             .child(layout::section_header(
-                "技能市场",
-                "搜索 skills.sh 上共享的技能，一键安装到所选应用。",
+                t(k::SKILLS_MARKET_SECTION_TITLE),
+                t(k::SKILLS_MARKET_SECTION_DESC),
             ))
             .child(
                 div()
@@ -1270,9 +1457,9 @@ impl SkillsView {
                         components::button(
                             "skill-market-search",
                             if self.searching_market {
-                                "搜索中..."
+                                raw(k::SKILLS_MARKET_SEARCH_BUSY)
                             } else {
-                                "搜索"
+                                raw(k::SKILLS_MARKET_SEARCH)
                             },
                             ButtonTone::Primary,
                             ButtonSize::Sm,
@@ -1287,8 +1474,8 @@ impl SkillsView {
         if self.market_results.is_empty() {
             col = col.child(components::empty_state(
                 IconName::Search,
-                "搜索技能市场",
-                "输入关键词（如 pdf、frontend、testing）搜索社区技能。",
+                t(k::SKILLS_MARKET_EMPTY_TITLE),
+                t(k::SKILLS_MARKET_EMPTY_HINT),
                 None,
             ));
         }
@@ -1331,7 +1518,7 @@ impl SkillsView {
                                 )
                                 .child(components::badge(
                                     BadgeTone::Accent,
-                                    format!("{} 次安装", skill.installs),
+                                    tf!(k::SKILLS_MARKET_INSTALLS, count = skill.installs),
                                 )),
                         )
                         .child(div().text_color(theme::muted()).text_xs().truncate().child(
@@ -1352,14 +1539,18 @@ impl SkillsView {
                             s.child(
                                 components::button(
                                     SharedString::from(format!("skill-market-repo-{}", skill.key)),
-                                    "仓库",
+                                    t(k::SKILLS_ACTION_REPO),
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,
                                 )
                                 .on_click(cx.listener(
                                     move |this, _event, _window, cx| {
                                         if let Err(err) = open_url(&url) {
-                                            this.set_status(format!("打开仓库失败: {err}"), cx);
+                                            this.set_status(
+                                                NotificationLevel::Error,
+                                                tf!(k::SKILLS_STATUS_OPEN_REPO_FAILED, error = err),
+                                                cx,
+                                            );
                                         }
                                     },
                                 )),
@@ -1369,13 +1560,13 @@ impl SkillsView {
                             components::button(
                                 SharedString::from(format!("skill-market-install-{}", skill.key)),
                                 if already {
-                                    "已安装"
+                                    raw(k::SKILLS_ACTION_INSTALL_INSTALLED)
                                 } else if conflict {
-                                    "目录冲突"
+                                    raw(k::SKILLS_ACTION_INSTALL_CONFLICT)
                                 } else if installing {
-                                    "安装中..."
+                                    raw(k::SKILLS_ACTION_INSTALL_BUSY)
                                 } else {
-                                    "安装"
+                                    raw(k::SKILLS_ACTION_INSTALL)
                                 },
                                 if already || conflict || installing {
                                     ButtonTone::Neutral
@@ -1406,12 +1597,12 @@ impl SkillsView {
             components::button(
                 "skill-market-more",
                 if self.searching_market {
-                    "加载中...".to_string()
+                    raw(k::SKILLS_MARKET_MORE_BUSY).to_string()
                 } else {
-                    format!(
-                        "加载更多（{}/{}）",
-                        self.market_results.len(),
-                        self.market_total
+                    tf!(
+                        k::SKILLS_MARKET_MORE,
+                        loaded = self.market_results.len(),
+                        total = self.market_total,
                     )
                 },
                 ButtonTone::Neutral,
@@ -1435,7 +1626,7 @@ impl SkillsView {
                 layout::row()
                     .child(layout::row_label(
                         format!("{}/{}", repo.owner, repo.name),
-                        format!("分支 {}", repo.branch),
+                        tf!(k::SKILLS_REPO_BRANCH, branch = repo.branch),
                     ))
                     .child(
                         div()
@@ -1449,7 +1640,7 @@ impl SkillsView {
                     .child(
                         components::button(
                             SharedString::from(format!("repo-delete-{owner}-{name}")),
-                            "删除",
+                            t(k::SKILLS_ACTION_DELETE),
                             ButtonTone::Danger,
                             ButtonSize::Sm,
                         )
@@ -1472,8 +1663,8 @@ impl SkillsView {
             .flex_col()
             .gap_3()
             .child(layout::section_header(
-                "技能仓库",
-                "从这些 GitHub 仓库发现技能；停用的仓库不参与发现。",
+                t(k::SKILLS_REPO_SECTION_TITLE),
+                t(k::SKILLS_REPO_SECTION_DESC),
             ));
         if !rows.is_empty() {
             col = col.child(layout::group(rows));
@@ -1489,7 +1680,7 @@ impl SkillsView {
                 .child(
                     components::button(
                         "skill-repo-add",
-                        "添加仓库",
+                        t(k::SKILLS_REPO_ADD),
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
                     )
@@ -1501,9 +1692,9 @@ impl SkillsView {
                     components::button(
                         "skill-repo-discover",
                         if self.discovering {
-                            "发现中..."
+                            raw(k::SKILLS_REPO_DISCOVER_BUSY)
                         } else {
-                            "刷新发现"
+                            raw(k::SKILLS_REPO_DISCOVER)
                         },
                         ButtonTone::Primary,
                         ButtonSize::Sm,
@@ -1521,24 +1712,21 @@ impl SkillsView {
             .flex_col()
             .gap_3()
             .child(layout::section_header(
-                "仓库技能",
-                format!(
-                    "从已启用仓库发现 {} 个可安装技能。",
-                    self.discoverable.len()
-                ),
+                t(k::SKILLS_REPO_RESULTS_TITLE),
+                tf!(k::SKILLS_REPO_RESULTS_DESC, count = self.discoverable.len()),
             ));
         if self.discoverable.is_empty() {
             col = col.child(components::empty_state(
                 IconName::Cloud,
                 if self.discovering {
-                    "正在发现技能..."
+                    raw(k::SKILLS_REPO_EMPTY_DISCOVERING_TITLE)
                 } else {
-                    "暂无可安装技能"
+                    raw(k::SKILLS_REPO_EMPTY_NONE_TITLE)
                 },
                 if self.discovering {
-                    "正在拉取仓库内容。"
+                    raw(k::SKILLS_REPO_EMPTY_DISCOVERING_HINT)
                 } else {
-                    "添加仓库后点击「刷新发现」加载技能列表。"
+                    raw(k::SKILLS_REPO_EMPTY_NONE_HINT)
                 },
                 None,
             ));
@@ -1589,13 +1777,13 @@ impl SkillsView {
                         components::button(
                             SharedString::from(format!("skill-install-{}", skill.key)),
                             if already {
-                                "已安装"
+                                raw(k::SKILLS_ACTION_INSTALL_INSTALLED)
                             } else if conflict {
-                                "目录冲突"
+                                raw(k::SKILLS_ACTION_INSTALL_CONFLICT)
                             } else if installing {
-                                "安装中..."
+                                raw(k::SKILLS_ACTION_INSTALL_BUSY)
                             } else {
-                                "安装"
+                                raw(k::SKILLS_ACTION_INSTALL)
                             },
                             if already || conflict || installing {
                                 ButtonTone::Neutral
@@ -1986,8 +2174,8 @@ impl Render for SkillsView {
         layout::page()
             .relative()
             .child(layout::page_header(
-                "技能",
-                Some("通过 skills CLI 集中安装、更新并分发技能".into()),
+                t(k::SKILLS_HEADER_TITLE),
+                Some(t(k::SKILLS_HEADER_SUBTITLE)),
             ))
             .child(layout::virtual_body(
                 "skills-list-body",
@@ -1997,14 +2185,18 @@ impl Render for SkillsView {
             .when_some(self.confirm.clone(), |root, action| {
                 let (title, message, confirm_label) = match &action {
                     ConfirmAction::Uninstall { name, .. } => (
-                        "卸载技能",
-                        format!("确定卸载技能「{name}」吗？skills CLI 会从已启用应用中移除它。"),
-                        "卸载",
+                        raw(k::SKILLS_CONFIRM_UNINSTALL_TITLE),
+                        tf!(k::SKILLS_CONFIRM_UNINSTALL_MESSAGE, name = name),
+                        raw(k::SKILLS_ACTION_UNINSTALL),
                     ),
                     ConfirmAction::DeleteRepo { owner, name } => (
-                        "删除仓库",
-                        format!("确定删除技能仓库「{owner}/{name}」吗？已安装的技能不受影响。"),
-                        "删除",
+                        raw(k::SKILLS_CONFIRM_DELETE_REPO_TITLE),
+                        tf!(
+                            k::SKILLS_CONFIRM_DELETE_REPO_MESSAGE,
+                            owner = owner,
+                            name = name,
+                        ),
+                        raw(k::SKILLS_ACTION_DELETE),
                     ),
                 };
                 root.child(components::modal_overlay(
@@ -2021,7 +2213,7 @@ impl Render for SkillsView {
                         .child(components::modal_footer(vec![
                             components::button(
                                 "skill-confirm-cancel",
-                                "取消",
+                                t(k::SKILLS_ACTION_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -2161,4 +2353,4 @@ fn open_path(path: &Path) -> Result<(), String> {
     cmd.spawn().map(|_| ()).map_err(|err| err.to_string())
 }
 
-crate::notifications::impl_status_toasts!(SkillsView);
+crate::notifications::impl_status_toasts_leveled!(SkillsView);
