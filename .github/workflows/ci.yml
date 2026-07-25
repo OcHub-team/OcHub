@@ -1,23 +1,10 @@
 name: CI
 
-# The docs site (docs/site) has its own Node toolchain and workflow
-# (.github/workflows/docs.yml), so a docs-only change shouldn't spend 90
-# minutes rebuilding the Rust workspace.
-#
-# NOTE: if "Format, lint, and test" is a required status check, a
-# docs-only PR will never report it and will sit unmergeable. Either drop
-# the requirement or make it required-but-skippable in branch protection.
 on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
   workflow_dispatch:
 
 permissions:
