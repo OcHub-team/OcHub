@@ -715,6 +715,33 @@ pub fn get_settings() -> AppSettings {
         .clone()
 }
 
+/// Read one app-enabled override without cloning the full settings graph.
+///
+/// Plugin checks are common UI metadata lookups; routing them through
+/// [`get_settings`] used to clone sync credentials, migration state, path
+/// overrides, and every other setting for a single boolean.
+pub(crate) fn app_enabled_override(id: &str) -> Option<bool> {
+    settings_store()
+        .read()
+        .unwrap_or_else(|e| {
+            log::warn!("设置锁已毒化，使用恢复值: {e}");
+            e.into_inner()
+        })
+        .app_enabled(id)
+}
+
+/// Snapshot only the enabled-app map for one-pass plugin filtering.
+pub(crate) fn enabled_apps_snapshot() -> Option<std::collections::BTreeMap<String, bool>> {
+    settings_store()
+        .read()
+        .unwrap_or_else(|e| {
+            log::warn!("设置锁已毒化，使用恢复值: {e}");
+            e.into_inner()
+        })
+        .enabled_apps
+        .clone()
+}
+
 /// Settings with secrets redacted, for sending to the UI.
 pub fn get_settings_for_frontend() -> AppSettings {
     let mut settings = get_settings();

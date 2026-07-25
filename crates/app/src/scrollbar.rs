@@ -201,7 +201,14 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
         };
         let scroll = scroll_amount_for_thumb_top(&scrollbar, pointer_y - drag_offset);
         let current = self.handle.offset();
-        self.handle.set_offset(point(current.x, -scroll));
+        let next_y = -scroll;
+        // Pointer devices can emit several events for the same physical pixel.
+        // Avoid invalidating the window until the scroll position has actually
+        // crossed a paintable distance.
+        if f32::from((current.y - next_y).abs()) < 0.5 {
+            return;
+        }
+        self.handle.set_offset(point(current.x, next_y));
         window.refresh();
     }
 

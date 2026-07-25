@@ -7,6 +7,8 @@
 //! (see callers) to get a draw-in. The progress scales the curve up from the
 //! baseline, so the chart "rises" into view.
 
+use std::sync::Arc;
+
 use gpui::{
     canvas, fill, linear_color_stop, linear_gradient, outline, point, px, size, App, BorderStyle,
     Bounds, Hsla, IntoElement, PathBuilder, Pixels, RenderOnce, SharedString, Styled, TextRun,
@@ -18,12 +20,12 @@ use crate::theme;
 /// An animated area + line chart over an evenly-spaced series of values.
 #[derive(IntoElement)]
 pub struct AreaChart {
-    values: Vec<f32>,
+    values: Arc<[f32]>,
     /// Pre-formatted tooltip text per bucket (same order as `values`).
     /// Empty disables hover. The caller must re-render on mouse move over the
     /// chart (e.g. an `on_mouse_move` → `cx.notify()` wrapper) — the paint pass
     /// reads the live mouse position each frame.
-    hover_labels: Vec<SharedString>,
+    hover_labels: Arc<[SharedString]>,
     line: Hsla,
     fill_top: Hsla,
     fill_bottom: Hsla,
@@ -32,10 +34,10 @@ pub struct AreaChart {
 }
 
 impl AreaChart {
-    pub fn new(values: Vec<f32>) -> Self {
+    pub fn new(values: impl Into<Arc<[f32]>>) -> Self {
         let mut chart = Self {
-            values,
-            hover_labels: Vec::new(),
+            values: values.into(),
+            hover_labels: Arc::from([]),
             line: theme::accent().into(),
             fill_top: theme::accent().into(),
             fill_bottom: theme::accent().into(),
@@ -48,8 +50,8 @@ impl AreaChart {
 
     /// Enable hover: show `labels[i]` in a tooltip when the pointer is over
     /// bucket `i`, with a crosshair + marker dot on the curve.
-    pub fn hover_labels(mut self, labels: Vec<SharedString>) -> Self {
-        self.hover_labels = labels;
+    pub fn hover_labels(mut self, labels: impl Into<Arc<[SharedString]>>) -> Self {
+        self.hover_labels = labels.into();
         self
     }
 
@@ -90,19 +92,15 @@ impl RenderOnce for AreaChart {
             progress,
         } = self;
 
+        let geometry_values = values.clone();
         canvas(
-            move |_bounds, _window, _cx| (),
-            move |bounds, _prepaint, window, cx| {
-                paint_area(
-                    bounds,
-                    &values,
-                    line,
-                    fill_top,
-                    fill_bottom,
-                    progress,
-                    window,
-                );
-                paint_hover(bounds, &values, &hover_labels, line, window, cx);
+            move |bounds, _window, _cx| chart_geometry(bounds, &geometry_values),
+            move |bounds, geometry, window, cx| {
+                let Some(geometry) = geometry.as_ref() else {
+                    return;
+                };
+                paint_area(geometry, line, fill_top, fill_bottom, progress, window);
+                paint_hover(bounds, geometry, &hover_labels, line, window, cx);
             },
         )
         .w_full()
@@ -120,7 +118,7 @@ struct ChartGeom {
     pts: Vec<(f32, f32)>,
 }
 
-fn chart_geometry(bounds: Bounds<Pixels>, values: &[f32], progress: f32) -> Option<ChartGeom> {
+fn chart_geometry(bounds: Bounds<Pixels>, values: &[f32]) -> Option<ChartGeom> {
     if values.len() < 2 {
         return None;
     }
@@ -140,13 +138,15 @@ fn chart_geometry(bounds: Bounds<Pixels>, values: &[f32], progress: f32) -> Opti
         .max(f32::EPSILON);
     let n = values.len();
 
-    // Project each value onto the canvas, scaling its height by the animation progress.
+    // Project the fully drawn series once. The draw-in animation scales these
+    // points while constructing paths, so hover and area painting share this
+    // allocation instead of projecting the series twice per frame.
     let pts: Vec<(f32, f32)> = values
         .iter()
         .enumerate()
         .map(|(i, &v)| {
             let x = x0 + width * (i as f32) / ((n - 1) as f32);
-            let y = baseline - (v / max_v) * usable_h * progress;
+            let y = baseline - (v / max_v) * usable_h;
             (x, y)
         })
         .collect();
@@ -163,28 +163,25 @@ fn chart_geometry(bounds: Bounds<Pixels>, values: &[f32], progress: f32) -> Opti
 
 #[allow(clippy::too_many_arguments)]
 fn paint_area(
-    bounds: Bounds<Pixels>,
-    values: &[f32],
+    geometry: &ChartGeom,
     line: Hsla,
     fill_top: Hsla,
     fill_bottom: Hsla,
     progress: f32,
     window: &mut Window,
 ) {
-    let Some(ChartGeom {
+    let ChartGeom {
         x0, baseline, pts, ..
-    }) = chart_geometry(bounds, values, progress)
-    else {
-        return;
-    };
+    } = geometry;
     let n = pts.len();
+    let scaled_y = |y: f32| baseline - (baseline - y) * progress;
 
     // Gradient area: curve along the top, drop to the baseline, close back to the start.
     let mut fill = PathBuilder::fill();
-    fill.move_to(point(px(x0), px(baseline)));
-    fill.line_to(point(px(pts[0].0), px(pts[0].1)));
-    smooth_through(&mut fill, &pts);
-    fill.line_to(point(px(pts[n - 1].0), px(baseline)));
+    fill.move_to(point(px(*x0), px(*baseline)));
+    fill.line_to(point(px(pts[0].0), px(scaled_y(pts[0].1))));
+    smooth_through_scaled(&mut fill, pts, *baseline, progress);
+    fill.line_to(point(px(pts[n - 1].0), px(*baseline)));
     fill.close();
     if let Ok(path) = fill.build() {
         window.paint_path(
@@ -199,8 +196,8 @@ fn paint_area(
 
     // Stroked line on top of the fill.
     let mut stroke = PathBuilder::stroke(px(2.0));
-    stroke.move_to(point(px(pts[0].0), px(pts[0].1)));
-    smooth_through(&mut stroke, &pts);
+    stroke.move_to(point(px(pts[0].0), px(scaled_y(pts[0].1))));
+    smooth_through_scaled(&mut stroke, pts, *baseline, progress);
     if let Ok(path) = stroke.build() {
         window.paint_path(path, line);
     }
@@ -210,24 +207,30 @@ fn paint_area(
 /// already `pts[0]`. Uses the quadratic-midpoint technique: each segment curves to the
 /// midpoint of the next pair using the shared vertex as the control point, which keeps
 /// the line continuous and smooth without overshoot.
-fn smooth_through(builder: &mut PathBuilder, pts: &[(f32, f32)]) {
+fn smooth_through_scaled(
+    builder: &mut PathBuilder,
+    pts: &[(f32, f32)],
+    baseline: f32,
+    progress: f32,
+) {
     let n = pts.len();
+    let y = |value: f32| baseline - (baseline - value) * progress;
     if n < 2 {
         return;
     }
     if n == 2 {
-        builder.line_to(point(px(pts[1].0), px(pts[1].1)));
+        builder.line_to(point(px(pts[1].0), px(y(pts[1].1))));
         return;
     }
     for i in 1..n - 1 {
         let mid_x = (pts[i].0 + pts[i + 1].0) / 2.0;
-        let mid_y = (pts[i].1 + pts[i + 1].1) / 2.0;
+        let mid_y = y((pts[i].1 + pts[i + 1].1) / 2.0);
         builder.curve_to(
             point(px(mid_x), px(mid_y)),
-            point(px(pts[i].0), px(pts[i].1)),
+            point(px(pts[i].0), px(y(pts[i].1))),
         );
     }
-    builder.line_to(point(px(pts[n - 1].0), px(pts[n - 1].1)));
+    builder.line_to(point(px(pts[n - 1].0), px(y(pts[n - 1].1))));
 }
 
 /// Crosshair + tooltip for the bucket nearest the pointer, painted above the
@@ -236,7 +239,7 @@ fn smooth_through(builder: &mut PathBuilder, pts: &[(f32, f32)]) {
 /// put while the draw-in animation plays underneath.
 fn paint_hover(
     bounds: Bounds<Pixels>,
-    values: &[f32],
+    geom: &ChartGeom,
     labels: &[SharedString],
     line: Hsla,
     window: &mut Window,
@@ -249,9 +252,6 @@ fn paint_hover(
     if !bounds.contains(&mouse) {
         return;
     }
-    let Some(geom) = chart_geometry(bounds, values, 1.0) else {
-        return;
-    };
     let n = geom.pts.len();
     let rel = ((f32::from(mouse.x) - geom.x0) / geom.width).clamp(0.0, 1.0);
     let ix = (rel * (n - 1) as f32).round() as usize;

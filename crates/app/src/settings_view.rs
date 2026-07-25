@@ -46,6 +46,7 @@ use gpui::{
     ScrollHandle, SharedString, Window,
 };
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
+use ochub_core::plugin::{AppPlugin, ManifestLoadError};
 use ochub_core::settings::{self, AppSettings};
 use ochub_core::AppState;
 
@@ -102,6 +103,8 @@ pub struct SettingsView {
     /// Display cache. Written only by `= settings::get_settings()`, never read
     /// back into the store — see the module doc.
     settings: AppSettings,
+    plugins: Arc<[Arc<dyn AppPlugin>]>,
+    plugin_load_errors: Arc<[ManifestLoadError]>,
     page: Page,
     /// The six root blocks, or one block when a search query is active.
     root_list: ListState,
@@ -119,6 +122,9 @@ pub struct SettingsView {
     /// `Some` only while `page == Page::Sync`.
     draft: Option<SyncDraft>,
     sync_busy: bool,
+    /// Serializes settings-file and OS integration writes without blocking the
+    /// GPUI thread.
+    settings_busy: bool,
     /// The login-item error belongs to two specific rows, so it renders inline
     /// in the startup group rather than as a toast. Stores the raw OS message;
     /// the sentence around it is built at paint time.
@@ -144,9 +150,11 @@ const APPS_BLOCK_COUNT: usize = 3;
 impl SettingsView {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::new(cx, t(k::SETTINGS_SEARCH_PLACEHOLDER)).compact());
-        let this = Self {
+        let mut this = Self {
             app,
             settings: settings::get_settings(),
+            plugins: ochub_core::plugin::all_plugins_snapshot(),
+            plugin_load_errors: ochub_core::plugin::manifest_load_errors().into(),
             page: Page::Root,
             root_list: ListState::new(ROOT_BLOCK_COUNT, ListAlignment::Top, px(600.)),
             apps_list: ListState::new(APPS_BLOCK_COUNT, ListAlignment::Top, px(600.)),
@@ -158,13 +166,14 @@ impl SettingsView {
             toggling: HashSet::new(),
             draft: None,
             sync_busy: false,
+            settings_busy: false,
             startup_error: None,
             warned_dual_target: false,
             pending_nav: None,
             confirm: None,
             status: None,
             status_level: None,
-            ccswitch_source: import_ccswitch::detect_source().filter(|source| !source.is_empty()),
+            ccswitch_source: None,
             ccswitch_busy: false,
         };
 
@@ -181,7 +190,25 @@ impl SettingsView {
         })
         .detach();
 
+        this.detect_ccswitch_source(cx);
         this
+    }
+
+    fn detect_ccswitch_source(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let source = cx
+                .background_spawn(async {
+                    import_ccswitch::detect_source().filter(|source| !source.is_empty())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.ccswitch_source = source;
+                this.root_list.reset(this.root_block_count());
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Re-read the store so the page cannot show state a background write or a
@@ -317,25 +344,50 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// One targeted read-modify-write under the store's lock, then a re-read so
-    /// the control renders from what was actually persisted. A failed write
-    /// shows a toast and the control snaps back next frame, because nothing
-    /// here renders from local optimism.
-    fn write(&mut self, mutator: impl FnOnce(&mut AppSettings), cx: &mut Context<Self>) -> bool {
-        match settings::mutate_settings(mutator) {
-            Ok(()) => {
-                self.reload(cx);
-                true
-            }
-            Err(err) => {
-                self.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::SETTINGS_STATUS_SAVE_FAILED, error = err),
-                    cx,
-                );
-                false
-            }
+    fn write(
+        &mut self,
+        mutator: impl FnOnce(&mut AppSettings) + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.write_then(mutator, |_this, _cx| {}, cx);
+    }
+
+    /// One targeted read-modify-write off the UI thread, followed by an
+    /// authoritative re-read and an optional UI-side effect.
+    fn write_then(
+        &mut self,
+        mutator: impl FnOnce(&mut AppSettings) + Send + 'static,
+        on_success: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_busy {
+            return;
         }
+        self.settings_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    settings::mutate_settings(mutator).map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.settings_busy = false;
+                match result {
+                    Ok(()) => {
+                        this.reload(cx);
+                        on_success(this, cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_STATUS_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// A sub-page header: back button, then the same title/subtitle column

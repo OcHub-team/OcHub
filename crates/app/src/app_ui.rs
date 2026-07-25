@@ -9,8 +9,9 @@ use std::{
 };
 
 use gpui::{
-    div, prelude::*, px, App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton,
-    ScrollHandle, SharedString, Window, WindowAppearance,
+    div, point, prelude::*, px, AnyElement, App, Bounds, Context, Element, ElementId, Entity,
+    FontWeight, GlobalElementId, InspectorElementId, LayoutId, ListAlignment, ListState,
+    MouseButton, Pixels, ScrollHandle, SharedString, Window, WindowAppearance,
 };
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
@@ -161,8 +162,27 @@ impl StartupNotice {
 pub struct AppRoot {
     app: Arc<AppState>,
     selected_app: AppType,
+    /// Enabled builtin apps in registry order. Refreshed only when settings
+    /// emit `AppsChanged`; sidebar frames never clone global settings.
+    visible_apps: Arc<[AppType]>,
     section: Section,
     providers: Vec<Provider>,
+    /// Render-only provider data. Rebuilt when provider data changes so a
+    /// scroll/animation frame never parses tool configuration or allocates
+    /// display strings.
+    provider_presentations: HashMap<String, ProviderPresentation>,
+    /// Immutable provider-list plan shared by GPUI's list processor. Replaced
+    /// only when the provider set/current selection changes.
+    provider_rows: Arc<[ProviderRow]>,
+    /// Direct-provider slots and their aligned row indices. Keeping these
+    /// cached makes drag-move processing linear only in the rows whose bounds
+    /// must actually be sampled.
+    provider_sortable_slots: Arc<[usize]>,
+    provider_sortable_rows: Arc<[usize]>,
+    provider_sortable_positions: HashMap<String, usize>,
+    provider_loaded_app: Option<AppType>,
+    provider_reload_generation: u64,
+    provider_action_in_flight: bool,
     current: String,
     gateway_routes: Vec<GatewayRoute>,
     gateway_keys: Vec<GatewayKey>,
@@ -170,7 +190,7 @@ pub struct AppRoot {
     /// Active provider editor (add or edit); when `Some`, replaces the list.
     editor: Option<Entity<ProviderEditor>>,
     /// Provider pending deletion confirmation; when `Some`, a modal is shown.
-    confirm_delete: Option<Provider>,
+    confirm_delete: Option<ProviderDeleteTarget>,
     /// One-time acknowledgement shown after the first successful launch.
     show_first_run_notice: bool,
     /// cc-switch data found on disk that the first-run notice is offering to
@@ -205,8 +225,8 @@ pub struct AppRoot {
     sidebar_scroll_handle: ScrollHandle,
 }
 
-/// Row plan for the virtualized provider list. Rebuilt每帧并被 list 的
-/// processor 捕获，保证一帧内索引与内容一致。`Card` 存 `providers` 的下标。
+/// Cached row plan for the virtualized provider list. It is replaced only when
+/// provider/current state changes; `Card` stores an index into `providers`.
 #[derive(Clone, Copy)]
 enum ProviderRow {
     Hero,
@@ -216,6 +236,70 @@ enum ProviderRow {
     GatewayCta,
     EmptyState,
     Card(usize),
+}
+
+#[derive(Clone)]
+struct ProviderPresentation {
+    name: SharedString,
+    base_url: SharedString,
+}
+
+struct ProviderPageLoad {
+    providers: Result<Vec<Provider>, String>,
+    base_urls: HashMap<String, String>,
+    current: String,
+    gateway_routes: Vec<GatewayRoute>,
+    gateway_keys: Vec<GatewayKey>,
+}
+
+impl ProviderPageLoad {
+    fn load(app: &AppState, app_type: AppType) -> Self {
+        if let Err(err) = ProviderService::auto_import_live_providers(app, app_type) {
+            log::debug!(
+                "automatic provider discovery skipped for {}: {err}",
+                app_type.as_str()
+            );
+        }
+
+        let providers = ProviderService::list(app, app_type)
+            .map(|map| map.into_values().collect::<Vec<_>>())
+            .map_err(|error| error.to_string());
+        let base_urls = providers
+            .as_ref()
+            .map(|providers| {
+                providers
+                    .iter()
+                    .filter(|provider| !provider.is_local_gateway())
+                    .map(|provider| {
+                        (
+                            provider.id.clone(),
+                            provider.resolve_usage_base_url(&app_type),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Self {
+            providers,
+            base_urls,
+            current: ProviderService::current(app, app_type).unwrap_or_default(),
+            gateway_routes: app.db.get_gateway_routes().unwrap_or_default(),
+            gateway_keys: app.db.get_gateway_keys().unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ProviderDeleteTarget {
+    id: String,
+    name: SharedString,
+}
+
+enum ProviderGatewayConnectError {
+    Config(String),
+    Start(String),
+    Switch(String),
 }
 
 #[derive(Clone)]
@@ -237,8 +321,10 @@ struct ProviderDragState {
     source_position: usize,
     target_position: usize,
     transition_started: Instant,
-    from_offsets: HashMap<String, f32>,
-    to_offsets: HashMap<String, f32>,
+    /// Paint offsets are indexed by sortable position. This keeps pointer-move
+    /// animation bookkeeping allocation-free with respect to provider IDs.
+    from_offsets: Vec<f32>,
+    to_offsets: Vec<f32>,
 }
 
 impl ProviderDragState {
@@ -248,8 +334,8 @@ impl ProviderDragState {
             source_position: dragged.source_position,
             target_position: dragged.source_position,
             transition_started: Instant::now(),
-            from_offsets: HashMap::new(),
-            to_offsets: HashMap::new(),
+            from_offsets: Vec::new(),
+            to_offsets: Vec::new(),
         }
     }
 
@@ -263,12 +349,12 @@ impl ProviderDragState {
         .clamp(0., 1.)
     }
 
-    fn offset_for(&self, provider_id: &str, now: Instant, reduce_motion: bool) -> f32 {
+    fn offset_for(&self, position: usize, now: Instant, reduce_motion: bool) -> f32 {
         let progress = self.animation_progress(now, reduce_motion);
         // Quintic ease-out: quick acknowledgement, then a quiet deceleration.
         let eased = 1. - (1. - progress).powi(5);
-        let from = self.from_offsets.get(provider_id).copied().unwrap_or(0.);
-        let to = self.to_offsets.get(provider_id).copied().unwrap_or(0.);
+        let from = self.from_offsets.get(position).copied().unwrap_or(0.);
+        let to = self.to_offsets.get(position).copied().unwrap_or(0.);
         from + (to - from) * eased
     }
 
@@ -276,37 +362,25 @@ impl ProviderDragState {
         if reduce_motion || self.animation_progress(now, false) >= 1. {
             return false;
         }
-        self.from_offsets
-            .keys()
-            .chain(self.to_offsets.keys())
-            .any(|provider_id| {
-                let from = self.from_offsets.get(provider_id).copied().unwrap_or(0.);
-                let to = self.to_offsets.get(provider_id).copied().unwrap_or(0.);
-                (from - to).abs() > f32::EPSILON
-            })
+        let count = self.from_offsets.len().max(self.to_offsets.len());
+        (0..count).any(|position| {
+            let from = self.from_offsets.get(position).copied().unwrap_or(0.);
+            let to = self.to_offsets.get(position).copied().unwrap_or(0.);
+            (from - to).abs() > f32::EPSILON
+        })
     }
 
     fn retarget(
         &mut self,
         target_position: usize,
-        provider_ids: &[String],
         row_tops: &[f32],
         now: Instant,
         reduce_motion: bool,
     ) {
-        let current_offsets = provider_ids
-            .iter()
-            .filter_map(|provider_id| {
-                let offset = self.offset_for(provider_id, now, reduce_motion);
-                (offset.abs() > f32::EPSILON).then(|| (provider_id.clone(), offset))
-            })
+        let current_offsets = (0..row_tops.len())
+            .map(|position| self.offset_for(position, now, reduce_motion))
             .collect();
-        let desired_offsets = reorder_slot_offsets(
-            provider_ids,
-            row_tops,
-            self.source_position,
-            target_position,
-        );
+        let desired_offsets = reorder_slot_offsets(row_tops, self.source_position, target_position);
 
         self.target_position = target_position;
         self.transition_started = now;
@@ -320,36 +394,103 @@ impl ProviderDragState {
 }
 
 fn reorder_slot_offsets(
-    provider_ids: &[String],
     row_tops: &[f32],
     source_position: usize,
     target_position: usize,
-) -> HashMap<String, f32> {
-    if provider_ids.len() != row_tops.len()
-        || source_position >= provider_ids.len()
-        || target_position >= provider_ids.len()
+) -> Vec<f32> {
+    if source_position >= row_tops.len()
+        || target_position >= row_tops.len()
         || source_position == target_position
     {
-        return HashMap::new();
+        return vec![0.; row_tops.len()];
     }
 
-    let mut offsets = HashMap::new();
+    let mut offsets = vec![0.; row_tops.len()];
     if source_position < target_position {
         for position in (source_position + 1)..=target_position {
-            offsets.insert(
-                provider_ids[position].clone(),
-                row_tops[position - 1] - row_tops[position],
-            );
+            offsets[position] = row_tops[position - 1] - row_tops[position];
         }
     } else {
         for position in target_position..source_position {
-            offsets.insert(
-                provider_ids[position].clone(),
-                row_tops[position + 1] - row_tops[position],
-            );
+            offsets[position] = row_tops[position + 1] - row_tops[position];
         }
     }
     offsets
+}
+
+/// Moves a subtree during prepaint, after layout has completed. Unlike
+/// `relative().top(...)`, this does not make Taffy recompute card layout on
+/// every animation frame, while hitboxes and clipping still follow the card.
+struct PaintOffsetY {
+    offset: Pixels,
+    child: AnyElement,
+}
+
+impl PaintOffsetY {
+    fn new(offset: Pixels, child: impl IntoElement) -> Self {
+        Self {
+            offset,
+            child: child.into_any_element(),
+        }
+    }
+}
+
+impl IntoElement for PaintOffsetY {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for PaintOffsetY {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.with_element_offset(point(px(0.), self.offset), |window| {
+            self.child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+    }
 }
 
 struct ProviderDragPreview {
@@ -657,11 +798,8 @@ impl AppRoot {
         let theme_view = cx.new(ThemeView::new);
         let gallery_view = cx.new(GalleryView::new);
         let show_first_run_notice = crate::shell_support::first_run_notice_pending();
-        let ccswitch_import = show_first_run_notice
-            .then(|| Self::pending_ccswitch_import(&app))
-            .flatten();
         let initial_section = Section::from_env();
-        let enabled = Self::visible_apps();
+        let enabled = Self::load_visible_apps();
         let initial_app = std::env::var("MS_START_APP")
             .ok()
             .and_then(|value| value.parse::<AppType>().ok())
@@ -672,8 +810,17 @@ impl AppRoot {
         let mut this = Self {
             app,
             selected_app: initial_app,
+            visible_apps: enabled.into(),
             section: initial_section,
             providers: Vec::new(),
+            provider_presentations: HashMap::new(),
+            provider_rows: Vec::new().into(),
+            provider_sortable_slots: Vec::new().into(),
+            provider_sortable_rows: Vec::new().into(),
+            provider_sortable_positions: HashMap::new(),
+            provider_loaded_app: None,
+            provider_reload_generation: 0,
+            provider_action_in_flight: false,
             current: String::new(),
             gateway_routes: Vec::new(),
             gateway_keys: Vec::new(),
@@ -681,7 +828,7 @@ impl AppRoot {
             editor: None,
             confirm_delete: None,
             show_first_run_notice,
-            ccswitch_import,
+            ccswitch_import: None,
             ccswitch_importing: false,
             startup_notice,
             settings_view,
@@ -711,6 +858,10 @@ impl AppRoot {
         .detach();
         cx.subscribe(&this.settings_view, |this, _view, event, cx| match event {
             crate::settings_view::SettingsEvent::AppsChanged => {
+                this.visible_apps = Self::load_visible_apps().into();
+                this.skills_view
+                    .update(cx, |view, cx| view.refresh_apps(cx));
+                this.mcp_view.update(cx, |view, cx| view.refresh_apps(cx));
                 this.ensure_valid_selection(cx);
                 cx.notify();
             }
@@ -731,6 +882,9 @@ impl AppRoot {
         .detach();
         this.connect_toast_sources(cx);
         this.reload(cx);
+        if show_first_run_notice {
+            this.detect_pending_ccswitch_import(cx);
+        }
         this.spawn_auto_update_check(cx);
         if initial_section == Section::Providers
             && std::env::var("MS_START_EDITOR")
@@ -747,12 +901,12 @@ impl AppRoot {
             this.open_app_settings(cx);
         }
         match initial_section {
-            Section::Mcp => this.mcp_view.update(cx, |v, _| v.reload()),
+            Section::Mcp => this.mcp_view.update(cx, |v, cx| v.reload(cx)),
             Section::Skills => this.skills_view.update(cx, |v, cx| v.reload(cx)),
             Section::Gateway => this.gateway_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Usage => this.usage_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Usage => this.usage_view.update(cx, |v, cx| v.activate(cx)),
             Section::Sessions => this.sessions_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Tools => this.tools_view.update(cx, |v, _| v.reload()),
+            Section::Tools => this.tools_view.update(cx, |v, cx| v.reload(cx)),
             _ => {}
         }
         this.flush_section_toast(initial_section, cx);
@@ -829,7 +983,7 @@ impl AppRoot {
         }
     }
 
-    fn visible_apps() -> Vec<AppType> {
+    fn load_visible_apps() -> Vec<AppType> {
         ochub_core::plugin::enabled_plugins()
             .iter()
             .filter_map(|plugin| AppType::from_app_id(plugin.id()))
@@ -933,25 +1087,50 @@ impl AppRoot {
 
     /// (Re)load providers + current id for the selected app from the store.
     fn reload(&mut self, cx: &mut Context<Self>) {
-        if let Err(err) = ProviderService::auto_import_live_providers(&self.app, self.selected_app)
-        {
-            log::debug!(
-                "automatic provider discovery skipped for {}: {err}",
-                self.selected_app.as_str()
-            );
+        let app_type = self.selected_app;
+        if self.provider_loaded_app != Some(app_type) {
+            self.providers.clear();
+            self.provider_presentations.clear();
+            self.provider_rows = Vec::new().into();
+            self.provider_sortable_slots = Vec::new().into();
+            self.provider_sortable_rows = Vec::new().into();
+            self.provider_sortable_positions.clear();
+            self.current.clear();
+            self.gateway_routes.clear();
+            self.gateway_keys.clear();
+            self.provider_list_state.reset(0);
         }
-        match ProviderService::list(&self.app, self.selected_app) {
-            Ok(map) => self.providers = map.into_values().collect(),
-            Err(err) => {
-                self.providers = Vec::new();
-                self.notify_error(t(k::SHELL_PROVIDER_LOAD_FAILED), err.to_string(), cx);
-            }
-        }
-        self.current = ProviderService::current(&self.app, self.selected_app).unwrap_or_default();
-        self.gateway_routes = self.app.db.get_gateway_routes().unwrap_or_default();
-        self.gateway_keys = self.app.db.get_gateway_keys().unwrap_or_default();
-        // 行数变化由 render 里的 reset 处理；这里只失效高度缓存。
-        self.provider_list_state.remeasure();
+
+        self.provider_reload_generation = self.provider_reload_generation.wrapping_add(1);
+        let generation = self.provider_reload_generation;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let data = cx
+                .background_spawn(async move { ProviderPageLoad::load(&app, app_type) })
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.provider_reload_generation || app_type != this.selected_app {
+                    return;
+                }
+                match data.providers {
+                    Ok(providers) => this.providers = providers,
+                    Err(error) => {
+                        this.providers.clear();
+                        this.notify_error(t(k::SHELL_PROVIDER_LOAD_FAILED), error, cx);
+                    }
+                }
+                this.current = data.current;
+                this.gateway_routes = data.gateway_routes;
+                this.gateway_keys = data.gateway_keys;
+                this.rebuild_provider_render_cache(&data.base_urls);
+                this.provider_loaded_app = Some(app_type);
+                // Row heights and count follow the newly applied snapshot.
+                this.provider_list_state.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// If the currently selected app got disabled (or unregistered), move the
@@ -985,11 +1164,10 @@ impl AppRoot {
     }
 
     fn ensure_valid_selection(&mut self, cx: &mut Context<Self>) {
-        let enabled = Self::visible_apps();
-        if enabled.contains(&self.selected_app) {
+        if self.visible_apps.contains(&self.selected_app) {
             return;
         }
-        let Some(first) = enabled.first().copied() else {
+        let Some(first) = self.visible_apps.first().copied() else {
             return;
         };
         self.selected_app = first;
@@ -1000,7 +1178,7 @@ impl AppRoot {
     }
 
     fn select_app(&mut self, app: AppType, cx: &mut Context<Self>) {
-        if !Self::visible_apps().contains(&app) {
+        if !self.visible_apps.contains(&app) {
             return;
         }
         let changed = self.selected_app != app || self.section != Section::Providers;
@@ -1030,12 +1208,12 @@ impl AppRoot {
             self.showing_app_settings = false;
             // Reload the destination view's data so it reflects current state.
             match section {
-                Section::Mcp => self.mcp_view.update(cx, |v, _| v.reload()),
+                Section::Mcp => self.mcp_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Skills => self.skills_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Gateway => self.gateway_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Usage => self.usage_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Usage => self.usage_view.update(cx, |v, cx| v.activate(cx)),
                 Section::Sessions => self.sessions_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Tools => self.tools_view.update(cx, |v, _| v.reload()),
+                Section::Tools => self.tools_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Settings => self.settings_view.update(cx, |v, cx| v.reload(cx)),
                 _ => {}
             }
@@ -1049,30 +1227,48 @@ impl AppRoot {
             self.connect_local_gateway(cx);
             return;
         }
+        if self.provider_action_in_flight {
+            return;
+        }
         let name = self
             .providers
             .iter()
             .find(|provider| provider.id == id)
             .map(|provider| provider.name.clone())
             .unwrap_or_else(|| id.clone());
-        match ProviderService::switch(&self.app, self.selected_app, &id) {
-            Ok(result) => {
-                if result.warnings.is_empty() {
-                    self.notify_success(tf!(k::SHELL_PROVIDER_SWITCHED, name = name), cx);
-                } else {
-                    self.notify_warning(
-                        tf!(k::SHELL_PROVIDER_SWITCHED, name = name),
-                        Self::warnings_summary(&result.warnings),
-                        cx,
-                    );
+        self.provider_action_in_flight = true;
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ProviderService::switch(&app, app_type, &id).map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(result) if result.warnings.is_empty() => {
+                        this.notify_success(tf!(k::SHELL_PROVIDER_SWITCHED, name = name), cx);
+                    }
+                    Ok(result) => {
+                        this.notify_warning(
+                            tf!(k::SHELL_PROVIDER_SWITCHED, name = name),
+                            Self::warnings_summary(&result.warnings),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error, cx);
+                    }
                 }
-            }
-            Err(err) => {
-                self.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), err.to_string(), cx);
-            }
-        }
-        self.reload(cx);
-        shell_menu::refresh(&self.app, cx);
+                this.reload(cx);
+                shell_menu::refresh(&this.app, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -1105,6 +1301,9 @@ impl AppRoot {
     }
 
     fn connect_local_gateway(&mut self, cx: &mut Context<Self>) {
+        if self.provider_action_in_flight {
+            return;
+        }
         if self.bound_station_route().is_none() {
             self.notify_warning(
                 t(k::SHELL_GATEWAY_NEEDS_STATION_TITLE),
@@ -1114,39 +1313,46 @@ impl AppRoot {
             self.select_section(Section::Gateway, cx);
             return;
         }
-        let mut config = match self.app.db.get_gateway_config() {
-            Ok(config) => config,
-            Err(err) => {
-                self.notify_error(t(k::SHELL_GATEWAY_CONFIG_READ_FAILED), err.to_string(), cx);
-                return;
-            }
-        };
-        if !config.enabled {
-            config.enabled = true;
-            if let Err(err) = self.app.db.set_gateway_config(&config) {
-                self.notify_error(t(k::SHELL_GATEWAY_START_FAILED), err.to_string(), cx);
-                return;
-            }
-        }
+        self.provider_action_in_flight = true;
         self.notify_info(t(k::SHELL_GATEWAY_SWITCHING), cx);
         let app = self.app.clone();
         let app_type = self.selected_app;
         cx.spawn(async move |this, cx| {
-            let result = match app.gateway.start().await {
-                Ok(_) => {
-                    let app_for_switch = app.clone();
-                    cx.background_spawn(async move {
-                        ProviderService::switch(
-                            &app_for_switch,
-                            app_type,
-                            apply::GATEWAY_PROVIDER_ID,
-                        )
-                    })
+            let prepare_app = app.clone();
+            let prepare = cx
+                .background_spawn(async move {
+                    let mut config = prepare_app
+                        .db
+                        .get_gateway_config()
+                        .map_err(|error| ProviderGatewayConnectError::Config(error.to_string()))?;
+                    if !config.enabled {
+                        config.enabled = true;
+                        prepare_app
+                            .db
+                            .set_gateway_config(&config)
+                            .map_err(|error| {
+                                ProviderGatewayConnectError::Start(error.to_string())
+                            })?;
+                    }
+                    Ok::<(), ProviderGatewayConnectError>(())
+                })
+                .await;
+            let result = async {
+                prepare?;
+                app.gateway
+                    .start()
                     .await
-                }
-                Err(err) => Err(err),
-            };
+                    .map_err(|error| ProviderGatewayConnectError::Start(error.to_string()))?;
+                let app_for_switch = app.clone();
+                cx.background_spawn(async move {
+                    ProviderService::switch(&app_for_switch, app_type, apply::GATEWAY_PROVIDER_ID)
+                        .map_err(|error| ProviderGatewayConnectError::Switch(error.to_string()))
+                })
+                .await
+            }
+            .await;
             this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
                 match result {
                     Ok(result) if result.warnings.is_empty() => {
                         this.notify_success(t(k::SHELL_GATEWAY_SWITCHED), cx);
@@ -1158,8 +1364,14 @@ impl AppRoot {
                             cx,
                         );
                     }
-                    Err(err) => {
-                        this.notify_error(t(k::SHELL_GATEWAY_SWITCH_FAILED), err.to_string(), cx);
+                    Err(ProviderGatewayConnectError::Config(error)) => {
+                        this.notify_error(t(k::SHELL_GATEWAY_CONFIG_READ_FAILED), error, cx);
+                    }
+                    Err(ProviderGatewayConnectError::Start(error)) => {
+                        this.notify_error(t(k::SHELL_GATEWAY_START_FAILED), error, cx);
+                    }
+                    Err(ProviderGatewayConnectError::Switch(error)) => {
+                        this.notify_error(t(k::SHELL_GATEWAY_SWITCH_FAILED), error, cx);
                     }
                 }
                 this.reload(cx);
@@ -1172,45 +1384,82 @@ impl AppRoot {
     }
 
     fn activate_gateway_route(&mut self, route_id: String, cx: &mut Context<Self>) {
-        match apply::activate_route_for_app(&self.app, self.selected_app, &route_id) {
-            Ok(_) => {
-                let route_name = self
-                    .gateway_routes
-                    .iter()
-                    .find(|route| route.id == route_id)
-                    .map(|route| route.name.clone())
-                    .unwrap_or(route_id);
-                self.notify_success(tf!(k::SHELL_GATEWAY_ROUTES_SWITCHED, name = route_name), cx);
-            }
-            Err(err) => {
-                self.notify_error(
-                    t(k::SHELL_GATEWAY_ROUTES_SWITCH_FAILED),
-                    err.to_string(),
-                    cx,
-                );
-            }
+        if self.provider_action_in_flight {
+            return;
         }
-        self.reload(cx);
+        let route_name = self
+            .gateway_routes
+            .iter()
+            .find(|route| route.id == route_id)
+            .map(|route| route.name.clone())
+            .unwrap_or_else(|| route_id.clone());
+        self.provider_action_in_flight = true;
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    apply::activate_route_for_app(&app, app_type, &route_id)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(_) => this.notify_success(
+                        tf!(k::SHELL_GATEWAY_ROUTES_SWITCHED, name = route_name),
+                        cx,
+                    ),
+                    Err(error) => {
+                        this.notify_error(t(k::SHELL_GATEWAY_ROUTES_SWITCH_FAILED), error, cx)
+                    }
+                }
+                this.reload(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
     fn do_remove_from_live(&mut self, id: String, cx: &mut Context<Self>) {
-        match ProviderService::remove_from_live_config(&self.app, self.selected_app, &id) {
-            Ok(()) => {
-                self.notify_success(t(k::SHELL_PROVIDER_REMOVED_FROM_TOOL), cx);
-            }
-            Err(err) => self.notify_error(
-                t(k::SHELL_PROVIDER_REMOVE_FROM_TOOL_FAILED),
-                err.to_string(),
-                cx,
-            ),
+        if self.provider_action_in_flight {
+            return;
         }
-        self.reload(cx);
-        shell_menu::refresh(&self.app, cx);
+        self.provider_action_in_flight = true;
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ProviderService::remove_from_live_config(&app, app_type, &id)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(()) => {
+                        this.notify_success(t(k::SHELL_PROVIDER_REMOVED_FROM_TOOL), cx);
+                    }
+                    Err(error) => {
+                        this.notify_error(t(k::SHELL_PROVIDER_REMOVE_FROM_TOOL_FAILED), error, cx)
+                    }
+                }
+                this.reload(cx);
+                shell_menu::refresh(&this.app, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
-    fn provider_row_plan(&self) -> Vec<ProviderRow> {
+    /// Rebuild all provider-list structure in one pass. This is deliberately
+    /// called only after data/current-order changes, never from `render`.
+    fn rebuild_provider_structure_cache(&mut self) {
         let is_switch = !self.selected_app.is_additive_mode();
         let current_is_gateway = self
             .providers
@@ -1265,32 +1514,63 @@ impl AppRoot {
             }
             plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
         }
-        plan
+
+        let mut row_by_provider = vec![None; self.providers.len()];
+        for (row_index, row) in plan.iter().enumerate() {
+            if let ProviderRow::Card(provider_index) = row {
+                row_by_provider[*provider_index] = Some(row_index);
+            }
+        }
+
+        let mut sortable_rows = Vec::with_capacity(direct_ixs.len());
+        let mut sortable_positions = HashMap::with_capacity(direct_ixs.len());
+        for (position, provider_index) in direct_ixs.iter().copied().enumerate() {
+            let Some(row_index) = row_by_provider[provider_index] else {
+                continue;
+            };
+            let id = self.providers[provider_index].id.clone();
+            sortable_positions.insert(id, position);
+            sortable_rows.push(row_index);
+        }
+
+        self.provider_rows = plan.into();
+        self.provider_sortable_slots = direct_ixs.into();
+        self.provider_sortable_rows = sortable_rows.into();
+        self.provider_sortable_positions = sortable_positions;
     }
 
-    fn sortable_provider_slots(&self) -> Vec<usize> {
-        let hide_current = !self.selected_app.is_additive_mode();
-        self.providers
+    /// Resolve display-only provider data outside the frame loop. A Codex
+    /// provider can require parsing TOML; doing it here means once per reload
+    /// instead of once per visible card and animation frame.
+    fn rebuild_provider_presentations(&mut self, base_urls: &HashMap<String, String>) {
+        self.provider_presentations = self
+            .providers
             .iter()
-            .enumerate()
-            .filter(|(_, provider)| {
-                !provider.is_local_gateway() && (!hide_current || provider.id != self.current)
+            .map(|provider| {
+                let base_url = if provider.is_local_gateway() {
+                    SharedString::default()
+                } else {
+                    let base_url = base_urls.get(&provider.id).cloned().unwrap_or_default();
+                    if base_url.is_empty() {
+                        SharedString::new_static("—")
+                    } else {
+                        SharedString::from(base_url)
+                    }
+                };
+                (
+                    provider.id.clone(),
+                    ProviderPresentation {
+                        name: SharedString::from(provider.name.clone()),
+                        base_url,
+                    },
+                )
             })
-            .map(|(index, _)| index)
-            .collect()
+            .collect();
     }
 
-    fn sortable_provider_rows(&self) -> Vec<(String, usize)> {
-        let plan = self.provider_row_plan();
-        self.sortable_provider_slots()
-            .into_iter()
-            .filter_map(|provider_index| {
-                let row_index = plan.iter().position(
-                    |row| matches!(row, ProviderRow::Card(index) if *index == provider_index),
-                )?;
-                Some((self.providers[provider_index].id.clone(), row_index))
-            })
-            .collect()
+    fn rebuild_provider_render_cache(&mut self, base_urls: &HashMap<String, String>) {
+        self.rebuild_provider_presentations(base_urls);
+        self.rebuild_provider_structure_cache();
     }
 
     fn begin_provider_drag(&mut self, dragged: &DraggedProvider, cx: &mut Context<Self>) {
@@ -1315,7 +1595,7 @@ impl AppRoot {
             self.provider_drag_state = Some(ProviderDragState::new(dragged));
         }
 
-        let rows = self.sortable_provider_rows();
+        let rows = self.provider_sortable_rows.as_ref();
         if rows.len() < 2 || source_position >= rows.len() {
             return;
         }
@@ -1342,7 +1622,7 @@ impl AppRoot {
             .map_or(source_position, |state| state.target_position);
         let mut target_position = current_target.min(rows.len() - 1);
         while target_position + 1 < rows.len() {
-            let next_row = rows[target_position + 1].1;
+            let next_row = rows[target_position + 1];
             let Some(bounds) = self.provider_list_state.bounds_for_item(next_row) else {
                 break;
             };
@@ -1353,7 +1633,7 @@ impl AppRoot {
             }
         }
         while target_position > 0 {
-            let previous_row = rows[target_position - 1].1;
+            let previous_row = rows[target_position - 1];
             let Some(bounds) = self.provider_list_state.bounds_for_item(previous_row) else {
                 break;
             };
@@ -1367,30 +1647,33 @@ impl AppRoot {
             return;
         }
 
-        let measured_rows: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter_map(|(position, (_, row_index))| {
-                self.provider_list_state
-                    .bounds_for_item(*row_index)
-                    .map(|bounds| (position, bounds.top().as_f32(), bounds.size.height.as_f32()))
-            })
-            .collect();
-        let fallback_pitch = measured_rows
-            .windows(2)
-            .find_map(|pair| {
-                let pitch = pair[1].1 - pair[0].1;
-                (pitch > 0.).then_some(pitch)
-            })
-            .or_else(|| measured_rows.first().map(|row| row.2))
-            .unwrap_or(68.);
-        let Some(&(anchor_position, anchor_top, _)) = measured_rows.first() else {
+        let mut anchor = None;
+        let mut previous_measured = None;
+        let mut fallback_pitch = None;
+        for (position, row_index) in rows.iter().enumerate() {
+            let Some(bounds) = self.provider_list_state.bounds_for_item(*row_index) else {
+                continue;
+            };
+            let top = bounds.top().as_f32();
+            anchor.get_or_insert((position, top, bounds.size.height.as_f32()));
+            if let Some((previous_position, previous_top)) = previous_measured {
+                let row_distance = position - previous_position;
+                let pitch = (top - previous_top) / row_distance as f32;
+                if pitch > 0. {
+                    fallback_pitch = Some(pitch);
+                    break;
+                }
+            }
+            previous_measured = Some((position, top));
+        }
+        let Some((anchor_position, anchor_top, anchor_height)) = anchor else {
             return;
         };
+        let fallback_pitch = fallback_pitch.unwrap_or(anchor_height.max(1.));
         let row_tops: Vec<f32> = rows
             .iter()
             .enumerate()
-            .map(|(position, (_, row_index))| {
+            .map(|(position, row_index)| {
                 self.provider_list_state
                     .bounds_for_item(*row_index)
                     .map(|bounds| bounds.top().as_f32())
@@ -1400,11 +1683,9 @@ impl AppRoot {
                     })
             })
             .collect();
-        let provider_ids: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
         if let Some(state) = self.provider_drag_state.as_mut() {
             state.retarget(
                 target_position,
-                &provider_ids,
                 &row_tops,
                 Instant::now(),
                 cx.reduce_motion(),
@@ -1430,7 +1711,7 @@ impl AppRoot {
             .contains(&window.mouse_position());
         self.provider_drag_state = None;
 
-        let slots = self.sortable_provider_slots();
+        let slots = self.provider_sortable_slots.clone();
         let target_id = slots
             .get(target_position)
             .and_then(|slot| self.providers.get(*slot))
@@ -1445,13 +1726,19 @@ impl AppRoot {
     }
 
     fn provider_drag_offset(&self, provider_id: &str, reduce_motion: bool) -> f32 {
+        let Some(position) = self.provider_sortable_positions.get(provider_id).copied() else {
+            return 0.;
+        };
         self.provider_drag_state.as_ref().map_or(0., |state| {
-            state.offset_for(provider_id, Instant::now(), reduce_motion)
+            state.offset_for(position, Instant::now(), reduce_motion)
         })
     }
 
     fn reorder_provider(&mut self, source_id: String, target_id: String, cx: &mut Context<Self>) {
-        let slots = self.sortable_provider_slots();
+        if self.provider_action_in_flight {
+            return;
+        }
+        let slots = self.provider_sortable_slots.clone();
         let Some(source_position) = slots
             .iter()
             .position(|slot| self.providers[*slot].id == source_id)
@@ -1466,12 +1753,13 @@ impl AppRoot {
         };
         if !move_items_between_slots(
             &mut self.providers,
-            &slots,
+            slots.as_ref(),
             source_position,
             target_position,
         ) {
             return;
         }
+        self.rebuild_provider_structure_cache();
 
         let updates = self
             .providers
@@ -1482,51 +1770,98 @@ impl AppRoot {
                 sort_index,
             })
             .collect();
-        if let Err(err) = ProviderService::update_sort_order(&self.app, self.selected_app, updates)
-        {
-            self.notify_error(t(k::SHELL_PROVIDER_REORDER_FAILED), err.to_string(), cx);
-        }
-        self.reload(cx);
+        self.provider_action_in_flight = true;
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ProviderService::update_sort_order(&app, app_type, updates)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                if let Err(error) = result {
+                    this.notify_error(t(k::SHELL_PROVIDER_REORDER_FAILED), error, cx);
+                }
+                this.reload(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
-        match ProviderService::delete(&self.app, self.selected_app, &id) {
-            Ok(()) => {
-                self.notify_success(t(k::SHELL_PROVIDER_DELETED), cx);
-            }
-            Err(err) => self.notify_error(t(k::SHELL_PROVIDER_DELETE_FAILED), err.to_string(), cx),
+        if self.provider_action_in_flight {
+            return;
         }
-        self.reload(cx);
-        shell_menu::refresh(&self.app, cx);
+        self.provider_action_in_flight = true;
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ProviderService::delete(&app, app_type, &id).map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(()) => this.notify_success(t(k::SHELL_PROVIDER_DELETED), cx),
+                    Err(error) => this.notify_error(t(k::SHELL_PROVIDER_DELETE_FAILED), error, cx),
+                }
+                this.reload(cx);
+                shell_menu::refresh(&this.app, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
     fn acknowledge_first_run(&mut self, cx: &mut Context<Self>) {
-        crate::shell_support::confirm_first_run_notice();
         self.show_first_run_notice = false;
         cx.notify();
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_spawn(async {
+                    ochub_core::settings::mutate_settings(|settings| {
+                        settings.first_run_notice_confirmed = Some(true)
+                    })
+                })
+                .await;
+            if let Err(error) = result {
+                log::warn!("保存首次运行提示确认状态失败: {error}");
+            }
+        })
+        .detach();
     }
 
-    /// cc-switch data worth offering to import on this launch.
-    ///
-    /// Nothing is offered once the question has been answered, nor for an
-    /// install that holds no providers, MCP servers or skill repositories —
-    /// an empty import is not worth a decision. Users who skip, or who get
-    /// here after the notice was dismissed, still have Settings → Data.
-    fn pending_ccswitch_import(app: &Arc<AppState>) -> Option<DetectedSource> {
-        if app.db.ccswitch_import_decision().ok().flatten().is_some() {
-            return None;
-        }
-        import_ccswitch::detect_source().filter(|source| !source.is_empty())
-    }
-
-    /// Record the answer so the notice stops asking, whichever way it went.
-    fn record_ccswitch_decision(&mut self, decision: &str) {
-        if let Err(err) = self.app.db.set_ccswitch_import_decision(decision) {
-            log::warn!("保存 cc-switch 导入选择失败: {err}");
-        }
-        self.ccswitch_import = None;
+    fn detect_pending_ccswitch_import(&mut self, cx: &mut Context<Self>) {
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let source = cx
+                .background_spawn(async move {
+                    if app.db.ccswitch_import_decision().ok().flatten().is_some() {
+                        None
+                    } else {
+                        import_ccswitch::detect_source().filter(|source| !source.is_empty())
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.show_first_run_notice {
+                    this.ccswitch_import = source;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Re-read everything a cc-switch import rewrites. Shared by the first-run
@@ -1534,14 +1869,24 @@ impl AppRoot {
     fn reload_after_ccswitch_import(&mut self, cx: &mut Context<Self>) {
         self.ensure_valid_selection(cx);
         self.reload(cx);
-        self.mcp_view.update(cx, |view, _| view.reload());
+        self.mcp_view.update(cx, |view, cx| view.reload(cx));
         self.skills_view.update(cx, |view, cx| view.reload(cx));
         shell_menu::refresh(&self.app, cx);
         cx.notify();
     }
 
     fn skip_ccswitch_import(&mut self, cx: &mut Context<Self>) {
-        self.record_ccswitch_decision("skipped");
+        self.ccswitch_import = None;
+        let app = self.app.clone();
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_spawn(async move { app.db.set_ccswitch_import_decision("skipped") })
+                .await;
+            if let Err(error) = result {
+                log::warn!("保存 cc-switch 导入选择失败: {error}");
+            }
+        })
+        .detach();
         self.acknowledge_first_run(cx);
     }
 
@@ -1563,13 +1908,21 @@ impl AppRoot {
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { app.db.import_from_ccswitch_source(&source) })
+                .background_spawn(async move {
+                    let result = app.db.import_from_ccswitch_source(&source);
+                    if result.is_ok() {
+                        if let Err(error) = app.db.set_ccswitch_import_decision("imported") {
+                            log::warn!("保存 cc-switch 导入选择失败: {error}");
+                        }
+                    }
+                    result
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.ccswitch_importing = false;
                 match result {
                     Ok(report) => {
-                        this.record_ccswitch_decision("imported");
+                        this.ccswitch_import = None;
                         this.notify_success(
                             tf!(
                                 k::SHELL_FIRST_RUN_IMPORT_SUCCEEDED,
@@ -1758,12 +2111,28 @@ impl AppRoot {
         .detach();
     }
 
-    fn provider_base_url(&self, provider: &Provider) -> String {
-        let (base_url, _) = provider.resolve_usage_credentials(&self.selected_app);
-        if base_url.is_empty() {
-            "—".to_string()
-        } else {
-            base_url
+    fn provider_base_url(&self, provider: &Provider) -> SharedString {
+        self.provider_presentations
+            .get(&provider.id)
+            .map(|presentation| presentation.base_url.clone())
+            .unwrap_or_else(|| SharedString::new_static("—"))
+    }
+
+    fn provider_name(&self, provider: &Provider) -> SharedString {
+        self.provider_presentations
+            .get(&provider.id)
+            .map(|presentation| presentation.name.clone())
+            .unwrap_or_else(|| SharedString::from(provider.name.clone()))
+    }
+
+    fn open_edit_editor_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(provider) = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .cloned()
+        {
+            self.open_edit_editor(provider, cx);
         }
     }
 
@@ -1947,8 +2316,9 @@ impl AppRoot {
             ))
             .child(
                 div().flex().flex_col().gap_1().px_2().children(
-                    Self::visible_apps()
-                        .into_iter()
+                    self.visible_apps
+                        .iter()
+                        .copied()
                         .map(|app| self.render_sidebar_item(app, appearance, cx)),
                 ),
             )
@@ -2081,24 +2451,26 @@ impl AppRoot {
         let is_current = !self.selected_app.is_additive_mode() && provider.id == self.current;
         let is_gateway = provider.is_local_gateway();
         let id = provider.id.clone();
-        let edit_provider = provider.clone();
-        let confirm_provider = provider.clone();
+        let edit_id = id.clone();
+        let delete_target = ProviderDeleteTarget {
+            id: id.clone(),
+            name: self.provider_name(provider),
+        };
         let live_id = provider.id.clone();
-        let sortable_slots = self.sortable_provider_slots();
-        let sortable_position = sortable_slots
-            .iter()
-            .position(|slot| self.providers[*slot].id == provider.id);
-        let is_sortable = sortable_slots.len() > 1 && sortable_position.is_some();
+        let sortable_position = self.provider_sortable_positions.get(&provider.id).copied();
+        let sortable_count = self.provider_sortable_slots.len();
+        let is_sortable = sortable_count > 1 && sortable_position.is_some();
         let is_drag_source = self
             .provider_drag_state
             .as_ref()
             .is_some_and(|state| state.source_id == provider.id);
         let drag_offset = self.provider_drag_offset(&provider.id, cx.reduce_motion());
         let base_url = if is_gateway {
-            self.gateway_via_station_line()
+            SharedString::from(self.gateway_via_station_line())
         } else {
             self.provider_base_url(provider)
         };
+        let provider_name = self.provider_name(provider);
         let is_additive = self.selected_app.is_additive_mode();
         let is_in_live = provider
             .meta
@@ -2145,8 +2517,8 @@ impl AppRoot {
             let root = cx.entity();
             let dragged = DraggedProvider {
                 id: provider.id.clone(),
-                name: SharedString::from(provider.name.clone()),
-                base_url: SharedString::from(base_url.clone()),
+                name: provider_name.clone(),
+                base_url: base_url.clone(),
                 source_position,
                 app_icon: Self::app_icon(self.selected_app),
             };
@@ -2161,9 +2533,9 @@ impl AppRoot {
                 .cursor_grab()
                 .aria_label(SharedString::from(tf!(
                     k::SHELL_CARD_DRAG_ARIA,
-                    name = provider.name,
+                    name = provider_name,
                     position = source_position + 1,
-                    total = sortable_slots.len(),
+                    total = sortable_count,
                 )))
                 .aria_description(t(k::SHELL_CARD_DRAG_DESCRIPTION))
                 .hover(|style| style.bg(theme::surface_hover()))
@@ -2182,10 +2554,9 @@ impl AppRoot {
                 })
         });
 
-        components::panel()
+        let card = components::panel()
             .id(SharedString::from(format!("provider-card-{}", provider.id)))
             .relative()
-            .top(px(drag_offset))
             .opacity(if is_drag_source { 0. } else { 1. })
             .flex()
             .flex_row()
@@ -2259,7 +2630,7 @@ impl AppRoot {
                                         div()
                                             .text_color(theme::text())
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .child(SharedString::from(provider.name.clone())),
+                                            .child(provider_name.clone()),
                                     )
                                     .when(is_current, |s| {
                                         s.child(components::badge(
@@ -2274,12 +2645,7 @@ impl AppRoot {
                                         ))
                                     }),
                             )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(SharedString::from(base_url)),
-                            ),
+                            .child(div().text_color(theme::muted()).text_xs().child(base_url)),
                     ),
             )
             .child(
@@ -2297,13 +2663,13 @@ impl AppRoot {
                             t(edit_label_key),
                             false,
                         )
-                        .aria_label(SharedString::from(tf!(edit_aria_key, name = provider.name)))
+                        .aria_label(SharedString::from(tf!(edit_aria_key, name = provider_name)))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 if is_gateway {
                                     this.select_section(Section::Gateway, cx);
                                 } else {
-                                    this.open_edit_editor(edit_provider.clone(), cx);
+                                    this.open_edit_editor_by_id(&edit_id, cx);
                                 }
                             },
                         )),
@@ -2317,11 +2683,11 @@ impl AppRoot {
                             )
                             .aria_label(SharedString::from(tf!(
                                 k::SHELL_ACTION_DELETE_ARIA,
-                                name = provider.name
+                                name = provider_name
                             )))
                             .on_click(cx.listener(
                                 move |this, _event, _window, cx| {
-                                    this.confirm_delete = Some(confirm_provider.clone());
+                                    this.confirm_delete = Some(delete_target.clone());
                                     cx.notify();
                                 },
                             )),
@@ -2333,7 +2699,7 @@ impl AppRoot {
                             t(main_label_key),
                             !(is_current || (is_additive && is_in_live)),
                         )
-                        .aria_label(SharedString::from(tf!(main_aria_key, name = provider.name)))
+                        .aria_label(SharedString::from(tf!(main_aria_key, name = provider_name)))
                         .aria_selected(is_current || (is_additive && is_in_live))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -2347,7 +2713,9 @@ impl AppRoot {
                             },
                         )),
                     ),
-            )
+            );
+
+        PaintOffsetY::new(px(drag_offset), card)
     }
 
     /// Third line for gateway cards/hero: name the station actually serving
@@ -2365,13 +2733,9 @@ impl AppRoot {
     fn render_active_hero(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.selected_app;
         let accent = Self::app_accent(app);
-        let current = self
-            .providers
-            .iter()
-            .find(|p| p.id == self.current)
-            .cloned();
+        let current = self.providers.iter().find(|p| p.id == self.current);
         let has_current = current.is_some();
-        let is_gateway = current.as_ref().is_some_and(Provider::is_local_gateway);
+        let is_gateway = current.is_some_and(Provider::is_local_gateway);
 
         let icon_tile = div()
             .flex()
@@ -2401,9 +2765,15 @@ impl AppRoot {
                 23.,
             ));
 
-        let info = match &current {
+        let info = match current {
             Some(provider) => {
                 let base_url = self.provider_base_url(provider);
+                let provider_name = self.provider_name(provider);
+                let endpoint = if is_gateway {
+                    SharedString::from(self.gateway_via_station_line())
+                } else {
+                    base_url
+                };
                 div()
                     .flex()
                     .flex_col()
@@ -2442,7 +2812,7 @@ impl AppRoot {
                             .text_lg()
                             .font_weight(FontWeight::BOLD)
                             .truncate()
-                            .child(SharedString::from(provider.name.clone())),
+                            .child(provider_name),
                     )
                     .child(
                         div()
@@ -2459,13 +2829,13 @@ impl AppRoot {
                                 theme::muted(),
                                 12.,
                             ))
-                            .child(div().text_color(theme::muted()).text_xs().truncate().child(
-                                SharedString::from(if is_gateway {
-                                    self.gateway_via_station_line()
-                                } else {
-                                    base_url
-                                }),
-                            )),
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .truncate()
+                                    .child(endpoint),
+                            ),
                     )
             }
             None => div()
@@ -2497,7 +2867,8 @@ impl AppRoot {
         };
 
         let actions = current.map(|provider| {
-            let edit_provider = provider.clone();
+            let edit_id = provider.id.clone();
+            let provider_name = self.provider_name(provider);
             div().flex().flex_row().items_center().gap_2().child(
                 components::action_button(
                     SharedString::from(format!("hero-edit-{}", provider.id)),
@@ -2511,13 +2882,13 @@ impl AppRoot {
                 .aria_label(if is_gateway {
                     t(k::SHELL_ACTION_MANAGE_RELAY)
                 } else {
-                    SharedString::from(tf!(k::SHELL_ACTION_EDIT_ARIA, name = provider.name))
+                    SharedString::from(tf!(k::SHELL_ACTION_EDIT_ARIA, name = provider_name))
                 })
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     if is_gateway {
                         this.select_section(Section::Gateway, cx);
                     } else {
-                        this.open_edit_editor(edit_provider.clone(), cx);
+                        this.open_edit_editor_by_id(&edit_id, cx);
                     }
                 })),
             )
@@ -2780,7 +3151,7 @@ impl AppRoot {
             .iter()
             .find(|provider| provider.id == self.current)
             .is_some_and(Provider::is_local_gateway);
-        let plan = self.provider_row_plan();
+        let plan = self.provider_rows.clone();
         if self.provider_list_state.item_count() != plan.len() {
             self.provider_list_state.reset(plan.len());
         }
@@ -3137,21 +3508,15 @@ mod provider_reorder_tests {
 
     #[test]
     fn dragging_down_moves_intervening_cards_up_one_slot() {
-        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
-        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 0, 2);
+        let offsets = reorder_slot_offsets(&[100., 170., 250.], 0, 2);
 
-        assert_eq!(offsets.get("alpha"), None);
-        assert_eq!(offsets.get("beta"), Some(&-70.));
-        assert_eq!(offsets.get("gamma"), Some(&-80.));
+        assert_eq!(offsets, [0., -70., -80.]);
     }
 
     #[test]
     fn dragging_up_moves_intervening_cards_down_one_slot() {
-        let ids = vec!["alpha".into(), "beta".into(), "gamma".into()];
-        let offsets = reorder_slot_offsets(&ids, &[100., 170., 250.], 2, 0);
+        let offsets = reorder_slot_offsets(&[100., 170., 250.], 2, 0);
 
-        assert_eq!(offsets.get("alpha"), Some(&70.));
-        assert_eq!(offsets.get("beta"), Some(&80.));
-        assert_eq!(offsets.get("gamma"), None);
+        assert_eq!(offsets, [70., 80., 0.]);
     }
 }

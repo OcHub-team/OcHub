@@ -4,9 +4,10 @@
 //! a Tauri-style status item/tray icon. This module ports the useful cc-switch
 //! tray command surface onto the native menu APIs that are available here.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use gpui::{actions, App, Menu, MenuItem, OsAction, SharedString, SystemMenuType};
+use gpui::{actions, App, AppContext, Menu, MenuItem, OsAction, SharedString, SystemMenuType};
 use ochub_core::services::provider::ProviderService;
 use ochub_core::services::subscription::{
     SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
@@ -22,6 +23,54 @@ use crate::text_input::{Copy, Cut, Find, FindNext, FindPrevious, Paste, Redo, Se
 use crate::tf;
 
 actions!(ochub, [OpenMainWindow, QuitApp, RefreshShellMenus]);
+
+static MENU_REFRESH_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+struct ShellMenuSnapshot {
+    quick_switch_enabled: bool,
+    apps: Vec<AppProviderMenu>,
+}
+
+struct AppProviderMenu {
+    app_type: AppType,
+    providers: Result<Vec<(String, Provider)>, String>,
+    current: String,
+}
+
+impl ShellMenuSnapshot {
+    fn load(app: &Arc<AppState>) -> Self {
+        let quick_switch_enabled = settings::get_settings().show_in_tray;
+        let apps = if quick_switch_enabled {
+            enabled_app_types()
+                .into_iter()
+                .map(|app_type| {
+                    let providers = ProviderService::list(app, app_type)
+                        .map(|providers| {
+                            let mut providers = providers.into_iter().collect::<Vec<_>>();
+                            providers.sort_by(|(left_id, left), (right_id, right)| {
+                                provider_sort_key(left_id, left)
+                                    .cmp(&provider_sort_key(right_id, right))
+                            });
+                            providers
+                        })
+                        .map_err(|error| error.to_string());
+                    let current = ProviderService::current(app, app_type).unwrap_or_default();
+                    AppProviderMenu {
+                        app_type,
+                        providers,
+                        current,
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Self {
+            quick_switch_enabled,
+            apps,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = ochub, no_json)]
@@ -43,7 +92,7 @@ pub fn install(app: Arc<AppState>, cx: &mut App) {
 
     let refresh_app = app.clone();
     cx.on_action(move |_: &RefreshShellMenus, cx| {
-        apply_shell_menus(&refresh_app, cx);
+        refresh(&refresh_app, cx);
     });
 
     cx.on_action(|_: &OpenMainWindow, cx| {
@@ -53,16 +102,29 @@ pub fn install(app: Arc<AppState>, cx: &mut App) {
         cx.quit();
     });
 
-    apply_shell_menus(&app, cx);
+    refresh(&app, cx);
 }
 
 pub fn refresh(app: &Arc<AppState>, cx: &mut App) {
-    apply_shell_menus(app, cx);
+    let generation = MENU_REFRESH_GENERATION
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    let app_for_work = app.clone();
+    let app_for_apply = app.clone();
+    let task = cx.background_spawn(async move { ShellMenuSnapshot::load(&app_for_work) });
+    cx.spawn(async move |cx| {
+        let snapshot = task.await;
+        cx.update(move |cx| {
+            if MENU_REFRESH_GENERATION.load(Ordering::Acquire) == generation {
+                apply_shell_menus(&app_for_apply, snapshot, cx);
+            }
+        });
+    })
+    .detach();
 }
 
-fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
-    let settings = settings::get_settings();
-    let quick_switch_enabled = settings.show_in_tray;
+fn apply_shell_menus(app: &Arc<AppState>, snapshot: ShellMenuSnapshot, cx: &mut App) {
+    let quick_switch_enabled = snapshot.quick_switch_enabled;
     // "OcHub" is the product name, not prose: the macOS application menu is
     // titled after the app in every locale.
     let mut menus = vec![
@@ -94,19 +156,21 @@ fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
     ];
 
     if quick_switch_enabled {
-        menus.push(Menu::new(t(k::MENU_PROVIDER_TITLE)).items(provider_submenus(app)));
+        menus.push(
+            Menu::new(t(k::MENU_PROVIDER_TITLE)).items(provider_submenus(app, &snapshot.apps)),
+        );
     }
     cx.set_menus(menus);
 
     let dock_items = if cfg!(target_os = "windows") {
-        windows_taskbar_items(app, quick_switch_enabled)
+        windows_taskbar_items(&snapshot.apps, quick_switch_enabled)
     } else {
         let mut dock_items = vec![
             MenuItem::action(t(k::MENU_APP_OPEN_MAIN_WINDOW), OpenMainWindow),
             MenuItem::separator(),
         ];
         if quick_switch_enabled {
-            dock_items.extend(provider_submenus(app));
+            dock_items.extend(provider_submenus(app, &snapshot.apps));
             dock_items.push(MenuItem::separator());
         }
         dock_items.push(MenuItem::action(t(k::MENU_APP_QUIT), QuitApp));
@@ -115,10 +179,9 @@ fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
     cx.set_dock_menu(dock_items);
 }
 
-fn provider_submenus(app: &Arc<AppState>) -> Vec<MenuItem> {
-    enabled_app_types()
-        .into_iter()
-        .map(|app_type| provider_submenu(app, app_type))
+fn provider_submenus(app: &Arc<AppState>, apps: &[AppProviderMenu]) -> Vec<MenuItem> {
+    apps.iter()
+        .map(|provider_menu| provider_submenu(app, provider_menu))
         .collect()
 }
 
@@ -129,13 +192,14 @@ fn enabled_app_types() -> Vec<AppType> {
         .collect()
 }
 
-fn provider_submenu(app: &Arc<AppState>, app_type: AppType) -> MenuItem {
-    let providers = match ProviderService::list(app, app_type) {
+fn provider_submenu(app: &Arc<AppState>, provider_menu: &AppProviderMenu) -> MenuItem {
+    let app_type = provider_menu.app_type;
+    let providers = match &provider_menu.providers {
         Ok(providers) => providers,
-        Err(err) => {
+        Err(error) => {
             return MenuItem::submenu(
                 Menu::new(app_label(app_type)).items([MenuItem::action(
-                    tf!(k::MENU_PROVIDER_LOAD_FAILED, error = err),
+                    tf!(k::MENU_PROVIDER_LOAD_FAILED, error = error),
                     RefreshShellMenus,
                 )
                 .disabled(true)]),
@@ -149,22 +213,16 @@ fn provider_submenu(app: &Arc<AppState>, app_type: AppType) -> MenuItem {
         ]));
     }
 
-    let current = ProviderService::current(app, app_type).unwrap_or_default();
-    let mut providers = providers.into_iter().collect::<Vec<_>>();
-    providers.sort_by(|(left_id, left), (right_id, right)| {
-        provider_sort_key(left_id, left).cmp(&provider_sort_key(right_id, right))
-    });
-
-    let label = provider_submenu_label(app, app_type, &providers, &current);
+    let label = provider_submenu_label(app, app_type, providers, &provider_menu.current);
 
     MenuItem::submenu(
-        Menu::new(label).items(providers.into_iter().map(|(id, provider)| {
-            let checked = provider_is_selected(app_type, &current, &provider);
+        Menu::new(label).items(providers.iter().map(|(id, provider)| {
+            let checked = provider_is_selected(app_type, &provider_menu.current, provider);
             MenuItem::action(
-                provider_item_label(app_type, &provider),
+                provider_item_label(app_type, provider),
                 SwitchProviderFromMenu {
                     app: app_type.as_str().to_string(),
-                    provider_id: id,
+                    provider_id: id.clone(),
                 },
             )
             .checked(checked)
@@ -172,35 +230,31 @@ fn provider_submenu(app: &Arc<AppState>, app_type: AppType) -> MenuItem {
     )
 }
 
-fn windows_taskbar_items(app: &Arc<AppState>, quick_switch_enabled: bool) -> Vec<MenuItem> {
+fn windows_taskbar_items(apps: &[AppProviderMenu], quick_switch_enabled: bool) -> Vec<MenuItem> {
     let mut items = vec![MenuItem::action(
         t(k::MENU_APP_OPEN_MAIN_WINDOW),
         OpenMainWindow,
     )];
     if quick_switch_enabled {
-        items.extend(windows_provider_items(app));
+        items.extend(windows_provider_items(apps));
     }
     items.push(MenuItem::action(t(k::MENU_APP_QUIT), QuitApp));
     items
 }
 
-fn windows_provider_items(app: &Arc<AppState>) -> Vec<MenuItem> {
+fn windows_provider_items(apps: &[AppProviderMenu]) -> Vec<MenuItem> {
     let mut items = Vec::new();
 
-    for app_type in enabled_app_types() {
-        let Ok(providers) = ProviderService::list(app, app_type) else {
+    for provider_menu in apps {
+        let app_type = provider_menu.app_type;
+        let Ok(providers) = &provider_menu.providers else {
             continue;
         };
-        let current = ProviderService::current(app, app_type).unwrap_or_default();
-        let mut providers = providers.into_iter().collect::<Vec<_>>();
-        providers.sort_by(|(left_id, left), (right_id, right)| {
-            provider_sort_key(left_id, left).cmp(&provider_sort_key(right_id, right))
-        });
 
         for (id, provider) in providers {
             // One whole label per state rather than a status word pasted into a
             // shared template: the parenthetical is grammar, not a value.
-            let label = if provider_is_selected(app_type, &current, &provider) {
+            let label = if provider_is_selected(app_type, &provider_menu.current, provider) {
                 if app_type.is_additive_mode() {
                     k::MENU_PROVIDER_TASKBAR_ADDED
                 } else {
@@ -215,7 +269,7 @@ fn windows_provider_items(app: &Arc<AppState>) -> Vec<MenuItem> {
                 tf!(label, app = app_label(app_type), provider = provider.name),
                 SwitchProviderFromMenu {
                     app: app_type.as_str().to_string(),
-                    provider_id: id,
+                    provider_id: id.clone(),
                 },
             ));
         }
@@ -307,13 +361,48 @@ fn switch_provider_from_menu(app: Arc<AppState>, action: &SwitchProviderFromMenu
         }
     };
 
-    let provider = ProviderService::list(&app, app_type)
+    let provider_id = action.provider_id.clone();
+    let app_for_work = app.clone();
+    let app_for_refresh = app.clone();
+    let task =
+        cx.background_spawn(
+            async move { perform_menu_switch(&app_for_work, app_type, &provider_id) },
+        );
+    cx.spawn(async move |cx| {
+        let report = task.await;
+        cx.update(move |cx| {
+            refresh(&app_for_refresh, cx);
+            report_to_roots(
+                cx,
+                Some(report.app_type),
+                report.level,
+                report.title,
+                report.message,
+            );
+        });
+    })
+    .detach();
+}
+
+struct MenuSwitchReport {
+    app_type: AppType,
+    level: NotificationLevel,
+    title: String,
+    message: Option<String>,
+}
+
+fn perform_menu_switch(
+    app: &Arc<AppState>,
+    app_type: AppType,
+    provider_id: &str,
+) -> MenuSwitchReport {
+    let provider = ProviderService::list(app, app_type)
         .ok()
-        .and_then(|providers| providers.get(&action.provider_id).cloned());
+        .and_then(|providers| providers.get(provider_id).cloned());
     let provider_name = provider
         .as_ref()
         .map(|provider| provider.name.clone())
-        .unwrap_or_else(|| action.provider_id.clone());
+        .unwrap_or_else(|| provider_id.to_string());
     let removing_from_additive = provider
         .as_ref()
         .map(|provider| {
@@ -322,12 +411,11 @@ fn switch_provider_from_menu(app: Arc<AppState>, action: &SwitchProviderFromMenu
         .unwrap_or(false);
 
     let result = if removing_from_additive {
-        ProviderService::remove_from_live_config(&app, app_type, &action.provider_id)
+        ProviderService::remove_from_live_config(app, app_type, provider_id)
             .map(|_| Default::default())
     } else {
-        ProviderService::switch(&app, app_type, &action.provider_id)
+        ProviderService::switch(app, app_type, provider_id)
     };
-    apply_shell_menus(&app, cx);
 
     match result {
         Ok(result) if result.warnings.is_empty() => {
@@ -342,25 +430,28 @@ fn switch_provider_from_menu(app: Arc<AppState>, action: &SwitchProviderFromMenu
                     provider = provider_name,
                 )
             };
-            report_to_roots(cx, Some(app_type), NotificationLevel::Success, title, None);
+            MenuSwitchReport {
+                app_type,
+                level: NotificationLevel::Success,
+                title,
+                message: None,
+            }
         }
-        Ok(result) => report_to_roots(
-            cx,
-            Some(app_type),
-            NotificationLevel::Warning,
-            tf!(
+        Ok(result) => MenuSwitchReport {
+            app_type,
+            level: NotificationLevel::Warning,
+            title: tf!(
                 k::MENU_SWITCH_SWITCHED_WITH_WARNINGS,
                 app = app_label(app_type),
             ),
-            Some(tf!(k::MENU_SWITCH_WARNINGS, count = result.warnings.len(),)),
-        ),
-        Err(err) => report_to_roots(
-            cx,
-            Some(app_type),
-            NotificationLevel::Error,
-            tf!(k::MENU_SWITCH_FAILED, app = app_label(app_type)),
-            Some(err.to_string()),
-        ),
+            message: Some(tf!(k::MENU_SWITCH_WARNINGS, count = result.warnings.len(),)),
+        },
+        Err(error) => MenuSwitchReport {
+            app_type,
+            level: NotificationLevel::Error,
+            title: tf!(k::MENU_SWITCH_FAILED, app = app_label(app_type)),
+            message: Some(error.to_string()),
+        },
     }
 }
 

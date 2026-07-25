@@ -86,8 +86,10 @@ pub struct SkillsView {
     updating_all: bool,
     discovering: bool,
     searching_market: bool,
+    repo_mutating: bool,
     /// 自动检查更新是否已触发过（视图生命周期内一次）。
     auto_checked: bool,
+    skill_apps: Arc<[AppType]>,
     selected_app: AppType,
     search_input: gpui::Entity<TextInput>,
     market_input: gpui::Entity<TextInput>,
@@ -98,7 +100,9 @@ pub struct SkillsView {
     confirm: Option<ConfirmAction>,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
+    rows: Arc<[SkillRow]>,
     list_state: ListState,
+    reload_generation: u64,
 }
 
 impl SkillsView {
@@ -129,7 +133,9 @@ impl SkillsView {
             cx.new(|cx| TextInput::new(cx, t(k::SKILLS_INSTALLED_SEARCH_PLACEHOLDER)));
         let market_input = cx.new(|cx| TextInput::new(cx, t(k::SKILLS_MARKET_SEARCH_PLACEHOLDER)));
         let repo_input = cx.new(|cx| TextInput::new(cx, t(k::SKILLS_REPO_INPUT_PLACEHOLDER)));
-        let mut this = Self {
+        let skill_apps: Arc<[AppType]> = crate::app_meta::enabled_skill_apps().into();
+        let selected_app = skill_apps.first().copied().unwrap_or(AppType::Claude);
+        let this = Self {
             app,
             tab: SkillsTab::Installed,
             discover_mode: DiscoverMode::Market,
@@ -147,8 +153,10 @@ impl SkillsView {
             updating_all: false,
             discovering: false,
             searching_market: false,
+            repo_mutating: false,
             auto_checked: false,
-            selected_app: AppType::Claude,
+            skill_apps,
+            selected_app,
             search_input,
             market_input,
             repo_input,
@@ -156,7 +164,9 @@ impl SkillsView {
             confirm: None,
             status: None,
             status_level: None,
-            list_state: ListState::new(0, ListAlignment::Top, px(512.)),
+            rows: Arc::from([SkillRow::Tabs, SkillRow::Stats, SkillRow::InstalledToolbar]),
+            list_state: ListState::new(3, ListAlignment::Top, px(512.)),
+            reload_generation: 0,
         };
 
         // 过滤输入变化时重排列表（忽略光标闪烁等无关通知）。
@@ -164,8 +174,7 @@ impl SkillsView {
             let content = input.read(cx).content();
             if content != this.last_filter {
                 this.last_filter = content;
-                this.list_state.remeasure();
-                cx.notify();
+                this.refresh_list(cx);
             }
         })
         .detach();
@@ -183,31 +192,48 @@ impl SkillsView {
             input.set_on_enter(move |window, cx| add_repo(&(), window, cx));
         });
 
-        this.reload(cx);
         this
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let apps = Self::skill_apps();
-        if !apps.contains(&self.selected_app) {
-            if let Some(first) = apps.first() {
+        if !self.skill_apps.contains(&self.selected_app) {
+            if let Some(first) = self.skill_apps.first() {
                 self.selected_app = *first;
             }
         }
-        match SkillService::get_all_installed(&self.app.db) {
-            Ok(list) => self.skills = list,
-            Err(err) => {
-                self.skills = Vec::new();
-                self.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::SKILLS_STATUS_LOAD_FAILED, error = err),
-                    cx,
-                );
-            }
-        }
-        self.repos = self.app.db.get_skill_repos().unwrap_or_default();
-        self.list_state.remeasure();
-        cx.notify();
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        let generation = self.reload_generation;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let (skills, repos) = cx
+                .background_spawn(async move {
+                    (
+                        SkillService::get_all_installed(&app.db).map_err(|error| error.to_string()),
+                        app.db.get_skill_repos().unwrap_or_default(),
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.reload_generation {
+                    return;
+                }
+                match skills {
+                    Ok(list) => this.skills = list,
+                    Err(error) => {
+                        this.skills.clear();
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_LOAD_FAILED, error = error),
+                            cx,
+                        );
+                    }
+                }
+                this.repos = repos;
+                this.refresh_list(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// 页面首次显示且存在远程技能时自动检查一次更新。视图在应用启动时就被
@@ -224,8 +250,12 @@ impl SkillsView {
 
     // ── 通用工具 ────────────────────────────────────────────────────────────
 
-    fn skill_apps() -> Vec<AppType> {
-        crate::app_meta::enabled_skill_apps()
+    pub fn refresh_apps(&mut self, cx: &mut Context<Self>) {
+        self.skill_apps = crate::app_meta::enabled_skill_apps().into();
+        if !self.skill_apps.contains(&self.selected_app) {
+            self.selected_app = self.skill_apps.first().copied().unwrap_or(AppType::Claude);
+        }
+        self.refresh_list(cx);
     }
 
     fn app_label(app: AppType) -> SharedString {
@@ -243,8 +273,68 @@ impl SkillsView {
     }
 
     fn refresh_list(&mut self, cx: &mut Context<Self>) {
+        self.rebuild_rows();
         self.list_state.remeasure();
         cx.notify();
+    }
+
+    fn rebuild_rows(&mut self) {
+        let filter = self.last_filter.trim().to_lowercase();
+        let mut rows = vec![SkillRow::Tabs];
+        match self.tab {
+            SkillsTab::Installed => {
+                rows.push(SkillRow::Stats);
+                rows.push(SkillRow::InstalledToolbar);
+                rows.extend(
+                    self.installed_indices(&filter)
+                        .into_iter()
+                        .map(SkillRow::Installed),
+                );
+            }
+            SkillsTab::Discover => {
+                rows.push(SkillRow::DiscoverToolbar);
+                match self.discover_mode {
+                    DiscoverMode::Market => {
+                        rows.push(SkillRow::MarketBar);
+                        rows.extend((0..self.market_results.len()).map(SkillRow::Market));
+                        if self.market_results.len() < self.market_total {
+                            rows.push(SkillRow::MarketMore);
+                        }
+                    }
+                    DiscoverMode::Repos => {
+                        rows.push(SkillRow::RepoManager);
+                        rows.push(SkillRow::RepoResultsHeader);
+                        rows.extend((0..self.discoverable.len()).map(SkillRow::Discoverable));
+                    }
+                }
+            }
+        }
+        if self.list_state.item_count() != rows.len() {
+            self.list_state.reset(rows.len());
+        }
+        self.rows = rows.into();
+    }
+
+    fn run_repo_io<R, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
+    where
+        R: Send + 'static,
+        Work: FnOnce() -> R + Send + 'static,
+        Apply: FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
+    {
+        if self.repo_mutating {
+            return;
+        }
+        self.repo_mutating = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { work() }).await;
+            this.update(cx, |this, cx| {
+                this.repo_mutating = false;
+                apply(this, result, cx);
+                this.refresh_list(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Every status toast carries its severity explicitly. Guessing it from the
@@ -862,27 +952,42 @@ impl SkillsView {
             );
             return;
         }
-        match self.app.db.save_skill_repo(&repo) {
-            Ok(()) => {
-                let message = tf!(
-                    k::SKILLS_STATUS_REPO_ADDED,
-                    owner = repo.owner,
-                    name = repo.name,
-                    branch = repo.branch,
-                );
-                self.set_status(NotificationLevel::Success, message, cx);
-                self.repo_input
-                    .update(cx, |input, cx| input.set_content("", cx));
-                self.repos = self.app.db.get_skill_repos().unwrap_or_default();
-                self.discover_skills(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SKILLS_STATUS_REPO_ADD_FAILED, error = err),
-                cx,
-            ),
-        }
-        self.refresh_list(cx);
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+        let branch = repo.branch.clone();
+        let app = self.app.clone();
+        self.run_repo_io(
+            cx,
+            move || {
+                app.db
+                    .save_skill_repo(&repo)
+                    .and_then(|_| app.db.get_skill_repos())
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(repos) => {
+                    this.repos = repos;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::SKILLS_STATUS_REPO_ADDED,
+                            owner = owner,
+                            name = name,
+                            branch = branch,
+                        ),
+                        cx,
+                    );
+                    this.repo_input
+                        .update(cx, |input, cx| input.set_content("", cx));
+                    this.discover_skills(cx);
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SKILLS_STATUS_REPO_ADD_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn toggle_repo(&mut self, owner: String, name: String, cx: &mut Context<Self>) {
@@ -898,46 +1003,65 @@ impl SkillsView {
             enabled: !repo.enabled,
             ..repo
         };
-        match self.app.db.save_skill_repo(&toggled) {
-            Ok(()) => {
-                self.repos = self.app.db.get_skill_repos().unwrap_or_default();
-                // One whole sentence per branch; the verb is not a fragment
-                // that other languages can slot into the same frame.
-                let message = if toggled.enabled {
-                    tf!(k::SKILLS_STATUS_REPO_ENABLED, owner = owner, name = name)
-                } else {
-                    tf!(k::SKILLS_STATUS_REPO_DISABLED, owner = owner, name = name)
-                };
-                self.set_status(NotificationLevel::Success, message, cx);
-                self.discover_skills(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SKILLS_STATUS_REPO_UPDATE_FAILED, error = err),
-                cx,
-            ),
-        }
-        self.refresh_list(cx);
+        let enabled = toggled.enabled;
+        let app = self.app.clone();
+        self.run_repo_io(
+            cx,
+            move || {
+                app.db
+                    .save_skill_repo(&toggled)
+                    .and_then(|_| app.db.get_skill_repos())
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(repos) => {
+                    this.repos = repos;
+                    let message = if enabled {
+                        tf!(k::SKILLS_STATUS_REPO_ENABLED, owner = owner, name = name)
+                    } else {
+                        tf!(k::SKILLS_STATUS_REPO_DISABLED, owner = owner, name = name)
+                    };
+                    this.set_status(NotificationLevel::Success, message, cx);
+                    this.discover_skills(cx);
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SKILLS_STATUS_REPO_UPDATE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn do_delete_repo(&mut self, owner: String, name: String, cx: &mut Context<Self>) {
-        match self.app.db.delete_skill_repo(&owner, &name) {
-            Ok(()) => {
-                self.repos = self.app.db.get_skill_repos().unwrap_or_default();
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::SKILLS_STATUS_REPO_DELETED, owner = owner, name = name),
+        let app = self.app.clone();
+        let owner_for_work = owner.clone();
+        let name_for_work = name.clone();
+        self.run_repo_io(
+            cx,
+            move || {
+                app.db
+                    .delete_skill_repo(&owner_for_work, &name_for_work)
+                    .and_then(|_| app.db.get_skill_repos())
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(repos) => {
+                    this.repos = repos;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::SKILLS_STATUS_REPO_DELETED, owner = owner, name = name),
+                        cx,
+                    );
+                    this.discover_skills(cx);
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::SKILLS_STATUS_REPO_DELETE_FAILED, error = error),
                     cx,
-                );
-                self.discover_skills(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SKILLS_STATUS_REPO_DELETE_FAILED, error = err),
-                cx,
-            ),
-        }
-        self.refresh_list(cx);
+                ),
+            },
+        );
     }
 
     // ── 渲染 ────────────────────────────────────────────────────────────────
@@ -968,7 +1092,7 @@ impl SkillsView {
     }
 
     fn render_target_picker(&self, id: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
-        let apps = Self::skill_apps();
+        let apps = self.skill_apps.clone();
         let labels: Vec<String> = apps
             .iter()
             .map(|app| Self::app_label(*app).to_string())
@@ -1143,7 +1267,7 @@ impl SkillsView {
                     .text_xs()
                     .child(t(k::SKILLS_CARD_SYNC_TO)),
             );
-        for app_type in Self::skill_apps() {
+        for app_type in self.skill_apps.iter().copied() {
             let enabled = skill.apps.is_enabled_for(&app_type);
             let key = format!("{}:{}", skill.id, app_type.as_str());
             let busy = self.toggling.contains(&key);
@@ -2071,58 +2195,23 @@ impl SkillsView {
 impl Render for SkillsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.maybe_auto_check_updates(cx);
-        let filter = self.last_filter.trim().to_lowercase();
-        let mut plan: Vec<SkillRow> = vec![SkillRow::Tabs];
-        match self.tab {
-            SkillsTab::Installed => {
-                plan.push(SkillRow::Stats);
-                plan.push(SkillRow::InstalledToolbar);
-                plan.extend(
-                    self.installed_indices(&filter)
-                        .into_iter()
-                        .map(SkillRow::Installed),
-                );
-            }
-            SkillsTab::Discover => {
-                plan.push(SkillRow::DiscoverToolbar);
-                match self.discover_mode {
-                    DiscoverMode::Market => {
-                        plan.push(SkillRow::MarketBar);
-                        plan.extend((0..self.market_results.len()).map(SkillRow::Market));
-                        if self.market_results.len() < self.market_total {
-                            plan.push(SkillRow::MarketMore);
-                        }
-                    }
-                    DiscoverMode::Repos => {
-                        plan.push(SkillRow::RepoManager);
-                        plan.push(SkillRow::RepoResultsHeader);
-                        plan.extend((0..self.discoverable.len()).map(SkillRow::Discoverable));
-                    }
-                }
-            }
-        }
-        if self.list_state.item_count() != plan.len() {
-            self.list_state.reset(plan.len());
-        }
+        let rows = self.rows.clone();
 
         let list = gpui::list(
             self.list_state.clone(),
             cx.processor(move |this, ix: usize, _window, cx| {
                 // 每行自带 pb_3 作为行距（list 本身不画间距）。
                 let block = div().w_full().pb_3();
-                match plan.get(ix).copied() {
+                match rows.get(ix).copied() {
                     Some(SkillRow::Tabs) => block.child(this.render_tabs(cx)).into_any_element(),
                     Some(SkillRow::Stats) => block.child(this.render_stats()).into_any_element(),
                     Some(SkillRow::InstalledToolbar) => block
                         .child(this.render_installed_toolbar(cx))
                         .into_any_element(),
                     Some(SkillRow::Installed(six)) => match this.skills.get(six) {
-                        Some(skill) => {
-                            let skill = skill.clone();
-                            block
-                                .child(this.render_installed_card(&skill, cx))
-                                .into_any_element()
-                        }
+                        Some(skill) => block
+                            .child(this.render_installed_card(skill, cx))
+                            .into_any_element(),
                         None => gpui::Empty.into_any_element(),
                     },
                     Some(SkillRow::DiscoverToolbar) => block
@@ -2132,12 +2221,9 @@ impl Render for SkillsView {
                         block.child(this.render_market_bar(cx)).into_any_element()
                     }
                     Some(SkillRow::Market(mix)) => match this.market_results.get(mix) {
-                        Some(skill) => {
-                            let skill = skill.clone();
-                            block
-                                .child(this.render_market_card(&skill, cx))
-                                .into_any_element()
-                        }
+                        Some(skill) => block
+                            .child(this.render_market_card(skill, cx))
+                            .into_any_element(),
                         None => gpui::Empty.into_any_element(),
                     },
                     Some(SkillRow::MarketMore) => {
@@ -2150,12 +2236,9 @@ impl Render for SkillsView {
                         .child(this.render_repo_results_header())
                         .into_any_element(),
                     Some(SkillRow::Discoverable(dix)) => match this.discoverable.get(dix) {
-                        Some(skill) => {
-                            let skill = skill.clone();
-                            block
-                                .child(this.render_discoverable_card(&skill, cx))
-                                .into_any_element()
-                        }
+                        Some(skill) => block
+                            .child(this.render_discoverable_card(skill, cx))
+                            .into_any_element(),
                         None => gpui::Empty.into_any_element(),
                     },
                     None => gpui::Empty.into_any_element(),

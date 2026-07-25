@@ -50,12 +50,13 @@ impl SettingsView {
     ) -> AnyElement {
         match ix {
             0 => {
-                let plugins = ochub_core::plugin::all_plugins();
-                let enabled_count = plugins
+                let enabled_count = self
+                    .plugins
                     .iter()
                     .filter(|plugin| self.app_is_enabled(plugin.as_ref()))
                     .count();
-                let rows: Vec<AnyElement> = plugins
+                let rows: Vec<AnyElement> = self
+                    .plugins
                     .iter()
                     .map(|plugin| {
                         let id = plugin.id().as_str().to_string();
@@ -98,14 +99,14 @@ impl SettingsView {
                 )
             }
             1 => {
-                let errors = ochub_core::plugin::manifest_load_errors();
-                if errors.is_empty() {
+                if self.plugin_load_errors.is_empty() {
                     return gpui::Empty.into_any_element();
                 }
                 // Display-only, so plain rows: making them focusable would put
                 // a tab stop on something that cannot be operated.
-                let rows: Vec<AnyElement> = errors
-                    .into_iter()
+                let rows: Vec<AnyElement> = self
+                    .plugin_load_errors
+                    .iter()
                     .map(|err| {
                         layout::row()
                             .child(components::field_error(SharedString::from(tf!(
@@ -131,7 +132,7 @@ impl SettingsView {
                         t(k::SETTINGS_APPS_RELOAD_DESC),
                         t(k::SETTINGS_APPS_RELOAD_ACTION),
                         ButtonTone::Neutral,
-                        false,
+                        self.settings_busy,
                         row_handler(cx.listener(|this, _event: &(), _window, cx| {
                             this.reload_user_plugins(cx)
                         })),
@@ -143,7 +144,7 @@ impl SettingsView {
                         SharedString::from(dir.to_string_lossy().to_string()),
                         t(k::SETTINGS_ACTION_OPEN),
                         ButtonTone::Neutral,
-                        false,
+                        self.settings_busy,
                         row_handler(cx.listener(|this, _event: &(), _window, cx| {
                             this.open_user_plugins_dir(cx)
                         })),
@@ -175,8 +176,11 @@ impl SettingsView {
         if self.toggling.contains(id) {
             return;
         }
-        let plugins = ochub_core::plugin::all_plugins();
-        let Some(plugin) = plugins.iter().find(|plugin| plugin.id().as_str() == id) else {
+        let Some(plugin) = self
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id().as_str() == id)
+        else {
             return;
         };
         let currently = self.app_is_enabled(plugin.as_ref());
@@ -223,68 +227,98 @@ impl SettingsView {
     }
 
     fn reload_user_plugins(&mut self, cx: &mut Context<Self>) {
-        let errors = ochub_core::plugin::reload_user_plugins();
-        let plugin_count = ochub_core::plugin::all_plugins()
-            .iter()
-            .filter(|plugin| plugin.is_user_manifest())
-            .count();
-        // A partial reload still leaves broken manifests behind, so it is a
-        // warning rather than a clean success.
-        let (level, message) = if errors.is_empty() {
-            (
-                NotificationLevel::Success,
-                tf!(k::SETTINGS_APPS_PLUGINS_RELOADED, count = plugin_count),
-            )
-        } else {
-            (
-                NotificationLevel::Warning,
-                tf!(
-                    k::SETTINGS_APPS_PLUGINS_RELOADED_PARTIAL,
-                    loaded = plugin_count,
-                    failed = errors.len()
-                ),
-            )
-        };
-        self.set_status(level, message, cx);
-        shell_menu::refresh(&self.app, cx);
-        cx.emit(SettingsEvent::AppsChanged);
-        self.apps_list.remeasure();
+        if self.settings_busy {
+            return;
+        }
+        self.settings_busy = true;
         cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (plugins, errors, plugin_count) = cx
+                .background_spawn(async {
+                    let errors = ochub_core::plugin::reload_user_plugins();
+                    let plugins = ochub_core::plugin::all_plugins_snapshot();
+                    let plugin_count = plugins
+                        .iter()
+                        .filter(|plugin| plugin.is_user_manifest())
+                        .count();
+                    (plugins, errors, plugin_count)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.settings_busy = false;
+                this.plugins = plugins;
+                this.plugin_load_errors = errors.clone().into();
+                // A partial reload still leaves broken manifests behind, so it is a
+                // warning rather than a clean success.
+                let (level, message) = if errors.is_empty() {
+                    (
+                        NotificationLevel::Success,
+                        tf!(k::SETTINGS_APPS_PLUGINS_RELOADED, count = plugin_count),
+                    )
+                } else {
+                    (
+                        NotificationLevel::Warning,
+                        tf!(
+                            k::SETTINGS_APPS_PLUGINS_RELOADED_PARTIAL,
+                            loaded = plugin_count,
+                            failed = errors.len()
+                        ),
+                    )
+                };
+                this.set_status(level, message, cx);
+                shell_menu::refresh(&this.app, cx);
+                cx.emit(SettingsEvent::AppsChanged);
+                this.apps_list.remeasure();
+                this.root_list.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_user_plugins_dir(&mut self, cx: &mut Context<Self>) {
-        let dir = ochub_core::plugin::user_plugins_dir();
-        if let Err(err) = std::fs::create_dir_all(&dir) {
-            self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SETTINGS_APPS_PLUGINS_DIR_CREATE_FAILED, error = err),
-                cx,
-            );
+        if self.settings_busy {
             return;
         }
-        #[cfg(target_os = "macos")]
-        let result = Command::new("open").arg(&dir).status();
-        #[cfg(target_os = "windows")]
-        let result = Command::new("explorer").arg(&dir).status();
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let result = Command::new("xdg-open").arg(&dir).status();
-        match result {
-            Ok(status) if status.success() => self.set_status(
-                NotificationLevel::Success,
-                t(k::SETTINGS_APPS_PLUGINS_DIR_OPENED),
-                cx,
-            ),
-            Ok(status) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SETTINGS_APPS_OPEN_FAILED_STATUS, status = status),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SETTINGS_APPS_OPEN_FAILED, error = err),
-                cx,
-            ),
-        }
+        let dir = ochub_core::plugin::user_plugins_dir();
+        self.settings_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    std::fs::create_dir_all(&dir).map_err(|error| {
+                        tf!(k::SETTINGS_APPS_PLUGINS_DIR_CREATE_FAILED, error = error)
+                    })?;
+                    #[cfg(target_os = "macos")]
+                    let status = Command::new("open").arg(&dir).status();
+                    #[cfg(target_os = "windows")]
+                    let status = Command::new("explorer").arg(&dir).status();
+                    #[cfg(all(unix, not(target_os = "macos")))]
+                    let status = Command::new("xdg-open").arg(&dir).status();
+                    match status {
+                        Ok(status) if status.success() => Ok(()),
+                        Ok(status) => {
+                            Err(tf!(k::SETTINGS_APPS_OPEN_FAILED_STATUS, status = status))
+                        }
+                        Err(error) => Err(tf!(k::SETTINGS_APPS_OPEN_FAILED, error = error)),
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.settings_busy = false;
+                match result {
+                    Ok(()) => this.set_status(
+                        NotificationLevel::Success,
+                        t(k::SETTINGS_APPS_PLUGINS_DIR_OPENED),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(NotificationLevel::Error, error, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 }
 

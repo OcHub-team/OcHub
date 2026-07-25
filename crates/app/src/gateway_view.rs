@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{
-    div, point, prelude::*, px, ClipboardItem, Context, Entity, EventEmitter, FontWeight,
-    ScrollHandle, SharedString, Window,
+    div, prelude::*, px, ClipboardItem, Context, Entity, EventEmitter, FontWeight, ListAlignment,
+    ListOffset, ListState, SharedString, Window,
 };
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
@@ -69,6 +69,133 @@ struct ImportCandidate {
     base_url: String,
 }
 
+struct GatewayPageLoad {
+    stations: Vec<RelayStation>,
+    import_candidates: Vec<ImportCandidate>,
+    active_station_by_app: HashMap<AppType, String>,
+    enabled_apps: Arc<[AppType]>,
+}
+
+impl GatewayPageLoad {
+    fn load(app: &AppState) -> Self {
+        let channels = app.db.get_gateway_channels().unwrap_or_default();
+        let routes = app.db.get_gateway_routes().unwrap_or_default();
+        let channel_map: HashMap<&str, &GatewayChannel> = channels
+            .iter()
+            .map(|channel| (channel.id.as_str(), channel))
+            .collect();
+        let mut referenced_channels = HashSet::new();
+        let mut stations = Vec::new();
+        for route in routes
+            .iter()
+            .filter(|route| route.id.starts_with(apply::STATION_ROUTE_PREFIX))
+        {
+            let grouped: Vec<GatewayChannel> = route
+                .channel_ids
+                .iter()
+                .filter_map(|id| channel_map.get(id.as_str()).copied().cloned())
+                .collect();
+            if grouped.is_empty() {
+                continue;
+            }
+            referenced_channels.extend(grouped.iter().map(|channel| channel.id.clone()));
+            stations.push(RelayStation {
+                channels: grouped,
+                route: route.clone(),
+            });
+        }
+        // Keep legacy control-API channels visible even when no station route
+        // was persisted for them.
+        for channel in channels
+            .iter()
+            .filter(|channel| !referenced_channels.contains(&channel.id))
+        {
+            stations.push(RelayStation {
+                channels: vec![channel.clone()],
+                route: GatewayRoute {
+                    id: apply::station_route_id(&channel.id),
+                    name: channel.name.clone(),
+                    app_type: None,
+                    channel_ids: vec![channel.id.clone()],
+                    default_model: None,
+                    model_rules: Vec::new(),
+                    reasoning: GatewayReasoningConfig::default(),
+                    enabled: channel.enabled,
+                    created_at: chrono::Utc::now().timestamp(),
+                },
+            });
+        }
+
+        let keys = app.db.get_gateway_keys().unwrap_or_default();
+        let mut active_station_by_app = HashMap::new();
+        for app_type in apply::supported_apps() {
+            let connected = if app_type.is_additive_mode() {
+                app.db
+                    .get_provider_by_id(apply::GATEWAY_PROVIDER_ID, app_type.as_str())
+                    .is_ok_and(|provider| provider.is_some())
+            } else {
+                ProviderService::current(app, *app_type)
+                    .is_ok_and(|current| current == apply::GATEWAY_PROVIDER_ID)
+            };
+            if connected {
+                if let Some(route_id) = keys
+                    .iter()
+                    .find(|key| key.name == app_type.as_str() && key.enabled)
+                    .and_then(|key| key.route_id.clone())
+                {
+                    active_station_by_app.insert(*app_type, route_id);
+                }
+            }
+        }
+
+        let imported_ids: HashSet<String> = stations
+            .iter()
+            .flat_map(|station| station.channels.iter().map(|channel| channel.id.clone()))
+            .collect();
+        let enabled_apps = crate::app_meta::enabled_app_types();
+        let mut import_candidates = Vec::new();
+        for app_type in enabled_apps.iter().copied() {
+            if let Ok(providers) = ProviderService::list(app, app_type) {
+                for provider in providers.into_values().filter(|provider| {
+                    provider.id != apply::GATEWAY_PROVIDER_ID
+                        && provider.category.as_deref() != Some("gateway")
+                }) {
+                    let channel_id = format!("imported-{}-{}", app_type.as_str(), provider.id);
+                    if imported_ids.contains(&channel_id) {
+                        continue;
+                    }
+                    let (base_url, api_key) = provider.resolve_usage_credentials(&app_type);
+                    if !base_url.trim().is_empty() && !api_key.trim().is_empty() {
+                        import_candidates.push(ImportCandidate {
+                            app_type,
+                            provider_id: provider.id,
+                            name: provider.name,
+                            base_url,
+                        });
+                    }
+                }
+            }
+        }
+
+        Self {
+            stations,
+            import_candidates,
+            active_station_by_app,
+            enabled_apps: enabled_apps.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GatewayRow {
+    Summary,
+    Imports,
+    Connection,
+    Editor,
+    Empty,
+    Station(usize),
+}
+
 struct ModelRuleEditor {
     id: u64,
     client_model: Entity<TextInput>,
@@ -118,6 +245,7 @@ pub struct GatewayView {
     next_rule_id: u64,
     show_imports: bool,
     applying: Option<(String, AppType)>,
+    mutation_in_flight: bool,
     confirm_delete: Option<(String, String)>,
     /// Deleting was refused: (station name, apps still using it).
     delete_blocked: Option<(SharedString, Vec<AppType>)>,
@@ -125,9 +253,12 @@ pub struct GatewayView {
     connection_loading: bool,
     connection_info: Option<apply::ApplyResult>,
     reveal_connection_key: bool,
-    scroll: ScrollHandle,
+    rows: Arc<[GatewayRow]>,
+    list_state: ListState,
+    enabled_apps: Arc<[AppType]>,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
+    reload_generation: u64,
 }
 
 impl EventEmitter<GatewayEvent> for GatewayView {}
@@ -139,10 +270,10 @@ impl GatewayView {
     /// draws. It does not reach the open editor: a `TextInput` captures its
     /// placeholder when it is constructed, and the inline field errors were
     /// resolved when a save was refused, so both otherwise survive in the
-    /// language they were made in. The station list is a plain scroll body
-    /// rather than a virtualized list, so there are no memoized item heights
-    /// to invalidate here.
+    /// language they were made in. The virtual list also needs its cached item
+    /// heights invalidated because translations can wrap differently.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        self.list_state.remeasure();
         let Some(editor) = self.editor.as_mut() else {
             cx.notify();
             return;
@@ -192,8 +323,8 @@ impl GatewayView {
         cx.notify();
     }
 
-    pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
-        let mut view = Self {
+    pub fn new(app: Arc<AppState>, _cx: &mut Context<Self>) -> Self {
+        Self {
             app,
             stations: Vec::new(),
             import_candidates: Vec::new(),
@@ -202,18 +333,20 @@ impl GatewayView {
             next_rule_id: 1,
             show_imports: false,
             applying: None,
+            mutation_in_flight: false,
             confirm_delete: None,
             delete_blocked: None,
             show_connection: false,
             connection_loading: false,
             connection_info: None,
             reveal_connection_key: false,
-            scroll: ScrollHandle::new(),
+            rows: Arc::from([]),
+            list_state: ListState::new(0, ListAlignment::Top, px(640.)),
+            enabled_apps: Arc::from([]),
             status: None,
             status_level: None,
-        };
-        view.reload(cx);
-        view
+            reload_generation: 0,
+        }
     }
 
     pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -227,10 +360,14 @@ impl GatewayView {
     }
 
     pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let closed_editor = self.editor.take().is_some();
         if self.delete_blocked.take().is_some()
             || self.confirm_delete.take().is_some()
-            || self.editor.take().is_some()
+            || closed_editor
         {
+            if closed_editor {
+                self.rebuild_rows();
+            }
             cx.notify();
         } else {
             window.play_system_bell();
@@ -238,113 +375,88 @@ impl GatewayView {
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let channels = self.app.db.get_gateway_channels().unwrap_or_default();
-        let routes = self.app.db.get_gateway_routes().unwrap_or_default();
-        let channel_map: HashMap<&str, &GatewayChannel> = channels
-            .iter()
-            .map(|channel| (channel.id.as_str(), channel))
-            .collect();
-        let mut referenced_channels = HashSet::new();
-        let mut stations = Vec::new();
-        for route in routes
-            .iter()
-            .filter(|route| route.id.starts_with(apply::STATION_ROUTE_PREFIX))
-        {
-            let grouped: Vec<GatewayChannel> = route
-                .channel_ids
-                .iter()
-                .filter_map(|id| channel_map.get(id.as_str()).copied().cloned())
-                .collect();
-            if grouped.is_empty() {
-                continue;
-            }
-            referenced_channels.extend(grouped.iter().map(|channel| channel.id.clone()));
-            stations.push(RelayStation {
-                channels: grouped,
-                route: route.clone(),
-            });
-        }
-        // Control-API users may have created a channel without its hidden
-        // user-facing station route. Keep that legacy state visible and
-        // editable; the next save persists the synthesized grouping.
-        for channel in channels
-            .iter()
-            .filter(|channel| !referenced_channels.contains(&channel.id))
-        {
-            stations.push(RelayStation {
-                channels: vec![channel.clone()],
-                route: GatewayRoute {
-                    id: apply::station_route_id(&channel.id),
-                    name: channel.name.clone(),
-                    app_type: None,
-                    channel_ids: vec![channel.id.clone()],
-                    default_model: None,
-                    model_rules: Vec::new(),
-                    reasoning: GatewayReasoningConfig::default(),
-                    enabled: channel.enabled,
-                    created_at: chrono::Utc::now().timestamp(),
-                },
-            });
-        }
-        self.stations = stations;
-
-        let keys = self.app.db.get_gateway_keys().unwrap_or_default();
-        self.active_station_by_app.clear();
-        for app_type in apply::supported_apps() {
-            // Switch-mode apps count as connected when the gateway provider is
-            // current; additive apps have no "current", so the managed gateway
-            // provider entry existing is the connected signal.
-            let connected = if app_type.is_additive_mode() {
-                self.app
-                    .db
-                    .get_provider_by_id(apply::GATEWAY_PROVIDER_ID, app_type.as_str())
-                    .is_ok_and(|provider| provider.is_some())
-            } else {
-                ProviderService::current(&self.app, *app_type)
-                    .is_ok_and(|current| current == apply::GATEWAY_PROVIDER_ID)
-            };
-            if connected {
-                if let Some(route_id) = keys
-                    .iter()
-                    .find(|key| key.name == app_type.as_str() && key.enabled)
-                    .and_then(|key| key.route_id.clone())
-                {
-                    self.active_station_by_app.insert(*app_type, route_id);
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        let generation = self.reload_generation;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let data = cx
+                .background_spawn(async move { GatewayPageLoad::load(&app) })
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.reload_generation {
+                    return;
                 }
-            }
-        }
+                this.stations = data.stations;
+                this.import_candidates = data.import_candidates;
+                this.active_station_by_app = data.active_station_by_app;
+                this.enabled_apps = data.enabled_apps;
+                this.rebuild_rows();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
 
-        let enabled_apps = crate::app_meta::enabled_app_types();
-        let mut candidates = Vec::new();
-        let imported_ids: HashSet<String> = self
+    fn rebuild_rows(&mut self) {
+        let mut rows = Vec::with_capacity(self.stations.len() + 5);
+        if !self.active_station_by_app.is_empty() {
+            rows.push(GatewayRow::Summary);
+        }
+        if self.show_imports {
+            rows.push(GatewayRow::Imports);
+        }
+        if self.show_connection {
+            rows.push(GatewayRow::Connection);
+        }
+        if self.editor.is_some() {
+            rows.push(GatewayRow::Editor);
+        } else if self.stations.is_empty() {
+            rows.push(GatewayRow::Empty);
+        }
+        rows.extend((0..self.stations.len()).map(GatewayRow::Station));
+
+        let old = self.rows.as_ref();
+        let mut prefix = 0;
+        while prefix < old.len() && prefix < rows.len() && old[prefix] == rows[prefix] {
+            prefix += 1;
+        }
+        let mut suffix = 0;
+        while suffix < old.len().saturating_sub(prefix)
+            && suffix < rows.len().saturating_sub(prefix)
+            && old[old.len() - 1 - suffix] == rows[rows.len() - 1 - suffix]
+        {
+            suffix += 1;
+        }
+        let old_end = old.len() - suffix;
+        let replacement_count = rows.len() - prefix - suffix;
+        if prefix == old.len() && prefix == rows.len() {
+            // The row identities stayed put, but a reload or editor mutation
+            // may have changed their height.
+            self.list_state.remeasure();
+        } else {
+            self.list_state.splice(prefix..old_end, replacement_count);
+        }
+        self.rows = rows.into();
+    }
+
+    fn close_editor(&mut self, cx: &mut Context<Self>) {
+        if self.editor.take().is_some() {
+            self.rebuild_rows();
+            cx.notify();
+        }
+    }
+
+    fn open_editor_by_route_id(&mut self, route_id: &str, cx: &mut Context<Self>) {
+        let Some(station) = self
             .stations
             .iter()
-            .flat_map(|station| station.channels.iter().map(|channel| channel.id.clone()))
-            .collect();
-        for app_type in enabled_apps {
-            if let Ok(providers) = ProviderService::list(&self.app, app_type) {
-                for provider in providers.into_values().filter(|provider| {
-                    provider.id != apply::GATEWAY_PROVIDER_ID
-                        && provider.category.as_deref() != Some("gateway")
-                }) {
-                    let channel_id = format!("imported-{}-{}", app_type.as_str(), provider.id);
-                    if imported_ids.contains(&channel_id) {
-                        continue;
-                    }
-                    let (base_url, api_key) = provider.resolve_usage_credentials(&app_type);
-                    if !base_url.trim().is_empty() && !api_key.trim().is_empty() {
-                        candidates.push(ImportCandidate {
-                            app_type,
-                            provider_id: provider.id,
-                            name: provider.name,
-                            base_url,
-                        });
-                    }
-                }
-            }
-        }
-        self.import_candidates = candidates;
-        cx.notify();
+            .find(|station| station.route.id == route_id)
+            .cloned()
+        else {
+            return;
+        };
+        self.open_editor(Some(&station), cx);
     }
 
     fn open_editor(&mut self, station: Option<&RelayStation>, cx: &mut Context<Self>) {
@@ -474,7 +586,11 @@ impl GatewayView {
         });
         // The editor renders pinned above the list; jump there so clicking
         // Edit on a card far down the page visibly responds.
-        self.scroll.set_offset(point(px(0.), px(0.)));
+        self.rebuild_rows();
+        self.list_state.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
         cx.notify();
     }
 
@@ -548,6 +664,9 @@ impl GatewayView {
     }
 
     fn save_editor(&mut self, cx: &mut Context<Self>) {
+        if self.mutation_in_flight {
+            return;
+        }
         let Some(editor) = &self.editor else {
             return;
         };
@@ -682,29 +801,48 @@ impl GatewayView {
             created_at: editor.created_at,
         };
 
-        let result = channels
-            .iter()
-            .try_for_each(|channel| self.app.db.upsert_gateway_channel(channel))
-            .and_then(|_| self.app.db.upsert_gateway_route(&route));
-        match result {
-            Ok(()) => {
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::GATEWAY_STATUS_SAVED, name = name),
-                    cx,
-                );
-                self.editor = None;
-                self.reload(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::GATEWAY_STATUS_SAVE_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.mutation_in_flight = true;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    channels
+                        .iter()
+                        .try_for_each(|channel| app.db.upsert_gateway_channel(channel))
+                        .and_then(|_| app.db.upsert_gateway_route(&route))
+                        .map(|_| name)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.mutation_in_flight = false;
+                match result {
+                    Ok(name) => {
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::GATEWAY_STATUS_SAVED, name = name),
+                            cx,
+                        );
+                        this.editor = None;
+                        this.rebuild_rows();
+                        this.reload(cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::GATEWAY_STATUS_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn toggle_station(&mut self, route_id: String, cx: &mut Context<Self>) {
+        if self.mutation_in_flight {
+            return;
+        }
         let Some(station) = self
             .stations
             .iter()
@@ -716,22 +854,39 @@ impl GatewayView {
         let enabled = !station.is_enabled();
         let mut route = station.route;
         route.enabled = enabled;
-        match self.app.db.upsert_gateway_route(&route) {
-            Ok(()) => {
-                let message = if enabled {
-                    tf!(k::GATEWAY_STATUS_ENABLED, name = route.name)
-                } else {
-                    tf!(k::GATEWAY_STATUS_DISABLED, name = route.name)
-                };
-                self.set_status(NotificationLevel::Success, message, cx);
-                self.reload(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::GATEWAY_STATUS_UPDATE_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.mutation_in_flight = true;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    app.db
+                        .upsert_gateway_route(&route)
+                        .map(|_| route.name)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.mutation_in_flight = false;
+                match result {
+                    Ok(name) => {
+                        let message = if enabled {
+                            tf!(k::GATEWAY_STATUS_ENABLED, name = name)
+                        } else {
+                            tf!(k::GATEWAY_STATUS_DISABLED, name = name)
+                        };
+                        this.set_status(NotificationLevel::Success, message, cx);
+                        this.reload(cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::GATEWAY_STATUS_UPDATE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn request_delete(&mut self, route_id: String, name: String, cx: &mut Context<Self>) {
@@ -751,6 +906,9 @@ impl GatewayView {
     }
 
     fn delete_station(&mut self, route_id: String, cx: &mut Context<Self>) {
+        if self.mutation_in_flight {
+            return;
+        }
         let channel_ids = self
             .stations
             .iter()
@@ -763,50 +921,86 @@ impl GatewayView {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let result = self.app.db.delete_gateway_route(&route_id).and_then(|_| {
-            for channel_id in channel_ids {
-                self.app.db.delete_gateway_channel(&channel_id)?;
-            }
-            Ok(())
-        });
-        match result {
-            Ok(()) => {
-                self.set_status(NotificationLevel::Success, t(k::GATEWAY_STATUS_DELETED), cx);
-                self.reload(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::GATEWAY_STATUS_DELETE_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.mutation_in_flight = true;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    app.db
+                        .delete_gateway_route(&route_id)
+                        .and_then(|_| {
+                            for channel_id in channel_ids {
+                                app.db.delete_gateway_channel(&channel_id)?;
+                            }
+                            Ok(())
+                        })
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.mutation_in_flight = false;
+                match result {
+                    Ok(()) => {
+                        this.set_status(
+                            NotificationLevel::Success,
+                            t(k::GATEWAY_STATUS_DELETED),
+                            cx,
+                        );
+                        this.reload(cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::GATEWAY_STATUS_DELETE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    fn import_provider(&mut self, candidate: ImportCandidate, cx: &mut Context<Self>) {
-        match apply::import_provider_as_channel(
-            &self.app,
-            candidate.app_type,
-            &candidate.provider_id,
-        )
-        .and_then(|channel| {
-            let route = apply::ensure_station_route(&self.app, &channel)?;
-            Ok((channel, route))
-        }) {
-            Ok((channel, _)) => {
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::GATEWAY_STATUS_IMPORTED, name = channel.name),
-                    cx,
-                );
-                self.show_imports = false;
-                self.reload(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::GATEWAY_STATUS_IMPORT_FAILED, error = err),
-                cx,
-            ),
+    fn import_provider(&mut self, app_type: AppType, provider_id: String, cx: &mut Context<Self>) {
+        if self.mutation_in_flight {
+            return;
         }
+        self.mutation_in_flight = true;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    apply::import_provider_as_channel(&app, app_type, &provider_id)
+                        .and_then(|channel| {
+                            let route = apply::ensure_station_route(&app, &channel)?;
+                            Ok((channel, route))
+                        })
+                        .map(|(channel, _)| channel.name)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.mutation_in_flight = false;
+                match result {
+                    Ok(name) => {
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::GATEWAY_STATUS_IMPORTED, name = name),
+                            cx,
+                        );
+                        this.show_imports = false;
+                        this.rebuild_rows();
+                        this.reload(cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::GATEWAY_STATUS_IMPORT_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn apply_station(&mut self, route_id: String, app_type: AppType, cx: &mut Context<Self>) {
@@ -841,15 +1035,6 @@ impl GatewayView {
             );
             return;
         }
-        if let Err(err) = self.app.db.upsert_gateway_route(&station.route) {
-            self.set_status(
-                NotificationLevel::Error,
-                tf!(k::GATEWAY_STATUS_PREPARE_FAILED, error = err),
-                cx,
-            );
-            return;
-        }
-
         self.applying = Some((route_id.clone(), app_type));
         self.set_status(
             NotificationLevel::Info,
@@ -862,14 +1047,32 @@ impl GatewayView {
         );
 
         let app = self.app.clone();
+        let route = station.route;
         cx.spawn(async move |this, cx| {
+            let prepare_app = app.clone();
+            let prepare = cx
+                .background_spawn(async move {
+                    prepare_app
+                        .db
+                        .upsert_gateway_route(&route)
+                        .and_then(|_| {
+                            let mut config = prepare_app.db.get_gateway_config()?;
+                            if !config.enabled {
+                                config.enabled = true;
+                                prepare_app.db.set_gateway_config(&config)?;
+                            }
+                            Ok(())
+                        })
+                        .map_err(|error| error.to_string())
+                })
+                .await;
             let result = async {
-                let mut config = app.db.get_gateway_config()?;
-                if !config.enabled {
-                    config.enabled = true;
-                    app.db.set_gateway_config(&config)?;
-                }
-                let status = app.gateway.start().await?;
+                prepare.map_err(|error| (true, error))?;
+                let status = app
+                    .gateway
+                    .start()
+                    .await
+                    .map_err(|error| (false, error.to_string()))?;
                 let base_url = status.base_url;
                 let route_id_for_apply = route_id.clone();
                 let app_for_apply = app.clone();
@@ -882,6 +1085,7 @@ impl GatewayView {
                     )
                 })
                 .await
+                .map_err(|error| (false, error.to_string()))
             }
             .await;
             this.update(cx, |this, cx| {
@@ -899,11 +1103,14 @@ impl GatewayView {
                         );
                         this.reload(cx);
                     }
-                    Err(err) => this.set_status(
-                        NotificationLevel::Error,
-                        tf!(k::GATEWAY_STATUS_APPLY_FAILED, error = err),
-                        cx,
-                    ),
+                    Err((preparing, error)) => {
+                        let key = if preparing {
+                            k::GATEWAY_STATUS_PREPARE_FAILED
+                        } else {
+                            k::GATEWAY_STATUS_APPLY_FAILED
+                        };
+                        this.set_status(NotificationLevel::Error, tf!(key, error = error), cx);
+                    }
                 }
             })
             .ok();
@@ -913,6 +1120,7 @@ impl GatewayView {
 
     fn toggle_connection_panel(&mut self, cx: &mut Context<Self>) {
         self.show_connection = !self.show_connection;
+        self.rebuild_rows();
         if self.show_connection && self.connection_info.is_none() {
             self.load_connection_info(cx);
         }
@@ -928,19 +1136,37 @@ impl GatewayView {
 
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
+            let prepare_app = app.clone();
+            let prepare = cx
+                .background_spawn(async move {
+                    let mut config = prepare_app
+                        .db
+                        .get_gateway_config()
+                        .map_err(|error| error.to_string())?;
+                    if !config.enabled {
+                        config.enabled = true;
+                        prepare_app
+                            .db
+                            .set_gateway_config(&config)
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok::<(), String>(())
+                })
+                .await;
             let result = async {
-                let mut config = app.db.get_gateway_config()?;
-                if !config.enabled {
-                    config.enabled = true;
-                    app.db.set_gateway_config(&config)?;
-                }
-                let status = app.gateway.start().await?;
+                prepare?;
+                let status = app
+                    .gateway
+                    .start()
+                    .await
+                    .map_err(|error| error.to_string())?;
                 let base_url = status.base_url;
                 let app_for_info = app.clone();
                 cx.background_spawn(
                     async move { apply::generic_client_info(&app_for_info, &base_url) },
                 )
                 .await
+                .map_err(|error| error.to_string())
             }
             .await;
             this.update(cx, |this, cx| {
@@ -951,6 +1177,7 @@ impl GatewayView {
                     }
                     Err(err) => {
                         this.show_connection = false;
+                        this.rebuild_rows();
                         this.set_status(
                             NotificationLevel::Error,
                             tf!(k::GATEWAY_STATUS_CONNECTION_INFO_FAILED, error = err),
@@ -1022,24 +1249,42 @@ impl GatewayView {
     /// Disconnect an additive app by removing its managed gateway provider
     /// entry (switch-mode apps instead navigate to the Providers page).
     fn disconnect_app(&mut self, app_type: AppType, cx: &mut Context<Self>) {
-        match ProviderService::delete(&self.app, app_type, apply::GATEWAY_PROVIDER_ID) {
-            Ok(()) => {
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(
-                        k::GATEWAY_STATUS_DISCONNECTED,
-                        app = crate::app_meta::label(app_type)
-                    ),
-                    cx,
-                );
-                self.reload(cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::GATEWAY_STATUS_DISCONNECT_FAILED, error = err),
-                cx,
-            ),
+        if self.mutation_in_flight {
+            return;
         }
+        self.mutation_in_flight = true;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ProviderService::delete(&app, app_type, apply::GATEWAY_PROVIDER_ID)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.mutation_in_flight = false;
+                match result {
+                    Ok(()) => {
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(
+                                k::GATEWAY_STATUS_DISCONNECTED,
+                                app = crate::app_meta::label(app_type)
+                            ),
+                            cx,
+                        );
+                        this.reload(cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::GATEWAY_STATUS_DISCONNECT_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn copy_to_clipboard(&mut self, value: String, done: &'static str, cx: &mut Context<Self>) {
@@ -1052,7 +1297,8 @@ impl GatewayView {
         candidate: &ImportCandidate,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let candidate_for_import = candidate.clone();
+        let app_type = candidate.app_type;
+        let provider_id = candidate.provider_id.clone();
         div()
             .flex()
             .flex_row()
@@ -1108,7 +1354,7 @@ impl GatewayView {
                     ButtonSize::Sm,
                 )
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.import_provider(candidate_for_import.clone(), cx);
+                    this.import_provider(app_type, provider_id.clone(), cx);
                 })),
             )
             .into_any_element()
@@ -1333,7 +1579,7 @@ impl GatewayView {
         let enabled = station.is_enabled();
         let route_id = station.route.id.clone();
         let route_id_for_toggle = route_id.clone();
-        let station_for_edit = station.clone();
+        let route_id_for_edit = route_id.clone();
         let route_id_for_delete = route_id.clone();
         let station_name = station.route.name.clone();
         let station_name_for_delete = station_name.clone();
@@ -1385,7 +1631,7 @@ impl GatewayView {
         let app_buttons: Vec<gpui::AnyElement> = apply::supported_apps()
             .iter()
             .copied()
-            .filter(|app| crate::app_meta::enabled_app_types().contains(app))
+            .filter(|app| self.enabled_apps.contains(app))
             .map(|app_type| {
                 let active = self
                     .active_station_by_app
@@ -1542,7 +1788,7 @@ impl GatewayView {
                                 )
                                 .on_click(cx.listener(
                                     move |this, _event, _window, cx| {
-                                        this.open_editor(Some(&station_for_edit), cx);
+                                        this.open_editor_by_route_id(&route_id_for_edit, cx);
                                     },
                                 )),
                             )
@@ -1796,8 +2042,7 @@ impl GatewayView {
                                 )
                                 .on_click(cx.listener(
                                     |this, _event, _window, cx| {
-                                        this.editor = None;
-                                        cx.notify();
+                                        this.close_editor(cx);
                                     },
                                 )),
                             )
@@ -2064,80 +2309,104 @@ impl GatewayView {
             })
             .into_any_element()
     }
+
+    fn render_import_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let import_rows: Vec<gpui::AnyElement> = self
+            .import_candidates
+            .iter()
+            .map(|candidate| self.render_import_candidate(candidate, cx))
+            .collect();
+        components::card()
+            .gap_3()
+            .child(section_title(
+                t(k::GATEWAY_IMPORT_TITLE),
+                t(k::GATEWAY_IMPORT_DESCRIPTION),
+            ))
+            .when(self.import_candidates.is_empty(), |panel| {
+                panel.child(
+                    div()
+                        .text_color(theme::muted())
+                        .text_sm()
+                        .child(t(k::GATEWAY_IMPORT_EMPTY)),
+                )
+            })
+            .when(!import_rows.is_empty(), |panel| {
+                panel.child(layout::group(import_rows))
+            })
+            .into_any_element()
+    }
+
+    fn render_empty_state(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        components::empty_state(
+            IconName::Cloud,
+            t(k::GATEWAY_EMPTY_TITLE),
+            t(k::GATEWAY_EMPTY_HINT),
+            Some(
+                components::button(
+                    "station-empty-add",
+                    t(k::GATEWAY_ACTION_ADD),
+                    ButtonTone::Primary,
+                    ButtonSize::Md,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.open_editor(None, cx);
+                }))
+                .into_any_element(),
+            ),
+        )
+        .into_any_element()
+    }
+
+    fn render_row(
+        &mut self,
+        index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let block = div().w_full().pb_5();
+        match self.rows.get(index).copied() {
+            Some(GatewayRow::Summary) => {
+                if let Some(summary) = self.render_summary_bar(cx) {
+                    block.child(summary).into_any_element()
+                } else {
+                    block.into_any_element()
+                }
+            }
+            Some(GatewayRow::Imports) => {
+                block.child(self.render_import_panel(cx)).into_any_element()
+            }
+            Some(GatewayRow::Connection) => block
+                .child(self.render_connection_panel(cx))
+                .into_any_element(),
+            Some(GatewayRow::Editor) => {
+                // Keep the editor outside `self` while its element tree is
+                // built, matching the previous borrow-safe rendering path.
+                let editor = self.editor.take();
+                let element = editor.as_ref().map(|editor| self.render_editor(editor, cx));
+                self.editor = editor;
+                if let Some(editor) = element {
+                    block.child(editor).into_any_element()
+                } else {
+                    block.into_any_element()
+                }
+            }
+            Some(GatewayRow::Empty) => block.child(self.render_empty_state(cx)).into_any_element(),
+            Some(GatewayRow::Station(station_index)) => {
+                if let Some(station) = self.stations.get(station_index) {
+                    block
+                        .child(self.render_station(station, cx))
+                        .into_any_element()
+                } else {
+                    block.into_any_element()
+                }
+            }
+            None => block.into_any_element(),
+        }
+    }
 }
 
 impl Render for GatewayView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let import_rows: Vec<gpui::AnyElement> = self
-            .import_candidates
-            .clone()
-            .iter()
-            .map(|candidate| self.render_import_candidate(candidate, cx))
-            .collect();
-        let station_rows: Vec<gpui::AnyElement> = self
-            .stations
-            .clone()
-            .iter()
-            .map(|station| self.render_station(station, cx))
-            .collect();
-        let editor = self.editor.take().map(|editor| {
-            let element = self.render_editor(&editor, cx);
-            self.editor = Some(editor);
-            element
-        });
-        let connection_panel = self
-            .show_connection
-            .then(|| self.render_connection_panel(cx));
-        let summary_bar = self.render_summary_bar(cx);
-        let station_count = self.stations.len();
-
-        let content = layout::wide_column()
-            .gap_5()
-            .when_some(summary_bar, |column, bar| column.child(bar))
-            .when(self.show_imports, |column| {
-                column.child(
-                    components::card()
-                        .gap_3()
-                        .child(section_title(
-                            t(k::GATEWAY_IMPORT_TITLE),
-                            t(k::GATEWAY_IMPORT_DESCRIPTION),
-                        ))
-                        .when(self.import_candidates.is_empty(), |panel| {
-                            panel.child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_sm()
-                                    .child(t(k::GATEWAY_IMPORT_EMPTY)),
-                            )
-                        })
-                        .when(!import_rows.is_empty(), |panel| {
-                            panel.child(layout::group(import_rows))
-                        }),
-                )
-            })
-            .when_some(connection_panel, |column, panel| column.child(panel))
-            .when_some(editor, |column, editor| column.child(editor))
-            .when(station_count == 0 && self.editor.is_none(), |column| {
-                column.child(components::empty_state(
-                    IconName::Cloud,
-                    t(k::GATEWAY_EMPTY_TITLE),
-                    t(k::GATEWAY_EMPTY_HINT),
-                    Some(
-                        components::button(
-                            "station-empty-add",
-                            t(k::GATEWAY_ACTION_ADD),
-                            ButtonTone::Primary,
-                            ButtonSize::Md,
-                        )
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.open_editor(None, cx);
-                        }))
-                        .into_any_element(),
-                    ),
-                ))
-            })
-            .children(station_rows);
-
         layout::page()
             .relative()
             .child(
@@ -2179,6 +2448,7 @@ impl Render for GatewayView {
                                 .on_click(cx.listener(
                                     |this, _event, _window, cx| {
                                         this.show_imports = !this.show_imports;
+                                        this.rebuild_rows();
                                         cx.notify();
                                     },
                                 )),
@@ -2198,10 +2468,13 @@ impl Render for GatewayView {
                             ),
                     ),
             )
-            .child(layout::scroll_body_tracked(
+            .child(layout::wide_virtual_body(
                 "relay-stations-body",
-                &self.scroll,
-                content,
+                gpui::list(
+                    self.list_state.clone(),
+                    cx.processor(|this, index, window, cx| this.render_row(index, window, cx)),
+                ),
+                &self.list_state,
             ))
             .when_some(self.delete_blocked.clone(), |root, (name, apps)| {
                 let labels = apps

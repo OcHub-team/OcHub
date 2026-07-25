@@ -421,13 +421,6 @@ pub fn first_run_notice_pending() -> bool {
     settings::get_settings().first_run_notice_confirmed != Some(true)
 }
 
-/// Persist acknowledgement of the first-run notice.
-pub fn confirm_first_run_notice() {
-    if let Err(err) = settings::mutate_settings(|s| s.first_run_notice_confirmed = Some(true)) {
-        log::warn!("保存首次运行提示确认状态失败: {err}");
-    }
-}
-
 #[cfg(test)]
 mod instance_lock_tests {
     use super::*;

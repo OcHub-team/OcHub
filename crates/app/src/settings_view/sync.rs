@@ -467,55 +467,66 @@ impl SettingsView {
         // Only the credential fields are written. `enabled`, `auto_sync` and
         // `status` belong to the store, and a sync running right now is writing
         // `status` into the same struct.
-        let write = match target {
-            SyncTarget::WebDav => {
-                let sync = normalized.clone();
-                settings::mutate_settings(move |settings| {
-                    let stored = settings.webdav_sync.get_or_insert_with(Default::default);
-                    stored.base_url = sync[0].clone();
-                    stored.username = sync[1].clone();
-                    stored.password = sync[2].clone();
-                    stored.remote_root = sync[3].clone();
-                    stored.profile = sync[4].clone();
+        let values_for_write = normalized.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    settings::mutate_settings(move |settings| match target {
+                        SyncTarget::WebDav => {
+                            let stored = settings.webdav_sync.get_or_insert_with(Default::default);
+                            stored.base_url = values_for_write[0].clone();
+                            stored.username = values_for_write[1].clone();
+                            stored.password = values_for_write[2].clone();
+                            stored.remote_root = values_for_write[3].clone();
+                            stored.profile = values_for_write[4].clone();
+                        }
+                        SyncTarget::S3 => {
+                            let stored = settings.s3_sync.get_or_insert_with(Default::default);
+                            stored.region = values_for_write[0].clone();
+                            stored.bucket = values_for_write[1].clone();
+                            stored.access_key_id = values_for_write[2].clone();
+                            stored.secret_access_key = values_for_write[3].clone();
+                            stored.endpoint = values_for_write[4].clone();
+                            stored.remote_root = values_for_write[5].clone();
+                            stored.profile = values_for_write[6].clone();
+                        }
+                    })
+                    .map(|_| settings::get_settings())
+                    .map_err(|error| error.to_string())
                 })
-            }
-            SyncTarget::S3 => {
-                let sync = normalized.clone();
-                settings::mutate_settings(move |settings| {
-                    let stored = settings.s3_sync.get_or_insert_with(Default::default);
-                    stored.region = sync[0].clone();
-                    stored.bucket = sync[1].clone();
-                    stored.access_key_id = sync[2].clone();
-                    stored.secret_access_key = sync[3].clone();
-                    stored.endpoint = sync[4].clone();
-                    stored.remote_root = sync[5].clone();
-                    stored.profile = sync[6].clone();
-                })
-            }
-        };
-
-        if let Some(draft) = self.draft.as_mut() {
-            draft.saving = false;
-        }
-        match write {
-            Ok(()) => {
-                self.settings = settings::get_settings();
-                // Re-seed from the *normalized* values, so an empty 远端目录
-                // becoming `ochub-sync` lands in the input the user is looking
-                // at rather than only on disk.
-                self.apply_values(normalized, cx);
-                self.set_status(NotificationLevel::Success, t(k::SETTINGS_STATUS_SAVED), cx);
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(
-                    k::SETTINGS_SYNC_SETTINGS_SAVE_FAILED,
-                    provider = target.provider(),
-                    error = err
-                ),
-                cx,
-            ),
-        }
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(draft) = this.draft.as_mut() {
+                    draft.saving = false;
+                }
+                match result {
+                    Ok(stored) => {
+                        this.settings = stored;
+                        // Re-seed from the *normalized* values, so an empty 远端目录
+                        // becoming `ochub-sync` lands in the input the user is looking
+                        // at rather than only on disk.
+                        this.apply_values(normalized, cx);
+                        this.set_status(
+                            NotificationLevel::Success,
+                            t(k::SETTINGS_STATUS_SAVED),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(
+                            k::SETTINGS_SYNC_SETTINGS_SAVE_FAILED,
+                            provider = target.provider(),
+                            error = error
+                        ),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     pub(super) fn discard_sync(&mut self, cx: &mut Context<Self>) {

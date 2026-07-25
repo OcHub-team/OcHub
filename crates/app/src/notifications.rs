@@ -20,6 +20,10 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 const ERROR_TIMEOUT: Duration = Duration::from_secs(5);
 const STACK_LAYER_OFFSET: f32 = 6.;
 const STACK_LAYER_INSET: f32 = 5.;
+/// Toast countdowns are supplementary feedback, not motion that needs display
+/// refresh cadence. Ten updates per second keeps the rail readable without
+/// forcing the whole window through 60 redraws per second for every toast.
+const PROGRESS_TICK: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotificationLevel {
@@ -131,6 +135,7 @@ pub struct NotificationHost {
     visible: VecDeque<Notification>,
     history: VecDeque<Notification>,
     stack_expanded: bool,
+    progress_task_running: bool,
 }
 
 /// A fixed-size canvas keeps the countdown animation out of layout. The wider,
@@ -203,10 +208,6 @@ impl RenderOnce for ToastProgress {
                     )
                     .corner_radii(px(0.5)),
                 );
-
-                if progress > 0. && started_at.is_some() && !cx.reduce_motion() {
-                    window.request_animation_frame();
-                }
             },
         )
         .w_full()
@@ -249,6 +250,7 @@ impl NotificationHost {
             visible: VecDeque::new(),
             history: VecDeque::new(),
             stack_expanded: false,
+            progress_task_running: false,
         }
     }
 
@@ -336,9 +338,42 @@ impl NotificationHost {
 
         if let Some(timeout) = timeout {
             Self::schedule_dismiss(id, timeout, 0, cx);
+            self.ensure_progress_ticks(cx);
         }
 
         id
+    }
+
+    fn ensure_progress_ticks(&mut self, cx: &mut Context<Self>) {
+        let has_running_countdown = self
+            .visible
+            .iter()
+            .any(|notification| notification.countdown_started_at.is_some());
+        if self.progress_task_running || !has_running_countdown {
+            return;
+        }
+        self.progress_task_running = true;
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(PROGRESS_TICK).await;
+            let keep_running = this
+                .update(cx, |this, cx| {
+                    let keep_running = this
+                        .visible
+                        .iter()
+                        .any(|notification| notification.countdown_started_at.is_some());
+                    if keep_running {
+                        cx.notify();
+                    } else {
+                        this.progress_task_running = false;
+                    }
+                    keep_running
+                })
+                .unwrap_or(false);
+            if !keep_running {
+                break;
+            }
+        })
+        .detach();
     }
 
     fn schedule_dismiss(id: u64, timeout: Duration, timer_epoch: u64, cx: &mut Context<Self>) {
@@ -392,6 +427,7 @@ impl NotificationHost {
         } else if let Some((remaining, timer_epoch)) = resume {
             Self::schedule_dismiss(id, remaining, timer_epoch, cx);
         }
+        self.ensure_progress_ticks(cx);
         cx.notify();
     }
 

@@ -16,6 +16,7 @@ use super::AppPlugin;
 pub struct PluginRegistry {
     plugins: BTreeMap<AppId, Arc<dyn AppPlugin>>,
     builtin_ids: Vec<AppId>,
+    sorted: Arc<[Arc<dyn AppPlugin>]>,
 }
 
 impl PluginRegistry {
@@ -26,10 +27,13 @@ impl PluginRegistry {
             builtin_ids.push(plugin.id().clone());
             plugins.insert(plugin.id().clone(), plugin);
         }
-        Self {
+        let mut registry = Self {
             plugins,
             builtin_ids,
-        }
+            sorted: Arc::from([]),
+        };
+        registry.rebuild_sorted();
+        registry
     }
 
     fn is_builtin(&self, id: &AppId) -> bool {
@@ -44,6 +48,7 @@ impl PluginRegistry {
             )));
         }
         self.plugins.insert(id, plugin);
+        self.rebuild_sorted();
         Ok(())
     }
 
@@ -51,7 +56,9 @@ impl PluginRegistry {
         if self.is_builtin(id) {
             return Err(AppError::InvalidInput(format!("内置应用不可注销: {id}")));
         }
-        self.plugins.remove(id);
+        if self.plugins.remove(id).is_some() {
+            self.rebuild_sorted();
+        }
         Ok(())
     }
 
@@ -59,14 +66,18 @@ impl PluginRegistry {
         self.plugins.get(id).cloned()
     }
 
-    fn sorted(&self) -> Vec<Arc<dyn AppPlugin>> {
+    fn rebuild_sorted(&mut self) {
         let mut all: Vec<_> = self.plugins.values().cloned().collect();
         all.sort_by(|a, b| {
             a.sort_order()
                 .cmp(&b.sort_order())
                 .then_with(|| a.id().cmp(b.id()))
         });
-        all
+        self.sorted = all.into();
+    }
+
+    fn sorted(&self) -> Arc<[Arc<dyn AppPlugin>]> {
+        self.sorted.clone()
     }
 }
 
@@ -80,22 +91,37 @@ pub fn get_plugin(id: &AppId) -> Option<Arc<dyn AppPlugin>> {
 
 /// All registered plugins sorted by `(sort_order, id)`.
 pub fn all_plugins() -> Vec<Arc<dyn AppPlugin>> {
-    REGISTRY.read().map(|reg| reg.sorted()).unwrap_or_default()
+    all_plugins_snapshot().iter().cloned().collect()
+}
+
+/// Cached sorted registry snapshot. Render paths can retain this `Arc` instead
+/// of sorting and cloning the full plugin set on every frame.
+pub fn all_plugins_snapshot() -> Arc<[Arc<dyn AppPlugin>]> {
+    REGISTRY
+        .read()
+        .map(|registry| registry.sorted())
+        .unwrap_or_else(|_| Arc::from([]))
 }
 
 /// [`all_plugins`] filtered by the enabled map in settings.
 pub fn enabled_plugins() -> Vec<Arc<dyn AppPlugin>> {
-    all_plugins()
-        .into_iter()
-        .filter(|p| is_app_enabled(p.as_ref()))
+    let overrides = crate::settings::enabled_apps_snapshot();
+    all_plugins_snapshot()
+        .iter()
+        .filter(|plugin| {
+            overrides
+                .as_ref()
+                .and_then(|enabled| enabled.get(plugin.id().as_str()).copied())
+                .unwrap_or_else(|| plugin.enabled_by_default())
+        })
+        .cloned()
         .collect()
 }
 
 /// Whether the app is currently enabled (settings map, falling back to the
 /// plugin's default).
 pub fn is_app_enabled(plugin: &dyn AppPlugin) -> bool {
-    crate::settings::get_settings()
-        .app_enabled(plugin.id().as_str())
+    crate::settings::app_enabled_override(plugin.id().as_str())
         .unwrap_or_else(|| plugin.enabled_by_default())
 }
 

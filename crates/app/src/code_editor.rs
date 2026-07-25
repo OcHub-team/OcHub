@@ -44,6 +44,29 @@ const STRUCTURE_REFRESH_DELAY: Duration = Duration::from_millis(160);
 const SCROLLBAR_TRACK_WIDTH: f32 = 10.;
 const SCROLLBAR_TRACK_INSET: f32 = 4.;
 const SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.;
+const HORIZONTAL_CONTENT_PADDING: f32 = 24.;
+const HORIZONTAL_CARET_PADDING: f32 = 12.;
+
+fn horizontal_scroll_for_caret(
+    current_left: Pixels,
+    caret_x: Pixels,
+    viewport_width: Pixels,
+    max_scroll: Pixels,
+) -> Pixels {
+    if viewport_width <= px(0.) || max_scroll <= px(0.) {
+        return px(0.);
+    }
+    let padding = px(HORIZONTAL_CARET_PADDING);
+    let right_edge = current_left + viewport_width - padding;
+    if caret_x < current_left + padding {
+        caret_x - padding
+    } else if caret_x > right_edge {
+        caret_x - viewport_width + padding
+    } else {
+        current_left
+    }
+    .clamp(px(0.), max_scroll)
+}
 
 #[derive(Clone, Copy, Debug)]
 struct VerticalScrollbarGeometry {
@@ -80,12 +103,16 @@ pub struct CodeEditor {
     lines: Vec<ShapedLine>,
     /// Buffer-line index for each entry in `lines`.
     rows: Vec<usize>,
-    /// Index into `visible_rows_cache` represented by `lines[0]`.
+    /// First visible row represented by `lines[0]`.
     painted_row_start: usize,
     /// Byte offset for the start of every buffer line.
     line_starts_cache: Vec<usize>,
     /// Post-folding buffer-line indices. Rebuilt only when content/folds change.
     visible_rows_cache: Vec<usize>,
+    /// With no collapsed region, visible row `n` is buffer line `n`. Keeping
+    /// that mapping implicit avoids rebuilding a hundred-thousand-item vector
+    /// after every edit.
+    visible_rows_identity: bool,
     /// Foldable regions for the current content.
     regions: Vec<FoldRegion>,
     /// Header lines of currently collapsed regions.
@@ -98,6 +125,13 @@ pub struct CodeEditor {
     /// content changes, so refocusing always starts from a visible caret.
     caret_blink: CaretBlink,
     scroll_handle: ScrollHandle,
+    /// Widest content width observed while shaping visible rows. This grows
+    /// lazily instead of scanning/shaping the whole document just to discover
+    /// one long line, which keeps opening very large files cheap.
+    measured_content_width: Pixels,
+    /// Last measured gutter width, used to keep keyboard cursor movement
+    /// horizontally visible.
+    gutter_width: Pixels,
     /// Last painted scrollbar geometry, in window coordinates. Mouse events
     /// use this exact geometry so the visible thumb and drag target cannot
     /// drift apart after scrolling or resizing.
@@ -136,7 +170,8 @@ impl CodeEditor {
             rows: Vec::new(),
             painted_row_start: 0,
             line_starts_cache: vec![0],
-            visible_rows_cache: vec![0],
+            visible_rows_cache: Vec::new(),
+            visible_rows_identity: true,
             regions: Vec::new(),
             collapsed: HashSet::new(),
             text_origin: None,
@@ -144,6 +179,8 @@ impl CodeEditor {
             last_bounds: None,
             caret_blink: CaretBlink::default(),
             scroll_handle: ScrollHandle::new(),
+            measured_content_width: px(0.),
+            gutter_width: px(0.),
             scrollbar_geometry: None,
             scrollbar_drag: None,
             find_input: None,
@@ -199,7 +236,11 @@ impl CodeEditor {
         self.selection_reversed = false;
         self.marked_range = None;
         self.collapsed.clear();
-        self.refresh_regions();
+        self.measured_content_width = px(0.);
+        self.gutter_width = px(0.);
+        self.scroll_handle.set_offset(point(px(0.), px(0.)));
+        self.refresh_line_index();
+        self.schedule_structure_refresh(cx);
         self.refresh_find_matches(cx);
         self.reset_blink(cx);
         cx.notify();
@@ -242,8 +283,8 @@ impl CodeEditor {
     }
 
     fn scroll_selection_into_view(&self) {
-        let (line, _) = self.line_index_for_offset(self.cursor_offset());
-        let Ok(row) = self.visible_rows().binary_search(&line) else {
+        let (line, column) = self.line_index_for_offset(self.cursor_offset());
+        let Some(row) = self.visible_row_for_line(line) else {
             return;
         };
         let row_top = self.line_height * row as f32;
@@ -262,7 +303,22 @@ impl CodeEditor {
             current_top
         }
         .clamp(px(0.), self.scroll_handle.max_offset().y);
-        self.scroll_handle.set_offset(point(current.x, -target_top));
+
+        let viewport_width = self.scroll_handle.bounds().size.width;
+        let max_x = self.scroll_handle.max_offset().x;
+        let target_left = row
+            .checked_sub(self.painted_row_start)
+            .and_then(|painted| self.lines.get(painted))
+            .filter(|_| viewport_width > px(0.) && max_x > px(0.))
+            .map(|layout| {
+                let caret_x = self.gutter_width + layout.x_for_index(column);
+                let current_left = -current.x;
+                horizontal_scroll_for_caret(current_left, caret_x, viewport_width, max_x)
+            })
+            .unwrap_or(-current.x);
+
+        self.scroll_handle
+            .set_offset(point(-target_left, -target_top));
     }
 
     fn open_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
@@ -372,9 +428,9 @@ impl CodeEditor {
         self.schedule_structure_refresh(cx);
     }
 
-    /// Recompute fold regions after any content change; drop collapsed marks
-    /// whose region no longer exists.
-    fn refresh_regions(&mut self) {
+    /// Refresh the byte line index immediately; the more expensive syntax fold
+    /// scan is scheduled separately.
+    fn refresh_line_index(&mut self) {
         self.structure_refresh_epoch = self.structure_refresh_epoch.wrapping_add(1);
         self.line_starts_cache.clear();
         self.line_starts_cache.push(0);
@@ -384,27 +440,37 @@ impl CodeEditor {
                 .enumerate()
                 .filter_map(|(index, byte)| (byte == b'\n').then_some(index + 1)),
         );
-        self.refresh_fold_regions();
-    }
-
-    fn refresh_fold_regions(&mut self) {
-        self.regions = fold_regions(self.lang, &self.content);
-        let regions = &self.regions;
-        self.collapsed
-            .retain(|h| regions.iter().any(|r| r.header == *h));
+        self.regions.clear();
+        self.collapsed.clear();
         self.refresh_visible_rows();
     }
 
     fn schedule_structure_refresh(&mut self, cx: &mut Context<Self>) {
         self.structure_refresh_epoch = self.structure_refresh_epoch.wrapping_add(1);
         let epoch = self.structure_refresh_epoch;
+        let lang = self.lang;
+        let content = self.content.clone();
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(STRUCTURE_REFRESH_DELAY)
                 .await;
+            let current = this
+                .update(cx, |this, _cx| this.structure_refresh_epoch == epoch)
+                .unwrap_or(false);
+            if !current {
+                return;
+            }
+            let regions = cx
+                .background_spawn(async move { fold_regions(lang, &content) })
+                .await;
             this.update(cx, |this, cx| {
                 if this.structure_refresh_epoch == epoch {
-                    this.refresh_fold_regions();
+                    this.regions = regions;
+                    this.collapsed
+                        .retain(|header| this.regions.iter().any(|r| r.header == *header));
+                    if !this.collapsed.is_empty() {
+                        this.refresh_visible_rows();
+                    }
                     cx.notify();
                 }
             })
@@ -418,6 +484,12 @@ impl CodeEditor {
     /// Buffer-line index for each visible row, honoring collapsed regions.
     fn refresh_visible_rows(&mut self) {
         let line_count = self.line_starts_cache.len().max(1);
+        if self.collapsed.is_empty() {
+            self.visible_rows_identity = true;
+            self.visible_rows_cache.clear();
+            return;
+        }
+        self.visible_rows_identity = false;
         let mut hidden_delta = vec![0i32; line_count + 1];
         for region in &self.regions {
             if self.collapsed.contains(&region.header) {
@@ -440,8 +512,28 @@ impl CodeEditor {
         }
     }
 
-    fn visible_rows(&self) -> &[usize] {
-        &self.visible_rows_cache
+    fn visible_row_count(&self) -> usize {
+        if self.visible_rows_identity {
+            self.line_starts_cache.len().max(1)
+        } else {
+            self.visible_rows_cache.len()
+        }
+    }
+
+    fn line_for_visible_row(&self, row: usize) -> Option<usize> {
+        if self.visible_rows_identity {
+            (row < self.line_starts_cache.len().max(1)).then_some(row)
+        } else {
+            self.visible_rows_cache.get(row).copied()
+        }
+    }
+
+    fn visible_row_for_line(&self, line: usize) -> Option<usize> {
+        if self.visible_rows_identity {
+            (line < self.line_starts_cache.len().max(1)).then_some(line)
+        } else {
+            self.visible_rows_cache.binary_search(&line).ok()
+        }
     }
 
     /// The fold region headed at `line`, if any (innermost = shortest).
@@ -512,7 +604,8 @@ impl CodeEditor {
             self.content = self.buffer.snapshot().text().into();
             self.marked_range = None;
             self.clamp_selection();
-            self.refresh_regions();
+            self.refresh_line_index();
+            self.schedule_structure_refresh(cx);
             self.ensure_offset_visible(self.cursor_offset());
             self.refresh_find_matches(cx);
             self.scroll_selection_into_view();
@@ -528,7 +621,8 @@ impl CodeEditor {
             self.content = self.buffer.snapshot().text().into();
             self.marked_range = None;
             self.clamp_selection();
-            self.refresh_regions();
+            self.refresh_line_index();
+            self.schedule_structure_refresh(cx);
             self.ensure_offset_visible(self.cursor_offset());
             self.refresh_find_matches(cx);
             self.scroll_selection_into_view();
@@ -580,13 +674,14 @@ impl CodeEditor {
     /// Visible row index under a window-space y position.
     fn row_for_position(&self, position: Point<Pixels>) -> Option<usize> {
         let origin = self.text_origin?;
-        if self.visible_rows_cache.is_empty() {
+        let row_count = self.visible_row_count();
+        if row_count == 0 {
             return None;
         }
         let line_height = f32::from(self.line_height).max(1.0);
         let rel_y = f32::from(position.y - origin.y);
         let row = (rel_y / line_height).floor().max(0.0) as usize;
-        Some(row.min(self.visible_rows_cache.len() - 1))
+        Some(row.min(row_count - 1))
     }
 
     fn offset_for_position(&self, position: Point<Pixels>) -> usize {
@@ -596,7 +691,7 @@ impl CodeEditor {
         let Some(row) = self.row_for_position(position) else {
             return 0;
         };
-        let line = self.visible_rows_cache.get(row).copied().unwrap_or(row);
+        let line = self.line_for_visible_row(row).unwrap_or(row);
         let starts = self.line_starts();
         if line >= starts.len() {
             return self.content.len();
@@ -633,7 +728,7 @@ impl CodeEditor {
     /// Visible row of the cursor's buffer line (post-folding).
     fn cursor_row(&self) -> Option<usize> {
         let (line, _) = self.line_index_for_offset(self.cursor_offset());
-        self.visible_rows_cache.binary_search(&line).ok()
+        self.visible_row_for_line(line)
     }
 
     /// Move vertically by one *visible* row, keeping the x position.
@@ -648,7 +743,7 @@ impl CodeEditor {
             self.move_to(0, cx);
             return;
         }
-        let Some(&target_line) = self.visible_rows_cache.get(target_row as usize) else {
+        let Some(target_line) = self.line_for_visible_row(target_row as usize) else {
             self.move_to(self.content.len(), cx);
             return;
         };
@@ -798,7 +893,7 @@ impl CodeEditor {
         if let (Some(origin), Some(bounds)) = (self.text_origin, self.last_bounds) {
             if event.position.x < origin.x && event.position.x >= bounds.left() {
                 if let Some(row) = self.row_for_position(event.position) {
-                    if let Some(&line) = self.visible_rows_cache.get(row) {
+                    if let Some(line) = self.line_for_visible_row(row) {
                         if self.region_at(line).is_some() {
                             self.toggle_fold(line, cx);
                             return;
@@ -840,7 +935,11 @@ impl CodeEditor {
         };
         let scroll_y = scroll_amount_for_thumb_top(&scrollbar, pointer_y - drag.grab_offset);
         let current = self.scroll_handle.offset();
-        self.scroll_handle.set_offset(point(current.x, -scroll_y));
+        let next_y = -scroll_y;
+        if f32::from((current.y - next_y).abs()) < 0.5 {
+            return;
+        }
+        self.scroll_handle.set_offset(point(current.x, next_y));
         cx.notify();
     }
 
@@ -861,6 +960,9 @@ impl CodeEditor {
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        if offset == self.cursor_offset() {
+            return;
+        }
         if self.selection_reversed {
             self.selected_range.start = offset
         } else {
@@ -1035,7 +1137,7 @@ impl EntityInputHandler for CodeEditor {
         let range = self.range_from_utf16(&range_utf16);
         let (line, col) = self.line_index_for_offset(range.start);
         let origin = self.text_origin?;
-        let visible_row = self.visible_rows_cache.binary_search(&line).ok()?;
+        let visible_row = self.visible_row_for_line(line)?;
         let painted_row = visible_row.checked_sub(self.painted_row_start);
         let x = self
             .lines
@@ -1080,6 +1182,7 @@ struct PrepaintState {
     selections: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
     gutter: Pixels,
+    measured_content_width: Pixels,
     line_height: Pixels,
     text_origin: Point<Pixels>,
     paint_bounds: Bounds<Pixels>,
@@ -1229,11 +1332,13 @@ impl Element for CodeEditorElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let row_count = {
             let editor = self.editor.read(cx);
-            editor.visible_rows().len().max(1)
+            editor.visible_row_count().max(1)
         };
+        let measured_content_width = self.editor.read(cx).measured_content_width;
         let line_height = window.line_height();
         let mut style = Style::default();
-        style.size.width = gpui::relative(1.).into();
+        style.size.width = measured_content_width.max(px(1.)).into();
+        style.min_size.width = gpui::relative(1.).into();
         style.size.height = (line_height * row_count as f32).into();
         (window.request_layout(style, [], cx), ())
     }
@@ -1262,10 +1367,12 @@ impl Element for CodeEditorElement {
             bounds,
             viewport_bounds,
             line_height,
-            editor.visible_rows().len(),
+            editor.visible_row_count(),
         );
         let first_row = row_range.start;
-        let rows = editor.visible_rows()[row_range].to_vec();
+        let rows = row_range
+            .filter_map(|row| editor.line_for_visible_row(row))
+            .collect::<Vec<_>>();
         let paint_bounds = if viewport_bounds.size.height > px(0.) {
             bounds.intersect(&viewport_bounds)
         } else {
@@ -1372,6 +1479,12 @@ impl Element for CodeEditorElement {
             });
             chevrons.push(chevron);
         }
+        let measured_content_width = lines
+            .iter()
+            .map(ShapedLine::width)
+            .fold(px(0.), Pixels::max)
+            + gutter
+            + px(HORIZONTAL_CONTENT_PADDING);
 
         let mut search_highlights = Vec::new();
         if !empty {
@@ -1465,17 +1578,19 @@ impl Element for CodeEditorElement {
         };
 
         // Cursor-style hitboxes: gutter (arrow), chevron rows (hand), text (I-beam).
-        let gutter_hitbox = window.insert_hitbox(
-            Bounds::new(paint_bounds.origin, size(gutter, paint_bounds.size.height)),
-            HitboxBehavior::Normal,
+        let gutter_right = text_origin
+            .x
+            .clamp(paint_bounds.left(), paint_bounds.right());
+        let gutter_bounds = Bounds::from_corners(
+            paint_bounds.origin,
+            point(gutter_right, paint_bounds.bottom()),
         );
+        let gutter_hitbox = window.insert_hitbox(gutter_bounds, HitboxBehavior::Normal);
+        let text_left = text_origin.x.max(paint_bounds.left());
         let text_hitbox = window.insert_hitbox(
-            Bounds::new(
-                point(text_origin.x, paint_bounds.top()),
-                size(
-                    (paint_bounds.size.width - gutter).max(px(0.)),
-                    paint_bounds.size.height,
-                ),
+            Bounds::from_corners(
+                point(text_left, paint_bounds.top()),
+                point(paint_bounds.right(), paint_bounds.bottom()),
             ),
             HitboxBehavior::Normal,
         );
@@ -1516,6 +1631,7 @@ impl Element for CodeEditorElement {
             selections,
             cursor,
             gutter,
+            measured_content_width,
             line_height,
             text_origin,
             paint_bounds,
@@ -1646,14 +1762,23 @@ impl Element for CodeEditorElement {
             .scrollbar
             .as_ref()
             .map(|scrollbar| scrollbar.geometry);
-        self.editor.update(cx, |editor, _cx| {
+        let measured_content_width = prepaint.measured_content_width;
+        self.editor.update(cx, |editor, cx| {
+            let width_grew = measured_content_width > editor.measured_content_width + px(0.5);
+            if width_grew {
+                editor.measured_content_width = measured_content_width;
+            }
             editor.lines = lines;
             editor.rows = rows;
             editor.painted_row_start = painted_row_start;
             editor.text_origin = Some(text_origin);
             editor.line_height = line_height;
+            editor.gutter_width = prepaint.gutter;
             editor.last_bounds = Some(paint_bounds);
             editor.scrollbar_geometry = scrollbar_geometry;
+            if width_grew {
+                cx.notify();
+            }
         });
     }
 }
@@ -1734,6 +1859,35 @@ impl Render for CodeEditor {
             .then(|| self.find_input.clone())
             .flatten()
             .map(|input| render_find_bar(input, self.find_active, self.find_matches.len()));
+        let mut editor_scroll = div()
+            .id(("code-editor-scroll", cx.entity_id().as_u64()))
+            // GPUI's block layout constrains a direct child to the viewport
+            // width, even when that child requests a wider layout. Make the
+            // viewport a flex container and keep the content item from
+            // shrinking so long logical lines create a real X scroll range.
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .w_full()
+            .h_full()
+            .overflow_scroll()
+            .track_scroll(&self.scroll_handle)
+            // Contain wheel gestures: without this, GPUI also scrolls every
+            // scrollable ancestor under the pointer (modal body, page), which
+            // reads as the whole page lurching.
+            .on_scroll_wheel(cx.listener(|this, _event, _window, cx| {
+                let max_offset = this.scroll_handle.max_offset();
+                if max_offset.x > px(0.) || max_offset.y > px(0.) {
+                    cx.stop_propagation();
+                }
+            }))
+            .child(div().flex_none().child(CodeEditorElement {
+                editor: cx.entity(),
+            }));
+        // Regular wheel gestures remain vertical; horizontal trackpad deltas
+        // (or Shift + wheel) move X without hijacking the page's Y axis.
+        editor_scroll.style().restrict_scroll_to_axis = Some(true);
         div()
             .id("code-editor")
             .role(gpui::Role::TextInput)
@@ -1791,25 +1945,7 @@ impl Render for CodeEditor {
             .h(px(380.))
             .items_start()
             .overflow_hidden()
-            .child(
-                div()
-                    .id(("code-editor-scroll", cx.entity_id().as_u64()))
-                    .w_full()
-                    .h_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll_handle)
-                    // Contain wheel gestures: without this, GPUI also scrolls
-                    // every scrollable ancestor under the pointer (modal body,
-                    // page), which reads as the whole page lurching.
-                    .on_scroll_wheel(cx.listener(|this, _event, _window, cx| {
-                        if this.scroll_handle.max_offset().y > px(0.) {
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .child(div().w_full().child(CodeEditorElement {
-                        editor: cx.entity(),
-                    })),
-            )
+            .child(editor_scroll)
             .when_some(find_bar, |element, bar| element.child(bar))
     }
 }
@@ -1823,8 +1959,8 @@ impl Focusable for CodeEditor {
 #[cfg(test)]
 mod tests {
     use super::{
-        line_starts_after_edit, painted_row_range, scroll_amount_for_thumb_top,
-        vertical_scrollbar_geometry,
+        horizontal_scroll_for_caret, line_starts_after_edit, painted_row_range,
+        scroll_amount_for_thumb_top, vertical_scrollbar_geometry,
     };
     use gpui::{point, px, size, Bounds};
 
@@ -1856,6 +1992,26 @@ mod tests {
             vec![0, 2, 5]
         );
         assert_eq!(line_starts_after_edit(&starts, &(0..2), ""), vec![0, 2]);
+    }
+
+    #[test]
+    fn horizontal_scroll_keeps_the_code_caret_visible() {
+        assert_eq!(
+            horizontal_scroll_for_caret(px(0.), px(800.), px(600.), px(400.)),
+            px(212.)
+        );
+        assert_eq!(
+            horizontal_scroll_for_caret(px(212.), px(50.), px(600.), px(400.)),
+            px(38.)
+        );
+        assert_eq!(
+            horizontal_scroll_for_caret(px(38.), px(300.), px(600.), px(400.)),
+            px(38.)
+        );
+        assert_eq!(
+            horizontal_scroll_for_caret(px(38.), px(300.), px(600.), px(0.)),
+            px(0.)
+        );
     }
 
     #[test]

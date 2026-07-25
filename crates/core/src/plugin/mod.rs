@@ -34,8 +34,9 @@ pub use manifest::{AppManifest, ManifestError};
 pub use manifest_codec::ManifestCodec;
 pub use plugin_manifest::{ManifestPlugin, ManifestSource};
 pub use registry::{
-    all_plugins, enabled_plugins, ensure_app_enabled, ensure_app_type_enabled, get_plugin,
-    is_app_enabled, is_app_type_enabled, register_plugin, unregister_plugin,
+    all_plugins, all_plugins_snapshot, enabled_plugins, ensure_app_enabled,
+    ensure_app_type_enabled, get_plugin, is_app_enabled, is_app_type_enabled, register_plugin,
+    unregister_plugin,
 };
 
 use crate::app_id::AppId;

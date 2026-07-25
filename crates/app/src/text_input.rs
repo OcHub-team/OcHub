@@ -1054,6 +1054,9 @@ impl TextInput {
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        if offset == self.cursor_offset() {
+            return;
+        }
         if self.selection_reversed {
             self.selected_range.start = offset
         } else {

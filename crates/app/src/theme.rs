@@ -5,11 +5,12 @@
 //! or pins one variant. User families are portable `.ochub-theme.json` files in
 //! the app data directory's `themes/` folder.
 
+use std::cell::Cell;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use anyhow::{anyhow, Context as _, Result};
 use gpui::{px, rgb, BoxShadow, Hsla, Rgba, Window, WindowAppearance, WindowBackgroundAppearance};
@@ -545,7 +546,7 @@ pub struct ThemeRecord {
     pub path: Option<PathBuf>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ThemeRegistry {
     pub themes: Vec<ThemeRecord>,
     pub diagnostics: Vec<String>,
@@ -773,7 +774,10 @@ fn read_theme_file(path: &Path) -> Result<ThemeFamily> {
     Ok(family)
 }
 
-pub fn load_registry() -> ThemeRegistry {
+static REGISTRY_CACHE: LazyLock<RwLock<Option<Arc<ThemeRegistry>>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+fn scan_registry() -> ThemeRegistry {
     let mut registry = ThemeRegistry {
         themes: built_in_records(),
         diagnostics: Vec::new(),
@@ -833,12 +837,35 @@ pub fn load_registry() -> ThemeRegistry {
     registry
 }
 
+pub fn load_registry() -> Arc<ThemeRegistry> {
+    if let Ok(cache) = REGISTRY_CACHE.read() {
+        if let Some(registry) = cache.as_ref() {
+            return registry.clone();
+        }
+    }
+    reload_registry()
+}
+
+pub fn reload_registry() -> Arc<ThemeRegistry> {
+    let registry = Arc::new(scan_registry());
+    if let Ok(mut cache) = REGISTRY_CACHE.write() {
+        *cache = Some(registry.clone());
+    }
+    registry
+}
+
+fn invalidate_registry() {
+    if let Ok(mut cache) = REGISTRY_CACHE.write() {
+        *cache = None;
+    }
+}
+
 pub fn find_family(id: &str) -> Option<ThemeFamily> {
     load_registry()
         .themes
-        .into_iter()
+        .iter()
         .find(|record| record.family.id == id)
-        .map(|record| record.family)
+        .map(|record| record.family.clone())
 }
 
 fn valid_id(id: &str) -> bool {
@@ -1030,6 +1057,7 @@ pub fn save_user_family(family: &ThemeFamily) -> Result<PathBuf> {
     }
     let path = themes_dir().join(format!("{}.ochub-theme.json", family.id));
     write_family(&path, family)?;
+    invalidate_registry();
     Ok(path)
 }
 
@@ -1071,15 +1099,36 @@ pub fn delete_user_family(record: &ThemeRecord) -> Result<()> {
         .path
         .as_ref()
         .ok_or_else(|| anyhow!(raw(k::THEME_DELETE_MISSING_PATH)))?;
-    fs::remove_file(path).with_context(|| tf!(k::THEME_FILE_DELETE_FAILED, path = path.display()))
+    fs::remove_file(path)
+        .with_context(|| tf!(k::THEME_FILE_DELETE_FAILED, path = path.display()))?;
+    invalidate_registry();
+    Ok(())
 }
 
 static CURRENT: RwLock<Theme> = RwLock::new(OCHUB_LIGHT);
+static CURRENT_VERSION: AtomicU64 = AtomicU64::new(0);
 static CURRENT_DARK: AtomicBool = AtomicBool::new(false);
 static PREVIEW_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+thread_local! {
+    /// Theme tokens are read hundreds of times while building a frame, all
+    /// from the UI thread. A versioned thread-local copy turns those reads
+    /// into one atomic load and avoids repeatedly acquiring the global lock.
+    static CURRENT_CACHE: Cell<(u64, Theme)> = const { Cell::new((0, OCHUB_LIGHT)) };
+}
+
 pub fn current() -> Theme {
-    *CURRENT.read().expect("theme lock poisoned")
+    let version = CURRENT_VERSION.load(Ordering::Acquire);
+    CURRENT_CACHE.with(|cache| {
+        let (cached_version, cached_theme) = cache.get();
+        if cached_version == version {
+            cached_theme
+        } else {
+            let theme = *CURRENT.read().expect("theme lock poisoned");
+            cache.set((version, theme));
+            theme
+        }
+    })
 }
 
 pub fn is_dark() -> bool {
@@ -1089,6 +1138,7 @@ pub fn is_dark() -> bool {
 fn install(theme: Theme, dark: bool) {
     *CURRENT.write().expect("theme lock poisoned") = theme;
     CURRENT_DARK.store(dark, Ordering::Relaxed);
+    CURRENT_VERSION.fetch_add(1, Ordering::Release);
 }
 
 pub fn install_preview(theme: Theme, dark: bool) {

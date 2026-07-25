@@ -12,6 +12,7 @@ use gpui::{div, prelude::*, AnyElement, Context, PathPromptOptions, SharedString
 use ochub_core::app_store;
 use ochub_core::i18n::Locale;
 use ochub_core::services::UpdateCheckResult;
+use ochub_core::settings;
 
 use crate::components::{self, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -272,9 +273,9 @@ impl SettingsView {
                 |this, cx| this.toggle_tray(cx),
             ),
             RowId::AppsOpen => {
-                let plugins = ochub_core::plugin::all_plugins();
-                let total = plugins.len();
-                let enabled = plugins
+                let total = self.plugins.len();
+                let enabled = self
+                    .plugins
                     .iter()
                     .filter(|plugin| self.app_is_enabled(plugin.as_ref()))
                     .count();
@@ -487,54 +488,90 @@ impl SettingsView {
             return;
         };
         let tag = choice.map(|locale| locale.tag().to_string());
-        if !self.write(move |settings| settings.language = tag, cx) {
-            return;
-        }
-        // Apply, then repaint: `refresh_windows` is what defeats gpui's
-        // element-state reuse and re-runs `render` across the whole tree.
-        ochub_core::i18n::install(ochub_core::i18n::resolve(self.settings.language.as_deref()));
-        cx.emit(SettingsEvent::LocaleChanged);
-        cx.refresh_windows();
+        self.write_then(
+            move |settings| settings.language = tag,
+            |this, cx| {
+                // Apply, then repaint: `refresh_windows` is what defeats gpui's
+                // element-state reuse and re-runs `render` across the whole tree.
+                ochub_core::i18n::install(ochub_core::i18n::resolve(
+                    this.settings.language.as_deref(),
+                ));
+                cx.emit(SettingsEvent::LocaleChanged);
+                cx.refresh_windows();
+            },
+            cx,
+        );
     }
 
     // ── Startup and window ──────────────────────────────────────────────────
 
     fn toggle_launch_on_startup(&mut self, cx: &mut Context<Self>) {
         let target = !self.settings.launch_on_startup;
-        // Register with the OS first: the stored flag must never claim a login
-        // item that does not exist.
-        if let Err(err) = ochub_core::autostart::set_enabled(target, self.settings.silent_startup) {
-            self.startup_error = Some(SharedString::from(err.to_string()));
-            cx.notify();
-            return;
-        }
-        self.startup_error = None;
-        self.write(move |settings| settings.launch_on_startup = target, cx);
+        self.apply_autostart(target, self.settings.silent_startup, true, cx);
     }
 
     fn toggle_silent_startup(&mut self, cx: &mut Context<Self>) {
         let target = !self.settings.silent_startup;
-        // The flag is carried on the registered command line, so the existing
-        // login item has to be rewritten for the change to mean anything. The
-        // row is disabled without one, so there always is one here.
-        if let Err(err) = ochub_core::autostart::set_enabled(true, target) {
-            self.startup_error = Some(SharedString::from(err.to_string()));
-            cx.notify();
+        self.apply_autostart(true, target, false, cx);
+    }
+
+    fn apply_autostart(
+        &mut self,
+        launch_enabled: bool,
+        silent_startup: bool,
+        update_launch_flag: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_busy {
             return;
         }
-        self.startup_error = None;
-        self.write(move |settings| settings.silent_startup = target, cx);
+        self.settings_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    // Register with the OS first: persisted settings must never
+                    // claim a login item that does not exist.
+                    ochub_core::autostart::set_enabled(launch_enabled, silent_startup)
+                        .map_err(|error| error.to_string())?;
+                    settings::mutate_settings(move |settings| {
+                        if update_launch_flag {
+                            settings.launch_on_startup = launch_enabled;
+                        } else {
+                            settings.silent_startup = silent_startup;
+                        }
+                    })
+                    .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.settings_busy = false;
+                match result {
+                    Ok(()) => {
+                        this.startup_error = None;
+                        this.reload(cx);
+                    }
+                    Err(error) => {
+                        this.startup_error = Some(SharedString::from(error));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn toggle_keep_running(&mut self, cx: &mut Context<Self>) {
         let target = !self.settings.minimize_to_tray_on_close;
-        if self.write(
+        self.write_then(
             move |settings| settings.minimize_to_tray_on_close = target,
+            |_this, cx| {
+                // This toggle changes when the process may exit.
+                crate::apply_quit_mode(cx);
+            },
             cx,
-        ) {
-            // This toggle changes when the process may exit.
-            crate::apply_quit_mode(cx);
-        }
+        );
     }
 
     fn toggle_auto_update_check(&mut self, cx: &mut Context<Self>) {
@@ -544,9 +581,11 @@ impl SettingsView {
 
     fn toggle_tray(&mut self, cx: &mut Context<Self>) {
         let target = !self.settings.show_in_tray;
-        if self.write(move |settings| settings.show_in_tray = target, cx) {
-            shell_menu::refresh(&self.app, cx);
-        }
+        self.write_then(
+            move |settings| settings.show_in_tray = target,
+            |this, cx| shell_menu::refresh(&this.app, cx),
+            cx,
+        );
     }
 
     // ── Data directory ──────────────────────────────────────────────────────
@@ -620,7 +659,15 @@ impl SettingsView {
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { app.db.import_from_ccswitch_source(&source) })
+                .background_spawn(async move {
+                    let result = app.db.import_from_ccswitch_source(&source);
+                    if result.is_ok() {
+                        if let Err(error) = app.db.set_ccswitch_import_decision("imported") {
+                            log::warn!("保存 cc-switch 导入选择失败: {error}");
+                        }
+                    }
+                    result
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.ccswitch_busy = false;
@@ -634,11 +681,6 @@ impl SettingsView {
                             ),
                             cx,
                         );
-                        // The import answers the first-run question too, so a
-                        // later fresh profile does not ask again pointlessly.
-                        if let Err(err) = this.app.db.set_ccswitch_import_decision("imported") {
-                            log::warn!("保存 cc-switch 导入选择失败: {err}");
-                        }
                         cx.emit(SettingsEvent::DataImported);
                     }
                     Err(err) => this.set_status(
@@ -656,23 +698,41 @@ impl SettingsView {
     }
 
     fn apply_data_dir(&mut self, path: Option<String>, cx: &mut Context<Self>) {
+        if self.settings_busy {
+            return;
+        }
+        self.settings_busy = true;
+        cx.notify();
         // The override lives in its own bootstrap file, not in settings.json,
         // so this failure has no field to attach to — it is plain I/O.
-        match app_store::set_app_config_dir_to_store(path.as_deref()) {
-            Ok(()) => {
-                self.reload(cx);
-                self.set_status(
-                    NotificationLevel::Success,
-                    t(k::SETTINGS_CONFIG_DIR_SAVED),
-                    cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SETTINGS_CONFIG_DIR_SAVE_FAILED, error = err),
-                cx,
-            ),
-        }
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    app_store::set_app_config_dir_to_store(path.as_deref())
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.settings_busy = false;
+                match result {
+                    Ok(()) => {
+                        this.reload(cx);
+                        this.set_status(
+                            NotificationLevel::Success,
+                            t(k::SETTINGS_CONFIG_DIR_SAVED),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_CONFIG_DIR_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ── Updates ─────────────────────────────────────────────────────────────
@@ -881,24 +941,37 @@ impl SettingsView {
     }
 
     fn open_release_page(&mut self, cx: &mut Context<Self>) {
+        if self.settings_busy {
+            return;
+        }
         let url = self
             .update
             .info
             .as_ref()
             .map(|info| info.release_url.clone())
             .unwrap_or_else(|| ochub_core::services::latest_release_url(None));
-        match open_url(&url) {
-            Ok(()) => self.set_status(
-                NotificationLevel::Success,
-                t(k::SETTINGS_UPDATE_RELEASE_OPENED),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::SETTINGS_UPDATE_RELEASE_OPEN_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.settings_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { open_url(&url) }).await;
+            this.update(cx, |this, cx| {
+                this.settings_busy = false;
+                match result {
+                    Ok(()) => this.set_status(
+                        NotificationLevel::Success,
+                        t(k::SETTINGS_UPDATE_RELEASE_OPENED),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_UPDATE_RELEASE_OPEN_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ── Sync destination (the two rows that stay on the root page) ──────────

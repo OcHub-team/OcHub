@@ -57,45 +57,43 @@ pub fn t(key: Key) -> SharedString {
 /// on which placeholders exist.
 pub fn format_named(template: &str, args: &[(&str, String)]) -> String {
     let mut out = String::with_capacity(template.len());
-    let chars: Vec<char> = template.chars().collect();
+    let bytes = template.as_bytes();
+    let mut literal_start = 0;
     let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '{' if chars.get(i + 1) == Some(&'{') => {
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' if bytes.get(i + 1) == Some(&b'{') => {
+                out.push_str(&template[literal_start..i]);
                 out.push('{');
                 i += 2;
+                literal_start = i;
             }
-            '}' if chars.get(i + 1) == Some(&'}') => {
+            b'}' if bytes.get(i + 1) == Some(&b'}') => {
+                out.push_str(&template[literal_start..i]);
                 out.push('}');
                 i += 2;
+                literal_start = i;
             }
-            '{' => {
+            b'{' => {
                 let start = i + 1;
-                let mut end = start;
-                while end < chars.len() && chars[end] != '}' {
-                    end += 1;
-                }
-                if end >= chars.len() {
-                    out.extend(&chars[i..]);
+                let Some(relative_end) = bytes[start..].iter().position(|byte| *byte == b'}')
+                else {
                     break;
-                }
-                let name: String = chars[start..end].iter().collect();
+                };
+                let end = start + relative_end;
+                let name = &template[start..end];
+                out.push_str(&template[literal_start..i]);
                 match args.iter().find(|(key, _)| *key == name) {
                     Some((_, value)) => out.push_str(value),
-                    None => {
-                        out.push('{');
-                        out.push_str(&name);
-                        out.push('}');
-                    }
+                    None => out.push_str(&template[i..=end]),
                 }
                 i = end + 1;
+                literal_start = i;
             }
-            c => {
-                out.push(c);
-                i += 1;
-            }
+            _ => i += 1,
         }
     }
+    out.push_str(&template[literal_start..]);
     out
 }
 

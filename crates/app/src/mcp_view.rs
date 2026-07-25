@@ -42,14 +42,9 @@ pub struct McpView {
     confirm_delete: Option<(String, String)>,
     list_state: ListState,
     form_scroll_handle: ScrollHandle,
-}
-
-/// Row plan for the virtualized list. Rebuilt每帧并被 list 的 processor 捕获，
-/// 保证一帧内索引与内容一致。`Card` 存 `servers` 的下标。
-#[derive(Clone, Copy)]
-enum McpRow {
-    EmptyState,
-    Card(usize),
+    reload_generation: u64,
+    io_busy: bool,
+    enabled_apps: Arc<[AppType]>,
 }
 
 impl McpView {
@@ -96,7 +91,7 @@ impl McpView {
         let description = cx.new(|cx| TextInput::new(cx, t(k::MCP_FORM_DESCRIPTION_PLACEHOLDER)));
         let spec_json = cx
             .new(|cx| TextInput::new(cx, r#"{"type":"stdio","command":"","args":[]}"#).code(true));
-        let mut this = Self {
+        Self {
             app,
             servers: Vec::new(),
             status: None,
@@ -110,9 +105,10 @@ impl McpView {
             confirm_delete: None,
             list_state: ListState::new(0, ListAlignment::Top, px(512.)),
             form_scroll_handle: ScrollHandle::new(),
-        };
-        this.reload();
-        this
+            reload_generation: 0,
+            io_busy: false,
+            enabled_apps: crate::app_meta::enabled_mcp_apps().into(),
+        }
     }
 
     /// Queue a toast with an explicit severity. Callers keep their own
@@ -129,23 +125,67 @@ impl McpView {
         self.status_level = None;
     }
 
-    pub fn reload(&mut self) {
-        match McpService::get_all_servers(&self.app) {
-            Ok(map) => self.servers = map.into_values().collect(),
-            Err(err) => {
-                self.servers = Vec::new();
-                self.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::MCP_STATUS_LOAD_FAILED, error = err),
-                );
-            }
-        }
-        // 行数变化由 render 里的 reset 处理；这里只失效高度缓存。
-        self.list_state.remeasure();
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.enabled_apps = crate::app_meta::enabled_mcp_apps().into();
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        let generation = self.reload_generation;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let servers = cx
+                .background_spawn(async move {
+                    McpService::get_all_servers(&app)
+                        .map(|map| map.into_values().collect::<Vec<_>>())
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.reload_generation {
+                    return;
+                }
+                match servers {
+                    Ok(servers) => this.servers = servers,
+                    Err(error) => {
+                        this.servers.clear();
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::MCP_STATUS_LOAD_FAILED, error = error),
+                        );
+                    }
+                }
+                this.list_state.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    fn mcp_apps() -> Vec<AppType> {
-        crate::app_meta::enabled_mcp_apps()
+    pub fn refresh_apps(&mut self, cx: &mut Context<Self>) {
+        self.enabled_apps = crate::app_meta::enabled_mcp_apps().into();
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
+    fn run_io<R, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
+    where
+        R: Send + 'static,
+        Work: FnOnce() -> R + Send + 'static,
+        Apply: FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
+    {
+        if self.io_busy {
+            return;
+        }
+        self.io_busy = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { work() }).await;
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                apply(this, result, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn app_label(app: AppType) -> SharedString {
@@ -233,6 +273,12 @@ impl McpView {
         cx.notify();
     }
 
+    fn start_edit_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(server) = self.servers.iter().find(|server| server.id == id).cloned() {
+            self.start_edit(server, cx);
+        }
+    }
+
     fn cancel_form(&mut self, cx: &mut Context<Self>) {
         self.form_mode = FormMode::List;
         self.clear_form(cx);
@@ -286,97 +332,132 @@ impl McpView {
             tags: Vec::new(),
         };
 
-        match McpService::upsert_server(&self.app, server) {
-            Ok(()) => {
-                let saved = if self.form_mode == FormMode::Edit {
-                    t(k::MCP_STATUS_SAVED)
-                } else {
-                    t(k::MCP_STATUS_CREATED)
-                };
-                self.set_status(NotificationLevel::Success, saved);
-                self.form_mode = FormMode::List;
-                self.clear_form(cx);
-                self.reload();
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::MCP_STATUS_SAVE_FAILED, error = err),
-            ),
-        }
-        cx.notify();
+        let app = self.app.clone();
+        let editing = self.form_mode == FormMode::Edit;
+        self.run_io(
+            cx,
+            move || McpService::upsert_server(&app, server).map_err(|error| error.to_string()),
+            move |this, result, cx| match result {
+                Ok(()) => {
+                    let saved = if editing {
+                        t(k::MCP_STATUS_SAVED)
+                    } else {
+                        t(k::MCP_STATUS_CREATED)
+                    };
+                    this.set_status(NotificationLevel::Success, saved);
+                    this.form_mode = FormMode::List;
+                    this.clear_form(cx);
+                    this.reload(cx);
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::MCP_STATUS_SAVE_FAILED, error = error),
+                ),
+            },
+        );
     }
 
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
-        match McpService::delete_server(&self.app, &id) {
-            Ok(true) => self.set_status(NotificationLevel::Success, t(k::MCP_STATUS_DELETED)),
-            Ok(false) => self.set_status(NotificationLevel::Warning, t(k::MCP_STATUS_MISSING)),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::MCP_STATUS_DELETE_FAILED, error = err),
-            ),
-        }
-        self.reload();
-        cx.notify();
+        let app = self.app.clone();
+        self.run_io(
+            cx,
+            move || McpService::delete_server(&app, &id).map_err(|error| error.to_string()),
+            |this, result, cx| {
+                match result {
+                    Ok(true) => {
+                        this.set_status(NotificationLevel::Success, t(k::MCP_STATUS_DELETED))
+                    }
+                    Ok(false) => {
+                        this.set_status(NotificationLevel::Warning, t(k::MCP_STATUS_MISSING))
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::MCP_STATUS_DELETE_FAILED, error = error),
+                    ),
+                }
+                this.reload(cx);
+            },
+        );
     }
 
     fn do_sync(&mut self, cx: &mut Context<Self>) {
-        match McpService::sync_all_enabled(&self.app) {
-            Ok(()) => self.set_status(NotificationLevel::Success, t(k::MCP_STATUS_SYNCED)),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::MCP_STATUS_SYNC_FAILED, error = err),
-            ),
-        }
-        cx.notify();
+        let app = self.app.clone();
+        self.run_io(
+            cx,
+            move || McpService::sync_all_enabled(&app).map_err(|error| error.to_string()),
+            |this, result, _cx| match result {
+                Ok(()) => this.set_status(NotificationLevel::Success, t(k::MCP_STATUS_SYNCED)),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::MCP_STATUS_SYNC_FAILED, error = error),
+                ),
+            },
+        );
     }
 
     fn do_toggle_app(&mut self, id: String, app: AppType, enabled: bool, cx: &mut Context<Self>) {
-        match McpService::toggle_app(&self.app, &id, app, enabled) {
-            Ok(()) => self.set_status(NotificationLevel::Success, t(k::MCP_STATUS_APP_TOGGLED)),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::MCP_STATUS_UPDATE_FAILED, error = err),
-            ),
-        }
-        self.reload();
-        cx.notify();
+        let state = self.app.clone();
+        self.run_io(
+            cx,
+            move || {
+                McpService::toggle_app(&state, &id, app, enabled).map_err(|error| error.to_string())
+            },
+            |this, result, cx| {
+                match result {
+                    Ok(()) => {
+                        this.set_status(NotificationLevel::Success, t(k::MCP_STATUS_APP_TOGGLED))
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::MCP_STATUS_UPDATE_FAILED, error = error),
+                    ),
+                }
+                this.reload(cx);
+            },
+        );
     }
 
     fn do_import_all(&mut self, cx: &mut Context<Self>) {
-        let imports = [
-            ("Claude", McpService::import_from_claude(&self.app)),
-            ("Codex", McpService::import_from_codex(&self.app)),
-            ("Grok Build", McpService::import_from_grokbuild(&self.app)),
-            ("OpenCode", McpService::import_from_opencode(&self.app)),
-            ("Hermes", McpService::import_from_hermes(&self.app)),
-        ];
-        let mut total = 0usize;
-        let mut failures = Vec::new();
-        for (label, result) in imports {
-            match result {
-                Ok(count) => total += count,
-                Err(err) => failures.push(format!("{label}: {err}")),
-            }
-        }
-
-        // 部分应用导入失败时仍算完成，但降级为警告，避免看起来像全量成功。
-        if failures.is_empty() {
-            self.set_status(
-                NotificationLevel::Success,
-                tf!(k::MCP_STATUS_IMPORTED, count = total),
-            );
-        } else {
-            self.set_status(
-                NotificationLevel::Warning,
-                tf!(
-                    k::MCP_STATUS_IMPORTED_PARTIAL,
-                    count = total,
-                    failures = failures.join("; ")
-                ),
-            );
-        }
-        self.reload();
-        cx.notify();
+        let app = self.app.clone();
+        self.run_io(
+            cx,
+            move || {
+                let imports = [
+                    ("Claude", McpService::import_from_claude(&app)),
+                    ("Codex", McpService::import_from_codex(&app)),
+                    ("Grok Build", McpService::import_from_grokbuild(&app)),
+                    ("OpenCode", McpService::import_from_opencode(&app)),
+                    ("Hermes", McpService::import_from_hermes(&app)),
+                ];
+                let mut total = 0usize;
+                let mut failures = Vec::new();
+                for (label, result) in imports {
+                    match result {
+                        Ok(count) => total += count,
+                        Err(error) => failures.push(format!("{label}: {error}")),
+                    }
+                }
+                (total, failures)
+            },
+            |this, (total, failures), cx| {
+                if failures.is_empty() {
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::MCP_STATUS_IMPORTED, count = total),
+                    );
+                } else {
+                    this.set_status(
+                        NotificationLevel::Warning,
+                        tf!(
+                            k::MCP_STATUS_IMPORTED_PARTIAL,
+                            count = total,
+                            failures = failures.join("; ")
+                        ),
+                    );
+                }
+                this.reload(cx);
+            },
+        );
     }
 
     /// 「toggle + app 名」小组件：整个 chip 可点，语义与开关一致。
@@ -426,7 +507,7 @@ impl McpView {
     fn render_card(&self, server: &McpServer, cx: &mut Context<Self>) -> impl IntoElement {
         let delete_id = server.id.clone();
         let delete_name = server.name.clone();
-        let edit_server = server.clone();
+        let edit_id = server.id.clone();
         let endpoint = Self::endpoint(server);
         let apps = Self::enabled_apps_label(server);
         let name = server.name.clone();
@@ -485,7 +566,7 @@ impl McpView {
                                 )
                                 .on_click(cx.listener(
                                     move |this, _event, _window, cx| {
-                                        this.start_edit(edit_server.clone(), cx);
+                                        this.start_edit_by_id(&edit_id, cx);
                                     },
                                 )),
                             )
@@ -508,8 +589,9 @@ impl McpView {
             )
             .child(
                 div().flex().flex_row().flex_wrap().gap_3().children(
-                    Self::mcp_apps()
-                        .into_iter()
+                    self.enabled_apps
+                        .iter()
+                        .copied()
                         .map(|app| self.render_app_toggle(server, app, cx)),
                 ),
             )
@@ -572,8 +654,9 @@ impl McpView {
                             false,
                             None,
                             div().flex().flex_row().flex_wrap().gap_3().children(
-                                Self::mcp_apps()
-                                    .into_iter()
+                                self.enabled_apps
+                                    .iter()
+                                    .copied()
                                     .map(|app| self.render_form_app_toggle(app, cx)),
                             ),
                         ))
@@ -626,14 +709,10 @@ impl Render for McpView {
             return self.render_form(cx).into_any_element();
         }
 
-        let mut plan: Vec<McpRow> = Vec::new();
-        if self.servers.is_empty() {
-            plan.push(McpRow::EmptyState);
-        } else {
-            plan.extend((0..self.servers.len()).map(McpRow::Card));
-        }
-        if self.list_state.item_count() != plan.len() {
-            self.list_state.reset(plan.len());
+        let empty = self.servers.is_empty();
+        let row_count = self.servers.len().max(1);
+        if self.list_state.item_count() != row_count {
+            self.list_state.reset(row_count);
         }
 
         let list = gpui::list(
@@ -641,8 +720,8 @@ impl Render for McpView {
             cx.processor(move |this, ix: usize, _window, cx| {
                 // 每行自带底部间距（list 不画行间 gap）；pb_3 对齐 content_column 的默认 gap。
                 let block = div().w_full().pb_3();
-                match plan.get(ix).copied() {
-                    Some(McpRow::EmptyState) => block
+                if empty {
+                    block
                         .child(components::empty_state(
                             IconName::Blocks,
                             t(k::MCP_EMPTY_TITLE),
@@ -660,15 +739,15 @@ impl Render for McpView {
                                 .into_any_element(),
                             ),
                         ))
-                        .into_any_element(),
-                    Some(McpRow::Card(pix)) => match this.servers.get(pix) {
+                        .into_any_element()
+                } else {
+                    match this.servers.get(ix) {
                         Some(server) => {
                             let card = this.render_card(server, cx);
                             block.child(card).into_any_element()
                         }
                         None => gpui::Empty.into_any_element(),
-                    },
-                    None => gpui::Empty.into_any_element(),
+                    }
                 }
             }),
         );

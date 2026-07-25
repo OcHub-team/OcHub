@@ -3,9 +3,11 @@
 //! Each family owns a complete light/dark pair. Built-ins are immutable;
 //! duplicating one creates an editable user file in `~/.ochub/themes/`.
 
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context as _, Result};
 use gpui::{
-    canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, size, Background,
+    canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, size, App, Background,
     Bounds, ColorSpace, Context, Entity, FontWeight, ListAlignment, ListState, PathBuilder,
     PathPromptOptions, Pixels, Point, Rgba, SharedString, Window,
 };
@@ -124,7 +126,7 @@ const THEME_EDITOR_BLOCKS: &[ThemeEditorBlock] = &[
 ];
 
 pub struct ThemeView {
-    registry: theme::ThemeRegistry,
+    registry: Arc<theme::ThemeRegistry>,
     selected_family: String,
     mode: ThemeMode,
     status: Option<SharedString>,
@@ -133,6 +135,7 @@ pub struct ThemeView {
     editor_list_state: ListState,
     manager_list_state: ListState,
     confirm_delete: Option<String>,
+    io_busy: bool,
 }
 
 impl ThemeView {
@@ -166,6 +169,18 @@ impl ThemeView {
         self.editor_list_state.remeasure();
         self.manager_list_state.remeasure();
         cx.notify();
+        cx.spawn(async move |this, cx| {
+            let registry = cx
+                .background_spawn(async { theme::reload_registry() })
+                .await;
+            this.update(cx, |this, cx| {
+                this.registry = registry;
+                this.reset_manager_list();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -222,6 +237,7 @@ impl ThemeView {
             ),
             manager_list_state: ListState::new(manager_item_count, ListAlignment::Top, px(720.)),
             confirm_delete: None,
+            io_busy: false,
         }
     }
 
@@ -254,14 +270,42 @@ impl ThemeView {
         self.status_level = None;
     }
 
-    fn persist_selection(&self) -> Result<()> {
-        let family = self.selected_family.clone();
-        let mode = self.mode;
-        settings::mutate_settings(move |settings| {
-            settings.theme_family = family;
-            settings.theme_mode = mode;
-        })?;
-        Ok(())
+    fn persist_selection(
+        &mut self,
+        family: String,
+        mode: ThemeMode,
+        success: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        if self.io_busy {
+            return;
+        }
+        self.io_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    settings::mutate_settings(move |settings| {
+                        settings.theme_family = family;
+                        settings.theme_mode = mode;
+                    })
+                    .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(()) => this.set_status(NotificationLevel::Success, success, cx),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::THEME_STATUS_SELECTION_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn apply_selection(
@@ -271,6 +315,9 @@ impl ThemeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.io_busy {
+            return;
+        }
         let Some(family) = self
             .registry
             .themes
@@ -284,20 +331,13 @@ impl ThemeView {
 
         self.selected_family = family_id;
         self.mode = mode;
-        if let Err(err) = self.persist_selection() {
-            self.set_status(
-                NotificationLevel::Error,
-                tf!(k::THEME_STATUS_SELECTION_SAVE_FAILED, error = err),
-                cx,
-            );
-            return;
-        }
         theme::install_family(&family, mode, window.appearance());
         theme::apply_window_background(window);
         cx.refresh_windows();
-        self.set_status(
-            NotificationLevel::Success,
-            tf!(k::THEME_STATUS_APPLIED, name = family.name),
+        self.persist_selection(
+            self.selected_family.clone(),
+            mode,
+            SharedString::from(tf!(k::THEME_STATUS_APPLIED, name = family.name)),
             cx,
         );
     }
@@ -576,6 +616,9 @@ impl ThemeView {
     }
 
     fn save_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.io_busy {
+            return;
+        }
         if let Err(err) = self.sync_editor(cx) {
             self.set_status(
                 NotificationLevel::Error,
@@ -587,26 +630,58 @@ impl ThemeView {
         let Some(family) = self.editor.as_ref().map(|editor| editor.family.clone()) else {
             return;
         };
-        if let Err(err) = theme::save_user_family(&family) {
-            self.set_status(
-                NotificationLevel::Error,
-                tf!(k::THEME_STATUS_SAVE_FAILED, error = err),
-                cx,
-            );
-            return;
-        }
-        self.registry = theme::load_registry();
-        self.reset_manager_list();
-        self.editor = None;
-        self.apply_selection(family.id.clone(), self.mode, window, cx);
-        self.set_status(
-            NotificationLevel::Success,
-            tf!(k::THEME_STATUS_SAVED, name = family.name),
-            cx,
-        );
+        let family_for_work = family.clone();
+        let family_id = family.id.clone();
+        let family_name = family.name.clone();
+        let mode = self.mode;
+        let appearance = window.appearance();
+        self.io_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    theme::save_user_family(&family_for_work).map_err(|error| error.to_string())?;
+                    let selected_family = family_for_work.id.clone();
+                    settings::mutate_settings(move |settings| {
+                        settings.theme_family = selected_family;
+                        settings.theme_mode = mode;
+                    })
+                    .map_err(|error| error.to_string())?;
+                    Ok::<_, String>(theme::reload_registry())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(registry) => {
+                        this.registry = registry;
+                        this.reset_manager_list();
+                        this.editor = None;
+                        this.selected_family = family_id;
+                        theme::install_family(&family, mode, appearance);
+                        apply_theme_windows(cx);
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::THEME_STATUS_SAVED, name = family_name),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::THEME_STATUS_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn duplicate_and_edit(&mut self, family_id: &str, cx: &mut Context<Self>) {
+        if self.io_busy {
+            return;
+        }
         let Some(source) = self
             .registry
             .themes
@@ -637,6 +712,11 @@ impl ThemeView {
     }
 
     fn import_theme(&mut self, cx: &mut Context<Self>) {
+        if self.io_busy {
+            return;
+        }
+        self.io_busy = true;
+        cx.notify();
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -649,26 +729,37 @@ impl ThemeView {
                 _ => None,
             };
             let Some(path) = path else {
+                this.update(cx, |this, cx| {
+                    this.io_busy = false;
+                    cx.notify();
+                })
+                .ok();
                 return;
             };
             let result = cx
-                .background_spawn(async move { theme::import_family(&path) })
+                .background_spawn(async move {
+                    let family = theme::import_family(&path).map_err(|error| error.to_string())?;
+                    Ok::<_, String>((family, theme::reload_registry()))
+                })
                 .await;
-            this.update(cx, |this, cx| match result {
-                Ok(family) => {
-                    this.registry = theme::load_registry();
-                    this.reset_manager_list();
-                    this.set_status(
-                        NotificationLevel::Success,
-                        tf!(k::THEME_STATUS_IMPORTED, name = family.name),
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok((family, registry)) => {
+                        this.registry = registry;
+                        this.reset_manager_list();
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::THEME_STATUS_IMPORTED, name = family.name),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::THEME_STATUS_IMPORT_FAILED, error = error),
                         cx,
-                    );
+                    ),
                 }
-                Err(err) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::THEME_STATUS_IMPORT_FAILED, error = err),
-                    cx,
-                ),
             })
             .ok();
         })
@@ -676,6 +767,9 @@ impl ThemeView {
     }
 
     fn export_theme(&mut self, family_id: &str, cx: &mut Context<Self>) {
+        if self.io_busy {
+            return;
+        }
         let Some(family) = self
             .registry
             .themes
@@ -692,6 +786,8 @@ impl ThemeView {
         };
         let directory = ochub_core::paths::get_app_config_dir();
         let suggested_name = format!("{}.ochub-theme.json", family.id);
+        self.io_busy = true;
+        cx.notify();
         let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
         cx.spawn(async move |this, cx| {
             let path = match receiver.await {
@@ -699,23 +795,31 @@ impl ThemeView {
                 _ => None,
             };
             let Some(path) = path else {
+                this.update(cx, |this, cx| {
+                    this.io_busy = false;
+                    cx.notify();
+                })
+                .ok();
                 return;
             };
             let display_path = path.display().to_string();
             let result = cx
                 .background_spawn(async move { theme::export_family(&family, &path) })
                 .await;
-            this.update(cx, |this, cx| match result {
-                Ok(()) => this.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::THEME_STATUS_EXPORTED, path = display_path),
-                    cx,
-                ),
-                Err(err) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::THEME_STATUS_EXPORT_FAILED, error = err),
-                    cx,
-                ),
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(()) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::THEME_STATUS_EXPORTED, path = display_path),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::THEME_STATUS_EXPORT_FAILED, error = error),
+                        cx,
+                    ),
+                }
             })
             .ok();
         })
@@ -723,6 +827,9 @@ impl ThemeView {
     }
 
     fn delete_confirmed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.io_busy {
+            return;
+        }
         let Some(family_id) = self.confirm_delete.take() else {
             return;
         };
@@ -740,28 +847,52 @@ impl ThemeView {
             );
             return;
         };
-        if let Err(err) = theme::delete_user_family(&record) {
-            self.set_status(
-                NotificationLevel::Error,
-                tf!(k::THEME_STATUS_DELETE_FAILED, error = err),
-                cx,
-            );
-            return;
-        }
-        if self.selected_family == family_id {
-            self.selected_family = theme::DEFAULT_THEME_FAMILY.to_string();
-            let _ = self.persist_selection();
-            theme::install_selected(&self.selected_family, self.mode, window.appearance());
-            theme::apply_window_background(window);
-            cx.refresh_windows();
-        }
-        self.registry = theme::load_registry();
-        self.reset_manager_list();
-        self.set_status(
-            NotificationLevel::Success,
-            tf!(k::THEME_STATUS_DELETED, name = record.family.name),
-            cx,
-        );
+        let was_selected = self.selected_family == family_id;
+        let family_name = record.family.name.clone();
+        let mode = self.mode;
+        let appearance = window.appearance();
+        self.io_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    theme::delete_user_family(&record).map_err(|error| error.to_string())?;
+                    if was_selected {
+                        settings::mutate_settings(|settings| {
+                            settings.theme_family = theme::DEFAULT_THEME_FAMILY.to_string();
+                        })
+                        .map_err(|error| error.to_string())?;
+                    }
+                    Ok::<_, String>(theme::reload_registry())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(registry) => {
+                        this.registry = registry;
+                        this.reset_manager_list();
+                        if was_selected {
+                            this.selected_family = theme::DEFAULT_THEME_FAMILY.to_string();
+                            theme::install_selected(&this.selected_family, mode, appearance);
+                            apply_theme_windows(cx);
+                        }
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::THEME_STATUS_DELETED, name = family_name),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::THEME_STATUS_DELETE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn mode_index(mode: ThemeMode) -> usize {
@@ -1964,6 +2095,15 @@ impl Render for ThemeView {
             self.render_manager(cx)
         }
     }
+}
+
+fn apply_theme_windows(cx: &mut App) {
+    for window in cx.windows() {
+        let _ = window.update(cx, |_root, window, _cx| {
+            theme::apply_window_background(window);
+        });
+    }
+    cx.refresh_windows();
 }
 
 crate::notifications::impl_status_toasts_leveled!(ThemeView);

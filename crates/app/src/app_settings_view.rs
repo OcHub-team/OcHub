@@ -6,7 +6,7 @@
 //! dumped into the single global Settings page. They belong with the app they
 //! configure, so this panel renders just the selected app's settings and is
 //! opened from a gear in that app's provider-list header. The values still live
-//! in the global [`AppSettings`] (persisted via `settings::update_settings`);
+//! in the global [`AppSettings`] (persisted via `settings::mutate_settings`);
 //! only their *placement* is app-scoped.
 
 use gpui::{div, prelude::*, Context, Entity, ScrollHandle, SharedString, Window};
@@ -36,11 +36,12 @@ pub struct AppSettingsView {
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
     scroll_handle: ScrollHandle,
+    saving: bool,
 }
 
 /// Whether an app has any app-scoped settings worth a gear button.
 pub fn app_has_settings(app: AppType) -> bool {
-    config_dir_meta(app).is_some() || !app_toggles(app).is_empty()
+    config_dir_meta(app).is_some() || matches!(app, AppType::Claude | AppType::Codex)
 }
 
 impl AppSettingsView {
@@ -66,6 +67,7 @@ impl AppSettingsView {
             status: None,
             status_level: None,
             scroll_handle: ScrollHandle::new(),
+            saving: false,
         }
     }
 
@@ -101,22 +103,52 @@ impl AppSettingsView {
         self.status_level = Some(level);
     }
 
-    fn persist(&mut self, cx: &mut Context<Self>) {
-        match settings::update_settings(self.settings.clone()) {
-            Ok(()) => self.set_status(NotificationLevel::Success, t(k::APP_SETTINGS_STATUS_SAVED)),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::APP_SETTINGS_STATUS_SAVE_FAILED, error = err),
-            ),
+    fn persist_mutation(
+        &mut self,
+        mutator: impl FnOnce(&mut AppSettings) + Send + 'static,
+        success: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        if self.saving {
+            return;
         }
-        self.settings = settings::get_settings();
+        self.saving = true;
         cx.notify();
+        cx.spawn(async move |this, cx| {
+            let (result, stored) = cx
+                .background_spawn(async move {
+                    let result =
+                        settings::mutate_settings(mutator).map_err(|error| error.to_string());
+                    (result, settings::get_settings())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.saving = false;
+                this.settings = stored;
+                match result {
+                    Ok(()) => this.set_status(NotificationLevel::Success, success),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::APP_SETTINGS_STATUS_SAVE_FAILED, error = error),
+                    ),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn toggle(&mut self, toggle: AppToggle, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         let current = (toggle.get)(&self.settings);
-        (toggle.set)(&mut self.settings, !current);
-        self.persist(cx);
+        self.persist_mutation(
+            move |settings| (toggle.set)(settings, !current),
+            t(k::APP_SETTINGS_STATUS_SAVED),
+            cx,
+        );
     }
 
     fn save_config_dir(&mut self, cx: &mut Context<Self>) {
@@ -129,15 +161,14 @@ impl AppSettingsView {
         } else {
             Some(entered)
         };
-        write_config_dir(&mut self.settings, self.app_type, value);
-        self.persist(cx);
-        // The save succeeded; the restart is a recommendation, not a caveat that
-        // makes this a warning.
-        self.set_status(
-            NotificationLevel::Success,
+        let app_type = self.app_type;
+        self.persist_mutation(
+            move |settings| write_config_dir(settings, app_type, value),
+            // Restart is a recommendation, not a caveat that makes this a
+            // warning.
             t(k::APP_SETTINGS_STATUS_DIR_SAVED),
+            cx,
         );
-        cx.notify();
     }
 
     fn render_toggle_row(&self, toggle: AppToggle, cx: &mut Context<Self>) -> impl IntoElement {
@@ -156,6 +187,27 @@ impl AppSettingsView {
     fn render_config_dir(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let input = self.config_dir.as_ref()?;
         let (_placeholder, desc) = config_dir_meta(self.app_type)?;
+        let save_button = if self.saving {
+            components::disabled_button(
+                "app-settings-save-dir",
+                t(k::APP_SETTINGS_CONFIG_DIR_SAVE),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+                true,
+            )
+            .into_any_element()
+        } else {
+            components::button(
+                "app-settings-save-dir",
+                t(k::APP_SETTINGS_CONFIG_DIR_SAVE),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.save_config_dir(cx);
+            }))
+            .into_any_element()
+        };
         Some(
             div()
                 .flex()
@@ -167,21 +219,10 @@ impl AppSettingsView {
                     desc,
                 ))
                 .child(
-                    components::card().gap_3().child(input.clone()).child(
-                        div().flex().flex_row().justify_end().child(
-                            components::button(
-                                "app-settings-save-dir",
-                                t(k::APP_SETTINGS_CONFIG_DIR_SAVE),
-                                ButtonTone::Primary,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(
-                                |this, _event, _window, cx| {
-                                    this.save_config_dir(cx);
-                                },
-                            )),
-                        ),
-                    ),
+                    components::card()
+                        .gap_3()
+                        .child(input.clone())
+                        .child(div().flex().flex_row().justify_end().child(save_button)),
                 )
                 .into_any_element(),
         )
@@ -191,7 +232,7 @@ impl AppSettingsView {
 impl Render for AppSettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app_type = self.app_type;
-        let toggles = app_toggles(app_type);
+        let toggles = app_toggles(app_type, &self.settings);
 
         let header = layout::page_header(
             SharedString::from(tf!(k::APP_SETTINGS_HEADER_TITLE, app = app_label(app_type))),
@@ -245,7 +286,7 @@ struct AppToggle {
     set: fn(&mut AppSettings, bool),
 }
 
-fn app_toggles(app: AppType) -> Vec<AppToggle> {
+fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
     match app {
         AppType::Claude => vec![
             AppToggle {
@@ -280,7 +321,7 @@ fn app_toggles(app: AppType) -> Vec<AppToggle> {
                     set: |s, v| s.unify_codex_session_history = v,
                 },
             ];
-            if settings::get_settings().unify_codex_session_history {
+            if settings.unify_codex_session_history {
                 toggles.push(AppToggle {
                     id: "app-set-codex-migrate-history",
                     label: raw(k::APP_SETTINGS_CODEX_MIGRATE_HISTORY_LABEL),

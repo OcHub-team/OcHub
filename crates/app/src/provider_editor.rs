@@ -95,9 +95,19 @@ impl PreviewDocument {
 struct PreviewCache {
     files: Vec<PreviewDocument>,
     issues: Vec<ConfigIssue>,
+    error_count: usize,
+    warning_count: usize,
+}
+
+struct PreviewBuild {
+    cache: PreviewCache,
+    total_lines: usize,
+    total_bytes: usize,
+    elapsed: Duration,
 }
 
 const PREVIEW_REFRESH_DELAY: Duration = Duration::from_millis(140);
+const PREVIEW_FOLD_BACKGROUND_LINE_THRESHOLD: usize = 4_096;
 const EDITOR_MAX_WIDTH: f32 = 1320.;
 /// Side-by-side form + preview. 1500 left almost every real window in the
 /// cramped stacked mode; a 13" laptop should get the split.
@@ -108,6 +118,16 @@ const EDITOR_STACK_GRID_MAX_WINDOW_WIDTH: f32 = 1050.;
 const PREVIEW_SPLIT_FRACTION: f32 = 0.38;
 const PREVIEW_SPLIT_MIN_WIDTH: f32 = 400.;
 const PREVIEW_SPLIT_MAX_WIDTH: f32 = 560.;
+
+enum ProviderSaveFailure {
+    CommonConfig(String),
+    Provider(String),
+}
+
+struct ProviderSaveOutcome {
+    saved_snippet: Option<String>,
+    result: Result<(), ProviderSaveFailure>,
+}
 
 pub struct ProviderEditor {
     app: Arc<AppState>,
@@ -149,6 +169,10 @@ pub struct ProviderEditor {
     preview_active_file: usize,
     preview_cache: PreviewCache,
     preview_dirty: bool,
+    /// Invalidates an in-flight preview build as soon as newer form input
+    /// arrives. Expensive line/fold indexing runs off the UI thread.
+    preview_generation: u64,
+    preview_applied_generation: u64,
     preview_refresh_task: Option<Task<()>>,
     /// When `Some`, a modal code editor for one preview file is open.
     raw_edit: Option<RawEdit>,
@@ -157,6 +181,9 @@ pub struct ProviderEditor {
     common_snippet: Entity<TextInput>,
     original_snippet: String,
     convert_open: bool,
+    /// Prevent duplicate submissions while provider/config writes run off the
+    /// UI thread.
+    saving: bool,
     error: Option<SharedString>,
     status: Option<SharedString>,
     /// Severity of whichever toast `take_toast` will hand over next. Always
@@ -198,6 +225,9 @@ impl ProviderEditor {
     }
 
     pub(crate) fn shortcut_save(&mut self, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         if self.raw_edit.is_some() {
             self.apply_raw_edit(cx);
         } else {
@@ -206,6 +236,9 @@ impl ProviderEditor {
     }
 
     pub(crate) fn shortcut_cancel(&mut self, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         if self.convert_open {
             self.close_convert(cx);
         } else if self.raw_edit.is_some() {
@@ -225,6 +258,7 @@ impl ProviderEditor {
         let mut this = Self::base(app, app_type, codec, schema, values, None, None, cx);
         Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
+        this.start_preview_build(cx);
         this
     }
 
@@ -251,6 +285,7 @@ impl ProviderEditor {
         this.set_identity(provider, cx);
         Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
+        this.start_preview_build(cx);
         this
     }
 
@@ -275,25 +310,17 @@ impl ProviderEditor {
             .and_then(|provider| provider.meta.as_ref())
             .and_then(|meta| meta.common_config_enabled)
             .unwrap_or(false);
-        let original_snippet = if common_config_supported {
-            ConfigService::get_common_config_snippet(&app, app_type.as_str())
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let snippet_seed = original_snippet.clone();
+        let original_snippet = String::new();
         let form_item_count = schema.len() + 3;
         let common_snippet = cx.new(|cx| {
             let mut input =
                 TextInput::new(cx, t(k::PROVIDER_EDITOR_COMMON_CONFIG_SNIPPET_PLACEHOLDER))
                     .code(true)
                     .multiline(true);
-            input.set_content(snippet_seed, cx);
+            input.set_content("", cx);
             input
         });
-        Self {
+        let mut this = Self {
             app,
             app_type,
             codec,
@@ -322,6 +349,8 @@ impl ProviderEditor {
             preview_active_file: 0,
             preview_cache: PreviewCache::default(),
             preview_dirty: true,
+            preview_generation: 1,
+            preview_applied_generation: 0,
             preview_refresh_task: None,
             raw_edit: None,
             common_config_supported,
@@ -329,13 +358,55 @@ impl ProviderEditor {
             common_snippet,
             original_snippet,
             convert_open: false,
+            saving: false,
             error: None,
             status: None,
             status_level: None,
             form_list_state: ListState::new(form_item_count, ListAlignment::Top, px(720.)),
             form_stack_grid: false,
             form_official_login: false,
+        };
+        this.load_common_snippet(cx);
+        this
+    }
+
+    fn load_common_snippet(&mut self, cx: &mut Context<Self>) {
+        if !self.common_config_supported {
+            return;
         }
+        let app = self.app.clone();
+        let app_type = self.app_type;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ConfigService::get_common_config_snippet(&app, app_type.as_str())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let snippet = match result {
+                    Ok(snippet) => snippet.unwrap_or_default(),
+                    Err(error) => {
+                        log::warn!(
+                            "failed to load common config snippet for {}: {}",
+                            app_type.as_str(),
+                            error
+                        );
+                        String::new()
+                    }
+                };
+                // A fast typist may have changed the empty editor before the
+                // database result returned. Keep their text, while still
+                // recording the stored baseline for the save comparison.
+                let untouched = this.common_snippet.read(cx).content().is_empty();
+                this.original_snippet = snippet.clone();
+                if untouched {
+                    this.common_snippet
+                        .update(cx, |input, cx| input.set_content(snippet, cx));
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn set_identity(&mut self, provider: &Provider, cx: &mut Context<Self>) {
@@ -462,11 +533,13 @@ impl ProviderEditor {
     /// document only after the user pauses briefly.
     fn schedule_preview_refresh(&mut self, cx: &mut Context<Self>) {
         self.preview_dirty = true;
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        self.preview_refresh_task.take();
         self.preview_refresh_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PREVIEW_REFRESH_DELAY).await;
             this.update(cx, |this, cx| {
                 if this.preview_dirty {
-                    cx.notify();
+                    this.start_preview_build(cx);
                 }
             })
             .ok();
@@ -474,75 +547,70 @@ impl ProviderEditor {
     }
 
     fn invalidate_preview(&mut self, cx: &mut Context<Self>) {
-        self.preview_dirty = true;
-        self.preview_refresh_task.take();
+        self.schedule_preview_refresh(cx);
         cx.notify();
     }
 
-    fn ensure_preview_current(&mut self, cx: &Context<Self>) {
+    fn start_preview_build(&mut self, cx: &mut Context<Self>) {
         if !self.preview_dirty {
             return;
         }
         self.pull_values(cx);
+        let generation = self.preview_generation;
+        let app_type = self.app_type;
+        let values = self.values.clone();
+        let working_base = self.working_base.clone();
         let category = self.category.read(cx).content().trim().to_string();
-        self.rebuild_preview_cache((!category.is_empty()).then_some(category.as_str()));
+        let collapsed = self.preview_collapsed.clone();
+        self.preview_dirty = false;
+        self.preview_refresh_task = None;
+
+        cx.spawn(async move |this, cx| {
+            let build = cx
+                .background_spawn(async move {
+                    let codec = provider_config::config_for(app_type)
+                        .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
+                    build_preview_cache(
+                        codec.as_ref(),
+                        &values,
+                        &working_base,
+                        (!category.is_empty()).then_some(category.as_str()),
+                        &collapsed,
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.preview_generation {
+                    return;
+                }
+                this.apply_preview_build(build);
+                this.preview_applied_generation = generation;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    fn rebuild_preview_cache(&mut self, category: Option<&str>) {
-        let started = Instant::now();
-        let issues = self.codec.validate_for_category(&self.values, category);
-        let files = self.codec.preview(&self.values, &self.working_base);
-        let mut total_bytes = 0usize;
-        let mut total_lines = 0usize;
-        let documents = files
-            .into_iter()
-            .enumerate()
-            .map(|(file_index, file)| {
-                let lang = Lang::from_core(file.language);
-                let language_label = match file.language {
-                    Language::Toml => "TOML",
-                    Language::Json => "JSON",
-                    Language::Yaml => "YAML",
-                    Language::Env => "ENV",
-                };
-                let content: Arc<str> = Arc::from(file.content);
-                let line_ranges = Arc::new(preview_line_ranges(&content));
-                let regions = Arc::new(fold_regions(lang, &content));
-                let region_headers = Arc::new(
-                    regions
-                        .iter()
-                        .map(|region| region.header)
-                        .collect::<HashSet<_>>(),
-                );
-                let collapsed = self
-                    .preview_collapsed
-                    .iter()
-                    .filter_map(|(index, header)| (*index == file_index).then_some(*header))
-                    .collect::<HashSet<_>>();
-                let visible_rows = Arc::new(preview_visible_rows(
-                    line_ranges.len(),
-                    &regions,
-                    &collapsed,
-                ));
-                total_bytes += content.len();
-                total_lines += line_ranges.len();
-                PreviewDocument {
-                    filename: SharedString::from(file.filename),
-                    language_label,
-                    lang,
-                    content,
-                    line_ranges,
-                    regions,
-                    region_headers,
-                    visible_rows,
-                }
-            })
-            .collect();
+    fn ensure_preview_current(&mut self, cx: &Context<Self>) {
+        if self.preview_applied_generation == self.preview_generation {
+            return;
+        }
+        self.pull_values(cx);
+        let category = self.category.read(cx).content().trim().to_string();
+        let build = build_preview_cache(
+            self.codec.as_ref(),
+            &self.values,
+            &self.working_base,
+            (!category.is_empty()).then_some(category.as_str()),
+            &self.preview_collapsed,
+        );
+        self.apply_preview_build(build);
+        self.preview_applied_generation = self.preview_generation;
+    }
 
-        self.preview_cache = PreviewCache {
-            files: documents,
-            issues,
-        };
+    fn apply_preview_build(&mut self, build: PreviewBuild) {
+        self.preview_cache = build.cache;
         self.preview_active_file = self
             .preview_active_file
             .min(self.preview_cache.files.len().saturating_sub(1));
@@ -550,9 +618,9 @@ impl ProviderEditor {
         log::debug!(
             "provider preview cache rebuilt: {} files, {} lines, {} bytes in {:?}",
             self.preview_cache.files.len(),
-            total_lines,
-            total_bytes,
-            started.elapsed()
+            build.total_lines,
+            build.total_bytes,
+            build.elapsed
         );
     }
 
@@ -822,6 +890,9 @@ impl ProviderEditor {
     }
 
     fn do_save(&mut self, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         let name = self.name.read(cx).content().trim().to_string();
         if name.is_empty() {
             self.set_error(t(k::PROVIDER_EDITOR_IDENTITY_NAME_REQUIRED));
@@ -848,20 +919,13 @@ impl ProviderEditor {
             .codec
             .encode(&self.values, &self.working_base, prior_meta.as_ref());
 
-        if self.common_config_supported {
+        let snippet_update = if self.common_config_supported {
             let snippet = self.common_snippet.read(cx).content().to_string();
-            if snippet != self.original_snippet {
-                if let Err(err) = ConfigService::set_common_config_snippet(
-                    &self.app,
-                    self.app_type.as_str(),
-                    snippet.clone(),
-                ) {
-                    self.set_error(tf!(k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID, error = err));
-                    cx.notify();
-                    return;
-                }
-                self.original_snippet = snippet;
-            }
+            let changed_snippet = if snippet != self.original_snippet {
+                Some(snippet)
+            } else {
+                None
+            };
             if self.common_config_enabled {
                 encoded
                     .meta
@@ -870,12 +934,15 @@ impl ProviderEditor {
             } else if let Some(meta) = encoded.meta.as_mut() {
                 meta.common_config_enabled = None;
             }
-        }
+            changed_snippet
+        } else {
+            None
+        };
 
         let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
         let notes = nonempty(self.notes.read(cx).content().trim().to_string());
 
-        let result = if let Some(original_id) = self.original_id.clone() {
+        let (original_id, provider) = if let Some(original_id) = self.original_id.clone() {
             let mut provider = self.original_provider.clone().unwrap_or_else(|| {
                 Provider::with_id(original_id.clone(), name.clone(), json!({}), None)
             });
@@ -885,7 +952,7 @@ impl ProviderEditor {
             provider.website_url = website_url;
             provider.category = category;
             provider.notes = notes;
-            ProviderService::update(&self.app, self.app_type, Some(&original_id), provider)
+            (Some(original_id), provider)
         } else {
             let id_input = self.provider_id.read(cx).content().trim().to_string();
             let id = if id_input.is_empty() {
@@ -898,16 +965,69 @@ impl ProviderEditor {
             provider.category = category;
             provider.notes = notes;
             provider.created_at = Some(chrono_now_millis());
-            ProviderService::add(&self.app, self.app_type, provider, true)
+            (None, provider)
         };
 
-        match result {
-            Ok(_) => cx.emit(EditorEvent::Saved),
-            Err(err) => {
-                self.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = err));
-                cx.notify();
-            }
-        }
+        self.saving = true;
+        self.error = None;
+        let app = self.app.clone();
+        let app_type = self.app_type;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_spawn(async move {
+                    let mut saved_snippet = None;
+                    if let Some(snippet) = snippet_update {
+                        if let Err(error) = ConfigService::set_common_config_snippet(
+                            &app,
+                            app_type.as_str(),
+                            snippet.clone(),
+                        ) {
+                            return ProviderSaveOutcome {
+                                saved_snippet,
+                                result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
+                            };
+                        }
+                        saved_snippet = Some(snippet);
+                    }
+
+                    let result = match original_id {
+                        Some(original_id) => {
+                            ProviderService::update(&app, app_type, Some(&original_id), provider)
+                                .map(|_| ())
+                        }
+                        None => ProviderService::add(&app, app_type, provider, true).map(|_| ()),
+                    }
+                    .map_err(|error| ProviderSaveFailure::Provider(error.to_string()));
+                    ProviderSaveOutcome {
+                        saved_snippet,
+                        result,
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.saving = false;
+                if let Some(snippet) = outcome.saved_snippet {
+                    this.original_snippet = snippet;
+                }
+                match outcome.result {
+                    Ok(()) => cx.emit(EditorEvent::Saved),
+                    Err(ProviderSaveFailure::CommonConfig(error)) => {
+                        this.set_error(tf!(
+                            k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
+                            error = error
+                        ));
+                        cx.notify();
+                    }
+                    Err(ProviderSaveFailure::Provider(error)) => {
+                        this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     // ---- helper actions (operate on `base_url` / `api_key` fields) -----------
@@ -1129,6 +1249,9 @@ impl ProviderEditor {
     }
 
     fn convert_to(&mut self, target: AppType, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         self.pull_values(cx);
         let target_codec = provider_config::config_for(target)
             .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
@@ -1155,23 +1278,40 @@ impl ProviderEditor {
         provider.category = nonempty(self.category.read(cx).content().trim().to_string());
         provider.notes = nonempty(self.notes.read(cx).content().trim().to_string());
         provider.created_at = Some(chrono_now_millis());
-        match ProviderService::add(&self.app, target, provider, false) {
-            Ok(_) => {
-                self.convert_open = false;
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(
-                        k::PROVIDER_EDITOR_CONVERT_COPIED,
-                        app = crate::app_meta::label(target)
-                    ),
-                );
-                self.error = None;
-            }
-            Err(err) => {
-                self.set_error(tf!(k::PROVIDER_EDITOR_CONVERT_FAILED, error = err));
-                self.status = None;
-            }
-        }
+        self.saving = true;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ProviderService::add(&app, target, provider, false)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.saving = false;
+                match result {
+                    Ok(()) => {
+                        this.convert_open = false;
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(
+                                k::PROVIDER_EDITOR_CONVERT_COPIED,
+                                app = crate::app_meta::label(target)
+                            ),
+                        );
+                        this.error = None;
+                    }
+                    Err(error) => {
+                        this.set_error(tf!(k::PROVIDER_EDITOR_CONVERT_FAILED, error = error));
+                        this.status = None;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -1612,19 +1752,58 @@ impl ProviderEditor {
             self.preview_collapsed.insert(key);
         }
 
-        if let Some(document) = self.preview_cache.files.get_mut(file_index) {
-            let collapsed = self
-                .preview_collapsed
-                .iter()
-                .filter_map(|(index, header)| (*index == file_index).then_some(*header))
-                .collect::<HashSet<_>>();
-            document.visible_rows = Arc::new(preview_visible_rows(
-                document.line_count(),
-                &document.regions,
-                &collapsed,
-            ));
+        let previous_generation = self.preview_generation;
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        let generation = self.preview_generation;
+        if self.preview_dirty || self.preview_applied_generation != previous_generation {
+            self.preview_dirty = true;
+            self.start_preview_build(cx);
+            cx.notify();
+            return;
         }
-        cx.notify();
+
+        let Some(document) = self.preview_cache.files.get(file_index) else {
+            self.preview_dirty = true;
+            self.start_preview_build(cx);
+            cx.notify();
+            return;
+        };
+        let collapsed = self
+            .preview_collapsed
+            .iter()
+            .filter_map(|(index, header)| (*index == file_index).then_some(*header))
+            .collect::<HashSet<_>>();
+        if document.line_count() <= PREVIEW_FOLD_BACKGROUND_LINE_THRESHOLD {
+            let rows = preview_visible_rows(document.line_count(), &document.regions, &collapsed);
+            if let Some(document) = self.preview_cache.files.get_mut(file_index) {
+                document.visible_rows = Arc::new(rows);
+            }
+            self.preview_applied_generation = generation;
+            cx.notify();
+            return;
+        }
+
+        let line_count = document.line_count();
+        let regions = document.regions.clone();
+        cx.spawn(async move |this, cx| {
+            let rows = cx
+                .background_spawn(
+                    async move { preview_visible_rows(line_count, &regions, &collapsed) },
+                )
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.preview_generation {
+                    return;
+                }
+                if let Some(document) = this.preview_cache.files.get_mut(file_index) {
+                    document.visible_rows = Arc::new(rows);
+                    this.preview_applied_generation = generation;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn render_preview_rows(
@@ -1900,12 +2079,6 @@ impl ProviderEditor {
         if self.preview_cache.issues.is_empty() {
             return None;
         }
-        let mut sorted: Vec<&ConfigIssue> = self.preview_cache.issues.iter().collect();
-        sorted.sort_by_key(|issue| match issue.severity {
-            Severity::Error => 0u8,
-            Severity::Warning => 1,
-            Severity::Info => 2,
-        });
         Some(
             div()
                 .flex()
@@ -1916,7 +2089,7 @@ impl ProviderEditor {
                 .py_2()
                 .border_b_1()
                 .border_color(theme::border())
-                .children(sorted.into_iter().map(|issue| {
+                .children(self.preview_cache.issues.iter().map(|issue| {
                     let (bg, fg, tag) = match issue.severity {
                         Severity::Error => (
                             theme::red_soft(),
@@ -2044,16 +2217,10 @@ impl ProviderEditor {
     }
 
     fn preview_issue_counts(&self) -> (usize, usize) {
-        let mut errors = 0;
-        let mut warnings = 0;
-        for issue in &self.preview_cache.issues {
-            match issue.severity {
-                Severity::Error => errors += 1,
-                Severity::Warning => warnings += 1,
-                Severity::Info => {}
-            }
-        }
-        (errors, warnings)
+        (
+            self.preview_cache.error_count,
+            self.preview_cache.warning_count,
+        )
     }
 
     /// Issue-count chip rendered beside the save action: the reason a save
@@ -2472,9 +2639,6 @@ impl ProviderEditor {
 
 impl Render for ProviderEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The cached native document is rebuilt only when form values changed;
-        // caret blinks and unrelated view updates reuse the existing line index.
-        self.ensure_preview_current(cx);
         let window_width = window.viewport_size().width;
         let compact_layout = window_width < px(EDITOR_SPLIT_MIN_WINDOW_WIDTH);
         let stack_grid = window_width < px(EDITOR_STACK_GRID_MAX_WINDOW_WIDTH);
@@ -2541,6 +2705,23 @@ impl Render for ProviderEditor {
                 cx,
             ));
         }
+        let save_button = if self.saving {
+            components::disabled_button(
+                "editor-save",
+                t(k::PROVIDER_EDITOR_ACTION_SAVE),
+                ButtonTone::Primary,
+                ButtonSize::Md,
+                true,
+            )
+        } else {
+            components::button(
+                "editor-save",
+                t(k::PROVIDER_EDITOR_ACTION_SAVE),
+                ButtonTone::Primary,
+                ButtonSize::Md,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| this.do_save(cx)))
+        };
         let actions = actions
             .child(
                 components::button(
@@ -2553,15 +2734,7 @@ impl Render for ProviderEditor {
                     this.open_convert(cx);
                 })),
             )
-            .child(
-                components::button(
-                    "editor-save",
-                    t(k::PROVIDER_EDITOR_ACTION_SAVE),
-                    ButtonTone::Primary,
-                    ButtonSize::Md,
-                )
-                .on_click(cx.listener(|this, _e, _w, cx| this.do_save(cx))),
-            )
+            .child(save_button)
             .child(
                 components::button(
                     "editor-cancel",
@@ -2671,6 +2844,88 @@ fn nonempty(value: String) -> Option<String> {
 
 fn common_config_supported(app: AppType) -> bool {
     matches!(app, AppType::Claude | AppType::Codex)
+}
+
+fn build_preview_cache(
+    codec: &dyn AppConfig,
+    values: &FormValues,
+    working_base: &Value,
+    category: Option<&str>,
+    collapsed_regions: &HashSet<(usize, usize)>,
+) -> PreviewBuild {
+    let started = Instant::now();
+    let mut issues = codec.validate_for_category(values, category);
+    issues.sort_by_key(|issue| match issue.severity {
+        Severity::Error => 0u8,
+        Severity::Warning => 1,
+        Severity::Info => 2,
+    });
+    let error_count = issues
+        .iter()
+        .filter(|issue| issue.severity == Severity::Error)
+        .count();
+    let warning_count = issues
+        .iter()
+        .filter(|issue| issue.severity == Severity::Warning)
+        .count();
+    let files = codec.preview(values, working_base);
+    let mut total_bytes = 0usize;
+    let mut total_lines = 0usize;
+    let documents = files
+        .into_iter()
+        .enumerate()
+        .map(|(file_index, file)| {
+            let lang = Lang::from_core(file.language);
+            let language_label = match file.language {
+                Language::Toml => "TOML",
+                Language::Json => "JSON",
+                Language::Yaml => "YAML",
+                Language::Env => "ENV",
+            };
+            let content: Arc<str> = Arc::from(file.content);
+            let line_ranges = Arc::new(preview_line_ranges(&content));
+            let regions = Arc::new(fold_regions(lang, &content));
+            let region_headers = Arc::new(
+                regions
+                    .iter()
+                    .map(|region| region.header)
+                    .collect::<HashSet<_>>(),
+            );
+            let collapsed = collapsed_regions
+                .iter()
+                .filter_map(|(index, header)| (*index == file_index).then_some(*header))
+                .collect::<HashSet<_>>();
+            let visible_rows = Arc::new(preview_visible_rows(
+                line_ranges.len(),
+                &regions,
+                &collapsed,
+            ));
+            total_bytes += content.len();
+            total_lines += line_ranges.len();
+            PreviewDocument {
+                filename: SharedString::from(file.filename),
+                language_label,
+                lang,
+                content,
+                line_ranges,
+                regions,
+                region_headers,
+                visible_rows,
+            }
+        })
+        .collect();
+
+    PreviewBuild {
+        cache: PreviewCache {
+            files: documents,
+            issues,
+            error_count,
+            warning_count,
+        },
+        total_lines,
+        total_bytes,
+        elapsed: started.elapsed(),
+    }
 }
 
 fn preview_line_ranges(content: &str) -> Vec<Range<usize>> {

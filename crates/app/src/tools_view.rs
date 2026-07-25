@@ -39,6 +39,22 @@ struct BackupRow {
     created_at: String,
 }
 
+struct ToolsBasicLoad {
+    config_rows: Vec<ConfigRow>,
+    auto_launch: Option<bool>,
+    db_backups: Vec<BackupRow>,
+}
+
+struct ToolsAdvancedLoad {
+    openclaw_default_model: String,
+    openclaw_env: String,
+    openclaw_tools: String,
+    hermes_model: String,
+    hermes_memory: String,
+    hermes_user: String,
+    hermes_limits: Option<hermes::HermesMemoryLimits>,
+}
+
 /// A destructive action awaiting confirmation: delete or restore a database
 /// backup, delete the environment variable conflicts, import SQL, restore the
 /// Codex history, or disable OMO. `Some` puts the confirm modal on screen.
@@ -64,6 +80,7 @@ pub struct ToolsView {
     tool_versions: Vec<ochub_core::session_manager::ToolVersion>,
     tool_installations: Vec<ochub_core::session_manager::ToolInstallationReport>,
     tool_busy: bool,
+    io_busy: bool,
     env_app: AppType,
     env_conflicts: Vec<ochub_core::EnvConflict>,
     db_backups: Vec<BackupRow>,
@@ -88,6 +105,8 @@ pub struct ToolsView {
     status_level: Option<NotificationLevel>,
     /// Drives the virtualized page body (one item per top-level block).
     list_state: ListState,
+    reload_generation: u64,
+    advanced_reload_generation: u64,
 }
 
 impl ToolsView {
@@ -162,13 +181,14 @@ impl ToolsView {
             cx.new(|cx| TextInput::new(cx, "~/.ochub/backups/env-backup-YYYYMMDD.json"));
         let backup_rename = cx.new(|cx| TextInput::new(cx, "backup-name"));
 
-        let mut this = Self {
+        Self {
             app,
             config_rows: Vec::new(),
             auto_launch: None,
             tool_versions: Vec::new(),
             tool_installations: Vec::new(),
             tool_busy: false,
+            io_busy: false,
             env_app: AppType::Claude,
             env_conflicts: Vec::new(),
             db_backups: Vec::new(),
@@ -190,71 +210,112 @@ impl ToolsView {
             status: None,
             status_level: None,
             list_state: ListState::new(TOOLS_BLOCK_COUNT, ListAlignment::Top, px(600.)),
-        };
-        this.reload();
-        this.refresh_advanced_configs(cx);
-        this
+            reload_generation: 0,
+            advanced_reload_generation: 0,
+        }
     }
 
-    pub fn reload(&mut self) {
-        self.config_rows = Self::all_apps()
-            .into_iter()
-            .map(|(app, label)| {
-                let (exists, path) = match config_status(&self.app, app) {
-                    Ok((exists, path)) => (exists, path),
-                    Err(err) => (false, err.to_string()),
-                };
-                ConfigRow {
-                    app,
-                    label,
-                    exists,
-                    path,
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        let generation = self.reload_generation;
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let data = cx
+                .background_spawn(async move {
+                    let config_rows = Self::all_apps()
+                        .into_iter()
+                        .map(|(app_type, label)| {
+                            let (exists, path) = match config_status(&app, app_type) {
+                                Ok((exists, path)) => (exists, path),
+                                Err(error) => (false, error.to_string()),
+                            };
+                            ConfigRow {
+                                app: app_type,
+                                label,
+                                exists,
+                                path,
+                            }
+                        })
+                        .collect();
+                    ToolsBasicLoad {
+                        config_rows,
+                        auto_launch: ochub_core::autostart::is_enabled().ok(),
+                        db_backups: load_db_backup_rows().unwrap_or_default(),
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.reload_generation {
+                    return;
                 }
+                this.config_rows = data.config_rows;
+                this.auto_launch = data.auto_launch;
+                this.db_backups = data.db_backups;
+                this.list_state.remeasure();
+                cx.notify();
             })
-            .collect();
-        self.auto_launch = ochub_core::autostart::is_enabled().ok();
-        self.db_backups = load_db_backup_rows().unwrap_or_default();
+            .ok();
+        })
+        .detach();
+        self.refresh_advanced_configs(cx);
     }
 
     fn refresh_advanced_configs(&mut self, cx: &mut Context<Self>) {
-        let openclaw_default_model = openclaw::get_default_model()
-            .ok()
-            .flatten()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .unwrap_or_else(|| "{}".to_string());
-        self.openclaw_default_model_json.update(cx, |input, cx| {
-            input.set_content(openclaw_default_model, cx)
-        });
-
-        let openclaw_env = openclaw::get_env_config()
-            .ok()
-            .and_then(|value| serde_json::to_string_pretty(&value.vars).ok())
-            .unwrap_or_else(|| "{}".to_string());
-        self.openclaw_env_json
-            .update(cx, |input, cx| input.set_content(openclaw_env, cx));
-
-        let openclaw_tools = openclaw::get_tools_config()
-            .ok()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .unwrap_or_else(|| "{}".to_string());
-        self.openclaw_tools_json
-            .update(cx, |input, cx| input.set_content(openclaw_tools, cx));
-
-        let hermes_model = hermes::get_model_config()
-            .ok()
-            .flatten()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .unwrap_or_else(|| "{}".to_string());
-        self.hermes_model_json
-            .update(cx, |input, cx| input.set_content(hermes_model, cx));
-
-        let hermes_memory = hermes::read_memory(hermes::MemoryKind::Memory).unwrap_or_default();
-        self.hermes_memory_content
-            .update(cx, |input, cx| input.set_content(hermes_memory, cx));
-        let hermes_user = hermes::read_memory(hermes::MemoryKind::User).unwrap_or_default();
-        self.hermes_user_memory_content
-            .update(cx, |input, cx| input.set_content(hermes_user, cx));
-        self.hermes_limits = hermes::read_memory_limits().ok();
+        self.advanced_reload_generation = self.advanced_reload_generation.wrapping_add(1);
+        let generation = self.advanced_reload_generation;
+        cx.spawn(async move |this, cx| {
+            let data = cx
+                .background_spawn(async move {
+                    ToolsAdvancedLoad {
+                        openclaw_default_model: openclaw::get_default_model()
+                            .ok()
+                            .flatten()
+                            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+                            .unwrap_or_else(|| "{}".to_string()),
+                        openclaw_env: openclaw::get_env_config()
+                            .ok()
+                            .and_then(|value| serde_json::to_string_pretty(&value.vars).ok())
+                            .unwrap_or_else(|| "{}".to_string()),
+                        openclaw_tools: openclaw::get_tools_config()
+                            .ok()
+                            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+                            .unwrap_or_else(|| "{}".to_string()),
+                        hermes_model: hermes::get_model_config()
+                            .ok()
+                            .flatten()
+                            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+                            .unwrap_or_else(|| "{}".to_string()),
+                        hermes_memory: hermes::read_memory(hermes::MemoryKind::Memory)
+                            .unwrap_or_default(),
+                        hermes_user: hermes::read_memory(hermes::MemoryKind::User)
+                            .unwrap_or_default(),
+                        hermes_limits: hermes::read_memory_limits().ok(),
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if generation != this.advanced_reload_generation {
+                    return;
+                }
+                this.openclaw_default_model_json.update(cx, |input, cx| {
+                    input.set_content(data.openclaw_default_model, cx)
+                });
+                this.openclaw_env_json
+                    .update(cx, |input, cx| input.set_content(data.openclaw_env, cx));
+                this.openclaw_tools_json
+                    .update(cx, |input, cx| input.set_content(data.openclaw_tools, cx));
+                this.hermes_model_json
+                    .update(cx, |input, cx| input.set_content(data.hermes_model, cx));
+                this.hermes_memory_content
+                    .update(cx, |input, cx| input.set_content(data.hermes_memory, cx));
+                this.hermes_user_memory_content
+                    .update(cx, |input, cx| input.set_content(data.hermes_user, cx));
+                this.hermes_limits = data.hermes_limits;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn all_apps() -> Vec<(AppType, gpui::SharedString)> {
@@ -262,6 +323,32 @@ impl ToolsView {
             .into_iter()
             .map(|app| (app, crate::app_meta::label(app)))
             .collect()
+    }
+
+    /// Run filesystem/database work without blocking GPUI's event loop. Tools
+    /// operations are serialized because restore/import actions can replace the
+    /// same database or config files.
+    fn run_io<R, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
+    where
+        R: Send + 'static,
+        Work: FnOnce() -> R + Send + 'static,
+        Apply: FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
+    {
+        if self.io_busy {
+            return;
+        }
+        self.io_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { work() }).await;
+            this.update(cx, move |this, cx| {
+                this.io_busy = false;
+                apply(this, result, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Every status toast carries its severity explicitly. Inferring it from
@@ -281,32 +368,53 @@ impl ToolsView {
     }
 
     fn open_path_action(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        match open_path(&path) {
-            Ok(()) => self.set_status(
-                NotificationLevel::Success,
-                tf!(k::TOOLS_PATH_OPENED, path = path.display()),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_PATH_OPEN_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.run_io(
+            cx,
+            move || {
+                open_path(&path)
+                    .map(|_| path)
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(path) => this.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::TOOLS_PATH_OPENED, path = path.display()),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_PATH_OPEN_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn open_config_dir(&mut self, app: AppType, cx: &mut Context<Self>) {
-        match config_dir(app).and_then(|path| {
-            std::fs::create_dir_all(&path).map_err(|e| AppError::io(&path, e))?;
-            Ok(path)
-        }) {
-            Ok(path) => self.open_path_action(path, cx),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_CONFIG_DIR_OPEN_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.run_io(
+            cx,
+            move || {
+                config_dir(app)
+                    .and_then(|path| {
+                        std::fs::create_dir_all(&path).map_err(|e| AppError::io(&path, e))?;
+                        open_path(&path)?;
+                        Ok(path)
+                    })
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(path) => this.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::TOOLS_PATH_OPENED, path = path.display()),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_CONFIG_DIR_OPEN_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn refresh_tool_versions(&mut self, cx: &mut Context<Self>) {
@@ -428,30 +536,38 @@ impl ToolsView {
     }
 
     fn scan_env_conflicts(&mut self, cx: &mut Context<Self>) {
-        match ochub_core::check_env_conflicts(self.env_app.as_str()) {
-            Ok(conflicts) => {
-                let count = conflicts.len();
-                self.env_conflicts = conflicts;
-                self.set_status(
-                    if count == 0 {
-                        NotificationLevel::Success
-                    } else {
-                        NotificationLevel::Warning
-                    },
-                    tf!(
-                        k::TOOLS_ENV_SCANNED,
-                        app = env_app_label(self.env_app),
-                        count = count
-                    ),
+        let app_type = self.env_app;
+        self.run_io(
+            cx,
+            move || {
+                ochub_core::check_env_conflicts(app_type.as_str())
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(conflicts) => {
+                    let count = conflicts.len();
+                    this.env_conflicts = conflicts;
+                    this.set_status(
+                        if count == 0 {
+                            NotificationLevel::Success
+                        } else {
+                            NotificationLevel::Warning
+                        },
+                        tf!(
+                            k::TOOLS_ENV_SCANNED,
+                            app = env_app_label(app_type),
+                            count = count
+                        ),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_ENV_SCAN_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_ENV_SCAN_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn delete_env_conflicts(&mut self, cx: &mut Context<Self>) {
@@ -463,28 +579,33 @@ impl ToolsView {
             );
             return;
         }
-        match ochub_core::delete_env_vars(self.env_conflicts.clone()) {
-            Ok(backup) => {
-                self.env_restore_path.update(cx, |input, cx| {
-                    input.set_content(backup.backup_path.clone(), cx)
-                });
-                self.env_conflicts.clear();
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(
-                        k::TOOLS_ENV_DELETED,
-                        path = backup.backup_path,
-                        count = backup.conflicts.len()
-                    ),
+        let conflicts = self.env_conflicts.clone();
+        self.run_io(
+            cx,
+            move || ochub_core::delete_env_vars(conflicts).map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(backup) => {
+                    this.env_restore_path.update(cx, |input, cx| {
+                        input.set_content(backup.backup_path.clone(), cx)
+                    });
+                    this.env_conflicts.clear();
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::TOOLS_ENV_DELETED,
+                            path = backup.backup_path,
+                            count = backup.conflicts.len()
+                        ),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_ENV_DELETE_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_ENV_DELETE_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn restore_env_backup(&mut self, cx: &mut Context<Self>) {
@@ -497,73 +618,103 @@ impl ToolsView {
             );
             return;
         };
-        match ochub_core::restore_env_backup(path.to_string_lossy().to_string()) {
-            Ok(()) => self.set_status(NotificationLevel::Success, t(k::TOOLS_ENV_RESTORED), cx),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_ENV_RESTORE_FAILED, error = err),
-                cx,
-            ),
-        }
+        let path = path.to_string_lossy().to_string();
+        self.run_io(
+            cx,
+            move || ochub_core::restore_env_backup(path).map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(()) => this.set_status(NotificationLevel::Success, t(k::TOOLS_ENV_RESTORED), cx),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_ENV_RESTORE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn refresh_db_backups(&mut self, cx: &mut Context<Self>) {
-        match load_db_backup_rows() {
-            Ok(backups) => {
-                let count = backups.len();
-                self.db_backups = backups;
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::TOOLS_DB_BACKUPS_REFRESHED, count = count),
+        self.run_io(
+            cx,
+            || load_db_backup_rows().map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(backups) => {
+                    let count = backups.len();
+                    this.db_backups = backups;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::TOOLS_DB_BACKUPS_REFRESHED, count = count),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_DB_BACKUPS_REFRESH_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_DB_BACKUPS_REFRESH_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn create_db_backup(&mut self, cx: &mut Context<Self>) {
-        match self.app.db.create_backup_file() {
-            Ok(filename) => {
-                self.db_backups = load_db_backup_rows().unwrap_or_default();
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::TOOLS_DB_BACKUP_CREATED, filename = filename),
+        let app = self.app.clone();
+        self.run_io(
+            cx,
+            move || {
+                app.db
+                    .create_backup_file()
+                    .map(|filename| (filename, load_db_backup_rows().unwrap_or_default()))
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok((filename, backups)) => {
+                    this.db_backups = backups;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::TOOLS_DB_BACKUP_CREATED, filename = filename),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_DB_BACKUP_CREATE_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_DB_BACKUP_CREATE_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn restore_db_backup(&mut self, filename: String, cx: &mut Context<Self>) {
-        match self.app.db.restore_from_backup(&filename) {
-            Ok(backup_id) => {
-                self.db_backups = load_db_backup_rows().unwrap_or_default();
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(
-                        k::TOOLS_DB_BACKUP_RESTORED,
-                        filename = filename,
-                        backup = backup_id
-                    ),
+        let app = self.app.clone();
+        let filename_for_work = filename.clone();
+        self.run_io(
+            cx,
+            move || {
+                app.db
+                    .restore_from_backup(&filename_for_work)
+                    .map(|backup_id| (backup_id, load_db_backup_rows().unwrap_or_default()))
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok((backup_id, backups)) => {
+                    this.db_backups = backups;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::TOOLS_DB_BACKUP_RESTORED,
+                            filename = filename,
+                            backup = backup_id
+                        ),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_DB_BACKUP_RESTORE_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_DB_BACKUP_RESTORE_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn rename_db_backup(&mut self, filename: String, cx: &mut Context<Self>) {
@@ -576,39 +727,56 @@ impl ToolsView {
             );
             return;
         }
-        match ochub_core::Database::rename_backup(&filename, &new_name) {
-            Ok(renamed) => {
-                self.db_backups = load_db_backup_rows().unwrap_or_default();
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::TOOLS_DB_BACKUP_RENAMED, name = renamed),
+        self.run_io(
+            cx,
+            move || {
+                ochub_core::Database::rename_backup(&filename, &new_name)
+                    .map(|renamed| (renamed, load_db_backup_rows().unwrap_or_default()))
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok((renamed, backups)) => {
+                    this.db_backups = backups;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::TOOLS_DB_BACKUP_RENAMED, name = renamed),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_DB_BACKUP_RENAME_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_DB_BACKUP_RENAME_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn delete_db_backup(&mut self, filename: String, cx: &mut Context<Self>) {
-        match ochub_core::Database::delete_backup(&filename) {
-            Ok(()) => {
-                self.db_backups = load_db_backup_rows().unwrap_or_default();
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::TOOLS_DB_BACKUP_DELETED, filename = filename),
+        let filename_for_work = filename.clone();
+        self.run_io(
+            cx,
+            move || {
+                ochub_core::Database::delete_backup(&filename_for_work)
+                    .map(|()| load_db_backup_rows().unwrap_or_default())
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(backups) => {
+                    this.db_backups = backups;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::TOOLS_DB_BACKUP_DELETED, filename = filename),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_DB_BACKUP_DELETE_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_DB_BACKUP_DELETE_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn export_sql(&mut self, cx: &mut Context<Self>) {
@@ -621,18 +789,24 @@ impl ToolsView {
             );
             return;
         };
-        match self.app.db.export_sql(&path) {
-            Ok(()) => self.set_status(
-                NotificationLevel::Success,
-                tf!(k::TOOLS_SQL_EXPORTED, path = path.display()),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_SQL_EXPORT_FAILED, error = err),
-                cx,
-            ),
-        }
+        let app = self.app.clone();
+        let display_path = path.display().to_string();
+        self.run_io(
+            cx,
+            move || app.db.export_sql(&path).map_err(|error| error.to_string()),
+            move |this, result, cx| match result {
+                Ok(()) => this.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::TOOLS_SQL_EXPORTED, path = display_path),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_SQL_EXPORT_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn import_sql(&mut self, cx: &mut Context<Self>) {
@@ -645,257 +819,321 @@ impl ToolsView {
             );
             return;
         };
-        match self.app.db.import_sql(&path) {
-            Ok(backup_id) => {
-                let sync_warning =
-                    ochub_core::services::ProviderService::sync_current_to_live(&self.app).err();
-                self.db_backups = load_db_backup_rows().unwrap_or_default();
-                // The import itself succeeded either way; the re-apply warning
-                // is the caveat that downgrades the toast. Each outcome is its
-                // own sentence — a translation cannot glue a clause on the end.
-                match sync_warning {
-                    None => self.set_status(
-                        NotificationLevel::Success,
-                        tf!(k::TOOLS_SQL_IMPORTED, backup = backup_id),
-                        cx,
-                    ),
-                    Some(err) => self.set_status(
-                        NotificationLevel::Warning,
-                        tf!(
-                            k::TOOLS_SQL_IMPORTED_WITH_WARNING,
-                            backup = backup_id,
-                            error = err
+        let app = self.app.clone();
+        self.run_io(
+            cx,
+            move || {
+                app.db
+                    .import_sql(&path)
+                    .map(|backup_id| {
+                        let sync_warning =
+                            ochub_core::services::ProviderService::sync_current_to_live(&app)
+                                .err()
+                                .map(|error| error.to_string());
+                        (
+                            backup_id,
+                            sync_warning,
+                            load_db_backup_rows().unwrap_or_default(),
+                        )
+                    })
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok((backup_id, sync_warning, backups)) => {
+                    this.db_backups = backups;
+                    // The import itself succeeded either way; the re-apply
+                    // warning is the caveat that downgrades the toast.
+                    match sync_warning {
+                        None => this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::TOOLS_SQL_IMPORTED, backup = backup_id),
+                            cx,
                         ),
-                        cx,
-                    ),
+                        Some(error) => this.set_status(
+                            NotificationLevel::Warning,
+                            tf!(
+                                k::TOOLS_SQL_IMPORTED_WITH_WARNING,
+                                backup = backup_id,
+                                error = error
+                            ),
+                            cx,
+                        ),
+                    }
                 }
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_SQL_IMPORT_FAILED, error = err),
-                cx,
-            ),
-        }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_SQL_IMPORT_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn toggle_auto_launch(&mut self, cx: &mut Context<Self>) {
         let target = !self.auto_launch.unwrap_or(false);
         let silent = ochub_core::settings::get_settings().silent_startup;
-        match ochub_core::autostart::set_enabled(target, silent) {
-            Ok(()) => {
-                self.auto_launch = Some(target);
-                // The settings page shows the same OS state; keep the stored
-                // flag in step so the two surfaces cannot disagree.
-                if let Err(err) =
-                    ochub_core::settings::mutate_settings(|s| s.launch_on_startup = target)
-                {
-                    log::warn!("failed to persist launch_on_startup: {err}");
+        self.run_io(
+            cx,
+            move || {
+                ochub_core::autostart::set_enabled(target, silent)
+                    .map_err(|error| error.to_string())?;
+                ochub_core::settings::mutate_settings(|settings| {
+                    settings.launch_on_startup = target
+                })
+                .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(()) => {
+                    this.auto_launch = Some(target);
+                    this.set_status(
+                        NotificationLevel::Success,
+                        if target {
+                            t(k::TOOLS_AUTOSTART_ENABLED)
+                        } else {
+                            t(k::TOOLS_AUTOSTART_DISABLED)
+                        },
+                        cx,
+                    );
                 }
-                self.set_status(
-                    NotificationLevel::Success,
-                    if target {
-                        t(k::TOOLS_AUTOSTART_ENABLED)
-                    } else {
-                        t(k::TOOLS_AUTOSTART_DISABLED)
-                    },
-                    cx,
-                );
-            }
-            Err(err) => self.set_status(NotificationLevel::Error, format!("{err}"), cx),
-        }
+                Err(error) => this.set_status(NotificationLevel::Error, error, cx),
+            },
+        );
     }
 
     fn read_omo(&mut self, slim: bool, cx: &mut Context<Self>) {
-        let result = if slim {
-            OmoService::read_local_file(&ochub_core::services::omo::SLIM)
-        } else {
-            OmoService::read_local_file(&ochub_core::services::omo::STANDARD)
-        };
-        match result {
-            Ok(data) => self.set_status(
-                NotificationLevel::Info,
-                format!(
-                    "{}: {}",
-                    if slim { "OMO Slim" } else { "OMO" },
-                    data.file_path
+        self.run_io(
+            cx,
+            move || {
+                let result = if slim {
+                    OmoService::read_local_file(&ochub_core::services::omo::SLIM)
+                } else {
+                    OmoService::read_local_file(&ochub_core::services::omo::STANDARD)
+                };
+                result
+                    .map(|data| data.file_path)
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(path) => this.set_status(
+                    NotificationLevel::Info,
+                    format!("{}: {path}", if slim { "OMO Slim" } else { "OMO" }),
+                    cx,
                 ),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_OMO_READ_FAILED, error = err),
-                cx,
-            ),
-        }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OMO_READ_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn disable_omo(&mut self, slim: bool, cx: &mut Context<Self>) {
         let category = if slim { "omo-slim" } else { "omo" };
-        let providers = self.app.db.get_all_providers("opencode");
-        match providers {
-            Ok(providers) => {
+        let app = self.app.clone();
+        self.run_io(
+            cx,
+            move || {
+                let providers = app
+                    .db
+                    .get_all_providers("opencode")
+                    .map_err(|error| (true, error.to_string()))?;
                 for (id, provider) in &providers {
                     if provider.category.as_deref() == Some(category) {
-                        let _ = self
-                            .app
-                            .db
-                            .clear_omo_provider_current("opencode", id, category);
+                        let _ = app.db.clear_omo_provider_current("opencode", id, category);
                     }
                 }
-                let result = if slim {
+                if slim {
                     OmoService::delete_config_file(&ochub_core::services::omo::SLIM)
                 } else {
                     OmoService::delete_config_file(&ochub_core::services::omo::STANDARD)
-                };
-                match result {
-                    Ok(()) => {
-                        self.set_status(NotificationLevel::Success, t(k::TOOLS_OMO_DISABLED), cx)
-                    }
-                    Err(err) => self.set_status(
-                        NotificationLevel::Error,
-                        tf!(k::TOOLS_OMO_DISABLE_FAILED, error = err),
-                        cx,
-                    ),
                 }
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_OMO_PROVIDERS_READ_FAILED, error = err),
-                cx,
-            ),
-        }
+                .map_err(|error| (false, error.to_string()))
+            },
+            |this, result, cx| match result {
+                Ok(()) => this.set_status(NotificationLevel::Success, t(k::TOOLS_OMO_DISABLED), cx),
+                Err((providers_failed, error)) => this.set_status(
+                    NotificationLevel::Error,
+                    if providers_failed {
+                        tf!(k::TOOLS_OMO_PROVIDERS_READ_FAILED, error = error)
+                    } else {
+                        tf!(k::TOOLS_OMO_DISABLE_FAILED, error = error)
+                    },
+                    cx,
+                ),
+            },
+        );
     }
 
     fn validate_mcp_command(&mut self, cx: &mut Context<Self>) {
         let cmd = self.mcp_command.read(cx).content().trim().to_string();
-        match ochub_core::mcp::validate_command_in_path(&cmd) {
-            Ok(true) => self.set_status(
-                NotificationLevel::Success,
-                tf!(k::TOOLS_MCP_COMMAND_AVAILABLE, command = cmd),
-                cx,
-            ),
-            Ok(false) => self.set_status(
-                NotificationLevel::Warning,
-                tf!(k::TOOLS_MCP_COMMAND_MISSING, command = cmd),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_MCP_VALIDATE_FAILED, error = err),
-                cx,
-            ),
-        }
+        let command = cmd.clone();
+        self.run_io(
+            cx,
+            move || {
+                ochub_core::mcp::validate_command_in_path(&command)
+                    .map_err(|error| error.to_string())
+            },
+            move |this, result, cx| match result {
+                Ok(true) => this.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::TOOLS_MCP_COMMAND_AVAILABLE, command = cmd),
+                    cx,
+                ),
+                Ok(false) => this.set_status(
+                    NotificationLevel::Warning,
+                    tf!(k::TOOLS_MCP_COMMAND_MISSING, command = cmd),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_MCP_VALIDATE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn read_claude_mcp(&mut self, cx: &mut Context<Self>) {
-        match ochub_core::mcp::read_mcp_json() {
-            Ok(Some(content)) => self.set_status(
-                NotificationLevel::Info,
-                tf!(k::TOOLS_MCP_CONFIG_CHARS, count = content.len()),
-                cx,
-            ),
-            Ok(None) => self.set_status(
-                NotificationLevel::Warning,
-                t(k::TOOLS_MCP_CONFIG_MISSING),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_MCP_READ_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.run_io(
+            cx,
+            || {
+                ochub_core::mcp::read_mcp_json()
+                    .map(|content| content.map(|content| content.len()))
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(Some(count)) => this.set_status(
+                    NotificationLevel::Info,
+                    tf!(k::TOOLS_MCP_CONFIG_CHARS, count = count),
+                    cx,
+                ),
+                Ok(None) => this.set_status(
+                    NotificationLevel::Warning,
+                    t(k::TOOLS_MCP_CONFIG_MISSING),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_MCP_READ_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn apply_claude_plugin(&mut self, official: bool, cx: &mut Context<Self>) {
-        let result = if official {
-            claude_plugin::clear_claude_config()
-        } else {
-            claude_plugin::write_claude_config()
-        };
-        match result {
-            Ok(changed) => self.set_status(
-                NotificationLevel::Success,
-                tf!(k::TOOLS_CLAUDE_PLUGIN_APPLIED, changed = changed),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_CLAUDE_PLUGIN_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.run_io(
+            cx,
+            move || {
+                if official {
+                    claude_plugin::clear_claude_config()
+                } else {
+                    claude_plugin::write_claude_config()
+                }
+                .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(changed) => this.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::TOOLS_CLAUDE_PLUGIN_APPLIED, changed = changed),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_CLAUDE_PLUGIN_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn mark_claude_onboarding(&mut self, completed: bool, cx: &mut Context<Self>) {
-        let result = if completed {
-            ochub_core::mcp::set_has_completed_onboarding()
-        } else {
-            ochub_core::mcp::clear_has_completed_onboarding()
-        };
-        match result {
-            Ok(changed) => self.set_status(
-                NotificationLevel::Success,
-                tf!(k::TOOLS_CLAUDE_ONBOARDING_APPLIED, changed = changed),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_CLAUDE_ONBOARDING_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.run_io(
+            cx,
+            move || {
+                if completed {
+                    ochub_core::mcp::set_has_completed_onboarding()
+                } else {
+                    ochub_core::mcp::clear_has_completed_onboarding()
+                }
+                .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(changed) => this.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::TOOLS_CLAUDE_ONBOARDING_APPLIED, changed = changed),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_CLAUDE_ONBOARDING_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn check_codex_unify_backup(&mut self, cx: &mut Context<Self>) {
-        let exists =
-            ochub_core::services::codex_history_migration::has_codex_official_history_unify_backup(
-            );
-        // A check that comes back empty is a caveat, not plain information:
-        // there is nothing the restore button can act on.
-        self.set_status(
-            if exists {
-                NotificationLevel::Info
-            } else {
-                NotificationLevel::Warning
-            },
-            if exists {
-                t(k::TOOLS_CODEX_UNIFY_BACKUP_PRESENT)
-            } else {
-                t(k::TOOLS_CODEX_UNIFY_BACKUP_ABSENT)
-            },
+        self.run_io(
             cx,
+            || {
+                ochub_core::services::codex_history_migration::
+                    has_codex_official_history_unify_backup()
+            },
+            |this, exists, cx| {
+                this.set_status(
+                    if exists {
+                        NotificationLevel::Info
+                    } else {
+                        NotificationLevel::Warning
+                    },
+                    if exists {
+                        t(k::TOOLS_CODEX_UNIFY_BACKUP_PRESENT)
+                    } else {
+                        t(k::TOOLS_CODEX_UNIFY_BACKUP_ABSENT)
+                    },
+                    cx,
+                );
+            },
         );
     }
 
     fn restore_codex_unified_history(&mut self, cx: &mut Context<Self>) {
-        match ochub_core::services::codex_history_migration::restore_codex_official_history_from_backups()
-        {
-            Ok(outcome) => {
-                if let Some(reason) = outcome.skipped_reason {
-                    self.set_status(
-                        NotificationLevel::Warning,
-                        tf!(k::TOOLS_CODEX_RESTORE_SKIPPED, reason = reason),
-                        cx,
-                    );
-                } else {
-                    self.set_status(
-                        NotificationLevel::Success,
-                        tf!(
-                            k::TOOLS_CODEX_RESTORED,
-                            files = outcome.restored_jsonl_files,
-                            rows = outcome.restored_state_rows
-                        ),
-                        cx,
-                    );
+        self.run_io(
+            cx,
+            || {
+                ochub_core::services::codex_history_migration::
+                    restore_codex_official_history_from_backups()
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(outcome) => {
+                    if let Some(reason) = outcome.skipped_reason {
+                        this.set_status(
+                            NotificationLevel::Warning,
+                            tf!(k::TOOLS_CODEX_RESTORE_SKIPPED, reason = reason),
+                            cx,
+                        );
+                    } else {
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(
+                                k::TOOLS_CODEX_RESTORED,
+                                files = outcome.restored_jsonl_files,
+                                rows = outcome.restored_state_rows
+                            ),
+                            cx,
+                        );
+                    }
                 }
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_CODEX_RESTORE_FAILED, error = err),
-                cx,
-            ),
-        }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_CODEX_RESTORE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn refresh_sync_status(&mut self, s3: bool, cx: &mut Context<Self>) {
@@ -939,50 +1177,62 @@ impl ToolsView {
     }
 
     fn openclaw_health(&mut self, cx: &mut Context<Self>) {
-        match openclaw::scan_openclaw_config_health() {
-            Ok(health) => self.set_status(
-                if health.is_empty() {
-                    NotificationLevel::Success
-                } else {
-                    NotificationLevel::Warning
-                },
-                tf!(k::TOOLS_OPENCLAW_HEALTH, count = health.len()),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_OPENCLAW_HEALTH_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.run_io(
+            cx,
+            || {
+                openclaw::scan_openclaw_config_health()
+                    .map(|health| health.len())
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(count) => this.set_status(
+                    if count == 0 {
+                        NotificationLevel::Success
+                    } else {
+                        NotificationLevel::Warning
+                    },
+                    tf!(k::TOOLS_OPENCLAW_HEALTH, count = count),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OPENCLAW_HEALTH_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn hermes_summary(&mut self, cx: &mut Context<Self>) {
-        match hermes::get_model_config() {
-            Ok(Some(config)) => self.set_status(
-                NotificationLevel::Info,
-                tf!(
-                    k::TOOLS_HERMES_SUMMARY,
-                    provider = config
-                        .provider
-                        .unwrap_or_else(|| raw(k::TOOLS_HERMES_UNSET).to_string()),
-                    model = config
-                        .default
-                        .unwrap_or_else(|| raw(k::TOOLS_HERMES_UNSET).to_string())
+        self.run_io(
+            cx,
+            || hermes::get_model_config().map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(Some(config)) => this.set_status(
+                    NotificationLevel::Info,
+                    tf!(
+                        k::TOOLS_HERMES_SUMMARY,
+                        provider = config
+                            .provider
+                            .unwrap_or_else(|| raw(k::TOOLS_HERMES_UNSET).to_string()),
+                        model = config
+                            .default
+                            .unwrap_or_else(|| raw(k::TOOLS_HERMES_UNSET).to_string())
+                    ),
+                    cx,
                 ),
-                cx,
-            ),
-            Ok(None) => self.set_status(
-                NotificationLevel::Warning,
-                t(k::TOOLS_HERMES_MODEL_UNINITIALIZED),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_HERMES_READ_FAILED, error = err),
-                cx,
-            ),
-        }
+                Ok(None) => this.set_status(
+                    NotificationLevel::Warning,
+                    t(k::TOOLS_HERMES_MODEL_UNINITIALIZED),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_HERMES_READ_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn save_openclaw_default_model(&mut self, cx: &mut Context<Self>) {
@@ -991,109 +1241,155 @@ impl ToolsView {
             .read(cx)
             .content()
             .to_string();
-        match serde_json::from_str::<openclaw::OpenClawDefaultModel>(&raw)
-            .map_err(|e| {
-                AppError::Message(tf!(k::TOOLS_OPENCLAW_DEFAULT_MODEL_JSON_INVALID, error = e))
-            })
-            .and_then(|model| openclaw::set_default_model(&model))
-        {
-            Ok(outcome) => {
-                let level = openclaw_outcome_level(&outcome);
-                let message = openclaw_outcome_message(
-                    OutcomeKeys {
-                        plain: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED,
-                        backup: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_BACKUP,
-                        warnings: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_WARNINGS,
-                        backup_warnings: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_BACKUP_WARNINGS,
-                    },
-                    outcome,
+        let model = match serde_json::from_str::<openclaw::OpenClawDefaultModel>(&raw) {
+            Ok(model) => model,
+            Err(error) => {
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OPENCLAW_DEFAULT_MODEL_JSON_INVALID, error = error),
+                    cx,
                 );
-                self.set_status(level, message, cx)
+                return;
             }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVE_FAILED, error = err),
-                cx,
-            ),
-        }
+        };
+        self.run_io(
+            cx,
+            move || openclaw::set_default_model(&model).map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(outcome) => {
+                    let level = openclaw_outcome_level(&outcome);
+                    let message = openclaw_outcome_message(
+                        OutcomeKeys {
+                            plain: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED,
+                            backup: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_BACKUP,
+                            warnings: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_WARNINGS,
+                            backup_warnings: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_BACKUP_WARNINGS,
+                        },
+                        outcome,
+                    );
+                    this.set_status(level, message, cx);
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn save_openclaw_env(&mut self, cx: &mut Context<Self>) {
         let raw = self.openclaw_env_json.read(cx).content().to_string();
-        match serde_json::from_str::<std::collections::HashMap<String, Value>>(&raw)
-            .map(|vars| openclaw::OpenClawEnvConfig { vars })
-            .map_err(|e| AppError::Message(tf!(k::TOOLS_OPENCLAW_ENV_JSON_INVALID, error = e)))
-            .and_then(|env| openclaw::set_env_config(&env))
-        {
-            Ok(outcome) => {
-                let level = openclaw_outcome_level(&outcome);
-                let message = openclaw_outcome_message(
-                    OutcomeKeys {
-                        plain: k::TOOLS_OPENCLAW_ENV_SAVED,
-                        backup: k::TOOLS_OPENCLAW_ENV_SAVED_BACKUP,
-                        warnings: k::TOOLS_OPENCLAW_ENV_SAVED_WARNINGS,
-                        backup_warnings: k::TOOLS_OPENCLAW_ENV_SAVED_BACKUP_WARNINGS,
-                    },
-                    outcome,
+        let vars = match serde_json::from_str::<std::collections::HashMap<String, Value>>(&raw) {
+            Ok(vars) => vars,
+            Err(error) => {
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OPENCLAW_ENV_JSON_INVALID, error = error),
+                    cx,
                 );
-                self.set_status(level, message, cx)
+                return;
             }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_OPENCLAW_ENV_SAVE_FAILED, error = err),
-                cx,
-            ),
-        }
+        };
+        let env = openclaw::OpenClawEnvConfig { vars };
+        self.run_io(
+            cx,
+            move || openclaw::set_env_config(&env).map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(outcome) => {
+                    let level = openclaw_outcome_level(&outcome);
+                    let message = openclaw_outcome_message(
+                        OutcomeKeys {
+                            plain: k::TOOLS_OPENCLAW_ENV_SAVED,
+                            backup: k::TOOLS_OPENCLAW_ENV_SAVED_BACKUP,
+                            warnings: k::TOOLS_OPENCLAW_ENV_SAVED_WARNINGS,
+                            backup_warnings: k::TOOLS_OPENCLAW_ENV_SAVED_BACKUP_WARNINGS,
+                        },
+                        outcome,
+                    );
+                    this.set_status(level, message, cx);
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OPENCLAW_ENV_SAVE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn save_openclaw_tools(&mut self, cx: &mut Context<Self>) {
         let raw = self.openclaw_tools_json.read(cx).content().to_string();
-        match serde_json::from_str::<openclaw::OpenClawToolsConfig>(&raw)
-            .map_err(|e| AppError::Message(tf!(k::TOOLS_OPENCLAW_TOOLS_JSON_INVALID, error = e)))
-            .and_then(|tools| openclaw::set_tools_config(&tools))
-        {
-            Ok(outcome) => {
-                let level = openclaw_outcome_level(&outcome);
-                let message = openclaw_outcome_message(
-                    OutcomeKeys {
-                        plain: k::TOOLS_OPENCLAW_TOOLS_SAVED,
-                        backup: k::TOOLS_OPENCLAW_TOOLS_SAVED_BACKUP,
-                        warnings: k::TOOLS_OPENCLAW_TOOLS_SAVED_WARNINGS,
-                        backup_warnings: k::TOOLS_OPENCLAW_TOOLS_SAVED_BACKUP_WARNINGS,
-                    },
-                    outcome,
+        let tools = match serde_json::from_str::<openclaw::OpenClawToolsConfig>(&raw) {
+            Ok(tools) => tools,
+            Err(error) => {
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OPENCLAW_TOOLS_JSON_INVALID, error = error),
+                    cx,
                 );
-                self.set_status(level, message, cx)
+                return;
             }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_OPENCLAW_TOOLS_SAVE_FAILED, error = err),
-                cx,
-            ),
-        }
+        };
+        self.run_io(
+            cx,
+            move || openclaw::set_tools_config(&tools).map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(outcome) => {
+                    let level = openclaw_outcome_level(&outcome);
+                    let message = openclaw_outcome_message(
+                        OutcomeKeys {
+                            plain: k::TOOLS_OPENCLAW_TOOLS_SAVED,
+                            backup: k::TOOLS_OPENCLAW_TOOLS_SAVED_BACKUP,
+                            warnings: k::TOOLS_OPENCLAW_TOOLS_SAVED_WARNINGS,
+                            backup_warnings: k::TOOLS_OPENCLAW_TOOLS_SAVED_BACKUP_WARNINGS,
+                        },
+                        outcome,
+                    );
+                    this.set_status(level, message, cx);
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_OPENCLAW_TOOLS_SAVE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn save_hermes_model(&mut self, cx: &mut Context<Self>) {
         let raw = self.hermes_model_json.read(cx).content().to_string();
-        match serde_json::from_str::<hermes::HermesModelConfig>(&raw)
-            .map_err(|e| AppError::Message(tf!(k::TOOLS_HERMES_MODEL_JSON_INVALID, error = e)))
-            .and_then(|model| hermes::set_model_config(&model))
-        {
-            Ok(outcome) => self.set_status(
-                NotificationLevel::Success,
-                hermes_outcome_message(
-                    k::TOOLS_HERMES_MODEL_SAVED,
-                    k::TOOLS_HERMES_MODEL_SAVED_BACKUP,
-                    outcome,
+        let model = match serde_json::from_str::<hermes::HermesModelConfig>(&raw) {
+            Ok(model) => model,
+            Err(error) => {
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_HERMES_MODEL_JSON_INVALID, error = error),
+                    cx,
+                );
+                return;
+            }
+        };
+        self.run_io(
+            cx,
+            move || hermes::set_model_config(&model).map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(outcome) => this.set_status(
+                    NotificationLevel::Success,
+                    hermes_outcome_message(
+                        k::TOOLS_HERMES_MODEL_SAVED,
+                        k::TOOLS_HERMES_MODEL_SAVED_BACKUP,
+                        outcome,
+                    ),
+                    cx,
                 ),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_HERMES_MODEL_SAVE_FAILED, error = err),
-                cx,
-            ),
-        }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_HERMES_MODEL_SAVE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn save_hermes_memory(&mut self, kind: hermes::MemoryKind, cx: &mut Context<Self>) {
@@ -1105,18 +1401,22 @@ impl ToolsView {
                 .content()
                 .to_string(),
         };
-        match hermes::write_memory(kind, &content) {
-            Ok(()) => self.set_status(
-                NotificationLevel::Success,
-                t(k::TOOLS_HERMES_MEMORY_SAVED),
-                cx,
-            ),
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_HERMES_MEMORY_SAVE_FAILED, error = err),
-                cx,
-            ),
-        }
+        self.run_io(
+            cx,
+            move || hermes::write_memory(kind, &content).map_err(|error| error.to_string()),
+            |this, result, cx| match result {
+                Ok(()) => this.set_status(
+                    NotificationLevel::Success,
+                    t(k::TOOLS_HERMES_MEMORY_SAVED),
+                    cx,
+                ),
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_HERMES_MEMORY_SAVE_FAILED, error = error),
+                    cx,
+                ),
+            },
+        );
     }
 
     fn toggle_hermes_memory(&mut self, kind: hermes::MemoryKind, cx: &mut Context<Self>) {
@@ -1125,25 +1425,33 @@ impl ToolsView {
             hermes::MemoryKind::Memory => !limits.memory_enabled,
             hermes::MemoryKind::User => !limits.user_enabled,
         };
-        match hermes::set_memory_enabled(kind, target) {
-            Ok(outcome) => {
-                self.hermes_limits = hermes::read_memory_limits().ok();
-                self.set_status(
-                    NotificationLevel::Success,
-                    hermes_outcome_message(
-                        k::TOOLS_HERMES_MEMORY_TOGGLE_SAVED,
-                        k::TOOLS_HERMES_MEMORY_TOGGLE_SAVED_BACKUP,
-                        outcome,
-                    ),
+        self.run_io(
+            cx,
+            move || {
+                hermes::set_memory_enabled(kind, target)
+                    .map(|outcome| (outcome, hermes::read_memory_limits().ok()))
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok((outcome, limits)) => {
+                    this.hermes_limits = limits;
+                    this.set_status(
+                        NotificationLevel::Success,
+                        hermes_outcome_message(
+                            k::TOOLS_HERMES_MEMORY_TOGGLE_SAVED,
+                            k::TOOLS_HERMES_MEMORY_TOGGLE_SAVED_BACKUP,
+                            outcome,
+                        ),
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::TOOLS_HERMES_MEMORY_TOGGLE_FAILED, error = error),
                     cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_HERMES_MEMORY_TOGGLE_FAILED, error = err),
-                cx,
-            ),
-        }
+                ),
+            },
+        );
     }
 
     fn toggle_advanced_tools(&mut self, cx: &mut Context<Self>) {
@@ -2546,8 +2854,7 @@ impl Render for ToolsView {
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.reload();
-                        this.refresh_advanced_configs(cx);
+                        this.reload(cx);
                         this.set_status(
                             NotificationLevel::Success,
                             t(k::TOOLS_STATUS_REFRESHED),

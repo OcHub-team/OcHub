@@ -2,14 +2,17 @@
 //! staying native GPUI: scoped filters, trends, provider/model tables, request
 //! detail, pricing configuration, and stream-check parameters.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use gpui::{
-    anchored, deferred, div, ease_out_quint, point, prelude::*, px, relative, Anchor, Animation,
-    AnimationExt, Context, ElementId, Entity, FontWeight, ListAlignment, ListState, MouseButton,
-    ScrollHandle, SharedString, Window,
+    anchored, canvas, deferred, div, ease_out_quint, point, prelude::*, px, relative, Anchor,
+    Animation, AnimationExt, Bounds, Context, ElementId, Entity, FontWeight, ListAlignment,
+    ListState, MouseButton, Pixels, Point, ScrollHandle, SharedString, Window,
 };
 use ochub_core::db::StreamCheckConfig;
 use ochub_core::services::session_usage::{
@@ -34,6 +37,7 @@ const DEFAULT_LOG_PAGE_SIZE: u32 = 20;
 const LOG_PAGE_SIZE_OPTIONS: &[u32] = &[20, 50, 100];
 const PRICING_APPS: [&str; 2] = ["claude", "codex"];
 const DATETIME_PICKER_GAP: f32 = 4.;
+const AUTO_SESSION_SYNC_INTERVAL: StdDuration = StdDuration::from_secs(60);
 
 /// Number of top-level blocks rendered by [`UsageView::render_block`] into the
 /// virtualized list (filters, data sources, summary, trend, scope, tabs,
@@ -56,6 +60,32 @@ struct UsageData {
     pricing: Vec<ModelPricingInfo>,
     stream_config: StreamCheckConfig,
     errors: Vec<String>,
+}
+
+struct TrendCache {
+    values: Arc<[f32]>,
+    hover_labels: Arc<[SharedString]>,
+    total_cost: SharedString,
+    peak_cost: SharedString,
+    first_label: SharedString,
+    last_label: SharedString,
+    range_label: SharedString,
+    animation_id: SharedString,
+}
+
+impl Default for TrendCache {
+    fn default() -> Self {
+        Self {
+            values: Arc::from([]),
+            hover_labels: Arc::from([]),
+            total_cost: SharedString::default(),
+            peak_cost: SharedString::default(),
+            first_label: SharedString::default(),
+            last_label: SharedString::default(),
+            range_label: SharedString::default(),
+            animation_id: SharedString::default(),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -315,8 +345,18 @@ pub struct UsageView {
     /// Whether the current `status` message came from a failed data load, so a
     /// later successful reload knows it may clear it (and only it).
     load_error: bool,
+    mutation_in_flight: bool,
+    session_sync_in_flight: bool,
+    last_session_sync_started_at: Option<Instant>,
     /// Drives the virtualized page body (one item per top-level block).
     list_state: ListState,
+    /// Preformatted trend data. Rendering and animation frames only clone
+    /// shared slices instead of reparsing costs and rebuilding tooltip text.
+    trend_cache: TrendCache,
+    /// The chart canvas reports its current bounds during prepaint. Pointer
+    /// movement then invalidates only when it crosses into another bucket.
+    trend_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    trend_hover_bucket: Option<usize>,
 }
 
 impl UsageView {
@@ -333,6 +373,7 @@ impl UsageView {
         self.log_page_input.update(cx, |input, cx| {
             input.set_placeholder(t(k::USAGE_PAGINATION_PAGE_PLACEHOLDER), cx)
         });
+        self.rebuild_trend_cache();
         self.list_state.remeasure();
         cx.notify();
     }
@@ -398,9 +439,15 @@ impl UsageView {
             range_start_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             range_end_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             load_error: false,
+            mutation_in_flight: false,
+            session_sync_in_flight: false,
+            last_session_sync_started_at: None,
             list_state: ListState::new(USAGE_BLOCK_COUNT, ListAlignment::Top, px(600.)),
+            trend_cache: TrendCache::default(),
+            trend_bounds: Rc::new(Cell::new(None)),
+            trend_hover_bucket: None,
         };
-        this.reload(cx);
+        this.rebuild_trend_cache();
         this.load_config_forms(cx);
         // “跳至 X 页”回车提交。
         let jump = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
@@ -430,6 +477,18 @@ impl UsageView {
         this
     }
 
+    /// Show the persisted usage cache immediately, then refresh that cache
+    /// from local Claude/Codex/OpenCode sessions in the background. The
+    /// parsers persist file mtimes and line offsets in `session_log_sync`, so
+    /// unchanged history is skipped on later visits.
+    pub fn activate(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
+        let now = Instant::now();
+        if auto_session_sync_due(self.last_session_sync_started_at, now) {
+            self.sync_sessions(false, cx);
+        }
+    }
+
     /// Every status toast carries its severity explicitly. Guessing it from the
     /// wording mis-reads several of these messages — a finished session sync
     /// that merely mentions skipped files is not a warning — and stops working
@@ -449,6 +508,28 @@ impl UsageView {
     fn clear_status(&mut self) {
         self.status = None;
         self.status_level = None;
+    }
+
+    fn run_mutation<R, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
+    where
+        R: Send + 'static,
+        Work: FnOnce() -> R + Send + 'static,
+        Apply: FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
+    {
+        if self.mutation_in_flight {
+            return;
+        }
+        self.mutation_in_flight = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { work() }).await;
+            this.update(cx, |this, cx| {
+                this.mutation_in_flight = false;
+                apply(this, result, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Kick off a background reload of everything the page shows. The queries
@@ -501,6 +582,7 @@ impl UsageView {
         self.summary = data.summary;
         self.summary_by_app = data.summary_by_app;
         self.daily = data.daily;
+        self.rebuild_trend_cache();
         self.providers = data.providers;
         self.provider_options = data.provider_options;
         self.models = data.models;
@@ -512,6 +594,66 @@ impl UsageView {
         self.stream_config = data.stream_config;
         self.list_state.remeasure();
         cx.notify();
+    }
+
+    fn rebuild_trend_cache(&mut self) {
+        // Keep the existing display order: oldest → newest, capped at 30
+        // buckets. This work runs only when data/range/locale changes.
+        let mut visible = self.daily.iter().rev().take(30).collect::<Vec<_>>();
+        visible.reverse();
+
+        let values: Arc<[f32]> = visible
+            .iter()
+            .map(|stat| stat.total_cost.parse::<f32>().unwrap_or(0.))
+            .collect::<Vec<_>>()
+            .into();
+        let hover_labels: Arc<[SharedString]> = visible
+            .iter()
+            .map(|stat| {
+                SharedString::from(tf!(
+                    k::USAGE_TREND_HOVER,
+                    time = trend_bucket_label(&stat.date),
+                    cost = format_money(&stat.total_cost, 4),
+                    count = stat.request_count
+                ))
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let total_cost = values.iter().copied().sum::<f32>();
+        let peak_cost = values.iter().copied().fold(0., f32::max);
+        let first_label = visible
+            .first()
+            .map(|stat| short_date_label(&stat.date))
+            .unwrap_or_default();
+        let last_label = visible
+            .last()
+            .map(|stat| short_date_label(&stat.date))
+            .unwrap_or_default();
+        let range_label = self.range.label();
+
+        self.trend_cache = TrendCache {
+            total_cost: SharedString::from(format_money(&total_cost.to_string(), 3)),
+            peak_cost: SharedString::from(format_money(&peak_cost.to_string(), 3)),
+            first_label: SharedString::from(first_label),
+            last_label: SharedString::from(last_label),
+            range_label: SharedString::new_static(range_label),
+            animation_id: SharedString::from(format!("usage-trend-{range_label}-{}", values.len())),
+            values,
+            hover_labels,
+        };
+        self.trend_hover_bucket = None;
+    }
+
+    fn trend_bucket_at(&self, pointer: Point<Pixels>) -> Option<usize> {
+        let count = self.trend_cache.values.len();
+        let bounds = self.trend_bounds.get()?;
+        if count < 2 || !bounds.contains(&pointer) {
+            return None;
+        }
+        let x0 = f32::from(bounds.origin.x) + 2.;
+        let width = (f32::from(bounds.size.width) - 4.).max(1.);
+        let relative = ((f32::from(pointer.x) - x0) / width).clamp(0., 1.);
+        Some((relative * (count - 1) as f32).round() as usize)
     }
 
     fn load_config_forms(&mut self, cx: &mut Context<Self>) {
@@ -575,6 +717,7 @@ impl UsageView {
 
     fn set_range(&mut self, range: UsageRange, cx: &mut Context<Self>) {
         self.range = range;
+        self.rebuild_trend_cache();
         self.reset_log_page();
         self.reload(cx);
         cx.notify();
@@ -842,8 +985,15 @@ impl UsageView {
         .detach();
     }
 
-    fn sync_sessions(&mut self, cx: &mut Context<Self>) {
-        self.set_status(NotificationLevel::Info, t(k::USAGE_STATUS_SYNCING), cx);
+    fn sync_sessions(&mut self, announce: bool, cx: &mut Context<Self>) {
+        if self.session_sync_in_flight {
+            return;
+        }
+        self.session_sync_in_flight = true;
+        self.last_session_sync_started_at = Some(Instant::now());
+        if announce {
+            self.set_status(NotificationLevel::Info, t(k::USAGE_STATUS_SYNCING), cx);
+        }
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -882,6 +1032,7 @@ impl UsageView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                this.session_sync_in_flight = false;
                 // A sync that finished with per-file errors still imported what
                 // it could, so it is a warning rather than a failure.
                 let level = if result.errors.is_empty() {
@@ -907,7 +1058,11 @@ impl UsageView {
                         errors = result.errors.len(),
                     )
                 };
-                this.set_status(level, summary, cx);
+                // Automatic refresh stays quiet on success; it should make the
+                // page current, not emit a toast every time it is visited.
+                if announce || !result.errors.is_empty() {
+                    this.set_status(level, summary, cx);
+                }
                 this.load_error = false;
                 this.reload(cx);
                 cx.notify();
@@ -948,52 +1103,66 @@ impl UsageView {
         let cache_read = input_value(&self.pricing_cache_read_cost, cx);
         let cache_creation = input_value(&self.pricing_cache_creation_cost, cx);
 
-        match self.app.db.update_model_pricing(
-            &model_id,
-            &display_name,
-            &input_cost,
-            &output_cost,
-            &cache_read,
-            &cache_creation,
-        ) {
-            Ok(()) => {
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::USAGE_PRICING_SAVED, model = model_id),
-                    cx,
-                );
-                self.reload(cx);
-            }
-            Err(err) => {
-                self.set_status(
+        let app = self.app.clone();
+        self.run_mutation(
+            cx,
+            move || {
+                app.db
+                    .update_model_pricing(
+                        &model_id,
+                        &display_name,
+                        &input_cost,
+                        &output_cost,
+                        &cache_read,
+                        &cache_creation,
+                    )
+                    .map(|_| model_id)
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(model_id) => {
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::USAGE_PRICING_SAVED, model = model_id),
+                        cx,
+                    );
+                    this.reload(cx);
+                }
+                Err(error) => this.set_status(
                     NotificationLevel::Error,
-                    tf!(k::USAGE_PRICING_SAVE_FAILED, error = err),
+                    tf!(k::USAGE_PRICING_SAVE_FAILED, error = error),
                     cx,
-                );
-            }
-        }
-        cx.notify();
+                ),
+            },
+        );
     }
 
     fn delete_pricing(&mut self, model_id: String, cx: &mut Context<Self>) {
-        match self.app.db.delete_model_pricing(&model_id) {
-            Ok(()) => {
-                self.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::USAGE_PRICING_DELETED, model = model_id),
-                    cx,
-                );
-                self.reload(cx);
-            }
-            Err(err) => {
-                self.set_status(
+        let app = self.app.clone();
+        self.run_mutation(
+            cx,
+            move || {
+                app.db
+                    .delete_model_pricing(&model_id)
+                    .map(|_| model_id)
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(model_id) => {
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::USAGE_PRICING_DELETED, model = model_id),
+                        cx,
+                    );
+                    this.reload(cx);
+                }
+                Err(error) => this.set_status(
                     NotificationLevel::Error,
-                    tf!(k::USAGE_PRICING_DELETE_FAILED, error = err),
+                    tf!(k::USAGE_PRICING_DELETE_FAILED, error = error),
                     cx,
-                );
-            }
-        }
-        cx.notify();
+                ),
+            },
+        );
     }
 
     fn set_pricing_source(
@@ -1008,6 +1177,9 @@ impl UsageView {
     }
 
     fn save_pricing_defaults(&mut self, cx: &mut Context<Self>) {
+        if self.mutation_in_flight {
+            return;
+        }
         let configs = [
             (
                 "claude",
@@ -1028,6 +1200,7 @@ impl UsageView {
         ];
 
         let app = self.app.clone();
+        self.mutation_in_flight = true;
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -1041,6 +1214,7 @@ impl UsageView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                this.mutation_in_flight = false;
                 match result {
                     Ok(()) => this.set_status(
                         NotificationLevel::Success,
@@ -1069,20 +1243,27 @@ impl UsageView {
             }
         };
 
-        match self.app.db.save_stream_check_config(&config) {
-            Ok(()) => {
-                self.stream_config = config;
-                self.set_status(NotificationLevel::Success, t(k::USAGE_STREAM_SAVED), cx);
-            }
-            Err(err) => {
-                self.set_status(
+        let app = self.app.clone();
+        self.run_mutation(
+            cx,
+            move || {
+                app.db
+                    .save_stream_check_config(&config)
+                    .map(|_| config)
+                    .map_err(|error| error.to_string())
+            },
+            |this, result, cx| match result {
+                Ok(config) => {
+                    this.stream_config = config;
+                    this.set_status(NotificationLevel::Success, t(k::USAGE_STREAM_SAVED), cx);
+                }
+                Err(error) => this.set_status(
                     NotificationLevel::Error,
-                    tf!(k::USAGE_STREAM_SAVE_FAILED, error = err),
+                    tf!(k::USAGE_STREAM_SAVE_FAILED, error = error),
                     cx,
-                );
-            }
-        }
-        cx.notify();
+                ),
+            },
+        );
     }
 
     fn render_datetime_picker(
@@ -1851,6 +2032,7 @@ impl UsageView {
                                 this.model_filter = None;
                                 this.status_filter = None;
                                 this.range = UsageRange::Today;
+                                this.rebuild_trend_cache();
                                 this.open_filter_popover = None;
                                 this.active_datetime_picker = None;
                                 set_input(&this.range_start_input, "", cx);
@@ -1937,7 +2119,7 @@ impl UsageView {
                     ButtonSize::Sm,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.sync_sessions(cx);
+                    this.sync_sessions(true, cx);
                 })),
             )
     }
@@ -2093,44 +2275,16 @@ impl UsageView {
     }
 
     fn render_trend(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Oldest → newest, capped so dense ranges stay legible.
-        let visible = {
-            let mut v = self.daily.iter().rev().take(30).collect::<Vec<_>>();
-            v.reverse();
-            v
-        };
-        let values: Vec<f32> = visible
-            .iter()
-            .map(|stat| stat.total_cost.parse::<f32>().unwrap_or(0.0))
-            .collect();
-        // 悬停提示：每个时间桶一条 “时间 · $成本 · N 次”。
-        let hover_labels: Vec<SharedString> = visible
-            .iter()
-            .map(|stat| {
-                SharedString::from(tf!(
-                    k::USAGE_TREND_HOVER,
-                    time = trend_bucket_label(&stat.date),
-                    cost = format_money(&stat.total_cost, 4),
-                    count = stat.request_count
-                ))
-            })
-            .collect();
-        let total_cost: f32 = values.iter().copied().sum();
-        let peak_cost = values.iter().copied().fold(0.0_f32, f32::max);
-        let first_label = visible
-            .first()
-            .map(|stat| short_date_label(&stat.date))
-            .unwrap_or_default();
-        let last_label = visible
-            .last()
-            .map(|stat| short_date_label(&stat.date))
-            .unwrap_or_default();
-        // Re-key the animation on range/shape changes so it replays on filter switches.
-        let anim_id = SharedString::from(format!(
-            "usage-trend-{}-{}",
-            self.range.label(),
-            values.len()
-        ));
+        let values = self.trend_cache.values.clone();
+        let hover_labels = self.trend_cache.hover_labels.clone();
+        let value_count = values.len();
+        let total_cost = self.trend_cache.total_cost.clone();
+        let peak_cost = self.trend_cache.peak_cost.clone();
+        let first_label = self.trend_cache.first_label.clone();
+        let last_label = self.trend_cache.last_label.clone();
+        let range_label = self.trend_cache.range_label.clone();
+        let anim_id = self.trend_cache.animation_id.clone();
+        let trend_bounds = self.trend_bounds.clone();
 
         div()
             .flex()
@@ -2166,10 +2320,10 @@ impl UsageView {
                         div()
                             .text_color(theme::muted())
                             .text_xs()
-                            .child(SharedString::from(self.range.label())),
+                            .child(range_label),
                     ),
             )
-            .when(values.len() < 2, |s| {
+            .when(value_count < 2, |s| {
                 s.child(
                     div()
                         .text_color(theme::muted())
@@ -2177,44 +2331,66 @@ impl UsageView {
                         .child(t(k::USAGE_TREND_INSUFFICIENT)),
                 )
             })
-            .when(values.len() >= 2, |s| {
+            .when(value_count >= 2, |s| {
                 s.child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap_4()
-                        .child(Self::trend_stat(
-                            raw(k::USAGE_TREND_TOTAL_COST),
-                            format_money(&format!("{total_cost}"), 3),
-                        ))
+                        .child(Self::trend_stat(raw(k::USAGE_TREND_TOTAL_COST), total_cost))
                         .child(div().w(px(1.)).h(px(26.)).bg(theme::border()))
-                        .child(Self::trend_stat(
-                            raw(k::USAGE_TREND_PEAK),
-                            format_money(&format!("{peak_cost}"), 3),
-                        )),
+                        .child(Self::trend_stat(raw(k::USAGE_TREND_PEAK), peak_cost)),
                 )
                 .child(
-                    // Hover 需要逐帧读取鼠标位置：进入/离开和移动时 notify 触发
-                    // 重绘，canvas 在 paint 阶段自行画十字线和 tooltip。
+                    // The chart paints from the live pointer, but a bucket's
+                    // crosshair/tooltip is constant. Invalidate only when the
+                    // pointer crosses a bucket boundary.
                     div()
                         .id("usage-trend-hotspot")
                         .w_full()
-                        .on_mouse_move(cx.listener(|_this, _event, _window, cx| {
-                            cx.notify();
-                        }))
-                        .on_hover(cx.listener(|_this, _hovered, _window, cx| {
-                            cx.notify();
+                        .on_mouse_move(cx.listener(
+                            |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                                let bucket = this.trend_bucket_at(event.position);
+                                if this.trend_hover_bucket != bucket {
+                                    this.trend_hover_bucket = bucket;
+                                    cx.notify();
+                                }
+                            },
+                        ))
+                        .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                            let bucket = hovered
+                                .then(|| this.trend_bucket_at(window.mouse_position()))
+                                .flatten();
+                            if this.trend_hover_bucket != bucket {
+                                this.trend_hover_bucket = bucket;
+                                cx.notify();
+                            }
                         }))
                         .child(
-                            crate::chart::AreaChart::new(values)
-                                .hover_labels(hover_labels)
-                                .height(176.)
-                                .with_animation(
-                                    anim_id,
-                                    Animation::new(std::time::Duration::from_millis(720))
-                                        .with_easing(ease_out_quint()),
-                                    |chart, delta| chart.progress(delta),
+                            div()
+                                .relative()
+                                .w_full()
+                                .child(
+                                    canvas(
+                                        move |bounds, _window, _cx| {
+                                            trend_bounds.set(Some(bounds));
+                                        },
+                                        |_bounds, _state, _window, _cx| {},
+                                    )
+                                    .absolute()
+                                    .inset_0(),
+                                )
+                                .child(
+                                    crate::chart::AreaChart::new(values)
+                                        .hover_labels(hover_labels)
+                                        .height(176.)
+                                        .with_animation(
+                                            anim_id,
+                                            Animation::new(std::time::Duration::from_millis(720))
+                                                .with_easing(ease_out_quint()),
+                                            |chart, delta| chart.progress(delta),
+                                        ),
                                 ),
                         ),
                 )
@@ -2228,20 +2404,20 @@ impl UsageView {
                             div()
                                 .text_color(theme::subtext())
                                 .text_xs()
-                                .child(SharedString::from(first_label)),
+                                .child(first_label),
                         )
                         .child(
                             div()
                                 .text_color(theme::subtext())
                                 .text_xs()
-                                .child(SharedString::from(last_label)),
+                                .child(last_label),
                         ),
                 )
             })
     }
 
     /// A small label-over-value stat used in the trend card header strip.
-    fn trend_stat(label: &'static str, value: String) -> impl IntoElement {
+    fn trend_stat(label: &'static str, value: SharedString) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -2251,7 +2427,7 @@ impl UsageView {
                 div()
                     .text_color(theme::text())
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(SharedString::from(value)),
+                    .child(value),
             )
     }
 
@@ -3796,9 +3972,20 @@ fn effective_model_label(log: &RequestLogDetail) -> String {
     }
 }
 
+fn auto_session_sync_due(last_started_at: Option<Instant>, now: Instant) -> bool {
+    last_started_at
+        .map(|last| now.saturating_duration_since(last) >= AUTO_SESSION_SYNC_INTERVAL)
+        .unwrap_or(true)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_local_timestamp, parse_local_timestamp, shifted_year_month};
+    use std::time::{Duration, Instant};
+
+    use super::{
+        auto_session_sync_due, format_local_timestamp, parse_local_timestamp, shifted_year_month,
+        AUTO_SESSION_SYNC_INTERVAL,
+    };
 
     #[test]
     fn parses_reference_datetime_formats() {
@@ -3837,6 +4024,20 @@ mod tests {
         assert_eq!(shifted_year_month(2026, 1, -1), (2025, 12));
         assert_eq!(shifted_year_month(2026, 12, 1), (2027, 1));
         assert_eq!(shifted_year_month(2026, 7, 18), (2028, 1));
+    }
+
+    #[test]
+    fn automatic_session_cache_refresh_is_throttled() {
+        let now = Instant::now();
+        assert!(auto_session_sync_due(None, now));
+        assert!(!auto_session_sync_due(
+            Some(now - AUTO_SESSION_SYNC_INTERVAL + Duration::from_secs(1)),
+            now
+        ));
+        assert!(auto_session_sync_due(
+            Some(now - AUTO_SESSION_SYNC_INTERVAL),
+            now
+        ));
     }
 }
 

@@ -165,16 +165,6 @@ pub fn scroll_body(
         ))
 }
 
-/// [`scroll_body`] with an externally held [`gpui::ScrollHandle`], so the view
-/// can scroll programmatically (e.g. jump back to a top-anchored editor).
-pub fn scroll_body_tracked(
-    id: &'static str,
-    handle: &gpui::ScrollHandle,
-    column: impl IntoElement,
-) -> gpui::Div {
-    scroll_body(id, handle, column)
-}
-
 /// A **virtualized** scrolling body, centered at [`CONTENT_MAX_WIDTH`] like
 /// [`scroll_body`] but backed by `gpui::list` so only the visible items (plus a
 /// little overdraw) are laid out and painted — the fix for long pages that drop

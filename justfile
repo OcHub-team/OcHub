@@ -6,8 +6,13 @@ export DEVELOPER_DIR := env_var_or_default("DEVELOPER_DIR", "/Applications/Xcode
 # 默认：启动桌面应用
 default: run
 
-# 启动 GPUI 桌面应用（debug）
+# 启动日常开发应用：保留符号与增量构建，但使用 opt-level=2。
+# 未优化的 GPUI/布局/文本栈会显著放大拖拽和滚动耗时，不适合作为流畅度基准。
 run:
+    cargo run --profile qa -p ochub-app
+
+# 仅在需要完整未优化调试语义时使用。
+run-debug:
     cargo run -p ochub-app
 
 # 启动 GPUI 桌面应用（release，构建慢但流畅）

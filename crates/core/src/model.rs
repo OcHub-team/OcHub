@@ -338,6 +338,47 @@ pub fn parse_custom_user_agent(
 }
 
 impl Provider {
+    /// Resolve only the upstream base URL needed by list/card presentation.
+    ///
+    /// Keep this separate from [`Self::resolve_usage_credentials`]: callers that
+    /// merely display an endpoint must not parse or materialize API keys. This
+    /// is especially important for Codex, where the fallback bearer token lives
+    /// in TOML and would otherwise trigger a second full parse.
+    pub fn resolve_usage_base_url(&self, app_type: &crate::app_type::AppType) -> String {
+        use crate::app_type::AppType;
+
+        let settings = &self.settings_config;
+        let str_at =
+            |value: Option<&Value>| value.and_then(Value::as_str).unwrap_or("").to_string();
+        let base_url = match app_type {
+            AppType::Codex => settings
+                .get("config")
+                .and_then(Value::as_str)
+                .and_then(crate::apps::codex::extract_codex_base_url)
+                .unwrap_or_default(),
+            AppType::GrokBuild => settings
+                .get("config")
+                .and_then(Value::as_str)
+                .and_then(crate::apps::grokbuild::extract_credentials)
+                .map(|(base_url, _)| base_url)
+                .unwrap_or_default(),
+            AppType::Hermes => str_at(settings.get("base_url")),
+            AppType::OpenClaw => str_at(settings.get("baseUrl")),
+            AppType::OpenCode => str_at(
+                settings
+                    .get("options")
+                    .and_then(|options| options.get("baseURL")),
+            ),
+            AppType::Claude | AppType::ClaudeDesktop => str_at(
+                settings
+                    .get("env")
+                    .and_then(|env| env.get("ANTHROPIC_BASE_URL")),
+            ),
+        };
+
+        base_url.trim_end_matches('/').to_string()
+    }
+
     /// Resolve `(base_url, api_key)` for the usage-script path, per app type.
     ///
     /// Ported from cc-switch `provider.rs::resolve_usage_credentials`. Mirrors the
