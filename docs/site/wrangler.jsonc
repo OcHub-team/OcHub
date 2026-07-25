@@ -1,0 +1,14 @@
+{
+  // Cloudflare Pages project config.
+  //
+  // Deploys normally happen through the dashboard's Git integration
+  // (Cloudflare builds on every push and gives each PR a preview URL), so
+  // this file is only consulted when someone runs `pnpm deploy` by hand.
+  // `pages_build_output_dir` is the Pages equivalent of the Workers
+  // `assets.directory` the Nimbus starter ships with; 404s are served from
+  // dist/404.html automatically, so no `not_found_handling` is needed.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ochub-docs",
+  "compatibility_date": "2026-07-25",
+  "pages_build_output_dir": "./dist"
+}

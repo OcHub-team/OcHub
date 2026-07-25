@@ -1,0 +1,44 @@
+---
+title: Overview
+description: What OcHub is, what it manages, and how it relates to your existing tool configuration.
+sidebar:
+  order: 1
+---
+
+OcHub is a native desktop control center for AI coding tools. It lets you switch
+providers, manage shared capabilities, and run a local relay from one place —
+without a browser shell or webview.
+
+## What OcHub manages
+
+OcHub manages **Claude Code, Claude Desktop, Codex, OpenCode, OpenClaw, and
+Hermes**.
+
+| Area | Capabilities |
+| --- | --- |
+| Providers | Discover, import, edit, switch, and test direct API providers |
+| Relay station | Route supported clients through a local gateway with model aliases, reasoning mapping, failover, health checks, and usage accounting |
+| Shared tools | Manage MCP servers and reusable skills across supported clients |
+| Operations | Browse sessions, inspect usage, configure sync, and manage app behavior |
+| Migration | One-time, read-only import from compatible cc-switch databases |
+
+## How it touches your configuration
+
+OcHub owns `~/.ochub/` and never writes back to `~/.cc-switch/`. It does update
+the live configuration directories of tools you explicitly manage.
+
+:::caution
+Quit cc-switch before switching providers in OcHub — both write the same tool
+configuration directories, and running them together can interleave writes.
+:::
+
+:::note
+OcHub is under active pre-release development. Back up important tool
+configuration before trying an early build.
+:::
+
+## Where to go next
+
+- [Install](/install) — Homebrew, direct downloads, and first-launch approval
+- [Architecture](/architecture) — the Rust workspace behind the app
+- [Build from source](/build-from-source) — toolchain and development commands

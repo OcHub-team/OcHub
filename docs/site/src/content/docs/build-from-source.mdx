@@ -1,0 +1,52 @@
+---
+title: Build from source
+description: Toolchain, platform prerequisites, and the development commands used day to day.
+sidebar:
+  order: 4
+---
+
+The repository pins Rust **1.97.1** in `rust-toolchain.toml`. Rustup selects it
+automatically:
+
+```sh
+git clone https://github.com/OcHub-team/OcHub.git
+cd OcHub
+cargo run -p ochub-app
+```
+
+## Platform prerequisites
+
+- **macOS:** Xcode or the Xcode Command Line Tools.
+- **Windows:** Visual Studio 2022 Build Tools with the Windows SDK.
+- **Debian/Ubuntu:** run `./scripts/ci/install-linux-deps.sh`.
+
+## Development commands
+
+```sh
+just check
+just test
+just ci
+just qa-app       # macOS: fixed /tmp/OCHUB-QA.app acceptance bundle
+```
+
+## Building installers locally
+
+Install the same pinned packager used by CI:
+
+```sh
+cargo install cargo-packager --version 0.11.8 --locked
+just package-macos
+# or, on Linux:
+just package-linux
+```
+
+## Automated releases
+
+The `Release` workflow accepts only a tag that exactly matches the Cargo
+workspace version. For example, workspace version `0.1.0` must be released as
+`v0.1.0`. It builds both macOS architectures plus Windows and Linux in parallel,
+checks the expected package set, creates checksums and provenance, and then
+publishes one GitHub Release.
+
+The Homebrew tap checks the latest release daily and updates the Cask version
+and both macOS checksums when needed.

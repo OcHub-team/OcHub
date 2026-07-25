@@ -1,0 +1,84 @@
+---
+title: 安装
+description: 通过 Homebrew 或直接下载安装 OcHub，完成首次启动授权，并保持更新。
+sidebar:
+  order: 2
+---
+
+每个版本标签都在对应的原生 GitHub 托管 runner 上构建。
+
+## Homebrew（macOS）
+
+Homebrew 会自动选择 Apple Silicon 或 Intel 版本：
+
+```sh
+brew install --cask ochub-team/tap/ochub
+```
+
+升级或卸载：
+
+```sh
+brew upgrade --cask ochub-team/tap/ochub
+brew uninstall --cask ochub
+```
+
+Cask 维护在
+[`OcHub-team/homebrew-tap`](https://github.com/OcHub-team/homebrew-tap)
+仓库中，下载的是每个 GitHub Release 发布的同一个 DMG。
+
+## 直接下载
+
+| 平台 | 发布文件 |
+| --- | --- |
+| macOS Apple Silicon | ARM64 `.dmg` |
+| macOS Intel | x64 `.dmg` |
+| Windows 10/11 x64 | NSIS 安装包和便携版 `.zip` |
+| Linux x64 | AppImage 和 Debian `.deb` |
+
+发布内容还包含 `SHA256SUMS` 和 GitHub 制品证明。校验已下载的文件：
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
+```
+
+## macOS：首次启动时授权
+
+OcHub 尚未经过 Apple 公证，因此 macOS 会要求你授权一次：
+
+<Steps>
+
+1. 打开 OcHub，macOS 提示无法验证开发者。
+
+2. 前往**系统设置 › 隐私与安全性**，滚动到"安全性"，点击**仍要打开**。
+
+</Steps>
+
+在 macOS 15 及更高版本上，右键点击应用的老办法已经失效——只能走系统设置这条路。
+想完全跳过这个提示，可以安装时不加隔离标记：
+
+```sh
+brew install --cask --no-quarantine ochub-team/tap/ochub
+```
+
+从 OcHub 内部安装的更新永远不会被加上隔离标记，所以这是一次性步骤，不需要每次发版都重复。
+
+Windows SmartScreen 可能出于同样原因发出警告。
+
+## 更新
+
+OcHub 会在启动后不久检查一次新版本，之后每天检查一次，并可以从
+**设置 → 关于 → 检查更新**直接安装，无需离开应用。用同一分组里的开关可以关闭检查。
+
+下载的安装包会用编译进二进制的签名密钥校验，且不接受不比当前运行版本更新的版本，
+因此更新通道无法被用来推送未签名代码，也无法把安装回滚到旧版。
+
+有两种安装方式只做检查、不自动更新，因为自更新会和管理它们的系统冲突：
+
+| 安装方式 | 应用内更新 |
+| --- | --- |
+| macOS `.dmg`、Windows 安装包、Linux AppImage | 支持 |
+| Debian 包 | 不支持——请用 `apt`，以保证 dpkg 的记录准确 |
+| Windows 便携版 ZIP | 不支持——没有可重新运行的安装程序 |
+
+这两种方式会在设置行里说明原因，并给出发布页链接。

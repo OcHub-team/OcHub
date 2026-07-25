@@ -1,0 +1,22 @@
+---
+title: Architecture
+description: The Rust workspace behind OcHub — crates, responsibilities, and platform specifics.
+sidebar:
+  order: 3
+---
+
+OcHub is a Rust workspace built around GPUI and axum.
+
+## Crates
+
+| Crate | Role |
+| --- | --- |
+| `ochub-core` | Domain model, SQLite storage, provider switching, client config writers, sync, MCP, skills, sessions, usage, and auth |
+| `ochub-server` | Loopback control API and in-process relay gateway |
+| `ochub-convert` | Request and response conversion between supported API dialects |
+| `ochub-app` | Native GPUI desktop application hosting the core and server |
+
+## Platform specifics
+
+GPUI is pinned to a tested Zed commit. Linux builds enable both Wayland and X11;
+macOS builds compile Metal shaders at runtime.

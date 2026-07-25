@@ -1,0 +1,54 @@
+---
+import DocsLayout from "../layouts/DocsLayout.astro";
+import { getDocsStaticPaths } from "@cloudflare/nimbus-docs";
+import { components } from "../components";
+import { localeByKey } from "../lib/i18n";
+import { getLocalePageData } from "../lib/locale-page";
+
+export const prerender = true;
+// English is the primary collection, mounted at the site root — hence
+// `getDocsStaticPaths` rather than the `getCollectionStaticPaths` used
+// by the prefixed locales.
+export const getStaticPaths = getDocsStaticPaths;
+
+const locale = localeByKey("en");
+const {
+  entry,
+  Content,
+  sidebar,
+  toc,
+  breadcrumbs,
+  prevNext,
+  editUrl,
+  lastUpdated,
+  markdownUrl,
+  socialImage,
+  alternates,
+} = await getLocalePageData(Astro, locale);
+---
+
+<DocsLayout
+  title={entry.data.title}
+  description={entry.data.description}
+  sidebar={sidebar}
+  headings={toc}
+  breadcrumbs={breadcrumbs}
+  prevNext={prevNext}
+  mode={entry.data.mode}
+  banner={entry.data.banner}
+  head={entry.data.head}
+  searchable={entry.data.searchable}
+  noindex={entry.data.noindex}
+  markdownUrl={markdownUrl}
+  socialImage={socialImage}
+  lastUpdated={lastUpdated}
+  editUrl={editUrl}
+  draft={entry.data.draft}
+  audience={entry.data.audience}
+  collection={entry.collection}
+  entryId={entry.id}
+  locale={locale}
+  alternates={alternates}
+>
+  <Content components={components} />
+</DocsLayout>

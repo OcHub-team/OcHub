@@ -1,0 +1,92 @@
+---
+title: インストール
+description: Homebrew または直接ダウンロードで OcHub を導入し、初回起動時の承認を済ませ、最新の状態に保つ方法。
+sidebar:
+  order: 2
+---
+
+すべてのバージョンタグは、対応するネイティブの GitHub ホストランナー上でビルドされます。
+
+## Homebrew（macOS）
+
+Homebrew が Apple Silicon 版と Intel 版を自動的に選択します：
+
+```sh
+brew install --cask ochub-team/tap/ochub
+```
+
+アップグレードとアンインストール：
+
+```sh
+brew upgrade --cask ochub-team/tap/ochub
+brew uninstall --cask ochub
+```
+
+Cask は
+[`OcHub-team/homebrew-tap`](https://github.com/OcHub-team/homebrew-tap)
+リポジトリで管理されており、各 GitHub Release で公開されるものと同じ DMG を
+ダウンロードします。
+
+## 直接ダウンロード
+
+| プラットフォーム | 配布ファイル |
+| --- | --- |
+| macOS Apple Silicon | ARM64 `.dmg` |
+| macOS Intel | x64 `.dmg` |
+| Windows 10/11 x64 | NSIS インストーラーとポータブル `.zip` |
+| Linux x64 | AppImage と Debian `.deb` |
+
+リリースには `SHA256SUMS` と GitHub の成果物アテステーションも含まれます。
+ダウンロードしたファイルの検証：
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
+```
+
+## macOS：初回起動時の承認
+
+OcHub はまだ Apple の公証を受けていないため、macOS が一度だけ承認を求めます：
+
+<Steps>
+
+1. OcHub を開きます。macOS が開発元を検証できないと表示します。
+
+2. **システム設定 › プライバシーとセキュリティ**を開き、「セキュリティ」まで
+   スクロールして**このまま開く**をクリックします。
+
+</Steps>
+
+macOS 15 以降では、アプリを Control クリックする従来の方法は使えません。
+システム設定から行う方法だけが有効です。この確認を完全に省くには、
+検疫フラグなしでインストールします：
+
+```sh
+brew install --cask --no-quarantine ochub-team/tap/ochub
+```
+
+OcHub 内部からインストールした更新に検疫フラグが付くことはないため、
+これはリリースごとに繰り返す作業ではなく一度きりの手順です。
+
+Windows SmartScreen も同じ理由で警告を出すことがあります。
+
+## 更新
+
+OcHub は起動直後に一度、その後は 1 日 1 回新しいリリースを確認し、
+**設定 → 情報 → 更新を確認**からアプリを離れずにインストールできます。
+同じグループ内のトグルで確認を無効にできます。
+
+ダウンロードされたパッケージはバイナリに埋め込まれた署名鍵で検証され、
+実行中のバージョンより新しくないバージョンは拒否されます。そのため更新経路を使って
+未署名のコードを配信したり、インストールを巻き戻したりすることはできません。
+
+次の 2 つのインストール方法は確認のみで、自動更新は行いません。
+自己更新するとそれを管理しているシステムと衝突するためです：
+
+| インストール方法 | アプリ内更新 |
+| --- | --- |
+| macOS `.dmg`、Windows インストーラー、Linux AppImage | 対応 |
+| Debian パッケージ | 非対応 — `apt` を使用し、dpkg の記録を正確に保つため |
+| Windows ポータブル ZIP | 非対応 — 再実行するインストーラーが存在しないため |
+
+この 2 つは設定画面の行に理由を表示し、リリースページへのリンクを示します。

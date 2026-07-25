@@ -1,0 +1,75 @@
+---
+/**
+ * Landing page body, shared by the three locale home routes so they can't
+ * drift apart. The route files stay thin shells that pick a locale.
+ */
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import Header from "@/components/Header.astro";
+import { config } from "virtual:nimbus/config";
+import { LOCALES, localePath, t, type Locale } from "@/lib/i18n";
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+
+// The home page exists in every locale, so its alternates are the full
+// set — no need to probe collections the way entry pages do.
+const alternates = [
+  ...LOCALES.map((l) => ({ tag: l.tag, href: `${l.prefix}/` })),
+  { tag: "x-default", href: "/" },
+];
+
+const cards = [
+  {
+    href: localePath(locale, "overview"),
+    title: t(locale, "overviewTitle"),
+    blurb: t(locale, "overviewBlurb"),
+  },
+  {
+    href: localePath(locale, "install"),
+    title: t(locale, "installTitle"),
+    blurb: t(locale, "installBlurb"),
+  },
+  {
+    href: localePath(locale, "build-from-source"),
+    title: t(locale, "buildTitle"),
+    blurb: t(locale, "buildBlurb"),
+  },
+];
+---
+
+<BaseLayout
+  title={config.title}
+  description={t(locale, "tagline")}
+  locale={locale}
+  alternates={alternates}
+>
+  <div class="flex flex-col min-h-screen">
+    <Header locale={locale} alternates={alternates} showSidebar={false} />
+    <main id="main-content" class="flex-1 mx-auto max-w-2xl w-full px-6 py-24">
+      <h1
+        class="text-foreground leading-tight"
+        style="font-size: var(--nb-h1-size); font-weight: var(--nb-h1-weight); letter-spacing: var(--nb-h1-tracking);"
+      >
+        {config.title}
+      </h1>
+      <p class="mt-2 text-[1.0625rem] text-muted-foreground leading-relaxed">
+        {t(locale, "tagline")}
+      </p>
+
+      <div class="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {cards.map((card) => (
+          <a
+            href={card.href}
+            class="block rounded-lg border border-border bg-card p-4 transition-colors hover:border-border-strong hover:bg-accent no-underline"
+          >
+            <div class="font-medium text-foreground">{card.title}</div>
+            <div class="mt-0.5 text-sm text-muted-foreground">{card.blurb}</div>
+          </a>
+        ))}
+      </div>
+    </main>
+  </div>
+</BaseLayout>

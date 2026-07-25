@@ -1,0 +1,52 @@
+---
+title: ソースからビルド
+description: ツールチェーン、プラットフォームごとの前提条件、日常的に使う開発コマンド。
+sidebar:
+  order: 4
+---
+
+リポジトリは `rust-toolchain.toml` で Rust **1.97.1** を固定しています。
+rustup が自動的に選択します：
+
+```sh
+git clone https://github.com/OcHub-team/OcHub.git
+cd OcHub
+cargo run -p ochub-app
+```
+
+## プラットフォームごとの前提条件
+
+- **macOS：** Xcode または Xcode コマンドラインツール。
+- **Windows：** Windows SDK を含む Visual Studio 2022 Build Tools。
+- **Debian/Ubuntu：** `./scripts/ci/install-linux-deps.sh` を実行。
+
+## 開発コマンド
+
+```sh
+just check
+just test
+just ci
+just qa-app       # macOS：固定パスの /tmp/OCHUB-QA.app 受け入れバンドル
+```
+
+## ローカルでインストーラーをビルド
+
+CI と同じ固定バージョンのパッケージャーをインストールします：
+
+```sh
+cargo install cargo-packager --version 0.11.8 --locked
+just package-macos
+# Linux の場合：
+just package-linux
+```
+
+## 自動リリース
+
+`Release` ワークフローは、Cargo ワークスペースのバージョンと完全に一致するタグのみを
+受け付けます。たとえばワークスペースバージョン `0.1.0` は `v0.1.0` としてリリース
+しなければなりません。macOS の両アーキテクチャに加えて Windows と Linux を並列に
+ビルドし、想定されるパッケージ一式を検証し、チェックサムと来歴情報を生成したうえで、
+1 つの GitHub Release を公開します。
+
+Homebrew tap は毎日最新リリースを確認し、必要に応じて Cask のバージョンと
+macOS 両方のチェックサムを更新します。

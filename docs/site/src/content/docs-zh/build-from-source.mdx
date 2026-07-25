@@ -1,0 +1,48 @@
+---
+title: 从源码构建
+description: 工具链、各平台前置依赖，以及日常开发命令。
+sidebar:
+  order: 4
+---
+
+仓库在 `rust-toolchain.toml` 中固定 Rust **1.97.1**，rustup 会自动选用：
+
+```sh
+git clone https://github.com/OcHub-team/OcHub.git
+cd OcHub
+cargo run -p ochub-app
+```
+
+## 平台前置依赖
+
+- **macOS：** Xcode 或 Xcode 命令行工具。
+- **Windows：** 带 Windows SDK 的 Visual Studio 2022 生成工具。
+- **Debian/Ubuntu：** 运行 `./scripts/ci/install-linux-deps.sh`。
+
+## 开发命令
+
+```sh
+just check
+just test
+just ci
+just qa-app       # macOS：固定的 /tmp/OCHUB-QA.app 验收包
+```
+
+## 本地构建安装包
+
+安装与 CI 相同的固定版本打包工具：
+
+```sh
+cargo install cargo-packager --version 0.11.8 --locked
+just package-macos
+# 或者在 Linux 上：
+just package-linux
+```
+
+## 自动化发布
+
+`Release` 工作流只接受与 Cargo 工作区版本完全一致的标签。例如工作区版本 `0.1.0`
+必须以 `v0.1.0` 发布。它会并行构建两种 macOS 架构以及 Windows 和 Linux，
+校验预期的产物集合，生成校验和与来源证明，然后发布一个 GitHub Release。
+
+Homebrew tap 每天检查最新发布，必要时更新 Cask 版本和两个 macOS 校验和。
