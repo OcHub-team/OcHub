@@ -36,14 +36,13 @@ jobs:
           rustc --version --verbose
           cargo --version --verbose
 
-      - name: Cache Cargo downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          key: cargo-downloads-linux-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-downloads-linux-
+          key: ci-quality
+          cache-bin: true
+          cache-targets: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -77,14 +76,13 @@ jobs:
           rustc --version --verbose
           cargo --version --verbose
 
-      - name: Cache Cargo downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          key: cargo-downloads-${{ matrix.cache }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-downloads-${{ matrix.cache }}-
+          key: ci-${{ matrix.cache }}
+          cache-bin: true
+          cache-targets: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check workspace
         run: cargo check --workspace --all-targets --locked

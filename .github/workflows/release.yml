@@ -90,14 +90,12 @@ jobs:
         if: matrix.kind == 'linux'
         run: ./scripts/ci/install-linux-deps.sh
 
-      - name: Cache Cargo downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-          key: cargo-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-release-${{ matrix.target }}-
+          key: release-${{ matrix.target }}
+          cache-bin: true
+          cache-targets: true
 
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
