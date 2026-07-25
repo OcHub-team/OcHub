@@ -1,7 +1,13 @@
 # Simplified Chinese — theme library and editor (the reference catalog).
 #
-# The `theme.*` area belongs to `crates/app/src/theme_view.rs`. Keys are
-# `<area>.<group>.<element>`; sort them alphabetically.
+# The `theme.*` area covers `crates/app/src/theme.rs` (the theme model, its
+# validation and its file errors) and `crates/app/src/theme_view.rs` (the page).
+# Keys are `<area>.<group>.<element>`; sort them alphabetically.
+#
+# `theme.validate.variant.*` is the only fragment here: it names the palette a
+# `theme.validate.*` sentence is about, and is substituted into `{variant}`.
+# Keep it a bare adjective ("浅色" / "light" / "ライト") so every sentence that
+# takes it still reads naturally.
 #
 # The colour-token group names ("表面", "文字与边框", …) are identities: they are
 # matched against `descriptor.group` with `==`, so the literals stay in the Rust
@@ -10,6 +16,8 @@
 # `theme.token.*` 是颜色令牌的显示名，键名直接取自 `ThemeTokenDescriptor::key`
 # （主题文件里的字段名，故为小驼峰），编辑器会在渲染时解析。
 
+"theme.builtin.ember.desc" = "象牙白与暖石墨表面，配以克制的余烬橙。"
+"theme.builtin.ochub.desc" = "克制的暖灰中性色与清晰蓝色强调。"
 "theme.card.apply" = "应用"
 "theme.card.badge.active" = "正在使用"
 "theme.card.badge.built_in" = "内置"
@@ -18,6 +26,8 @@
 "theme.card.duplicate" = "复制并编辑"
 "theme.card.edit" = "编辑"
 "theme.card.export" = "导出"
+"theme.delete.built_in" = "内置主题不能删除"
+"theme.delete.missing_path" = "用户主题缺少文件路径"
 "theme.delete.modal.body" = "确定删除用户主题「{name}」吗？主题文件将从本机移除。"
 "theme.delete.modal.cancel" = "取消"
 "theme.delete.modal.confirm" = "删除"
@@ -70,6 +80,13 @@
 "theme.error.no_editor" = "没有正在编辑的主题"
 "theme.error.opacity_integer" = "{field}需要填写整数百分比"
 "theme.error.opacity_range" = "{field}必须在 {min}–{max}% 之间"
+"theme.file.delete_failed" = "删除主题 {path} 失败"
+"theme.file.metadata_failed" = "读取 {path} 失败"
+"theme.file.missing_parent" = "主题文件缺少父目录"
+"theme.file.parse_failed" = "解析主题文件 {path} 失败"
+"theme.file.read_failed" = "读取主题文件 {path} 失败"
+"theme.file.too_large" = "主题文件超过 256 KiB"
+"theme.file.write_failed" = "写入主题文件 {path} 失败: {error}"
 "theme.import.button" = "导入主题"
 "theme.import.prompt" = "导入 OcHub 主题"
 "theme.library.section.desc" = "色板样图同时展示每套配色的浅色和深色界面。"
@@ -81,8 +98,14 @@
 "theme.mode.row.label" = "主题外观"
 "theme.mode.section.desc" = "每套配色都同时包含浅色与深色；跟随系统时会在同一套配色内自动切换。"
 "theme.mode.section.title" = "显示方式"
+"theme.name.copy" = "{name} 副本"
+"theme.name.imported" = "{name}（导入）"
 "theme.page.subtitle" = "管理、预览与分享完整的深浅配色。"
 "theme.page.title" = "主题"
+"theme.registry.dir_create_failed" = "无法创建主题目录 {path}: {error}"
+"theme.registry.dir_read_failed" = "无法读取主题目录 {path}: {error}"
+"theme.registry.duplicate_id" = "主题 ID「{id}」重复，已忽略 {path}"
+"theme.save.built_in_read_only" = "内置主题不能被覆盖，请先创建副本"
 "theme.status.applied" = "已应用 {name}"
 "theme.status.built_in_read_only" = "内置主题只读，请先复制再编辑"
 "theme.status.delete_failed" = "删除主题失败: {error}"
@@ -139,3 +162,17 @@
 "theme.token.text" = "主文字"
 "theme.token.yellow" = "警告前景"
 "theme.token.yellowSoft" = "警告背景"
+"theme.validate.author" = "主题作者不能超过 80 个字符"
+"theme.validate.contrast.accent_fill" = "{variant}配色的强调填充文字与强调填充对比度仅 {ratio}:1，至少需要 4.5:1"
+"theme.validate.contrast.accent_surface" = "{variant}配色的强调前景与卡片表面对比度仅 {ratio}:1，至少需要 4.5:1"
+"theme.validate.contrast.muted_surface" = "{variant}配色的弱文字与卡片表面对比度仅 {ratio}:1，至少需要 4.5:1"
+"theme.validate.contrast.subtext_surface" = "{variant}配色的次级文字与卡片表面对比度仅 {ratio}:1，至少需要 4.5:1"
+"theme.validate.contrast.text_bg" = "{variant}配色的主文字与窗口背景对比度仅 {ratio}:1，至少需要 4.5:1"
+"theme.validate.description" = "主题说明不能超过 400 个字符"
+"theme.validate.id" = "主题 ID 只能包含小写字母、数字和连字符，最长 64 位"
+"theme.validate.name" = "主题名称不能为空且不能超过 80 个字符"
+"theme.validate.opacity.content" = "{variant}配色的主界面不透明度必须在 {min}–{max}% 之间"
+"theme.validate.opacity.sidebar" = "{variant}配色的侧边栏不透明度必须在 {min}–{max}% 之间"
+"theme.validate.schema_version" = "不支持主题 schemaVersion {version}，当前仅支持 {supported}"
+"theme.validate.variant.dark" = "深色"
+"theme.validate.variant.light" = "浅色"

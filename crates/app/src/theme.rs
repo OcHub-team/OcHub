@@ -18,11 +18,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tempfile::NamedTempFile;
 
 use crate::i18n::{k, raw, Key};
+use crate::tf;
 
 pub const THEME_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_THEME_FAMILY: &str = "ochub";
 pub const EMBER_THEME_FAMILY: &str = "ember";
 const MAX_THEME_FILE_BYTES: u64 = 256 * 1024;
+const MAX_THEME_NAME_CHARS: usize = 80;
 pub const MIN_SURFACE_OPACITY_PERCENT: u8 = 0;
 pub const MAX_SURFACE_OPACITY_PERCENT: u8 = 100;
 pub const DEFAULT_SIDEBAR_OPACITY_PERCENT: u8 = 40;
@@ -717,7 +719,7 @@ pub fn ochub_family() -> ThemeFamily {
         id: DEFAULT_THEME_FAMILY.to_string(),
         name: "OcHub".to_string(),
         author: "OcHub".to_string(),
-        description: "克制的暖灰中性色与清晰蓝色强调。".to_string(),
+        description: raw(k::THEME_BUILTIN_OCHUB_DESC).to_string(),
         light: OCHUB_LIGHT,
         dark: OCHUB_DARK,
     }
@@ -729,7 +731,7 @@ pub fn ember_family() -> ThemeFamily {
         id: EMBER_THEME_FAMILY.to_string(),
         name: "Ember Orange".to_string(),
         author: "OcHub".to_string(),
-        description: "象牙白与暖石墨表面，配以克制的余烬橙。".to_string(),
+        description: raw(k::THEME_BUILTIN_EMBER_DESC).to_string(),
         light: EMBER_LIGHT,
         dark: EMBER_DARK,
     }
@@ -758,14 +760,15 @@ fn is_theme_file(path: &Path) -> bool {
 }
 
 fn read_theme_file(path: &Path) -> Result<ThemeFamily> {
-    let metadata = fs::metadata(path).with_context(|| format!("读取 {} 失败", path.display()))?;
+    let metadata = fs::metadata(path)
+        .with_context(|| tf!(k::THEME_FILE_METADATA_FAILED, path = path.display()))?;
     if metadata.len() > MAX_THEME_FILE_BYTES {
-        return Err(anyhow!("主题文件超过 256 KiB"));
+        return Err(anyhow!(raw(k::THEME_FILE_TOO_LARGE)));
     }
     let content = fs::read_to_string(path)
-        .with_context(|| format!("读取主题文件 {} 失败", path.display()))?;
+        .with_context(|| tf!(k::THEME_FILE_READ_FAILED, path = path.display()))?;
     let family: ThemeFamily = serde_json::from_str(&content)
-        .with_context(|| format!("解析主题文件 {} 失败", path.display()))?;
+        .with_context(|| tf!(k::THEME_FILE_PARSE_FAILED, path = path.display()))?;
     validate_family(&family)?;
     Ok(family)
 }
@@ -777,9 +780,11 @@ pub fn load_registry() -> ThemeRegistry {
     };
     let directory = themes_dir();
     if let Err(err) = fs::create_dir_all(&directory) {
-        registry
-            .diagnostics
-            .push(format!("无法创建主题目录 {}: {err}", directory.display()));
+        registry.diagnostics.push(tf!(
+            k::THEME_REGISTRY_DIR_CREATE_FAILED,
+            path = directory.display(),
+            error = err
+        ));
         return registry;
     }
 
@@ -790,9 +795,11 @@ pub fn load_registry() -> ThemeRegistry {
             .filter(|path| is_theme_file(path))
             .collect::<Vec<_>>(),
         Err(err) => {
-            registry
-                .diagnostics
-                .push(format!("无法读取主题目录 {}: {err}", directory.display()));
+            registry.diagnostics.push(tf!(
+                k::THEME_REGISTRY_DIR_READ_FAILED,
+                path = directory.display(),
+                error = err
+            ));
             return registry;
         }
     };
@@ -806,10 +813,10 @@ pub fn load_registry() -> ThemeRegistry {
                     .iter()
                     .any(|record| record.family.id == family.id)
                 {
-                    registry.diagnostics.push(format!(
-                        "主题 ID '{}' 重复，已忽略 {}",
-                        family.id,
-                        path.display()
+                    registry.diagnostics.push(tf!(
+                        k::THEME_REGISTRY_DUPLICATE_ID,
+                        id = family.id,
+                        path = path.display()
                     ));
                 } else {
                     registry.themes.push(ThemeRecord {
@@ -865,34 +872,64 @@ pub fn contrast_ratio(foreground: ThemeColor, background: ThemeColor) -> f32 {
     (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
 }
 
-fn validate_palette(label: &str, palette: &Theme) -> Result<()> {
-    for (name, value) in [
-        ("侧边栏不透明度", palette.effects.sidebar_opacity),
-        ("主界面不透明度", palette.effects.content_opacity),
+/// Check one palette's opacities and text contrast.
+///
+/// `variant` is the key naming the palette this message is about — light or
+/// dark. Every message is a whole sentence in the catalog rather than a stem
+/// with a field label glued into it: the Chinese original joined the two with
+/// 的, which has no equivalent that survives substitution in English or
+/// Japanese.
+fn validate_palette(variant: Key, palette: &Theme) -> Result<()> {
+    for (message, value) in [
+        (
+            k::THEME_VALIDATE_OPACITY_SIDEBAR,
+            palette.effects.sidebar_opacity,
+        ),
+        (
+            k::THEME_VALIDATE_OPACITY_CONTENT,
+            palette.effects.content_opacity,
+        ),
     ] {
         if !(MIN_SURFACE_OPACITY_PERCENT..=MAX_SURFACE_OPACITY_PERCENT).contains(&value) {
-            return Err(anyhow!(
-                "{label}的{name}必须在 {MIN_SURFACE_OPACITY_PERCENT}–{MAX_SURFACE_OPACITY_PERCENT}% 之间"
-            ));
+            return Err(anyhow!(tf!(
+                message,
+                variant = raw(variant),
+                min = MIN_SURFACE_OPACITY_PERCENT,
+                max = MAX_SURFACE_OPACITY_PERCENT
+            )));
         }
     }
 
-    for (pair, foreground, background) in [
-        ("主文字/背景", palette.text, palette.bg),
-        ("次级文字/表面", palette.subtext, palette.surface),
-        ("弱文字/表面", palette.muted, palette.surface),
-        ("强调文字/表面", palette.accent, palette.surface),
+    for (message, foreground, background) in [
+        (k::THEME_VALIDATE_CONTRAST_TEXT_BG, palette.text, palette.bg),
         (
-            "强调按钮文字/填充",
+            k::THEME_VALIDATE_CONTRAST_SUBTEXT_SURFACE,
+            palette.subtext,
+            palette.surface,
+        ),
+        (
+            k::THEME_VALIDATE_CONTRAST_MUTED_SURFACE,
+            palette.muted,
+            palette.surface,
+        ),
+        (
+            k::THEME_VALIDATE_CONTRAST_ACCENT_SURFACE,
+            palette.accent,
+            palette.surface,
+        ),
+        (
+            k::THEME_VALIDATE_CONTRAST_ACCENT_FILL,
             palette.accent_text,
             palette.accent_fill,
         ),
     ] {
         let ratio = contrast_ratio(foreground, background);
         if ratio < 4.5 {
-            return Err(anyhow!(
-                "{label} 的{pair}对比度仅 {ratio:.2}:1，至少需要 4.5:1"
-            ));
+            return Err(anyhow!(tf!(
+                message,
+                variant = raw(variant),
+                ratio = format!("{ratio:.2}")
+            )));
         }
     }
     Ok(())
@@ -900,29 +937,27 @@ fn validate_palette(label: &str, palette: &Theme) -> Result<()> {
 
 pub fn validate_family(family: &ThemeFamily) -> Result<()> {
     if family.schema_version != THEME_SCHEMA_VERSION {
-        return Err(anyhow!(
-            "不支持主题 schemaVersion {}，当前仅支持 {}",
-            family.schema_version,
-            THEME_SCHEMA_VERSION
-        ));
+        return Err(anyhow!(tf!(
+            k::THEME_VALIDATE_SCHEMA_VERSION,
+            version = family.schema_version,
+            supported = THEME_SCHEMA_VERSION
+        )));
     }
     if !valid_id(&family.id) {
-        return Err(anyhow!(
-            "主题 ID 只能包含小写字母、数字和连字符，最长 64 位"
-        ));
+        return Err(anyhow!(raw(k::THEME_VALIDATE_ID)));
     }
     let name = family.name.trim();
-    if name.is_empty() || name.chars().count() > 80 {
-        return Err(anyhow!("主题名称不能为空且不能超过 80 个字符"));
+    if name.is_empty() || name.chars().count() > MAX_THEME_NAME_CHARS {
+        return Err(anyhow!(raw(k::THEME_VALIDATE_NAME)));
     }
     if family.author.chars().count() > 80 {
-        return Err(anyhow!("主题作者不能超过 80 个字符"));
+        return Err(anyhow!(raw(k::THEME_VALIDATE_AUTHOR)));
     }
     if family.description.chars().count() > 400 {
-        return Err(anyhow!("主题说明不能超过 400 个字符"));
+        return Err(anyhow!(raw(k::THEME_VALIDATE_DESCRIPTION)));
     }
-    validate_palette("浅色配色", &family.light)?;
-    validate_palette("深色配色", &family.dark)?;
+    validate_palette(k::THEME_VALIDATE_VARIANT_LIGHT, &family.light)?;
+    validate_palette(k::THEME_VALIDATE_VARIANT_DARK, &family.dark)?;
     Ok(())
 }
 
@@ -951,17 +986,37 @@ fn unique_id(base: &str, registry: &ThemeRegistry) -> String {
     }
 }
 
+/// A theme name built from a suffix template, kept within the length limit.
+///
+/// How much room the suffix needs depends on the locale, so measure the
+/// template with an empty name instead of assuming a length; truncating the
+/// finished string would cut off the suffix rather than the name.
+fn suffixed_name(template: Key, name: &str) -> String {
+    let reserved = tf!(template, name = "").chars().count();
+    let stem: String = name
+        .chars()
+        .take(MAX_THEME_NAME_CHARS.saturating_sub(reserved))
+        .collect();
+    tf!(template, name = stem)
+}
+
 fn write_family(path: &Path, family: &ThemeFamily) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| anyhow!("主题文件缺少父目录"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!(raw(k::THEME_FILE_MISSING_PARENT)))?;
     fs::create_dir_all(parent)?;
     let serialized = serde_json::to_string_pretty(family)?;
     let mut temporary = NamedTempFile::new_in(parent)?;
     temporary.write_all(serialized.as_bytes())?;
     temporary.flush()?;
     temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .map_err(|err| anyhow!("写入主题文件 {} 失败: {}", path.display(), err.error))?;
+    temporary.persist(path).map_err(|err| {
+        anyhow!(tf!(
+            k::THEME_FILE_WRITE_FAILED,
+            path = path.display(),
+            error = err.error
+        ))
+    })?;
     Ok(())
 }
 
@@ -971,7 +1026,7 @@ pub fn save_user_family(family: &ThemeFamily) -> Result<PathBuf> {
         family.id.as_str(),
         DEFAULT_THEME_FAMILY | EMBER_THEME_FAMILY
     ) {
-        return Err(anyhow!("内置主题不能被覆盖，请先创建副本"));
+        return Err(anyhow!(raw(k::THEME_SAVE_BUILT_IN_READ_ONLY)));
     }
     let path = themes_dir().join(format!("{}.ochub-theme.json", family.id));
     write_family(&path, family)?;
@@ -982,7 +1037,7 @@ pub fn duplicate_family(source: &ThemeFamily) -> Result<ThemeFamily> {
     let registry = load_registry();
     let mut family = source.clone();
     family.id = unique_id(&format!("{}-copy", source.id), &registry);
-    family.name = format!("{} 副本", source.name.chars().take(77).collect::<String>());
+    family.name = suffixed_name(k::THEME_NAME_COPY, &source.name);
     family.author.clear();
     validate_family(&family)?;
     Ok(family)
@@ -997,7 +1052,7 @@ pub fn import_family(path: &Path) -> Result<ThemeFamily> {
         .any(|record| record.family.id == family.id)
     {
         family.id = unique_id(&format!("{}-imported", family.id), &registry);
-        family.name = format!("{}（导入）", family.name);
+        family.name = suffixed_name(k::THEME_NAME_IMPORTED, &family.name);
     }
     save_user_family(&family)?;
     Ok(family)
@@ -1010,13 +1065,13 @@ pub fn export_family(family: &ThemeFamily, path: &Path) -> Result<()> {
 
 pub fn delete_user_family(record: &ThemeRecord) -> Result<()> {
     if record.built_in {
-        return Err(anyhow!("内置主题不能删除"));
+        return Err(anyhow!(raw(k::THEME_DELETE_BUILT_IN)));
     }
     let path = record
         .path
         .as_ref()
-        .ok_or_else(|| anyhow!("用户主题缺少文件路径"))?;
-    fs::remove_file(path).with_context(|| format!("删除主题 {} 失败", path.display()))
+        .ok_or_else(|| anyhow!(raw(k::THEME_DELETE_MISSING_PATH)))?;
+    fs::remove_file(path).with_context(|| tf!(k::THEME_FILE_DELETE_FAILED, path = path.display()))
 }
 
 static CURRENT: RwLock<Theme> = RwLock::new(OCHUB_LIGHT);
@@ -1369,13 +1424,14 @@ mod tests {
 
     #[test]
     fn every_builtin_variant_meets_text_contrast() {
-        for (name, palette) in [
-            ("ochub light", OCHUB_LIGHT),
-            ("ochub dark", OCHUB_DARK),
-            ("ember light", EMBER_LIGHT),
-            ("ember dark", EMBER_DARK),
+        for (name, variant, palette) in [
+            ("ochub light", k::THEME_VALIDATE_VARIANT_LIGHT, OCHUB_LIGHT),
+            ("ochub dark", k::THEME_VALIDATE_VARIANT_DARK, OCHUB_DARK),
+            ("ember light", k::THEME_VALIDATE_VARIANT_LIGHT, EMBER_LIGHT),
+            ("ember dark", k::THEME_VALIDATE_VARIANT_DARK, EMBER_DARK),
         ] {
-            validate_palette(name, &palette).expect("palette contrast");
+            validate_palette(variant, &palette)
+                .unwrap_or_else(|err| panic!("{name} palette contrast: {err}"));
         }
     }
 

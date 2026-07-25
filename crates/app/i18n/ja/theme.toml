@@ -3,6 +3,11 @@
 # Checked against zh-Hans/theme.toml at build time: every key must be present
 # and use the same {placeholders}. Keys are sorted alphabetically.
 #
+# `theme.validate.variant.*` is the only fragment here: it names the palette a
+# `theme.validate.*` sentence is about, and is substituted into `{variant}`.
+# 「ライト」「ダーク」のような短い語のままにしておくと、どの文に入れても自然に
+# 読めます。
+#
 # `theme.error.field_qualified` names the field an editor error came from —
 # 「ライト · サイドバーの不透明度」. It is a separator, not a sentence, so it
 # reads the same in every locale; it lives here so the separator can change
@@ -11,6 +16,8 @@
 # `theme.token.*` はカラートークンの表示名です。キーは `ThemeTokenDescriptor::key`
 # （テーマファイルのフィールド名。そのため camelCase）をそのまま使います。
 
+"theme.builtin.ember.desc" = "アイボリーと暖かみのあるグラファイトのサーフェスに、控えめなエンバーオレンジを合わせています。"
+"theme.builtin.ochub.desc" = "落ち着いた暖かみのあるグレーのニュートラルカラーと、澄んだブルーのアクセント。"
 "theme.card.apply" = "適用"
 "theme.card.badge.active" = "使用中"
 "theme.card.badge.built_in" = "組み込み"
@@ -19,6 +26,8 @@
 "theme.card.duplicate" = "複製して編集"
 "theme.card.edit" = "編集"
 "theme.card.export" = "エクスポート"
+"theme.delete.built_in" = "組み込みテーマは削除できません"
+"theme.delete.missing_path" = "このユーザーテーマにはファイルパスがありません"
 "theme.delete.modal.body" = "カスタムテーマ「{name}」を削除しますか？テーマファイルはこの端末から削除されます。"
 "theme.delete.modal.cancel" = "キャンセル"
 "theme.delete.modal.confirm" = "削除"
@@ -71,6 +80,13 @@
 "theme.error.no_editor" = "編集中のテーマがありません"
 "theme.error.opacity_integer" = "{field}には整数のパーセント値を入力してください"
 "theme.error.opacity_range" = "{field}は {min}–{max}% の範囲で指定してください"
+"theme.file.delete_failed" = "テーマファイル {path} を削除できませんでした"
+"theme.file.metadata_failed" = "{path} を読み込めませんでした"
+"theme.file.missing_parent" = "テーマファイルの親フォルダがありません"
+"theme.file.parse_failed" = "テーマファイル {path} を解析できませんでした"
+"theme.file.read_failed" = "テーマファイル {path} を読み込めませんでした"
+"theme.file.too_large" = "テーマファイルが 256 KiB を超えています"
+"theme.file.write_failed" = "テーマファイル {path} を書き込めませんでした: {error}"
 "theme.import.button" = "テーマをインポート"
 "theme.import.prompt" = "OcHub テーマをインポート"
 "theme.library.section.desc" = "サンプル画像では、同じテーマのライトとダークの画面を並べて確認できます。"
@@ -82,8 +98,14 @@
 "theme.mode.row.label" = "外観"
 "theme.mode.section.desc" = "どのテーマにもライトとダークの配色が含まれます。システムに合わせる場合は、同じテーマの中で自動的に切り替わります。"
 "theme.mode.section.title" = "表示方法"
+"theme.name.copy" = "{name} のコピー"
+"theme.name.imported" = "{name}（インポート）"
 "theme.page.subtitle" = "ライトとダークがそろった配色を管理、プレビュー、共有できます。"
 "theme.page.title" = "テーマ"
+"theme.registry.dir_create_failed" = "テーマフォルダ {path} を作成できませんでした: {error}"
+"theme.registry.dir_read_failed" = "テーマフォルダ {path} を読み込めませんでした: {error}"
+"theme.registry.duplicate_id" = "テーマ ID「{id}」が重複しているため、{path} を無視しました"
+"theme.save.built_in_read_only" = "組み込みテーマは上書きできません。先に複製してください"
 "theme.status.applied" = "{name} を適用しました"
 "theme.status.built_in_read_only" = "組み込みテーマは読み取り専用です。複製してから編集してください"
 "theme.status.delete_failed" = "テーマを削除できませんでした: {error}"
@@ -140,3 +162,17 @@
 "theme.token.text" = "メインの文字"
 "theme.token.yellow" = "警告の前景"
 "theme.token.yellowSoft" = "警告の背景"
+"theme.validate.author" = "テーマの作者は 80 文字以内で入力してください"
+"theme.validate.contrast.accent_fill" = "{variant}配色では、アクセント塗りつぶし上の文字と塗りつぶしのコントラスト比が {ratio}:1 しかありません。4.5:1 以上が必要です"
+"theme.validate.contrast.accent_surface" = "{variant}配色では、アクセントの前景とカードのサーフェスのコントラスト比が {ratio}:1 しかありません。4.5:1 以上が必要です"
+"theme.validate.contrast.muted_surface" = "{variant}配色では、控えめな文字とカードのサーフェスのコントラスト比が {ratio}:1 しかありません。4.5:1 以上が必要です"
+"theme.validate.contrast.subtext_surface" = "{variant}配色では、サブの文字とカードのサーフェスのコントラスト比が {ratio}:1 しかありません。4.5:1 以上が必要です"
+"theme.validate.contrast.text_bg" = "{variant}配色では、メインの文字とウィンドウの背景のコントラスト比が {ratio}:1 しかありません。4.5:1 以上が必要です"
+"theme.validate.description" = "テーマの説明は 400 文字以内で入力してください"
+"theme.validate.id" = "テーマ ID に使えるのは英小文字、数字、ハイフンだけです。64 文字以内で入力してください"
+"theme.validate.name" = "テーマ名は必須です。80 文字以内で入力してください"
+"theme.validate.opacity.content" = "{variant}配色のメイン画面の不透明度は {min}–{max}% の範囲で指定してください"
+"theme.validate.opacity.sidebar" = "{variant}配色のサイドバーの不透明度は {min}–{max}% の範囲で指定してください"
+"theme.validate.schema_version" = "テーマの schemaVersion {version} には対応していません。対応しているのは {supported} のみです"
+"theme.validate.variant.dark" = "ダーク"
+"theme.validate.variant.light" = "ライト"
