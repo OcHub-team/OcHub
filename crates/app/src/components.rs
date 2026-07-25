@@ -11,9 +11,11 @@ use gpui::{
     FontWeight, MouseButton, Rgba, ScrollHandle, SharedString, Window,
 };
 
+use crate::i18n::{k, raw, t, Key};
 use crate::icons::{icon, IconName};
 use crate::scrollbar::VerticalScrollbar;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 // ── Buttons ────────────────────────────────────────────────────────────────
@@ -269,7 +271,11 @@ pub fn segmented(
         let mut item = div()
             .id(SharedString::from(format!("{id}-{ix}")))
             .role(gpui::Role::Button)
-            .aria_label(SharedString::from(format!("{id} 选项 {option}")))
+            .aria_label(SharedString::from(tf!(
+                k::COMMON_SEGMENTED_OPTION_ARIA,
+                id = id,
+                option = option
+            )))
             .aria_selected(is_selected)
             .flex_none()
             .max_w_full()
@@ -723,7 +729,15 @@ pub fn datetime_picker(
         first_of_month - Duration::days(first_of_month.weekday().num_days_from_sunday() as i64);
 
     let mut weekday_header = div().grid().grid_cols(7).gap(px(2.)).w_full();
-    for weekday in ["日", "一", "二", "三", "四", "五", "六"] {
+    for weekday in [
+        t(k::COMMON_CALENDAR_WEEKDAY_SUN),
+        t(k::COMMON_CALENDAR_WEEKDAY_MON),
+        t(k::COMMON_CALENDAR_WEEKDAY_TUE),
+        t(k::COMMON_CALENDAR_WEEKDAY_WED),
+        t(k::COMMON_CALENDAR_WEEKDAY_THU),
+        t(k::COMMON_CALENDAR_WEEKDAY_FRI),
+        t(k::COMMON_CALENDAR_WEEKDAY_SAT),
+    ] {
         weekday_header = weekday_header.child(
             div()
                 .h(px(24.))
@@ -778,8 +792,10 @@ pub fn datetime_picker(
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::text())
-                        .child(SharedString::from(format!(
-                            "{picker_year}年{picker_month:02}月"
+                        .child(SharedString::from(tf!(
+                            k::COMMON_CALENDAR_MONTH_TITLE,
+                            year = picker_year,
+                            month = month_label(picker_month)
                         ))),
                 )
                 .child(
@@ -791,7 +807,7 @@ pub fn datetime_picker(
                         .child(
                             calendar_nav_button(
                                 ElementId::Name(format!("{id}-previous-month").into()),
-                                "上个月",
+                                raw(k::COMMON_CALENDAR_PREVIOUS_MONTH_ARIA),
                                 IconName::ChevronLeft,
                             )
                             .on_click(move |_event, window, cx| previous_month(-1, window, cx)),
@@ -799,7 +815,7 @@ pub fn datetime_picker(
                         .child(
                             calendar_nav_button(
                                 ElementId::Name(format!("{id}-next-month").into()),
-                                "下个月",
+                                raw(k::COMMON_CALENDAR_NEXT_MONTH_ARIA),
                                 IconName::ChevronRight,
                             )
                             .on_click(move |_event, window, cx| next_month(1, window, cx)),
@@ -819,12 +835,18 @@ pub fn datetime_picker(
                 .items_center()
                 .justify_between()
                 .child(
-                    calendar_footer_button(ElementId::Name(format!("{id}-clear").into()), "清除")
-                        .on_click(move |_event, window, cx| clear(window, cx)),
+                    calendar_footer_button(
+                        ElementId::Name(format!("{id}-clear").into()),
+                        t(k::COMMON_CALENDAR_CLEAR_LABEL),
+                    )
+                    .on_click(move |_event, window, cx| clear(window, cx)),
                 )
                 .child(
-                    calendar_footer_button(ElementId::Name(format!("{id}-today").into()), "今天")
-                        .on_click(move |_event, window, cx| today_callback(window, cx)),
+                    calendar_footer_button(
+                        ElementId::Name(format!("{id}-today").into()),
+                        t(k::COMMON_CALENDAR_TODAY_LABEL),
+                    )
+                    .on_click(move |_event, window, cx| today_callback(window, cx)),
                 ),
         );
 
@@ -888,7 +910,7 @@ pub fn datetime_picker(
                 .flex()
                 .flex_col()
                 .items_center()
-                .child(time_column_label("时"))
+                .child(time_column_label(raw(k::COMMON_CALENDAR_HOUR_LABEL)))
                 .child(
                     div()
                         .relative()
@@ -909,7 +931,7 @@ pub fn datetime_picker(
                 .flex()
                 .flex_col()
                 .items_center()
-                .child(time_column_label("分"))
+                .child(time_column_label(raw(k::COMMON_CALENDAR_MINUTE_LABEL)))
                 .child(
                     div()
                         .relative()
@@ -938,6 +960,31 @@ pub fn datetime_picker(
         .child(calendar)
         .child(div().w(px(1.)).h_full().bg(theme::border()))
         .child(time_selector)
+}
+
+/// The month as a calendar header spells it: a name in English, digits in
+/// Chinese and Japanese. It is the `{month}` of `common.calendar.month.title`,
+/// so the label is translated separately from the order it sits in.
+fn month_label(month: u32) -> String {
+    const NAMES: [Key; 12] = [
+        k::COMMON_CALENDAR_MONTH_NAME_01,
+        k::COMMON_CALENDAR_MONTH_NAME_02,
+        k::COMMON_CALENDAR_MONTH_NAME_03,
+        k::COMMON_CALENDAR_MONTH_NAME_04,
+        k::COMMON_CALENDAR_MONTH_NAME_05,
+        k::COMMON_CALENDAR_MONTH_NAME_06,
+        k::COMMON_CALENDAR_MONTH_NAME_07,
+        k::COMMON_CALENDAR_MONTH_NAME_08,
+        k::COMMON_CALENDAR_MONTH_NAME_09,
+        k::COMMON_CALENDAR_MONTH_NAME_10,
+        k::COMMON_CALENDAR_MONTH_NAME_11,
+        k::COMMON_CALENDAR_MONTH_NAME_12,
+    ];
+    match NAMES.get(month.wrapping_sub(1) as usize) {
+        Some(key) => raw(*key).to_string(),
+        // Unreachable for a real date; keeps the pre-catalog `{month:02}`.
+        None => format!("{month:02}"),
+    }
 }
 
 fn calendar_nav_button(
@@ -971,11 +1018,11 @@ fn calendar_day_button(
     let mut button = div()
         .id(id)
         .role(gpui::Role::Button)
-        .aria_label(SharedString::from(format!(
-            "{}年{}月{}日",
-            date.year(),
-            date.month(),
-            day
+        .aria_label(SharedString::from(tf!(
+            k::COMMON_CALENDAR_DAY_ARIA,
+            year = date.year(),
+            month = date.month(),
+            day = day
         )))
         .aria_selected(selected)
         .w(px(28.))
@@ -1145,7 +1192,7 @@ pub fn pagination_bar(
         .py_2()
         .child(pagination_nav_button(
             ElementId::Name(format!("{id}-previous").into()),
-            "上一页",
+            raw(k::COMMON_PAGINATION_PREVIOUS_ARIA),
             IconName::ChevronLeft,
             page == 0,
             {
@@ -1167,7 +1214,10 @@ pub fn pagination_bar(
         let mut cell = div()
             .id(ElementId::Name(format!("{id}-p{number}").into()))
             .role(gpui::Role::Button)
-            .aria_label(SharedString::from(format!("第 {} 页", number + 1)))
+            .aria_label(SharedString::from(tf!(
+                k::COMMON_PAGINATION_PAGE_ARIA,
+                page = number + 1
+            )))
             .aria_selected(is_current)
             .min_w(px(28.))
             .h(px(28.))
@@ -1195,7 +1245,7 @@ pub fn pagination_bar(
 
     bar = bar.child(pagination_nav_button(
         ElementId::Name(format!("{id}-next").into()),
-        "下一页",
+        raw(k::COMMON_PAGINATION_NEXT_ARIA),
         IconName::ChevronRight,
         page == last,
         {
@@ -1220,7 +1270,10 @@ pub fn pagination_bar(
         let option = div()
             .id(ElementId::Name(format!("{id}-page-size-{size}").into()))
             .role(gpui::Role::Button)
-            .aria_label(SharedString::from(format!("每页 {size} 条")))
+            .aria_label(SharedString::from(tf!(
+                k::COMMON_PAGINATION_PAGE_SIZE_OPTION_ARIA,
+                size = size
+            )))
             .aria_selected(selected)
             .h(px(30.))
             .px_2()
@@ -1237,7 +1290,10 @@ pub fn pagination_bar(
             })
             .when(selected, |option| option.bg(theme::accent_soft()))
             .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-            .child(SharedString::from(format!("{size} 条/页")))
+            .child(SharedString::from(tf!(
+                k::COMMON_PAGINATION_PAGE_SIZE_OPTION,
+                size = size
+            )))
             .when(selected, |option| {
                 option.child(icon(IconName::Check, theme::accent(), 12.))
             })
@@ -1255,7 +1311,7 @@ pub fn pagination_bar(
             div()
                 .id(ElementId::Name(format!("{id}-page-size").into()))
                 .role(gpui::Role::Button)
-                .aria_label("选择每页条数")
+                .aria_label(t(k::COMMON_PAGINATION_PAGE_SIZE_TRIGGER_ARIA))
                 .aria_expanded(page_size_open)
                 .h(px(28.))
                 .px_2()
@@ -1278,7 +1334,10 @@ pub fn pagination_bar(
                         .border_color(theme::accent())
                         .text_color(theme::text())
                 })
-                .child(SharedString::from(format!("{page_size} 条/页")))
+                .child(SharedString::from(tf!(
+                    k::COMMON_PAGINATION_PAGE_SIZE_OPTION,
+                    size = page_size
+                )))
                 .child(icon(IconName::ChevronDown, theme::muted(), 11.))
                 .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                     toggle_page_size(window, cx)
@@ -1297,6 +1356,10 @@ pub fn pagination_bar(
             )
         });
 
+    // The jump row brackets the input: prefix + [x] + suffix. English wants
+    // nothing after the box, and a catalog entry can never be empty, so a blank
+    // suffix means "render no trailing label" rather than a stray gap.
+    let jump_suffix = raw(k::COMMON_PAGINATION_JUMP_SUFFIX);
     bar.child(
         div()
             .flex()
@@ -1304,9 +1367,21 @@ pub fn pagination_bar(
             .items_center()
             .gap_1()
             .ml_2()
-            .child(div().text_color(theme::subtext()).text_sm().child("跳至"))
+            .child(
+                div()
+                    .text_color(theme::subtext())
+                    .text_sm()
+                    .child(t(k::COMMON_PAGINATION_JUMP_PREFIX)),
+            )
             .child(div().w(px(48.)).flex_none().child(page_input.clone()))
-            .child(div().text_color(theme::subtext()).text_sm().child("页")),
+            .when(!jump_suffix.trim().is_empty(), |row| {
+                row.child(
+                    div()
+                        .text_color(theme::subtext())
+                        .text_sm()
+                        .child(t(k::COMMON_PAGINATION_JUMP_SUFFIX)),
+                )
+            }),
     )
     .child(size_control)
     .child(div().flex_1())
@@ -1315,7 +1390,10 @@ pub fn pagination_bar(
             div()
                 .text_color(theme::muted())
                 .text_sm()
-                .child(SharedString::from(format!("共 {total} 条"))),
+                .child(SharedString::from(tf!(
+                    k::COMMON_PAGINATION_TOTAL_LABEL,
+                    total = total
+                ))),
         )
     })
 }

@@ -1,0 +1,51 @@
+# English — shared component strings.
+#
+# Checked against zh-Hans/common.toml at build time: every key must be present
+# and use the same {placeholders}. Keys are sorted alphabetically.
+#
+# `common.calendar.month.name_NN` is the `{month}` of
+# `common.calendar.month.title`: English names its months, so the header reads
+# "July 2026" where Chinese and Japanese number it.
+#
+# `common.pagination.jump.*` brackets the page input — the row reads
+# prefix + [input] + suffix. English wants nothing after the box, and the
+# catalog forbids an empty string, so the suffix is a lone space and the bar
+# drops the label when it is blank.
+
+"common.calendar.clear.label" = "Clear"
+"common.calendar.day.aria" = "{year}-{month}-{day}"
+"common.calendar.hour.label" = "Hour"
+"common.calendar.minute.label" = "Minute"
+"common.calendar.month.name_01" = "January"
+"common.calendar.month.name_02" = "February"
+"common.calendar.month.name_03" = "March"
+"common.calendar.month.name_04" = "April"
+"common.calendar.month.name_05" = "May"
+"common.calendar.month.name_06" = "June"
+"common.calendar.month.name_07" = "July"
+"common.calendar.month.name_08" = "August"
+"common.calendar.month.name_09" = "September"
+"common.calendar.month.name_10" = "October"
+"common.calendar.month.name_11" = "November"
+"common.calendar.month.name_12" = "December"
+"common.calendar.month.title" = "{month} {year}"
+"common.calendar.next_month.aria" = "Next month"
+"common.calendar.previous_month.aria" = "Previous month"
+"common.calendar.today.label" = "Today"
+"common.calendar.weekday.fri" = "Fri"
+"common.calendar.weekday.mon" = "Mon"
+"common.calendar.weekday.sat" = "Sat"
+"common.calendar.weekday.sun" = "Sun"
+"common.calendar.weekday.thu" = "Thu"
+"common.calendar.weekday.tue" = "Tue"
+"common.calendar.weekday.wed" = "Wed"
+"common.pagination.jump.prefix" = "Go to page"
+"common.pagination.jump.suffix" = " "
+"common.pagination.next.aria" = "Next page"
+"common.pagination.page.aria" = "Page {page}"
+"common.pagination.page_size.option" = "{size} / page"
+"common.pagination.page_size.option_aria" = "{size} per page"
+"common.pagination.page_size.trigger_aria" = "Items per page"
+"common.pagination.previous.aria" = "Previous page"
+"common.pagination.total.label" = "{total} total"
+"common.segmented.option.aria" = "{id} option {option}"

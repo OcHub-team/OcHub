@@ -21,6 +21,7 @@ use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsVi
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::gallery_view::GalleryView;
 use crate::gateway_view::GatewayView;
+use crate::i18n::{k, raw, t};
 use crate::icons::{icon, IconName};
 use crate::layout;
 use crate::mcp_view::McpView;
@@ -31,6 +32,7 @@ use crate::settings_view::SettingsView;
 use crate::shell_menu;
 use crate::shortcuts::{Cancel, CloseWindow, Save};
 use crate::skills_view::SkillsView;
+use crate::tf;
 use crate::theme;
 use crate::theme_view::ThemeView;
 use crate::tools_view::ToolsView;
@@ -388,7 +390,7 @@ impl Render for ProviderDragTooltip {
             .text_color(theme::subtext())
             .text_xs()
             .shadow_xs()
-            .child("拖动排序")
+            .child(t(k::SHELL_CARD_DRAG_TOOLTIP))
     }
 }
 
@@ -813,12 +815,14 @@ impl AppRoot {
             NotificationLevel::Success => self.notify_success(title, cx),
             NotificationLevel::Warning => self.notify_warning(
                 title,
-                message.unwrap_or_else(|| "操作完成，但需要检查结果。".to_string()),
+                message.unwrap_or_else(|| raw(k::SHELL_NOTICE_WARNING_FALLBACK).to_string()),
                 cx,
             ),
-            NotificationLevel::Error => {
-                self.notify_error(title, message.unwrap_or_else(|| "未知错误".to_string()), cx)
-            }
+            NotificationLevel::Error => self.notify_error(
+                title,
+                message.unwrap_or_else(|| raw(k::SHELL_NOTICE_UNKNOWN_ERROR).to_string()),
+                cx,
+            ),
         }
         cx.notify();
     }
@@ -851,7 +855,7 @@ impl AppRoot {
             Ok(map) => self.providers = map.into_values().collect(),
             Err(err) => {
                 self.providers = Vec::new();
-                self.notify_error("加载供应商失败", err.to_string(), cx);
+                self.notify_error(t(k::SHELL_PROVIDER_LOAD_FAILED), err.to_string(), cx);
             }
         }
         self.current = ProviderService::current(&self.app, self.selected_app).unwrap_or_default();
@@ -957,17 +961,17 @@ impl AppRoot {
         match ProviderService::switch(&self.app, self.selected_app, &id) {
             Ok(result) => {
                 if result.warnings.is_empty() {
-                    self.notify_success(format!("已切换到「{name}」"), cx);
+                    self.notify_success(tf!(k::SHELL_PROVIDER_SWITCHED, name = name), cx);
                 } else {
                     self.notify_warning(
-                        format!("已切换到「{name}」"),
+                        tf!(k::SHELL_PROVIDER_SWITCHED, name = name),
                         Self::warnings_summary(&result.warnings),
                         cx,
                     );
                 }
             }
             Err(err) => {
-                self.notify_error("切换供应商失败", err.to_string(), cx);
+                self.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), err.to_string(), cx);
             }
         }
         self.reload(cx);
@@ -992,7 +996,11 @@ impl AppRoot {
     /// messages, so users never see a bare number with no detail.
     fn warnings_summary(warnings: &[String]) -> String {
         let shown: Vec<&str> = warnings.iter().take(3).map(String::as_str).collect();
-        let mut text = format!("{} 条警告：{}", warnings.len(), shown.join("；"));
+        let mut text = tf!(
+            k::SHELL_WARNINGS_SUMMARY,
+            count = warnings.len(),
+            details = shown.join(raw(k::SHELL_WARNINGS_SEPARATOR)),
+        );
         if warnings.len() > 3 {
             text.push('…');
         }
@@ -1002,8 +1010,8 @@ impl AppRoot {
     fn connect_local_gateway(&mut self, cx: &mut Context<Self>) {
         if self.bound_station_route().is_none() {
             self.notify_warning(
-                "请先应用一个转发站",
-                "进入“转发站”页面，选择一个配置并应用到当前 CLI。",
+                t(k::SHELL_GATEWAY_NEEDS_STATION_TITLE),
+                t(k::SHELL_GATEWAY_NEEDS_STATION_MESSAGE),
                 cx,
             );
             self.select_section(Section::Gateway, cx);
@@ -1012,18 +1020,18 @@ impl AppRoot {
         let mut config = match self.app.db.get_gateway_config() {
             Ok(config) => config,
             Err(err) => {
-                self.notify_error("读取转发站设置失败", err.to_string(), cx);
+                self.notify_error(t(k::SHELL_GATEWAY_CONFIG_READ_FAILED), err.to_string(), cx);
                 return;
             }
         };
         if !config.enabled {
             config.enabled = true;
             if let Err(err) = self.app.db.set_gateway_config(&config) {
-                self.notify_error("启动转发服务失败", err.to_string(), cx);
+                self.notify_error(t(k::SHELL_GATEWAY_START_FAILED), err.to_string(), cx);
                 return;
             }
         }
-        self.notify_info("正在切换到转发站模式", cx);
+        self.notify_info(t(k::SHELL_GATEWAY_SWITCHING), cx);
         let app = self.app.clone();
         let app_type = self.selected_app;
         cx.spawn(async move |this, cx| {
@@ -1044,17 +1052,17 @@ impl AppRoot {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(result) if result.warnings.is_empty() => {
-                        this.notify_success("已切换到转发站模式", cx);
+                        this.notify_success(t(k::SHELL_GATEWAY_SWITCHED), cx);
                     }
                     Ok(result) => {
                         this.notify_warning(
-                            "已切换到转发站模式",
+                            t(k::SHELL_GATEWAY_SWITCHED),
                             Self::warnings_summary(&result.warnings),
                             cx,
                         );
                     }
                     Err(err) => {
-                        this.notify_error("切换到转发站模式失败", err.to_string(), cx);
+                        this.notify_error(t(k::SHELL_GATEWAY_SWITCH_FAILED), err.to_string(), cx);
                     }
                 }
                 this.reload(cx);
@@ -1075,10 +1083,14 @@ impl AppRoot {
                     .find(|route| route.id == route_id)
                     .map(|route| route.name.clone())
                     .unwrap_or(route_id);
-                self.notify_success(format!("已切换转发站为「{route_name}」"), cx);
+                self.notify_success(tf!(k::SHELL_GATEWAY_ROUTES_SWITCHED, name = route_name), cx);
             }
             Err(err) => {
-                self.notify_error("切换转发站失败", err.to_string(), cx);
+                self.notify_error(
+                    t(k::SHELL_GATEWAY_ROUTES_SWITCH_FAILED),
+                    err.to_string(),
+                    cx,
+                );
             }
         }
         self.reload(cx);
@@ -1088,9 +1100,13 @@ impl AppRoot {
     fn do_remove_from_live(&mut self, id: String, cx: &mut Context<Self>) {
         match ProviderService::remove_from_live_config(&self.app, self.selected_app, &id) {
             Ok(()) => {
-                self.notify_success("已从工具配置移除", cx);
+                self.notify_success(t(k::SHELL_PROVIDER_REMOVED_FROM_TOOL), cx);
             }
-            Err(err) => self.notify_error("从工具配置移除失败", err.to_string(), cx),
+            Err(err) => self.notify_error(
+                t(k::SHELL_PROVIDER_REMOVE_FROM_TOOL_FAILED),
+                err.to_string(),
+                cx,
+            ),
         }
         self.reload(cx);
         shell_menu::refresh(&self.app, cx);
@@ -1371,7 +1387,7 @@ impl AppRoot {
             .collect();
         if let Err(err) = ProviderService::update_sort_order(&self.app, self.selected_app, updates)
         {
-            self.notify_error("调整供应商顺序失败", err.to_string(), cx);
+            self.notify_error(t(k::SHELL_PROVIDER_REORDER_FAILED), err.to_string(), cx);
         }
         self.reload(cx);
         cx.notify();
@@ -1380,9 +1396,9 @@ impl AppRoot {
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
         match ProviderService::delete(&self.app, self.selected_app, &id) {
             Ok(()) => {
-                self.notify_success("供应商已删除", cx);
+                self.notify_success(t(k::SHELL_PROVIDER_DELETED), cx);
             }
-            Err(err) => self.notify_error("删除供应商失败", err.to_string(), cx),
+            Err(err) => self.notify_error(t(k::SHELL_PROVIDER_DELETE_FAILED), err.to_string(), cx),
         }
         self.reload(cx);
         shell_menu::refresh(&self.app, cx);
@@ -1419,7 +1435,7 @@ impl AppRoot {
         cx.subscribe(editor, |this, _editor, event, cx| match event {
             EditorEvent::Saved => {
                 this.editor = None;
-                this.notify_success("供应商已保存", cx);
+                this.notify_success(t(k::SHELL_PROVIDER_SAVED), cx);
                 this.reload(cx);
                 shell_menu::refresh(&this.app, cx);
                 cx.notify();
@@ -1452,7 +1468,10 @@ impl AppRoot {
         div()
             .id(SharedString::from(format!("app-{}", app.as_str())))
             .role(gpui::Role::Button)
-            .aria_label(SharedString::from(format!("打开 {}", Self::app_label(app))))
+            .aria_label(SharedString::from(tf!(
+                k::SHELL_SIDEBAR_OPEN_ARIA,
+                name = Self::app_label(app)
+            )))
             .aria_selected(selected)
             .flex()
             .flex_row()
@@ -1513,7 +1532,10 @@ impl AppRoot {
         div()
             .id(id)
             .role(gpui::Role::Button)
-            .aria_label(SharedString::from(format!("打开 {label}")))
+            .aria_label(SharedString::from(tf!(
+                k::SHELL_SIDEBAR_OPEN_ARIA,
+                name = label
+            )))
             .aria_selected(selected)
             .flex()
             .flex_row()
@@ -1609,7 +1631,10 @@ impl AppRoot {
                 self.sidebar_scroll_handle.clone(),
             ))
             .pb_4()
-            .child(Self::render_sidebar_group("应用", appearance))
+            .child(Self::render_sidebar_group(
+                raw(k::SHELL_SIDEBAR_GROUP_APPS),
+                appearance,
+            ))
             .child(
                 div().flex().flex_col().gap_1().px_2().children(
                     Self::visible_apps()
@@ -1617,7 +1642,10 @@ impl AppRoot {
                         .map(|app| self.render_sidebar_item(app, appearance, cx)),
                 ),
             )
-            .child(Self::render_sidebar_group("工具", appearance))
+            .child(Self::render_sidebar_group(
+                raw(k::SHELL_SIDEBAR_GROUP_TOOLS),
+                appearance,
+            ))
             .child(
                 div()
                     .flex()
@@ -1626,41 +1654,44 @@ impl AppRoot {
                     .px_2()
                     .child(self.render_nav_item(
                         "nav-mcp",
-                        "MCP 服务器",
+                        raw(k::SHELL_SIDEBAR_NAV_MCP),
                         Section::Mcp,
                         appearance,
                         cx,
                     ))
                     .child(self.render_nav_item(
                         "nav-skills",
-                        "技能",
+                        raw(k::SHELL_SIDEBAR_NAV_SKILLS),
                         Section::Skills,
                         appearance,
                         cx,
                     ))
                     .child(self.render_nav_item(
                         "nav-usage",
-                        "用量",
+                        raw(k::SHELL_SIDEBAR_NAV_USAGE),
                         Section::Usage,
                         appearance,
                         cx,
                     ))
                     .child(self.render_nav_item(
                         "nav-sessions",
-                        "会话",
+                        raw(k::SHELL_SIDEBAR_NAV_SESSIONS),
                         Section::Sessions,
                         appearance,
                         cx,
                     ))
                     .child(self.render_nav_item(
                         "nav-tools",
-                        "高级工具",
+                        raw(k::SHELL_SIDEBAR_NAV_TOOLS),
                         Section::Tools,
                         appearance,
                         cx,
                     )),
             )
-            .child(Self::render_sidebar_group("网络", appearance))
+            .child(Self::render_sidebar_group(
+                raw(k::SHELL_SIDEBAR_GROUP_NETWORK),
+                appearance,
+            ))
             .child(
                 div()
                     .flex()
@@ -1669,13 +1700,16 @@ impl AppRoot {
                     .px_2()
                     .child(self.render_nav_item(
                         "nav-gateway",
-                        "转发站",
+                        raw(k::SHELL_SIDEBAR_NAV_GATEWAY),
                         Section::Gateway,
                         appearance,
                         cx,
                     )),
             )
-            .child(Self::render_sidebar_group("系统", appearance))
+            .child(Self::render_sidebar_group(
+                raw(k::SHELL_SIDEBAR_GROUP_SYSTEM),
+                appearance,
+            ))
             .child(
                 div()
                     .flex()
@@ -1684,14 +1718,14 @@ impl AppRoot {
                     .px_2()
                     .child(self.render_nav_item(
                         "nav-themes",
-                        "主题",
+                        raw(k::SHELL_SIDEBAR_NAV_THEMES),
                         Section::Themes,
                         appearance,
                         cx,
                     ))
                     .child(self.render_nav_item(
                         "nav-settings",
-                        "设置",
+                        raw(k::SHELL_SIDEBAR_NAV_SETTINGS),
                         Section::Settings,
                         appearance,
                         cx,
@@ -1699,7 +1733,7 @@ impl AppRoot {
                     .when(std::env::var_os("MS_GALLERY").is_some(), |col| {
                         col.child(self.render_nav_item(
                             "nav-gallery",
-                            "组件画廊",
+                            raw(k::SHELL_SIDEBAR_NAV_GALLERY),
                             Section::Gallery,
                             appearance,
                             cx,
@@ -1765,20 +1799,36 @@ impl AppRoot {
         // be switched to; without one the button becomes a setup shortcut.
         let gateway_needs_setup =
             is_gateway && !is_additive && self.bound_station_route().is_none();
-        let main_label = if gateway_needs_setup {
-            "配置转发站"
+        // One key per branch, label and aria sentence together: a screen reader
+        // cannot be handed a verb and a name to glue into a sentence itself.
+        let (main_label_key, main_aria_key) = if gateway_needs_setup {
+            (
+                k::SHELL_ACTION_SETUP_RELAY,
+                k::SHELL_ACTION_SETUP_RELAY_ARIA,
+            )
         } else if is_additive {
             if is_in_live {
-                "从工具移除"
+                (
+                    k::SHELL_ACTION_REMOVE_FROM_TOOL,
+                    k::SHELL_ACTION_REMOVE_FROM_TOOL_ARIA,
+                )
             } else {
-                "添加到工具"
+                (
+                    k::SHELL_ACTION_ADD_TO_TOOL,
+                    k::SHELL_ACTION_ADD_TO_TOOL_ARIA,
+                )
             }
         } else if is_current {
             // Unreachable in switch mode (the current provider is filtered out
             // of the list); kept for the additive rendering path.
-            "已启用"
+            (k::SHELL_ACTION_ENABLED, k::SHELL_ACTION_ENABLED_ARIA)
         } else {
-            "切换"
+            (k::SHELL_ACTION_SWITCH, k::SHELL_ACTION_SWITCH_ARIA)
+        };
+        let (edit_label_key, edit_aria_key) = if is_gateway {
+            (k::SHELL_ACTION_MANAGE, k::SHELL_ACTION_MANAGE_ARIA)
+        } else {
+            (k::SHELL_ACTION_EDIT, k::SHELL_ACTION_EDIT_ARIA)
         };
 
         let drag_handle = sortable_position.map(|source_position| {
@@ -1799,13 +1849,13 @@ impl AppRoot {
                 .w(px(32.))
                 .flex_none()
                 .cursor_grab()
-                .aria_label(SharedString::from(format!(
-                    "拖动排序 {}，当前位置 {} / {}",
-                    provider.name,
-                    source_position + 1,
-                    sortable_slots.len()
+                .aria_label(SharedString::from(tf!(
+                    k::SHELL_CARD_DRAG_ARIA,
+                    name = provider.name,
+                    position = source_position + 1,
+                    total = sortable_slots.len(),
                 )))
-                .aria_description("按住并拖动到其他连接上以调整顺序")
+                .aria_description(t(k::SHELL_CARD_DRAG_DESCRIPTION))
                 .hover(|style| style.bg(theme::surface_hover()))
                 .active(|style| style.bg(theme::accent_soft()))
                 .tooltip(|_window, cx| cx.new(|_| ProviderDragTooltip).into())
@@ -1902,10 +1952,16 @@ impl AppRoot {
                                             .child(SharedString::from(provider.name.clone())),
                                     )
                                     .when(is_current, |s| {
-                                        s.child(components::badge(BadgeTone::Accent, "当前"))
+                                        s.child(components::badge(
+                                            BadgeTone::Accent,
+                                            t(k::SHELL_BADGE_CURRENT),
+                                        ))
                                     })
                                     .when(is_gateway, |s| {
-                                        s.child(components::badge(BadgeTone::Accent, "转发站模式"))
+                                        s.child(components::badge(
+                                            BadgeTone::Accent,
+                                            t(k::SHELL_BADGE_RELAY),
+                                        ))
                                     }),
                             )
                             .child(
@@ -1928,14 +1984,10 @@ impl AppRoot {
                     .child(
                         components::action_button(
                             SharedString::from(format!("edit-{}", provider.id)),
-                            if is_gateway { "管理" } else { "编辑" },
+                            t(edit_label_key),
                             false,
                         )
-                        .aria_label(SharedString::from(format!(
-                            "{} {}",
-                            if is_gateway { "管理" } else { "编辑" },
-                            provider.name
-                        )))
+                        .aria_label(SharedString::from(tf!(edit_aria_key, name = provider.name)))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 if is_gateway {
@@ -1950,10 +2002,13 @@ impl AppRoot {
                         row.child(
                             components::action_button_tone(
                                 SharedString::from(format!("delete-{}", provider.id)),
-                                "删除",
+                                t(k::SHELL_ACTION_DELETE),
                                 ButtonTone::Danger,
                             )
-                            .aria_label(SharedString::from(format!("删除 {}", provider.name)))
+                            .aria_label(SharedString::from(tf!(
+                                k::SHELL_ACTION_DELETE_ARIA,
+                                name = provider.name
+                            )))
                             .on_click(cx.listener(
                                 move |this, _event, _window, cx| {
                                     this.confirm_delete = Some(confirm_provider.clone());
@@ -1965,13 +2020,10 @@ impl AppRoot {
                     .child(
                         components::action_button(
                             SharedString::from(format!("switch-{}", provider.id)),
-                            main_label,
+                            t(main_label_key),
                             !(is_current || (is_additive && is_in_live)),
                         )
-                        .aria_label(SharedString::from(format!(
-                            "{main_label} {}",
-                            provider.name
-                        )))
+                        .aria_label(SharedString::from(tf!(main_aria_key, name = provider.name)))
                         .aria_selected(is_current || (is_additive && is_in_live))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -1992,8 +2044,8 @@ impl AppRoot {
     /// the selected app instead of a generic explanation.
     fn gateway_via_station_line(&self) -> String {
         match self.bound_station_route() {
-            Some(route) => format!("经「{}」转发", route.name),
-            None => "尚未选择转发站".to_string(),
+            Some(route) => tf!(k::SHELL_GATEWAY_VIA_STATION, name = route.name),
+            None => raw(k::SHELL_GATEWAY_NO_STATION).to_string(),
         }
     }
 
@@ -2059,7 +2111,7 @@ impl AppRoot {
                                     .text_color(theme::accent())
                                     .text_xs()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("当前连接"),
+                                    .child(t(k::SHELL_HERO_CURRENT)),
                             )
                             .child(components::badge(
                                 if is_gateway {
@@ -2068,9 +2120,9 @@ impl AppRoot {
                                     BadgeTone::Success
                                 },
                                 if is_gateway {
-                                    "转发站模式"
+                                    t(k::SHELL_BADGE_RELAY)
                                 } else {
-                                    "直接连接"
+                                    t(k::SHELL_BADGE_DIRECT)
                                 },
                             )),
                     )
@@ -2117,20 +2169,20 @@ impl AppRoot {
                         .text_color(theme::muted())
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("当前连接"),
+                        .child(t(k::SHELL_HERO_CURRENT)),
                 )
                 .child(
                     div()
                         .text_color(theme::text())
                         .text_lg()
                         .font_weight(FontWeight::BOLD)
-                        .child("尚未选择连接"),
+                        .child(t(k::SHELL_HERO_EMPTY_TITLE)),
                 )
                 .child(
                     div()
                         .text_color(theme::muted())
                         .text_xs()
-                        .child("从下方选择直接连接或转发站模式。"),
+                        .child(t(k::SHELL_HERO_EMPTY_HINT)),
                 ),
         };
 
@@ -2140,17 +2192,17 @@ impl AppRoot {
                 components::action_button(
                     SharedString::from(format!("hero-edit-{}", provider.id)),
                     if is_gateway {
-                        "管理转发站"
+                        t(k::SHELL_ACTION_MANAGE_RELAY)
                     } else {
-                        "编辑"
+                        t(k::SHELL_ACTION_EDIT)
                     },
                     false,
                 )
-                .aria_label(SharedString::from(if is_gateway {
-                    "管理转发站".to_string()
+                .aria_label(if is_gateway {
+                    t(k::SHELL_ACTION_MANAGE_RELAY)
                 } else {
-                    format!("编辑 {}", provider.name)
-                }))
+                    SharedString::from(tf!(k::SHELL_ACTION_EDIT_ARIA, name = provider.name))
+                })
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     if is_gateway {
                         this.select_section(Section::Gateway, cx);
@@ -2221,20 +2273,20 @@ impl AppRoot {
                                     .text_color(theme::text())
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("转发站模式"),
+                                    .child(t(k::SHELL_GATEWAY_CTA_TITLE)),
                             )
                             .child(
                                 div()
                                     .text_color(theme::muted())
                                     .text_xs()
-                                    .child("应用一次后，可直接在这里切换不同转发站。"),
+                                    .child(t(k::SHELL_GATEWAY_CTA_DESC)),
                             ),
                     ),
             )
             .child(
                 components::button(
                     "setup-local-gateway",
-                    "配置转发站",
+                    t(k::SHELL_ACTION_SETUP_RELAY),
                     ButtonTone::Primary,
                     ButtonSize::Sm,
                 )
@@ -2266,7 +2318,7 @@ impl AppRoot {
 
         let manage_button = components::button(
             "manage-relay-stations",
-            "管理转发站",
+            t(k::SHELL_ACTION_MANAGE_RELAY),
             ButtonTone::Ghost,
             ButtonSize::Sm,
         )
@@ -2298,13 +2350,13 @@ impl AppRoot {
                                     .text_color(theme::text())
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("当前转发站"),
+                                    .child(t(k::SHELL_GATEWAY_ROUTES_TITLE)),
                             )
                             .child(
                                 div()
                                     .text_color(theme::muted())
                                     .text_xs()
-                                    .child("切换后立即生效，不会再次修改应用配置。"),
+                                    .child(t(k::SHELL_GATEWAY_ROUTES_DESC)),
                             ),
                     )
                     .child(manage_button),
@@ -2314,7 +2366,7 @@ impl AppRoot {
                     div()
                         .text_color(theme::muted())
                         .text_sm()
-                        .child("还没有可用转发站，请先添加并应用一个转发站配置。"),
+                        .child(t(k::SHELL_GATEWAY_ROUTES_EMPTY)),
                 )
             })
             .children(routes.into_iter().map(|route| {
@@ -2323,17 +2375,24 @@ impl AppRoot {
                 let model = route
                     .default_model
                     .as_deref()
-                    .map(|model| format!("默认模型 {model}"))
+                    .map(|model| tf!(k::SHELL_GATEWAY_ROUTES_DEFAULT_MODEL, model = model))
                     .unwrap_or_else(|| {
                         if route.model_rules.is_empty() {
-                            "模型名原样传递".to_string()
+                            raw(k::SHELL_GATEWAY_ROUTES_PASSTHROUGH).to_string()
                         } else {
-                            format!("{} 条模型映射", route.model_rules.len())
+                            tf!(
+                                k::SHELL_GATEWAY_ROUTES_MODEL_RULES,
+                                count = route.model_rules.len()
+                            )
                         }
                     });
                 let button = components::button(
                     SharedString::from(format!("quick-station-{}", route.id)),
-                    if active { "使用中" } else { "切换" },
+                    if active {
+                        t(k::SHELL_GATEWAY_ROUTES_IN_USE)
+                    } else {
+                        t(k::SHELL_ACTION_SWITCH)
+                    },
                     if active {
                         ButtonTone::Neutral
                     } else {
@@ -2387,7 +2446,10 @@ impl AppRoot {
                                             .child(SharedString::from(route.name.clone())),
                                     )
                                     .when(active, |row| {
-                                        row.child(components::badge(BadgeTone::Accent, "当前"))
+                                        row.child(components::badge(
+                                            BadgeTone::Accent,
+                                            t(k::SHELL_BADGE_CURRENT),
+                                        ))
                                     }),
                             )
                             .child(
@@ -2418,35 +2480,41 @@ impl AppRoot {
             .iter()
             .filter(|provider| !provider.is_local_gateway())
             .count();
-        let mode = if app.is_additive_mode() {
-            "管理应用中的连接"
+        // A whole sentence per mode: the count sits inside the phrase, and no
+        // locale has to build one out of a mode fragment and a tail.
+        let subtitle = SharedString::from(if app.is_additive_mode() {
+            tf!(k::SHELL_LIST_SUBTITLE_ADDITIVE, count = direct_count)
         } else if current_is_gateway {
-            "当前：转发站模式"
+            tf!(k::SHELL_LIST_SUBTITLE_RELAY, count = direct_count)
         } else {
-            "当前：直接连接"
-        };
-        let subtitle = SharedString::from(format!("{mode} · {direct_count} 个直接连接"));
+            tf!(k::SHELL_LIST_SUBTITLE_DIRECT, count = direct_count)
+        });
 
         let actions = div()
             .flex()
             .flex_row()
             .gap_2()
             .child(
-                components::icon_button("add-provider", "添加连接", IconName::Add, true)
-                    .aria_label("添加直接连接")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.open_add_editor(cx);
-                    })),
+                components::icon_button(
+                    "add-provider",
+                    t(k::SHELL_LIST_ADD_LABEL),
+                    IconName::Add,
+                    true,
+                )
+                .aria_label(t(k::SHELL_LIST_ADD_ARIA))
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.open_add_editor(cx);
+                })),
             )
             .when(app_has_settings(app), |s| {
                 s.child(
                     components::icon_button(
                         "app-settings-gear",
-                        "应用设置",
+                        t(k::SHELL_LIST_APP_SETTINGS_LABEL),
                         IconName::Settings,
                         false,
                     )
-                    .aria_label("打开应用设置")
+                    .aria_label(t(k::SHELL_LIST_APP_SETTINGS_ARIA))
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.open_app_settings(cx);
                     })),
@@ -2473,7 +2541,7 @@ impl AppRoot {
                                 .text_color(theme::subtext())
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("直接连接"),
+                                .child(t(k::SHELL_LIST_SECTION_DIRECT)),
                         )
                         .into_any_element(),
                     Some(ProviderRow::GatewayLabel) => block
@@ -2483,7 +2551,7 @@ impl AppRoot {
                                 .text_color(theme::subtext())
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("转发站模式"),
+                                .child(t(k::SHELL_LIST_SECTION_RELAY)),
                         )
                         .into_any_element(),
                     Some(ProviderRow::GatewayCta) => {
@@ -2493,12 +2561,12 @@ impl AppRoot {
                         .child(
                             components::card().p_0().child(components::empty_state(
                                 IconName::Folder,
-                                "还没有直接连接",
-                                "已有工具配置会自动识别，也可以手动添加。",
+                                t(k::SHELL_LIST_EMPTY_TITLE),
+                                t(k::SHELL_LIST_EMPTY_DESC),
                                 Some(
                                     components::icon_button(
                                         "empty-add-provider",
-                                        "添加直接连接",
+                                        t(k::SHELL_LIST_EMPTY_ACTION),
                                         IconName::Add,
                                         true,
                                     )
@@ -2655,13 +2723,11 @@ impl Render for AppRoot {
             .child(self.notifications.clone())
             .when_some(self.confirm_delete.clone(), |root, provider| {
                 let delete_id = provider.id.clone();
-                let message = SharedString::from(format!(
-                    "确定删除供应商「{}」吗？此操作不可撤销。",
-                    provider.name
-                ));
+                let message =
+                    SharedString::from(tf!(k::SHELL_DELETE_MESSAGE, name = provider.name));
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("删除供应商"))
+                        .child(components::modal_header(t(k::SHELL_DELETE_TITLE)))
                         .child(
                             components::modal_body()
                                 .child(div().text_color(theme::subtext()).text_sm().child(message)),
@@ -2669,7 +2735,7 @@ impl Render for AppRoot {
                         .child(components::modal_footer(vec![
                             components::button(
                                 "confirm-delete-cancel",
-                                "取消",
+                                t(k::SHELL_DELETE_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -2680,7 +2746,7 @@ impl Render for AppRoot {
                             .into_any_element(),
                             components::button(
                                 "confirm-delete-ok",
-                                "删除",
+                                t(k::SHELL_DELETE_CONFIRM),
                                 ButtonTone::Danger,
                                 ButtonSize::Sm,
                             )
@@ -2695,29 +2761,29 @@ impl Render for AppRoot {
             .when(self.show_first_run_notice, |root| {
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("欢迎使用 OcHub"))
-                        .child(components::modal_body().child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .text_color(theme::subtext())
-                                .text_sm()
-                                .child("OcHub 会直接读写各 AI 工具的配置，并在本地保存供应商与转发站数据。")
-                                .child("建议首次使用前备份现有配置；之后可在“设置”与各应用页面调整行为。"),
-                        ))
-                        .child(components::modal_footer(vec![
-                            components::button(
-                                "first-run-confirm",
-                                "我知道了",
-                                ButtonTone::Primary,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.acknowledge_first_run(cx);
-                            }))
-                            .into_any_element(),
-                        ])),
+                        .child(components::modal_header(t(k::SHELL_FIRST_RUN_TITLE)))
+                        .child(
+                            components::modal_body().child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .text_color(theme::subtext())
+                                    .text_sm()
+                                    .child(t(k::SHELL_FIRST_RUN_STORAGE))
+                                    .child(t(k::SHELL_FIRST_RUN_BACKUP)),
+                            ),
+                        )
+                        .child(components::modal_footer(vec![components::button(
+                            "first-run-confirm",
+                            t(k::SHELL_FIRST_RUN_CONFIRM),
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.acknowledge_first_run(cx);
+                        }))
+                        .into_any_element()])),
                 ))
             })
     }

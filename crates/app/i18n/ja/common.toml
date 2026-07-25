@@ -1,0 +1,50 @@
+# Japanese — shared component strings.
+#
+# Checked against zh-Hans/common.toml at build time: every key must be present
+# and use the same {placeholders}. Keys are sorted alphabetically.
+#
+# `common.calendar.month.name_NN` is the `{month}` of
+# `common.calendar.month.title`. Japanese numbers its months and does not pad
+# them, so the header reads「2026年7月」.
+#
+# `common.pagination.jump.*` brackets the page input: the row reads
+# prefix + [input] + suffix, so Japanese puts the noun first and the verb after
+# the box —「ページ [3] へ移動」.
+
+"common.calendar.clear.label" = "クリア"
+"common.calendar.day.aria" = "{year}年{month}月{day}日"
+"common.calendar.hour.label" = "時"
+"common.calendar.minute.label" = "分"
+"common.calendar.month.name_01" = "1"
+"common.calendar.month.name_02" = "2"
+"common.calendar.month.name_03" = "3"
+"common.calendar.month.name_04" = "4"
+"common.calendar.month.name_05" = "5"
+"common.calendar.month.name_06" = "6"
+"common.calendar.month.name_07" = "7"
+"common.calendar.month.name_08" = "8"
+"common.calendar.month.name_09" = "9"
+"common.calendar.month.name_10" = "10"
+"common.calendar.month.name_11" = "11"
+"common.calendar.month.name_12" = "12"
+"common.calendar.month.title" = "{year}年{month}月"
+"common.calendar.next_month.aria" = "次の月"
+"common.calendar.previous_month.aria" = "前の月"
+"common.calendar.today.label" = "今日"
+"common.calendar.weekday.fri" = "金"
+"common.calendar.weekday.mon" = "月"
+"common.calendar.weekday.sat" = "土"
+"common.calendar.weekday.sun" = "日"
+"common.calendar.weekday.thu" = "木"
+"common.calendar.weekday.tue" = "火"
+"common.calendar.weekday.wed" = "水"
+"common.pagination.jump.prefix" = "ページ"
+"common.pagination.jump.suffix" = "へ移動"
+"common.pagination.next.aria" = "次のページ"
+"common.pagination.page.aria" = "{page} ページ目"
+"common.pagination.page_size.option" = "{size} 件/ページ"
+"common.pagination.page_size.option_aria" = "1 ページ {size} 件"
+"common.pagination.page_size.trigger_aria" = "1 ページの表示件数"
+"common.pagination.previous.aria" = "前のページ"
+"common.pagination.total.label" = "全 {total} 件"
+"common.segmented.option.aria" = "{id} オプション {option}"

@@ -1,0 +1,42 @@
+# English — native shell menus (macOS menu bar, Dock/taskbar menu).
+#
+# Checked against zh-Hans/menu.toml at build time: every key must be present
+# and use the same {placeholders}. Keys are sorted alphabetically.
+#
+# Menu-bar entries use title-style capitalization to match the OS-supplied
+# items they sit beside; toasts use sentence case.
+
+"menu.app.open_main_window" = "Open Main Window"
+"menu.app.quit" = "Quit OcHub"
+"menu.app.services" = "Services"
+"menu.edit.copy" = "Copy"
+"menu.edit.cut" = "Cut"
+"menu.edit.find" = "Find"
+"menu.edit.find_next" = "Find Next"
+"menu.edit.find_previous" = "Find Previous"
+"menu.edit.paste" = "Paste"
+"menu.edit.redo" = "Redo"
+"menu.edit.select_all" = "Select All"
+"menu.edit.title" = "Edit"
+"menu.edit.undo" = "Undo"
+"menu.file.close_window" = "Close Window"
+"menu.file.save" = "Save"
+"menu.file.title" = "File"
+"menu.provider.added_count" = "{app} · {count} added"
+"menu.provider.empty" = "No providers"
+"menu.provider.item_add" = "{name} · Add to tool config"
+"menu.provider.item_added" = "{name} · Added"
+"menu.provider.load_failed" = "Couldn't load: {error}"
+"menu.provider.taskbar.add" = "{app}: {provider} (add)"
+"menu.provider.taskbar.added" = "{app}: {provider} (added)"
+"menu.provider.taskbar.current" = "{app}: {provider} (current)"
+"menu.provider.taskbar.switch" = "{app}: {provider} (switch)"
+"menu.provider.title" = "Providers"
+"menu.switch.action_failed" = "Menu action failed"
+"menu.switch.added" = "{name} added to the tool config"
+"menu.switch.failed" = "Couldn't switch the {app} provider"
+"menu.switch.removed" = "{name} removed from the tool config"
+"menu.switch.switched" = "{app} switched to {provider}"
+"menu.switch.switched_with_warnings" = "{app} switched"
+"menu.switch.unknown_app" = "Unknown app type {app}: {error}"
+"menu.switch.warnings" = "Applying the tool config returned {count} warnings"

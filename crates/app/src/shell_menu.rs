@@ -15,9 +15,11 @@ use ochub_core::services::subscription::{
 use ochub_core::{settings, AppState, AppType, Provider, UsageResult};
 
 use crate::app_ui::notify_open_roots;
+use crate::i18n::{k, raw, t};
 use crate::notifications::NotificationLevel;
 use crate::shortcuts::{CloseWindow, Save};
 use crate::text_input::{Copy, Cut, Find, FindNext, FindPrevious, Paste, Redo, SelectAll, Undo};
+use crate::tf;
 
 actions!(ochub, [OpenMainWindow, QuitApp, RefreshShellMenus]);
 
@@ -61,36 +63,42 @@ pub fn refresh(app: &Arc<AppState>, cx: &mut App) {
 fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
     let settings = settings::get_settings();
     let quick_switch_enabled = settings.show_in_tray;
+    // "OcHub" is the product name, not prose: the macOS application menu is
+    // titled after the app in every locale.
     let mut menus = vec![
         Menu::new("OcHub").items([
-            MenuItem::action("打开主窗口", OpenMainWindow),
+            MenuItem::action(t(k::MENU_APP_OPEN_MAIN_WINDOW), OpenMainWindow),
             MenuItem::separator(),
-            MenuItem::os_submenu("服务", SystemMenuType::Services),
+            MenuItem::os_submenu(t(k::MENU_APP_SERVICES), SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("退出 OcHub", QuitApp),
+            MenuItem::action(t(k::MENU_APP_QUIT), QuitApp),
         ]),
-        Menu::new("文件").items([
-            MenuItem::action("保存", Save),
+        Menu::new(t(k::MENU_FILE_TITLE)).items([
+            MenuItem::action(t(k::MENU_FILE_SAVE), Save),
             MenuItem::separator(),
-            MenuItem::action("关闭窗口", CloseWindow),
+            MenuItem::action(t(k::MENU_FILE_CLOSE_WINDOW), CloseWindow),
         ]),
-        Menu::new("编辑").items([
-            MenuItem::os_action("撤销", Undo, OsAction::Undo),
-            MenuItem::os_action("重做", Redo, OsAction::Redo),
+        Menu::new(t(k::MENU_EDIT_TITLE)).items([
+            MenuItem::os_action(t(k::MENU_EDIT_UNDO), Undo, OsAction::Undo),
+            MenuItem::os_action(t(k::MENU_EDIT_REDO), Redo, OsAction::Redo),
             MenuItem::separator(),
-            MenuItem::os_action("剪切", Cut, OsAction::Cut),
-            MenuItem::os_action("复制", Copy, OsAction::Copy),
-            MenuItem::os_action("粘贴", Paste, OsAction::Paste),
-            MenuItem::os_action("全选", SelectAll, OsAction::SelectAll),
+            MenuItem::os_action(t(k::MENU_EDIT_CUT), Cut, OsAction::Cut),
+            MenuItem::os_action(t(k::MENU_EDIT_COPY), Copy, OsAction::Copy),
+            MenuItem::os_action(t(k::MENU_EDIT_PASTE), Paste, OsAction::Paste),
+            MenuItem::os_action(
+                t(k::MENU_EDIT_SELECT_ALL),
+                SelectAll,
+                OsAction::SelectAll,
+            ),
             MenuItem::separator(),
-            MenuItem::action("查找", Find),
-            MenuItem::action("查找下一个", FindNext),
-            MenuItem::action("查找上一个", FindPrevious),
+            MenuItem::action(t(k::MENU_EDIT_FIND), Find),
+            MenuItem::action(t(k::MENU_EDIT_FIND_NEXT), FindNext),
+            MenuItem::action(t(k::MENU_EDIT_FIND_PREVIOUS), FindPrevious),
         ]),
     ];
 
     if quick_switch_enabled {
-        menus.push(Menu::new("供应商").items(provider_submenus(app)));
+        menus.push(Menu::new(t(k::MENU_PROVIDER_TITLE)).items(provider_submenus(app)));
     }
     cx.set_menus(menus);
 
@@ -98,14 +106,14 @@ fn apply_shell_menus(app: &Arc<AppState>, cx: &mut App) {
         windows_taskbar_items(app, quick_switch_enabled)
     } else {
         let mut dock_items = vec![
-            MenuItem::action("打开主窗口", OpenMainWindow),
+            MenuItem::action(t(k::MENU_APP_OPEN_MAIN_WINDOW), OpenMainWindow),
             MenuItem::separator(),
         ];
         if quick_switch_enabled {
             dock_items.extend(provider_submenus(app));
             dock_items.push(MenuItem::separator());
         }
-        dock_items.push(MenuItem::action("退出 OcHub", QuitApp));
+        dock_items.push(MenuItem::action(t(k::MENU_APP_QUIT), QuitApp));
         dock_items
     };
     cx.set_dock_menu(dock_items);
@@ -129,20 +137,20 @@ fn provider_submenu(app: &Arc<AppState>, app_type: AppType) -> MenuItem {
     let providers = match ProviderService::list(app, app_type) {
         Ok(providers) => providers,
         Err(err) => {
-            return MenuItem::submenu(Menu::new(app_label(app_type)).items([
-                MenuItem::action(format!("加载失败: {err}"), RefreshShellMenus).disabled(true),
-            ]));
+            return MenuItem::submenu(
+                Menu::new(app_label(app_type)).items([MenuItem::action(
+                    tf!(k::MENU_PROVIDER_LOAD_FAILED, error = err),
+                    RefreshShellMenus,
+                )
+                .disabled(true)]),
+            );
         }
     };
 
     if providers.is_empty() {
-        return MenuItem::submenu(
-            Menu::new(app_label(app_type)).items([MenuItem::action(
-                "没有供应商",
-                RefreshShellMenus,
-            )
-            .disabled(true)]),
-        );
+        return MenuItem::submenu(Menu::new(app_label(app_type)).items([
+            MenuItem::action(t(k::MENU_PROVIDER_EMPTY), RefreshShellMenus).disabled(true),
+        ]));
     }
 
     let current = ProviderService::current(app, app_type).unwrap_or_default();
@@ -169,11 +177,14 @@ fn provider_submenu(app: &Arc<AppState>, app_type: AppType) -> MenuItem {
 }
 
 fn windows_taskbar_items(app: &Arc<AppState>, quick_switch_enabled: bool) -> Vec<MenuItem> {
-    let mut items = vec![MenuItem::action("打开主窗口", OpenMainWindow)];
+    let mut items = vec![MenuItem::action(
+        t(k::MENU_APP_OPEN_MAIN_WINDOW),
+        OpenMainWindow,
+    )];
     if quick_switch_enabled {
         items.extend(windows_provider_items(app));
     }
-    items.push(MenuItem::action("退出 OcHub", QuitApp));
+    items.push(MenuItem::action(t(k::MENU_APP_QUIT), QuitApp));
     items
 }
 
@@ -191,19 +202,21 @@ fn windows_provider_items(app: &Arc<AppState>) -> Vec<MenuItem> {
         });
 
         for (id, provider) in providers {
-            let status = if provider_is_selected(app_type, &current, &provider) {
+            // One whole label per state rather than a status word pasted into a
+            // shared template: the parenthetical is grammar, not a value.
+            let label = if provider_is_selected(app_type, &current, &provider) {
                 if app_type.is_additive_mode() {
-                    "已添加"
+                    k::MENU_PROVIDER_TASKBAR_ADDED
                 } else {
-                    "当前"
+                    k::MENU_PROVIDER_TASKBAR_CURRENT
                 }
             } else if app_type.is_additive_mode() {
-                "添加"
+                k::MENU_PROVIDER_TASKBAR_ADD
             } else {
-                "切换"
+                k::MENU_PROVIDER_TASKBAR_SWITCH
             };
             items.push(MenuItem::action(
-                format!("{}: {} ({status})", app_label(app_type), provider.name),
+                tf!(label, app = app_label(app_type), provider = provider.name),
                 SwitchProviderFromMenu {
                     app: app_type.as_str().to_string(),
                     provider_id: id,
@@ -226,7 +239,11 @@ fn provider_submenu_label(
             .iter()
             .filter(|(_, provider)| provider_live_config_managed(app_type, provider))
             .count();
-        return format!("{} · 已添加 {}", app_label(app_type), managed_count);
+        return tf!(
+            k::MENU_PROVIDER_ADDED_COUNT,
+            app = app_label(app_type),
+            count = managed_count,
+        );
     }
 
     providers
@@ -244,9 +261,9 @@ fn provider_item_label(app_type: AppType, provider: &Provider) -> String {
         return provider.name.clone();
     }
     if provider_live_config_managed(app_type, provider) {
-        format!("{} · 已添加", provider.name)
+        tf!(k::MENU_PROVIDER_ITEM_ADDED, name = provider.name)
     } else {
-        format!("{} · 添加到工具配置", provider.name)
+        tf!(k::MENU_PROVIDER_ITEM_ADD, name = provider.name)
     }
 }
 
@@ -283,8 +300,12 @@ fn switch_provider_from_menu(app: Arc<AppState>, action: &SwitchProviderFromMenu
                 cx,
                 None,
                 NotificationLevel::Error,
-                "菜单操作失败".to_string(),
-                Some(format!("无法识别应用类型 {}: {err}", action.app)),
+                raw(k::MENU_SWITCH_ACTION_FAILED).to_string(),
+                Some(tf!(
+                    k::MENU_SWITCH_UNKNOWN_APP,
+                    app = action.app,
+                    error = err,
+                )),
             );
             return;
         }
@@ -315,11 +336,15 @@ fn switch_provider_from_menu(app: Arc<AppState>, action: &SwitchProviderFromMenu
     match result {
         Ok(result) if result.warnings.is_empty() => {
             let title = if removing_from_additive {
-                format!("{} 已从工具配置移除", provider_name)
+                tf!(k::MENU_SWITCH_REMOVED, name = provider_name)
             } else if app_type.is_additive_mode() {
-                format!("{} 已添加到工具配置", provider_name)
+                tf!(k::MENU_SWITCH_ADDED, name = provider_name)
             } else {
-                format!("{} 已切换到 {}", app_label(app_type), provider_name)
+                tf!(
+                    k::MENU_SWITCH_SWITCHED,
+                    app = app_label(app_type),
+                    provider = provider_name,
+                )
             };
             report_to_roots(cx, Some(app_type), NotificationLevel::Success, title, None);
         }
@@ -327,17 +352,20 @@ fn switch_provider_from_menu(app: Arc<AppState>, action: &SwitchProviderFromMenu
             cx,
             Some(app_type),
             NotificationLevel::Warning,
-            format!("{} 已切换", app_label(app_type)),
-            Some(format!(
-                "应用工具配置时返回 {} 个警告",
-                result.warnings.len()
+            tf!(
+                k::MENU_SWITCH_SWITCHED_WITH_WARNINGS,
+                app = app_label(app_type),
+            ),
+            Some(tf!(
+                k::MENU_SWITCH_WARNINGS,
+                count = result.warnings.len(),
             )),
         ),
         Err(err) => report_to_roots(
             cx,
             Some(app_type),
             NotificationLevel::Error,
-            format!("切换 {} 供应商失败", app_label(app_type)),
+            tf!(k::MENU_SWITCH_FAILED, app = app_label(app_type)),
             Some(err.to_string()),
         ),
     }

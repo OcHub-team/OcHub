@@ -1,0 +1,47 @@
+# Simplified Chinese — shared component strings (the reference catalog).
+#
+# The `common.*` area belongs to `crates/app/src/components.rs`: primitives that
+# every page composes, so one wording change here lands everywhere. Keys are
+# sorted alphabetically; `.aria` keys are read by assistive technology only.
+#
+# `common.calendar.month.name_NN` is the month as a calendar header spells it —
+# digits here and in Japanese, a name in English. It is the `{month}` of
+# `common.calendar.month.title`, so pass `month_label()`, never a bare number.
+
+"common.calendar.clear.label" = "清除"
+"common.calendar.day.aria" = "{year}年{month}月{day}日"
+"common.calendar.hour.label" = "时"
+"common.calendar.minute.label" = "分"
+"common.calendar.month.name_01" = "01"
+"common.calendar.month.name_02" = "02"
+"common.calendar.month.name_03" = "03"
+"common.calendar.month.name_04" = "04"
+"common.calendar.month.name_05" = "05"
+"common.calendar.month.name_06" = "06"
+"common.calendar.month.name_07" = "07"
+"common.calendar.month.name_08" = "08"
+"common.calendar.month.name_09" = "09"
+"common.calendar.month.name_10" = "10"
+"common.calendar.month.name_11" = "11"
+"common.calendar.month.name_12" = "12"
+"common.calendar.month.title" = "{year}年{month}月"
+"common.calendar.next_month.aria" = "下个月"
+"common.calendar.previous_month.aria" = "上个月"
+"common.calendar.today.label" = "今天"
+"common.calendar.weekday.fri" = "五"
+"common.calendar.weekday.mon" = "一"
+"common.calendar.weekday.sat" = "六"
+"common.calendar.weekday.sun" = "日"
+"common.calendar.weekday.thu" = "四"
+"common.calendar.weekday.tue" = "二"
+"common.calendar.weekday.wed" = "三"
+"common.pagination.jump.prefix" = "跳至"
+"common.pagination.jump.suffix" = "页"
+"common.pagination.next.aria" = "下一页"
+"common.pagination.page.aria" = "第 {page} 页"
+"common.pagination.page_size.option" = "{size} 条/页"
+"common.pagination.page_size.option_aria" = "每页 {size} 条"
+"common.pagination.page_size.trigger_aria" = "选择每页条数"
+"common.pagination.previous.aria" = "上一页"
+"common.pagination.total.label" = "共 {total} 条"
+"common.segmented.option.aria" = "{id} 选项 {option}"
