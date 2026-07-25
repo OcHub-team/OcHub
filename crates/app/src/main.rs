@@ -525,7 +525,7 @@ fn main() {
             };
             window
                 .update(cx, |_root, window, cx| {
-                    window.on_window_should_close(cx, |window, cx| {
+                    window.on_window_should_close(cx, |window, _cx| {
                         shell_support::save_window_bounds(window.window_bounds().get_bounds());
                         // Read fresh rather than capturing, so toggling the
                         // setting takes effect without a restart.
@@ -538,7 +538,7 @@ fn main() {
                         // destroyed and a later activation has nothing to show.
                         #[cfg(target_os = "macos")]
                         {
-                            cx.hide();
+                            _cx.hide();
                             false
                         }
                         #[cfg(any(target_os = "windows", target_os = "linux"))]

@@ -272,14 +272,14 @@ fn read_existing(path: &Path, file: &FileSpec) -> Result<Value, AppError> {
 fn write_leaf(
     path: &Path,
     bytes: &[u8],
-    dir_mode: Option<u32>,
-    file_mode: Option<u32>,
+    _dir_mode: Option<u32>,
+    _file_mode: Option<u32>,
     atomic: bool,
 ) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         #[cfg(unix)]
-        if let Some(mode) = dir_mode {
+        if let Some(mode) = _dir_mode {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(mode);
             fs::set_permissions(parent, perms).map_err(|e| AppError::io(parent, e))?;
@@ -293,7 +293,7 @@ fn write_leaf(
     }
 
     #[cfg(unix)]
-    if let Some(mode) = file_mode {
+    if let Some(mode) = _file_mode {
         use std::os::unix::fs::PermissionsExt;
         let perms = fs::Permissions::from_mode(mode);
         fs::set_permissions(path, perms).map_err(|e| AppError::io(path, e))?;

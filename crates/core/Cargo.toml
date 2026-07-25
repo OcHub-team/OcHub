@@ -48,5 +48,8 @@ axum.workspace = true
 bytes.workspace = true
 reqwest.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 [dev-dependencies]
 tempfile.workspace = true
