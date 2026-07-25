@@ -17,6 +17,8 @@ use ochub_core::settings::ThemeMode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tempfile::NamedTempFile;
 
+use crate::i18n::{k, raw, Key};
+
 pub const THEME_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_THEME_FAMILY: &str = "ochub";
 pub const EMBER_THEME_FAMILY: &str = "ember";
@@ -47,7 +49,7 @@ impl ThemeColor {
     pub fn parse(value: &str) -> Result<Self> {
         let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
         if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(anyhow!("颜色必须使用 #RRGGBB 格式"));
+            return Err(anyhow!(raw(k::THEME_ERROR_COLOR_FORMAT)));
         }
         Ok(Self(u32::from_str_radix(hex, 16)?))
     }
@@ -211,10 +213,16 @@ pub enum ThemeToken {
     Shadow,
 }
 
+/// One editable color token in the theme editor.
+///
+/// `key` is the identifier the theme file uses and the editor prints under the
+/// label; `group` is matched against [`THEME_TOKENS`] with `==`. Both are
+/// identities and stay untranslated — only `label` is prose, so it holds a
+/// translation key that the editor resolves at render time.
 pub struct ThemeTokenDescriptor {
     pub token: ThemeToken,
     pub key: &'static str,
-    pub label: &'static str,
+    pub label: Key,
     pub group: &'static str,
 }
 
@@ -222,211 +230,211 @@ pub const THEME_TOKENS: &[ThemeTokenDescriptor] = &[
     ThemeTokenDescriptor {
         token: ThemeToken::Bg,
         key: "bg",
-        label: "窗口背景",
+        label: k::THEME_TOKEN_BG,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Mantle,
         key: "mantle",
-        label: "侧栏背景",
+        label: k::THEME_TOKEN_MANTLE,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Header,
         key: "header",
-        label: "标题栏",
+        label: k::THEME_TOKEN_HEADER,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Surface,
         key: "surface",
-        label: "卡片表面",
+        label: k::THEME_TOKEN_SURFACE,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Overlay,
         key: "overlay",
-        label: "浮层表面",
+        label: k::THEME_TOKEN_OVERLAY,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Panel,
         key: "panel",
-        label: "分组面板",
+        label: k::THEME_TOKEN_PANEL,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Inset,
         key: "inset",
-        label: "内凹控件",
+        label: k::THEME_TOKEN_INSET,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::SurfaceHover,
         key: "surfaceHover",
-        label: "悬停表面",
+        label: k::THEME_TOKEN_SURFACEHOVER,
         group: "表面",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Border,
         key: "border",
-        label: "普通边框",
+        label: k::THEME_TOKEN_BORDER,
         group: "文字与边框",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::BorderStrong,
         key: "borderStrong",
-        label: "强调边框",
+        label: k::THEME_TOKEN_BORDERSTRONG,
         group: "文字与边框",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Text,
         key: "text",
-        label: "主文字",
+        label: k::THEME_TOKEN_TEXT,
         group: "文字与边框",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Subtext,
         key: "subtext",
-        label: "次级文字",
+        label: k::THEME_TOKEN_SUBTEXT,
         group: "文字与边框",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Muted,
         key: "muted",
-        label: "弱文字",
+        label: k::THEME_TOKEN_MUTED,
         group: "文字与边框",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::SidebarText,
         key: "sidebarText",
-        label: "侧栏文字",
+        label: k::THEME_TOKEN_SIDEBARTEXT,
         group: "文字与边框",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::SidebarMuted,
         key: "sidebarMuted",
-        label: "侧栏弱文字",
+        label: k::THEME_TOKEN_SIDEBARMUTED,
         group: "文字与边框",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Accent,
         key: "accent",
-        label: "强调前景",
+        label: k::THEME_TOKEN_ACCENT,
         group: "强调与选中",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::AccentFill,
         key: "accentFill",
-        label: "强调填充",
+        label: k::THEME_TOKEN_ACCENTFILL,
         group: "强调与选中",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::AccentHover,
         key: "accentHover",
-        label: "强调悬停",
+        label: k::THEME_TOKEN_ACCENTHOVER,
         group: "强调与选中",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::AccentSoft,
         key: "accentSoft",
-        label: "强调柔和背景",
+        label: k::THEME_TOKEN_ACCENTSOFT,
         group: "强调与选中",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::AccentText,
         key: "accentText",
-        label: "强调填充文字",
+        label: k::THEME_TOKEN_ACCENTTEXT,
         group: "强调与选中",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::SidebarSelected,
         key: "sidebarSelected",
-        label: "侧栏选中",
+        label: k::THEME_TOKEN_SIDEBARSELECTED,
         group: "强调与选中",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Selection,
         key: "selection",
-        label: "文本选区",
+        label: k::THEME_TOKEN_SELECTION,
         group: "强调与选中",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Green,
         key: "green",
-        label: "成功前景",
+        label: k::THEME_TOKEN_GREEN,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::GreenSoft,
         key: "greenSoft",
-        label: "成功背景",
+        label: k::THEME_TOKEN_GREENSOFT,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Red,
         key: "red",
-        label: "危险前景",
+        label: k::THEME_TOKEN_RED,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::RedSoft,
         key: "redSoft",
-        label: "危险背景",
+        label: k::THEME_TOKEN_REDSOFT,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::RedHover,
         key: "redHover",
-        label: "危险悬停",
+        label: k::THEME_TOKEN_REDHOVER,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::ErrorSurface,
         key: "errorSurface",
-        label: "错误详情背景",
+        label: k::THEME_TOKEN_ERRORSURFACE,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Yellow,
         key: "yellow",
-        label: "警告前景",
+        label: k::THEME_TOKEN_YELLOW,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::YellowSoft,
         key: "yellowSoft",
-        label: "警告背景",
+        label: k::THEME_TOKEN_YELLOWSOFT,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Mauve,
         key: "mauve",
-        label: "紫色数据",
+        label: k::THEME_TOKEN_MAUVE,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Teal,
         key: "teal",
-        label: "青色数据",
+        label: k::THEME_TOKEN_TEAL,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Peach,
         key: "peach",
-        label: "橙色数据",
+        label: k::THEME_TOKEN_PEACH,
         group: "状态",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Scrim,
         key: "scrim",
-        label: "模态遮罩",
+        label: k::THEME_TOKEN_SCRIM,
         group: "效果",
     },
     ThemeTokenDescriptor {
         token: ThemeToken::Shadow,
         key: "shadow",
-        label: "投影颜色",
+        label: k::THEME_TOKEN_SHADOW,
         group: "效果",
     },
 ];

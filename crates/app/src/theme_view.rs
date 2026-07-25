@@ -498,7 +498,7 @@ impl ThemeView {
                             tf!(
                                 k::THEME_ERROR_FIELD_QUALIFIED,
                                 variant = label,
-                                field = descriptor.label,
+                                field = raw(descriptor.label),
                             )
                         })
                         .map(|color| (descriptor.token, color))
@@ -1626,7 +1626,7 @@ impl ThemeView {
                         div()
                             .text_sm()
                             .text_color(theme::text())
-                            .child(descriptor.label),
+                            .child(t(descriptor.label)),
                     )
                     .child(
                         div()

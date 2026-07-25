@@ -7,6 +7,10 @@
 # "Light · Sidebar opacity". It is a separator, not a sentence, so it reads the
 # same in every locale; it lives here so a language that wants a different
 # separator can change one string.
+#
+# `theme.token.*` holds the display name of one color token. The key is the
+# token's own identifier from `ThemeTokenDescriptor::key` — the field name a
+# theme file uses, hence camelCase — so label and token cannot drift apart.
 
 "theme.card.apply" = "Apply"
 "theme.card.badge.active" = "In use"
@@ -63,6 +67,7 @@
 "theme.editor.variant.light" = "Light"
 "theme.editor.variant.section.desc" = "Materials and colors are stored separately for the light and dark variants. Switching previews the matching draft right away."
 "theme.editor.variant.section.title" = "Variants"
+"theme.error.color_format" = "Colors must use the #RRGGBB format"
 "theme.error.field_qualified" = "{variant} · {field}"
 "theme.error.no_editor" = "No theme is open for editing"
 "theme.error.opacity_integer" = "{field} needs a whole-number percentage"
@@ -101,3 +106,38 @@
 "theme.status.saved" = "Saved and applied {name}"
 "theme.status.selection_save_failed" = "Could not save the theme selection: {error}"
 "theme.status.variant_switch_failed" = "Could not switch variants: {error}"
+"theme.token.accent" = "Accent foreground"
+"theme.token.accentFill" = "Accent fill"
+"theme.token.accentHover" = "Accent hover"
+"theme.token.accentSoft" = "Soft accent background"
+"theme.token.accentText" = "Text on accent fill"
+"theme.token.bg" = "Window background"
+"theme.token.border" = "Default border"
+"theme.token.borderStrong" = "Strong border"
+"theme.token.errorSurface" = "Error detail background"
+"theme.token.green" = "Success foreground"
+"theme.token.greenSoft" = "Success background"
+"theme.token.header" = "Title bar"
+"theme.token.inset" = "Inset control"
+"theme.token.mantle" = "Sidebar background"
+"theme.token.mauve" = "Purple data"
+"theme.token.muted" = "Muted text"
+"theme.token.overlay" = "Overlay surface"
+"theme.token.panel" = "Group panel"
+"theme.token.peach" = "Orange data"
+"theme.token.red" = "Danger foreground"
+"theme.token.redHover" = "Danger hover"
+"theme.token.redSoft" = "Danger background"
+"theme.token.scrim" = "Modal scrim"
+"theme.token.selection" = "Text selection"
+"theme.token.shadow" = "Shadow color"
+"theme.token.sidebarMuted" = "Sidebar muted text"
+"theme.token.sidebarSelected" = "Sidebar selection"
+"theme.token.sidebarText" = "Sidebar text"
+"theme.token.subtext" = "Secondary text"
+"theme.token.surface" = "Card surface"
+"theme.token.surfaceHover" = "Hover surface"
+"theme.token.teal" = "Teal data"
+"theme.token.text" = "Primary text"
+"theme.token.yellow" = "Warning foreground"
+"theme.token.yellowSoft" = "Warning background"
