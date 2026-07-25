@@ -111,7 +111,6 @@
 "skills.status.repo_input_invalid" = "Unrecognised repository format. Use owner/repo, owner/repo@branch or a GitHub link"
 "skills.status.repo_input_required" = "Enter a repository, such as anthropics/skills or owner/repo@branch"
 "skills.status.repo_update_failed" = "Couldn't update the repository: {error}"
-"skills.status.runtime_failed" = "Couldn't create the async runtime: {error}"
 "skills.status.search_query_required" = "Enter a search keyword"
 "skills.status.searching_market" = "Searching the skill marketplace..."
 "skills.status.skill_dir_failed" = "Couldn't locate the skills folder: {error}"

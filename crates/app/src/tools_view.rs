@@ -320,15 +320,9 @@ impl ToolsView {
             cx,
         );
 
-        let task = cx.background_spawn(async move {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| tf!(k::TOOLS_CLI_RUNTIME_CREATE_FAILED, error = e))
-                .and_then(|runtime| {
-                    runtime.block_on(ochub_core::session_manager::get_tool_versions(None, None))
-                })
-        });
+        let task = cx.background_spawn(crate::core_async::run(
+            ochub_core::session_manager::get_tool_versions(None, None),
+        ));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {

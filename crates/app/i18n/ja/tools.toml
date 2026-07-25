@@ -79,7 +79,6 @@
 "tools.cli.installs_scanned" = "CLI ツール {count} 件をスキャンしました。競合は {conflicts} 件です"
 "tools.cli.refresh_versions" = "バージョンを更新"
 "tools.cli.running" = "CLI ツールの操作を実行しています..."
-"tools.cli.runtime_create_failed" = "非同期ランタイムを作成できませんでした：{error}"
 "tools.cli.scan_installs" = "インストール場所をスキャン"
 "tools.cli.update_all" = "すべてのツールを更新"
 "tools.cli.update_command_ran" = "CLI ツールの更新コマンドを実行しました"

@@ -270,15 +270,7 @@ impl SkillsView {
         cx: &mut Context<Self>,
         fut: impl std::future::Future<Output = anyhow::Result<T>> + Send + 'static,
     ) -> gpui::Task<anyhow::Result<T>> {
-        cx.background_spawn(async move {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|err| {
-                    anyhow::anyhow!(tf!(k::SKILLS_STATUS_RUNTIME_FAILED, error = err))
-                })?;
-            runtime.block_on(fut)
-        })
+        cx.background_spawn(crate::core_async::run(fut))
     }
 
     fn set_tab(&mut self, tab: SkillsTab, cx: &mut Context<Self>) {

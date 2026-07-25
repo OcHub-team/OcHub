@@ -9,6 +9,7 @@ mod app_ui;
 mod chart;
 mod code_editor;
 mod components;
+mod core_async;
 mod fold;
 mod gallery_view;
 mod gateway_view;
@@ -163,14 +164,13 @@ fn bind_control_api(port: u16) -> std::result::Result<TcpListener, StartupNotice
 /// listener on one dedicated tokio runtime. Binding happens synchronously in
 /// [`bind_control_api`], so the UI never mistakes a failed listener for ready.
 fn spawn_app_services(app: Arc<AppState>, control_listener: Option<TcpListener>) -> io::Result<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(io::Error::other)?;
+    // Parks on the shared runtime rather than building a private one, so the
+    // UI and the server drive their futures on the same reactor.
+    let handle = core_async::handle().clone();
     std::thread::Builder::new()
         .name("ochub-server".into())
         .spawn(move || {
-            runtime.block_on(async move {
+            handle.block_on(async move {
                 app.gateway.maybe_autostart().await;
                 if let Some(listener) = control_listener {
                     if let Err(err) = ochub_server::serve_with_app_on_listener(app, listener).await
@@ -297,6 +297,13 @@ fn main() {
     ochub_core::i18n::install(ochub_core::i18n::resolve(
         ochub_core::settings::get_settings().language.as_deref(),
     ));
+
+    // Every crossing from the UI into ochub-core's async surface needs this,
+    // so it must exist before any of them can be reached.
+    if let Err(err) = core_async::init() {
+        log::error!("failed to build the shared async runtime: {err}");
+        return;
+    }
 
     let port = control_api_port();
     let (_instance_lock, mut activation_rx) = match shell_support::acquire_single_instance(port) {

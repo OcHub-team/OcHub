@@ -676,7 +676,14 @@ impl SettingsView {
                 None
             };
 
-            let outcome = perform(action, target, &db, backup).await;
+            // `perform` reaches the network through reqwest, which needs a
+            // tokio reactor. Awaited on gpui's executor it does not fail
+            // gracefully — it panics with "there is no reactor running", and a
+            // panic crossing the objc stack aborts the process.
+            let outcome = crate::core_async::run(async move {
+                perform(action, target, &db, backup).await
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.sync_busy = false;
                 this.reload(cx);

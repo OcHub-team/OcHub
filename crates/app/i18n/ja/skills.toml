@@ -111,7 +111,6 @@
 "skills.status.repo_input_invalid" = "リポジトリの形式を認識できません。owner/repo、owner/repo@branch、GitHub のリンクに対応しています"
 "skills.status.repo_input_required" = "リポジトリを入力してください。例: anthropics/skills、owner/repo@branch"
 "skills.status.repo_update_failed" = "リポジトリを更新できませんでした: {error}"
-"skills.status.runtime_failed" = "非同期ランタイムを作成できませんでした: {error}"
 "skills.status.search_query_required" = "検索キーワードを入力してください"
 "skills.status.searching_market" = "スキルマーケットを検索しています..."
 "skills.status.skill_dir_failed" = "スキルフォルダを取得できませんでした: {error}"

@@ -185,7 +185,6 @@
 "settings.update.checking" = "Checking for updates…"
 "settings.update.release_open_failed" = "Could not open the release page: {error}"
 "settings.update.release_opened" = "Opened the release page"
-"settings.update.runtime_failed" = "Could not build the async runtime: {error}"
 "settings.update.unknown_version" = "unknown"
 "settings.update.up_to_date" = "You are up to date on {current}."
 "settings.webdav.password.desc" = "The WebDAV password. The local settings file is written with 0600 permissions."

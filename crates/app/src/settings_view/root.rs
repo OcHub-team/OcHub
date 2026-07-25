@@ -569,22 +569,9 @@ impl SettingsView {
             cx,
         );
 
-        // This one keeps its own runtime: it is real network I/O, and it is
-        // already off the render thread inside `background_spawn`.
-        let task = cx.background_spawn(async move {
-            match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => {
-                    runtime.block_on(ochub_core::services::update::check_for_updates(None))
-                }
-                Err(err) => Err(ochub_core::AppError::Config(tf!(
-                    k::SETTINGS_UPDATE_RUNTIME_FAILED,
-                    error = err
-                ))),
-            }
-        });
+        let task = cx.background_spawn(crate::core_async::run(
+            ochub_core::services::update::check_for_updates(None),
+        ));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {

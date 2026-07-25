@@ -185,7 +185,6 @@
 "settings.update.checking" = "更新を確認しています…"
 "settings.update.release_open_failed" = "リリースページを開けませんでした: {error}"
 "settings.update.release_opened" = "リリースページを開きました"
-"settings.update.runtime_failed" = "非同期ランタイムを構築できませんでした: {error}"
 "settings.update.unknown_version" = "不明"
 "settings.update.up_to_date" = "最新バージョン {current} を使用中です。"
 "settings.webdav.password.desc" = "WebDAV のログインパスワードです。ローカルの settings ファイルは 0600 の権限で保存されます。"

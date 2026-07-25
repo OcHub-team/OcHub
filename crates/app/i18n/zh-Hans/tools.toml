@@ -83,7 +83,6 @@
 "tools.cli.installs_scanned" = "已扫描 {count} 个 CLI 工具，冲突 {conflicts} 个"
 "tools.cli.refresh_versions" = "刷新版本"
 "tools.cli.running" = "正在执行 CLI 工具操作..."
-"tools.cli.runtime_create_failed" = "创建异步运行时失败: {error}"
 "tools.cli.scan_installs" = "扫描安装位置"
 "tools.cli.update_all" = "更新全部工具"
 "tools.cli.update_command_ran" = "CLI 工具更新命令已执行"

@@ -114,7 +114,6 @@
 "skills.status.repo_input_invalid" = "无法识别仓库格式，支持 owner/repo、owner/repo@branch 或 GitHub 链接"
 "skills.status.repo_input_required" = "请输入仓库，如 anthropics/skills 或 owner/repo@branch"
 "skills.status.repo_update_failed" = "更新仓库失败: {error}"
-"skills.status.runtime_failed" = "创建异步运行时失败: {error}"
 "skills.status.search_query_required" = "请输入搜索关键词"
 "skills.status.searching_market" = "正在搜索技能市场..."
 "skills.status.skill_dir_failed" = "获取技能目录失败: {error}"

@@ -189,7 +189,6 @@
 "settings.update.checking" = "正在检查更新…"
 "settings.update.release_open_failed" = "打开发布页失败: {error}"
 "settings.update.release_opened" = "已打开发布页"
-"settings.update.runtime_failed" = "构建异步运行时失败: {error}"
 "settings.update.unknown_version" = "未知"
 "settings.update.up_to_date" = "已是最新版本 {current}。"
 "settings.webdav.password.desc" = "WebDAV 登录密码；本地 settings 文件会以 0600 权限保存。"

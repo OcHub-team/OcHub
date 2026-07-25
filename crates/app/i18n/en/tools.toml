@@ -79,7 +79,6 @@
 "tools.cli.installs_scanned" = "Scanned {count} CLI tools, {conflicts} with conflicts"
 "tools.cli.refresh_versions" = "Refresh versions"
 "tools.cli.running" = "Running the CLI tool action..."
-"tools.cli.runtime_create_failed" = "Couldn't create the async runtime: {error}"
 "tools.cli.scan_installs" = "Scan install locations"
 "tools.cli.update_all" = "Update every tool"
 "tools.cli.update_command_ran" = "Update command sent to the CLI tools"
