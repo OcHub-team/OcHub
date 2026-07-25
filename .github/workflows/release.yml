@@ -316,3 +316,14 @@ jobs:
           fi
           gh release upload "${TAG}" dist/* --clobber
           gh release edit "${TAG}" --draft=false --latest
+
+  notify-homebrew:
+    name: Notify Homebrew tap
+    needs:
+      - validate
+      - publish
+    uses: ./.github/workflows/update-homebrew.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+    secrets:
+      HOMEBREW_TAP_DISPATCH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}

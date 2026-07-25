@@ -45,4 +45,5 @@ just package-linux
 必须以 `v0.1.0` 发布。它会并行构建两种 macOS 架构以及 Windows 和 Linux，
 校验预期的产物集合，生成校验和与来源证明，然后发布一个 GitHub Release。
 
-Homebrew tap 每天检查最新发布，必要时更新 Cask 版本和两个 macOS 校验和。
+发布工作流随后会通知 Homebrew tap 更新 Cask 版本和两个 macOS 校验和；tap
+也会每天检查最新发布作为兜底。

@@ -1,0 +1,54 @@
+name: Notify Homebrew tap
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Published OcHub release tag
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_DISPATCH_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published OcHub release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Notify homebrew-tap
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate release and dispatch update
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          TAP_REPOSITORY: OcHub-team/homebrew-tap
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          release_json="$(
+            gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+          )"
+          test "$(jq -er '.draft' <<<"${release_json}")" = "false"
+          test "$(jq -er '.prerelease' <<<"${release_json}")" = "false"
+          test "$(jq -er '.tag_name' <<<"${release_json}")" = "${RELEASE_TAG}"
+
+          jq -cn \
+            --arg event_type "ochub_release_published" \
+            --arg tag "${RELEASE_TAG}" \
+            '{event_type: $event_type, client_payload: {tag: $tag}}' |
+            gh api \
+              --method POST \
+              "repos/${TAP_REPOSITORY}/dispatches" \
+              --input -

@@ -188,8 +188,9 @@ The `Release` workflow accepts only a tag that exactly matches the Cargo
 workspace version. For example, workspace version `0.1.0` must be released as
 `v0.1.0`. It builds both macOS architectures plus Windows and Linux in parallel,
 checks the expected package set, creates checksums and provenance, and then
-publishes one GitHub Release. The Homebrew tap checks the latest release daily
-and updates the Cask version and both macOS checksums when needed.
+publishes one GitHub Release, then asks the Homebrew tap to update the Cask
+version and both macOS checksums. The tap also checks the latest release daily
+as a fallback.
 
 Detailed signing secret names and local packaging commands are documented in
 [`packaging/README.md`](packaging/README.md).
