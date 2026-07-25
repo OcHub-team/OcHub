@@ -573,6 +573,22 @@ fn restore_live_settings_for_provider_backfill(
     }
 
     let mut settings = live_settings;
+    let provider_auth = provider
+        .settings_config
+        .get("auth")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let provider_config = provider
+        .settings_config
+        .get("config")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let provider_owns_live_auth = crate::apps::codex::codex_provider_owns_live_auth(
+        provider.category.as_deref(),
+        &provider_auth,
+        provider_config,
+        crate::settings::preserve_codex_official_auth_on_switch(),
+    );
     let restore_provider_token =
         crate::apps::codex::should_restore_codex_provider_token_for_backfill(
             provider.category.as_deref(),
@@ -587,6 +603,29 @@ fn restore_live_settings_for_provider_backfill(
             "Failed to restore Codex settings while backfilling '{}': {err}",
             provider.id
         );
+    }
+
+    // Config-only custom providers borrow whatever auth.json is currently live.
+    // Do not capture that unrelated account during switch-away backfill. A
+    // login/hybrid provider that explicitly owned auth.json is allowed to keep
+    // refreshed OAuth tokens from Live.
+    if provider.category.as_deref() != Some("official") && !provider_owns_live_auth {
+        let restored_provider_key = restore_provider_token
+            .then(|| {
+                settings
+                    .get("auth")
+                    .and_then(crate::apps::codex::extract_codex_auth_api_key)
+            })
+            .flatten();
+        let mut restored_auth = provider_auth;
+        if let (Some(auth), Some(provider_key)) =
+            (restored_auth.as_object_mut(), restored_provider_key)
+        {
+            auth.insert("OPENAI_API_KEY".to_string(), Value::String(provider_key));
+        }
+        if let Some(obj) = settings.as_object_mut() {
+            obj.insert("auth".to_string(), restored_auth);
+        }
     }
 
     // 统一会话开关注入的共享 `custom` 路由只属于 live 配置；切换回填时
@@ -1632,6 +1671,52 @@ mod tests {
             result.get("modelCatalog"),
             live_settings.get("modelCatalog"),
             "backfill must keep the Live-reconstructed catalog when the DB has none"
+        );
+    }
+
+    #[test]
+    fn codex_config_only_provider_does_not_capture_live_oauth() {
+        let mut provider = Provider::with_id(
+            "relay".to_string(),
+            "Relay".to_string(),
+            json!({
+                "auth": {
+                    "auth_mode": "chatgpt",
+                    "tokens": { "access_token": "stored-unused-account" }
+                },
+                "config": r#"model_provider = "relay"
+
+[model_providers.relay]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+experimental_bearer_token = "sk-relay"
+"#
+            }),
+            None,
+        );
+        provider.category = Some("custom".to_string());
+        let live_settings = json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "tokens": { "access_token": "different-live-account" }
+            },
+            "config": provider.settings_config["config"].clone()
+        });
+
+        let result =
+            restore_live_settings_for_provider_backfill(&AppType::Codex, &provider, live_settings);
+
+        assert_eq!(
+            result["auth"]["tokens"]["access_token"], "stored-unused-account",
+            "relay-only providers borrow live auth.json and must not capture it"
+        );
+        assert_eq!(
+            crate::apps::codex::extract_codex_experimental_bearer_token(
+                result["config"].as_str().unwrap()
+            )
+            .as_deref(),
+            Some("sk-relay")
         );
     }
 

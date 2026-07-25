@@ -260,14 +260,15 @@ fn gateway_settings_for(
                     "name = \"{name}\"\n",
                     "base_url = \"{base}/v1\"\n",
                     "wire_api = \"responses\"\n",
-                    "env_key = \"OPENAI_API_KEY\"\n",
+                    "experimental_bearer_token = \"{key}\"\n",
                 ),
                 id = GATEWAY_PROVIDER_ID,
                 name = GATEWAY_PROVIDER_NAME,
                 base = base_url,
+                key = key,
             );
             Ok(json!({
-                "auth": { "OPENAI_API_KEY": key },
+                "auth": {},
                 "config": toml,
             }))
         }
@@ -584,11 +585,13 @@ mod tests {
         assert_eq!(claude["env"]["ANTHROPIC_AUTH_TOKEN"], "rd-k");
 
         let codex = gateway_settings_for(AppType::Codex, base, "rd-k", &models).unwrap();
-        assert_eq!(codex["auth"]["OPENAI_API_KEY"], "rd-k");
+        assert_eq!(codex["auth"], json!({}));
         let toml = codex["config"].as_str().unwrap();
         assert!(toml.contains("model_provider = \"local-gateway\""));
         assert!(toml.contains("base_url = \"http://127.0.0.1:4180/v1\""));
         assert!(toml.contains("wire_api = \"responses\""));
+        assert!(toml.contains("experimental_bearer_token = \"rd-k\""));
+        assert!(!toml.contains("env_key"));
 
         let opencode = gateway_settings_for(AppType::OpenCode, base, "rd-k", &models).unwrap();
         assert_eq!(opencode["npm"], "@ai-sdk/openai-compatible");

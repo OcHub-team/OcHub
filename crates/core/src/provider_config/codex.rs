@@ -1,9 +1,10 @@
 //! Codex provider config codec.
 //!
-//! Codex reads two files: `~/.codex/auth.json` (the API key / OpenAI-login
-//! material) and `~/.codex/config.toml` (model + provider table). OcHub
+//! Codex reads two files: `~/.codex/auth.json` (OpenAI-login material) and
+//! `~/.codex/config.toml` (model + provider table, including relay bearer
+//! tokens). OcHub
 //! stores both inside one `settingsConfig` object shaped
-//! `{ "auth": { "OPENAI_API_KEY": … }, "config": "<config.toml text>" }`.
+//! `{ "auth": { … }, "config": "<config.toml text>" }`.
 //!
 //! This codec edits that shape *structurally* — the `config.toml` is parsed and
 //! emitted with `toml_edit`, preserving any keys the form does not model, rather
@@ -21,7 +22,10 @@ use crate::AppType;
 
 const AUTH_API_KEY: &str = "api_key";
 const AUTH_OPENAI_LOGIN: &str = "openai_login";
-const DEFAULT_ENV_KEY: &str = "OPENAI_API_KEY";
+const AUTH_OPENAI_LOGIN_WITH_API_KEY: &str = "openai_login_with_api_key";
+const OPENAI_PROVIDER_NAME: &str = "OpenAI";
+const HAS_OPENAI_LOGIN: &str = "_has_openai_login";
+const LEGACY_ENV_KEY: &str = "_legacy_env_key";
 
 pub struct CodexConfig;
 
@@ -46,11 +50,14 @@ impl AppConfig for CodexConfig {
                     .required(),
                     FormField::new(
                         "name",
-                        "显示名",
+                        "普通 Provider 名称",
                         FieldKind::Text {
                             placeholder: "Custom".into(),
                         },
-                    ),
+                    )
+                    .help("这是 config.toml 中的 provider name，不是 OcHub 列表名称；开启远程压缩时会强制写为 OpenAI。"),
+                    FormField::new("remote_compaction", "远程压缩", FieldKind::Toggle)
+                        .help("Codex 仅在 provider name 精确为 OpenAI 时开启远程压缩。请确认上游完整支持 Responses 远程压缩。"),
                 ],
             ),
             FormSection::new(
@@ -63,37 +70,35 @@ impl AppConfig for CodexConfig {
                             placeholder: "https://api.example.com/v1".into(),
                         },
                     )
-                    .help("通常需以 /v1 结尾；Codex 会在其后拼接 /responses。")
-                    .required(),
+                    .help("API 转发站模式必须填写，通常以 /v1 结尾；仅账号登录时可留空使用 Codex 官方端点。"),
                     FormField::new(
                         "auth_mode",
                         "鉴权方式",
                         FieldKind::Select {
                             options: vec![
-                                SelectOption::new(AUTH_API_KEY, "API Key（第三方）")
-                                    .with_hint("env_key + requires_openai_auth=false"),
-                                SelectOption::new(AUTH_OPENAI_LOGIN, "OpenAI / ChatGPT 登录")
-                                    .with_hint("requires_openai_auth=true，使用 auth.json"),
+                                SelectOption::new(AUTH_API_KEY, "仅 API 转发站")
+                                    .with_hint("experimental_bearer_token"),
+                                SelectOption::new(AUTH_OPENAI_LOGIN, "仅 ChatGPT 账号登录")
+                                    .with_hint("requires_openai_auth=true"),
+                                SelectOption::new(
+                                    AUTH_OPENAI_LOGIN_WITH_API_KEY,
+                                    "ChatGPT 登录 + API 转发站",
+                                )
+                                .with_hint(
+                                    "auth.json 保留登录态，请求使用 experimental_bearer_token",
+                                ),
                             ],
                         },
                     )
-                    .help("第三方 API-Key 供应商选前者；二者互斥，绝不同时写 env_key 与 requires_openai_auth。"),
-                    FormField::new(
-                        "env_key",
-                        "环境变量名 (env_key)",
-                        FieldKind::Text {
-                            placeholder: DEFAULT_ENV_KEY.into(),
-                        },
-                    )
-                    .visible_when("auth_mode", AUTH_API_KEY)
-                    .help("Codex 从该环境变量读取密钥；OcHub 启动时会注入。"),
+                    .help("组合模式不会把转发站密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。"),
                     FormField::new(
                         "api_key",
-                        "API Key",
+                        "转发站 API Key",
                         FieldKind::Secret {
                             placeholder: "sk-...".into(),
                         },
-                    ),
+                    )
+                    .help("仅两种 API 转发站模式使用；保存后写入当前 provider 的 experimental_bearer_token。"),
                 ],
             ),
             FormSection::new(
@@ -163,12 +168,6 @@ impl AppConfig for CodexConfig {
     fn decode(&self, settings_config: &Value, _meta: Option<&ProviderMeta>) -> FormValues {
         let mut values = FormValues::new();
 
-        // API key from the `auth` object.
-        let api_key = settings_config
-            .get("auth")
-            .and_then(crate::apps::codex::extract_codex_auth_api_key);
-        set_str(&mut values, "api_key", api_key.unwrap_or_default());
-
         let config_text = settings_config
             .get("config")
             .and_then(Value::as_str)
@@ -225,10 +224,16 @@ impl AppConfig for CodexConfig {
         };
 
         let name = read("name");
+        let remote_compaction = name == OPENAI_PROVIDER_NAME;
+        set_bool(&mut values, "remote_compaction", remote_compaction);
         set_str(
             &mut values,
             "name",
-            if name.is_empty() { provider_id } else { name },
+            if name.is_empty() || remote_compaction {
+                provider_id.clone()
+            } else {
+                name
+            },
         );
         set_str(&mut values, "base_url", read("base_url"));
 
@@ -244,24 +249,44 @@ impl AppConfig for CodexConfig {
         );
 
         let env_key = read("env_key");
+        let provider_token =
+            crate::apps::codex::extract_codex_experimental_bearer_token(config_text);
+        let auth_token = settings_config
+            .get("auth")
+            .and_then(crate::apps::codex::extract_codex_auth_api_key);
+        let literal_env_key =
+            (!env_key.is_empty() && !is_valid_env_key_name(&env_key)).then(|| env_key.clone());
+        let api_key = provider_token.or(auth_token).or(literal_env_key);
+        set_str(&mut values, "api_key", api_key.clone().unwrap_or_default());
+        set_str(
+            &mut values,
+            LEGACY_ENV_KEY,
+            if is_valid_env_key_name(&env_key) {
+                env_key.clone()
+            } else {
+                String::new()
+            },
+        );
+
         let requires_openai_auth = ptbl
             .and_then(|t| t.get("requires_openai_auth"))
             .and_then(Item::as_bool)
             .unwrap_or(false);
-        let auth_mode = if requires_openai_auth {
+        let has_relay_credentials = api_key.is_some() || !env_key.is_empty();
+        let auth_mode = if requires_openai_auth && has_relay_credentials {
+            AUTH_OPENAI_LOGIN_WITH_API_KEY
+        } else if requires_openai_auth {
             AUTH_OPENAI_LOGIN
         } else {
             AUTH_API_KEY
         };
         set_str(&mut values, "auth_mode", auth_mode);
-        set_str(
+        set_bool(
             &mut values,
-            "env_key",
-            if env_key.is_empty() {
-                DEFAULT_ENV_KEY.into()
-            } else {
-                env_key
-            },
+            HAS_OPENAI_LOGIN,
+            settings_config
+                .get("auth")
+                .is_some_and(crate::apps::codex::codex_auth_has_oauth_login_material),
         );
 
         values.insert(
@@ -287,10 +312,7 @@ impl AppConfig for CodexConfig {
 
         // Preserve any sibling keys in settingsConfig (e.g. modelCatalog).
         let mut settings = prior.as_object().cloned().unwrap_or_default();
-        settings.insert(
-            "auth".into(),
-            json!({ "OPENAI_API_KEY": str_val(values, "api_key") }),
-        );
+        settings.insert("auth".into(), build_auth(values, prior));
         settings.insert("config".into(), Value::String(config_text));
 
         EncodeResult {
@@ -329,10 +351,8 @@ impl AppConfig for CodexConfig {
             PreviewFile {
                 filename: "~/.codex/auth.json".into(),
                 language: Language::Json,
-                content: serde_json::to_string_pretty(
-                    &json!({ "OPENAI_API_KEY": str_val(values, "api_key") }),
-                )
-                .unwrap_or_default(),
+                content: serde_json::to_string_pretty(&build_auth(values, prior))
+                    .unwrap_or_default(),
             },
         ]
     }
@@ -350,9 +370,13 @@ impl AppConfig for CodexConfig {
             );
         }
 
-        if str_val(values, "base_url").trim().is_empty() {
+        let auth_mode = str_val(values, "auth_mode");
+        let uses_relay = auth_mode_uses_relay(auth_mode);
+        let uses_login = auth_mode_uses_login(auth_mode);
+
+        if uses_relay && str_val(values, "base_url").trim().is_empty() {
             issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
-        } else {
+        } else if !str_val(values, "base_url").trim().is_empty() {
             let base = str_val(values, "base_url").trim_end_matches('/');
             if !base.ends_with("/v1") && !base.contains("127.0.0.1") && !base.contains("localhost")
             {
@@ -365,20 +389,22 @@ impl AppConfig for CodexConfig {
             }
         }
 
-        let auth_mode = str_val(values, "auth_mode");
-        if auth_mode == AUTH_API_KEY && str_val(values, "env_key").trim().is_empty() {
+        if uses_relay
+            && str_val(values, "api_key").trim().is_empty()
+            && str_val(values, LEGACY_ENV_KEY).trim().is_empty()
+        {
+            issues.push(ConfigIssue::warning("转发站模式尚未填写 API Key。").for_field("api_key"));
+        }
+        if !uses_relay && !str_val(values, "api_key").trim().is_empty() {
             issues.push(
-                ConfigIssue::warning("API Key 模式需要 env_key（默认 OPENAI_API_KEY）。")
-                    .for_field("env_key"),
+                ConfigIssue::info("仅账号登录模式不会使用该转发站 API Key，保存时将移除。")
+                    .for_field("api_key"),
             );
         }
-        if auth_mode == AUTH_OPENAI_LOGIN && !str_val(values, "env_key").trim().is_empty() {
+        if uses_login && !bool_val(values, HAS_OPENAI_LOGIN) {
             issues.push(ConfigIssue::warning(
-                "OpenAI 登录模式 (requires_openai_auth=true) 与 env_key 互斥，env_key 将被忽略。",
+                "此供应商尚未保存 ChatGPT 登录态；应用时会沿用当前 auth.json，请先在 Codex 完成登录。",
             ));
-        }
-        if str_val(values, "api_key").trim().is_empty() {
-            issues.push(ConfigIssue::warning("尚未填写 API Key。").for_field("api_key"));
         }
 
         issues
@@ -394,7 +420,7 @@ impl AppConfig for CodexConfig {
             issues.retain(|issue| {
                 !matches!(
                     issue.field.as_deref(),
-                    Some("base_url" | "api_key" | "auth_mode" | "env_key")
+                    Some("base_url" | "api_key" | "auth_mode")
                 )
             });
         }
@@ -405,9 +431,9 @@ impl AppConfig for CodexConfig {
         vec![
             codex_preset(
                 "OpenAI 官方",
-                "openai",
+                "openai-account",
                 "OpenAI",
-                "https://api.openai.com/v1",
+                "",
                 AUTH_OPENAI_LOGIN,
                 "gpt-5.5",
                 "high",
@@ -459,7 +485,7 @@ fn codex_preset(
     set_str(&mut v, "name", name);
     set_str(&mut v, "base_url", base_url);
     set_str(&mut v, "auth_mode", auth_mode);
-    set_str(&mut v, "env_key", DEFAULT_ENV_KEY);
+    set_bool(&mut v, "remote_compaction", name == OPENAI_PROVIDER_NAME);
     set_str(&mut v, "model", model);
     set_str(&mut v, "reasoning_effort", effort);
     set_str(&mut v, "wire_api", "responses");
@@ -487,6 +513,36 @@ fn normalize_base_url(raw: &str) -> String {
     }
 }
 
+fn auth_mode_uses_relay(auth_mode: &str) -> bool {
+    matches!(auth_mode, AUTH_API_KEY | AUTH_OPENAI_LOGIN_WITH_API_KEY)
+}
+
+fn auth_mode_uses_login(auth_mode: &str) -> bool {
+    matches!(
+        auth_mode,
+        AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_WITH_API_KEY
+    )
+}
+
+fn is_valid_env_key_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+/// `auth.json` remains the account-login document. Legacy providers may have
+/// kept a relay key in `auth.OPENAI_API_KEY`; saving migrates that key into the
+/// active provider's `experimental_bearer_token` without discarding OAuth data.
+fn build_auth(_values: &FormValues, prior: &Value) -> Value {
+    let mut auth = prior
+        .get("auth")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    auth.remove("OPENAI_API_KEY");
+    Value::Object(auth)
+}
+
 /// Build the `config.toml` text from structured values, merging into `prior`
 /// (so unknown keys survive).
 fn build_config_text(values: &FormValues, prior: &str) -> String {
@@ -503,6 +559,9 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
 
     let root = doc.as_table_mut();
     root.insert("model_provider", toml_edit::value(provider_id.as_str()));
+    // Provider-scoped bearer tokens are canonical for form-managed providers.
+    // Remove a legacy top-level projection so it cannot shadow the active table.
+    root.remove("experimental_bearer_token");
 
     let model = str_val(values, "model").trim();
     if model.is_empty() {
@@ -535,36 +594,41 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
         let ptbl = mps.entry(&provider_id).or_insert(Item::Table(Table::new()));
         if let Some(ptbl) = ptbl.as_table_mut() {
             let name = str_val(values, "name").trim();
+            let remote_compaction = bool_val(values, "remote_compaction");
+            let normal_name = if name.is_empty() || name == OPENAI_PROVIDER_NAME {
+                provider_id.as_str()
+            } else {
+                name
+            };
             ptbl.insert(
                 "name",
-                toml_edit::value(if name.is_empty() {
-                    provider_id.as_str()
+                toml_edit::value(if remote_compaction {
+                    OPENAI_PROVIDER_NAME
                 } else {
-                    name
+                    normal_name
                 }),
             );
-            ptbl.insert(
-                "base_url",
-                toml_edit::value(normalize_base_url(str_val(values, "base_url"))),
-            );
+            let base_url = normalize_base_url(str_val(values, "base_url"));
+            if base_url.is_empty() {
+                ptbl.remove("base_url");
+            } else {
+                ptbl.insert("base_url", toml_edit::value(base_url));
+            }
             ptbl.insert("wire_api", toml_edit::value("responses"));
 
             match str_val(values, "auth_mode") {
                 AUTH_OPENAI_LOGIN => {
                     ptbl.remove("env_key");
+                    ptbl.remove("experimental_bearer_token");
                     ptbl.insert("requires_openai_auth", toml_edit::value(true));
+                }
+                AUTH_OPENAI_LOGIN_WITH_API_KEY => {
+                    ptbl.insert("requires_openai_auth", toml_edit::value(true));
+                    write_relay_credentials(ptbl, values);
                 }
                 _ => {
                     ptbl.remove("requires_openai_auth");
-                    let env_key = str_val(values, "env_key").trim();
-                    ptbl.insert(
-                        "env_key",
-                        toml_edit::value(if env_key.is_empty() {
-                            DEFAULT_ENV_KEY
-                        } else {
-                            env_key
-                        }),
-                    );
+                    write_relay_credentials(ptbl, values);
                 }
             }
 
@@ -574,6 +638,23 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
     }
 
     doc.to_string()
+}
+
+fn write_relay_credentials(table: &mut Table, values: &FormValues) {
+    let api_key = str_val(values, "api_key").trim();
+    if !api_key.is_empty() {
+        table.remove("env_key");
+        table.insert("experimental_bearer_token", toml_edit::value(api_key));
+        return;
+    }
+
+    table.remove("experimental_bearer_token");
+    let legacy_env_key = str_val(values, LEGACY_ENV_KEY).trim();
+    if legacy_env_key.is_empty() {
+        table.remove("env_key");
+    } else {
+        table.insert("env_key", toml_edit::value(legacy_env_key));
+    }
 }
 
 /// Write a JSON string-map field as a TOML inline table, or remove it when empty.
@@ -630,7 +711,6 @@ mod tests {
         set_str(&mut v, "name", "DeepSeek");
         set_str(&mut v, "base_url", "https://api.deepseek.com/v1");
         set_str(&mut v, "auth_mode", AUTH_API_KEY);
-        set_str(&mut v, "env_key", "DEEPSEEK_API_KEY");
         set_str(&mut v, "api_key", "sk-deepseek");
         set_str(&mut v, "model", "deepseek-chat");
         set_str(&mut v, "reasoning_effort", "high");
@@ -643,31 +723,78 @@ mod tests {
         assert_eq!(str_val(&values, "provider_id"), "custom");
         assert_eq!(str_val(&values, "wire_api"), "responses");
         assert_eq!(str_val(&values, "auth_mode"), AUTH_API_KEY);
-        assert_eq!(str_val(&values, "env_key"), DEFAULT_ENV_KEY);
+        assert!(!bool_val(&values, "remote_compaction"));
     }
 
     #[test]
-    fn api_key_mode_writes_env_key_not_requires_auth() {
+    fn api_key_mode_writes_provider_bearer_not_auth_json_or_env_key() {
         let result = CodexConfig.encode(&deepseek_values(), &Value::Null, None);
         let cfg = result.settings_config["config"].as_str().unwrap();
-        assert!(cfg.contains("env_key = \"DEEPSEEK_API_KEY\""), "{cfg}");
+        assert!(
+            cfg.contains("experimental_bearer_token = \"sk-deepseek\""),
+            "{cfg}"
+        );
+        assert!(!cfg.contains("env_key"), "{cfg}");
         assert!(!cfg.contains("requires_openai_auth"), "{cfg}");
         assert!(cfg.contains("wire_api = \"responses\""));
         assert!(cfg.contains("[model_providers.deepseek]"), "{cfg}");
+        assert_eq!(result.settings_config["auth"], json!({}));
+    }
+
+    #[test]
+    fn openai_login_mode_sets_requires_auth_and_drops_relay_credentials() {
+        let mut v = deepseek_values();
+        set_str(&mut v, "auth_mode", AUTH_OPENAI_LOGIN);
+        set_str(&mut v, "base_url", "");
+        let prior = json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "tokens": { "access_token": "oauth-access" }
+            },
+            "config": ""
+        });
+        let result = CodexConfig.encode(&v, &prior, None);
+        let cfg = result.settings_config["config"].as_str().unwrap();
+        assert!(cfg.contains("requires_openai_auth = true"), "{cfg}");
+        assert!(!cfg.contains("env_key"), "{cfg}");
+        assert!(!cfg.contains("experimental_bearer_token"), "{cfg}");
+        assert!(!cfg.contains("base_url"), "{cfg}");
         assert_eq!(
-            result.settings_config["auth"]["OPENAI_API_KEY"].as_str(),
-            Some("sk-deepseek")
+            result.settings_config["auth"]["tokens"]["access_token"],
+            "oauth-access"
         );
     }
 
     #[test]
-    fn openai_login_mode_sets_requires_auth_drops_env_key() {
+    fn combined_mode_preserves_login_and_uses_provider_bearer() {
         let mut v = deepseek_values();
-        set_str(&mut v, "auth_mode", AUTH_OPENAI_LOGIN);
-        let result = CodexConfig.encode(&v, &Value::Null, None);
+        set_str(&mut v, "auth_mode", AUTH_OPENAI_LOGIN_WITH_API_KEY);
+        let prior = json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "oauth-access",
+                    "refresh_token": "oauth-refresh"
+                }
+            },
+            "config": ""
+        });
+
+        let result = CodexConfig.encode(&v, &prior, None);
         let cfg = result.settings_config["config"].as_str().unwrap();
+
         assert!(cfg.contains("requires_openai_auth = true"), "{cfg}");
-        assert!(!cfg.contains("env_key"), "{cfg}");
+        assert!(
+            cfg.contains("experimental_bearer_token = \"sk-deepseek\""),
+            "{cfg}"
+        );
+        assert_eq!(
+            result.settings_config["auth"]["tokens"]["refresh_token"],
+            "oauth-refresh"
+        );
+        assert!(result.settings_config["auth"]
+            .get("OPENAI_API_KEY")
+            .is_none());
     }
 
     #[test]
@@ -681,7 +808,6 @@ mod tests {
             "base_url",
             "model",
             "reasoning_effort",
-            "env_key",
             "api_key",
         ] {
             assert_eq!(
@@ -691,6 +817,134 @@ mod tests {
             );
         }
         assert_eq!(str_val(&decoded, "auth_mode"), AUTH_API_KEY);
+    }
+
+    #[test]
+    fn current_login_plus_relay_shape_decodes_and_round_trips() {
+        let settings = json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "oauth-access",
+                    "refresh_token": "oauth-refresh"
+                }
+            },
+            "config": r#"model = "gpt-5.6-sol"
+model_provider = "zhizheng"
+
+[model_providers.zhizheng]
+base_url = "https://relay.example.com/openai/v1"
+experimental_bearer_token = "sk-relay"
+name = "OpenAI"
+requires_openai_auth = true
+wire_api = "responses"
+supports_websockets = true
+"#
+        });
+
+        let values = CodexConfig.decode(&settings, None);
+        assert_eq!(
+            str_val(&values, "auth_mode"),
+            AUTH_OPENAI_LOGIN_WITH_API_KEY
+        );
+        assert_eq!(str_val(&values, "api_key"), "sk-relay");
+        assert!(bool_val(&values, "remote_compaction"));
+        assert!(bool_val(&values, HAS_OPENAI_LOGIN));
+
+        let result = CodexConfig.encode(&values, &settings, None);
+        let cfg = result.settings_config["config"].as_str().unwrap();
+        assert!(cfg.contains("name = \"OpenAI\""), "{cfg}");
+        assert!(cfg.contains("requires_openai_auth = true"), "{cfg}");
+        assert!(
+            cfg.contains("experimental_bearer_token = \"sk-relay\""),
+            "{cfg}"
+        );
+        assert!(cfg.contains("supports_websockets = true"), "{cfg}");
+        assert_eq!(
+            result.settings_config["auth"]["tokens"]["refresh_token"],
+            "oauth-refresh"
+        );
+    }
+
+    #[test]
+    fn remote_compaction_toggle_exclusively_controls_openai_name() {
+        let mut values = deepseek_values();
+        set_str(&mut values, "name", OPENAI_PROVIDER_NAME);
+        set_bool(&mut values, "remote_compaction", false);
+
+        let disabled = CodexConfig.encode(&values, &Value::Null, None);
+        let disabled_cfg = disabled.settings_config["config"].as_str().unwrap();
+        assert!(
+            disabled_cfg.contains("name = \"deepseek\""),
+            "{disabled_cfg}"
+        );
+        assert!(
+            !disabled_cfg.contains("name = \"OpenAI\""),
+            "{disabled_cfg}"
+        );
+
+        set_bool(&mut values, "remote_compaction", true);
+        let enabled = CodexConfig.encode(&values, &Value::Null, None);
+        let enabled_cfg = enabled.settings_config["config"].as_str().unwrap();
+        assert!(enabled_cfg.contains("name = \"OpenAI\""), "{enabled_cfg}");
+    }
+
+    #[test]
+    fn legacy_inline_env_key_secret_migrates_to_provider_bearer() {
+        let settings = json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "tokens": { "access_token": "oauth-access" }
+            },
+            "config": r#"model_provider = "legacy"
+
+[model_providers.legacy]
+name = "OpenAI"
+base_url = "https://relay.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+env_key = "sk-legacy-inline-secret"
+"#
+        });
+
+        let values = CodexConfig.decode(&settings, None);
+        assert_eq!(
+            str_val(&values, "auth_mode"),
+            AUTH_OPENAI_LOGIN_WITH_API_KEY
+        );
+        assert_eq!(str_val(&values, "api_key"), "sk-legacy-inline-secret");
+
+        let result = CodexConfig.encode(&values, &settings, None);
+        let cfg = result.settings_config["config"].as_str().unwrap();
+        assert!(!cfg.contains("env_key"), "{cfg}");
+        assert!(
+            cfg.contains("experimental_bearer_token = \"sk-legacy-inline-secret\""),
+            "{cfg}"
+        );
+    }
+
+    #[test]
+    fn legacy_real_env_key_is_preserved_until_a_secret_is_supplied() {
+        let settings = json!({
+            "auth": {},
+            "config": r#"model_provider = "legacy"
+
+[model_providers.legacy]
+name = "Legacy"
+base_url = "https://relay.example.com/v1"
+wire_api = "responses"
+env_key = "LEGACY_API_KEY"
+"#
+        });
+
+        let values = CodexConfig.decode(&settings, None);
+        assert_eq!(str_val(&values, "api_key"), "");
+        assert_eq!(str_val(&values, LEGACY_ENV_KEY), "LEGACY_API_KEY");
+
+        let result = CodexConfig.encode(&values, &settings, None);
+        let cfg = result.settings_config["config"].as_str().unwrap();
+        assert!(cfg.contains("env_key = \"LEGACY_API_KEY\""), "{cfg}");
+        assert!(!cfg.contains("experimental_bearer_token"), "{cfg}");
     }
 
     #[test]
@@ -739,7 +993,7 @@ mod tests {
         assert!(!issues.iter().any(|issue| {
             matches!(
                 issue.field.as_deref(),
-                Some("base_url" | "api_key" | "auth_mode" | "env_key")
+                Some("base_url" | "api_key" | "auth_mode")
             )
         }));
     }
@@ -779,14 +1033,7 @@ mod tests {
             .collect();
         let settings = CodexConfig.parse_files(&files).unwrap();
         let decoded = CodexConfig.decode(&settings, None);
-        for key in [
-            "provider_id",
-            "name",
-            "base_url",
-            "model",
-            "env_key",
-            "api_key",
-        ] {
+        for key in ["provider_id", "name", "base_url", "model", "api_key"] {
             assert_eq!(
                 str_val(&decoded, key),
                 str_val(&original, key),

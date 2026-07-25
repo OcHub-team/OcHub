@@ -62,6 +62,25 @@ pub fn conversion_supported(_inlet: Dialect, _channel: Dialect) -> bool {
     true
 }
 
+/// Codex remote compaction v2 is a Responses-only protocol extension. Its
+/// `compaction_trigger` input has no faithful Messages/Chat representation, so
+/// it must never enter a lossy dialect conversion or fail over to one.
+fn is_remote_compaction_request(inlet: Dialect, body: &Value) -> bool {
+    inlet == Dialect::Responses
+        && body
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("compaction_trigger")
+                })
+            })
+}
+
+fn channel_supports_request(inlet: Dialect, channel: Dialect, remote_compaction: bool) -> bool {
+    conversion_supported(inlet, channel) && (!remote_compaction || channel == Dialect::Responses)
+}
+
 fn error_body(inlet: Dialect, message: &str) -> Value {
     match inlet {
         Dialect::Messages => json!({
@@ -755,9 +774,10 @@ pub async fn run(
             .as_ref()
             .and_then(|route| route.default_model.as_deref()),
     };
+    let remote_compaction = is_remote_compaction_request(inlet, &body);
     let convertible: Vec<GatewayChannel> = channels
         .into_iter()
-        .filter(|channel| conversion_supported(inlet, channel.dialect))
+        .filter(|channel| channel_supports_request(inlet, channel.dialect, remote_compaction))
         .filter(|channel| {
             route
                 .as_ref()
@@ -786,12 +806,14 @@ pub async fn run(
             candidates_for_model_ranked(&convertible, routing_model, |_| false, rank, entropy);
     }
     if candidates.is_empty() {
+        let message = if remote_compaction {
+            "remote compaction requires an OpenAI Responses upstream".to_string()
+        } else {
+            format!("no gateway channel serves model '{}'", meta.model)
+        };
         return PipelineOutcome::Json {
             status: 503,
-            body: error_body(
-                inlet,
-                &format!("no gateway channel serves model '{}'", meta.model),
-            ),
+            body: error_body(inlet, &message),
         };
     }
 
@@ -1038,6 +1060,44 @@ mod tests {
                 assert!(conversion_supported(inlet, channel));
             }
         }
+    }
+
+    #[test]
+    fn remote_compaction_is_restricted_to_responses_channels() {
+        let compact = json!({
+            "model": "gpt-5.6",
+            "input": [
+                { "role": "user", "content": "long context" },
+                { "type": "compaction_trigger" }
+            ]
+        });
+        assert!(is_remote_compaction_request(Dialect::Responses, &compact));
+        assert!(channel_supports_request(
+            Dialect::Responses,
+            Dialect::Responses,
+            true
+        ));
+        assert!(!channel_supports_request(
+            Dialect::Responses,
+            Dialect::Messages,
+            true
+        ));
+        assert!(!channel_supports_request(
+            Dialect::Responses,
+            Dialect::Chat,
+            true
+        ));
+
+        let ordinary = json!({
+            "model": "gpt-5.6",
+            "input": [{ "role": "user", "content": "hello" }]
+        });
+        assert!(!is_remote_compaction_request(Dialect::Responses, &ordinary));
+        assert!(channel_supports_request(
+            Dialect::Responses,
+            Dialect::Messages,
+            false
+        ));
     }
 
     #[test]

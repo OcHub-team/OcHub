@@ -9,7 +9,7 @@ use crate::paths::{
 };
 use serde_json::{json, Value};
 use std::fs;
-use toml_edit::DocumentMut;
+use toml_edit::{DocumentMut, Item};
 
 pub const OCHUB_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 pub const OCHUB_CODEX_MODEL_CATALOG_FILENAME: &str = "ochub-model-catalog.json";
@@ -232,6 +232,28 @@ pub fn extract_codex_base_url(config_text: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Whether the active custom model provider requests OpenAI-managed auth.
+///
+/// This is the on-disk discriminator between relay-only mode and the two
+/// account-login modes. Built-in providers are handled by their provider
+/// category instead of synthesizing reserved provider tables here.
+pub fn codex_config_requires_openai_auth(config_text: &str) -> bool {
+    let Ok(doc) = config_text.parse::<DocumentMut>() else {
+        return false;
+    };
+    let Some(provider_id) = active_codex_model_provider_id(&doc) else {
+        return false;
+    };
+
+    doc.get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(&provider_id))
+        .and_then(Item::as_table)
+        .and_then(|provider| provider.get("requires_openai_auth"))
+        .and_then(Item::as_bool)
+        == Some(true)
+}
+
 pub fn codex_auth_has_login_material(auth: &Value) -> bool {
     let Some(obj) = auth.as_object() else {
         return false;
@@ -287,13 +309,20 @@ pub fn should_restore_codex_provider_token_for_backfill(
         return false;
     }
 
-    let Some(auth) = template_settings.get("auth") else {
-        return true;
-    };
+    let has_provider_api_key = template_settings
+        .get("auth")
+        .and_then(extract_codex_auth_api_key)
+        .is_some();
+    let already_uses_provider_bearer = template_settings
+        .get("config")
+        .and_then(Value::as_str)
+        .and_then(extract_codex_experimental_bearer_token)
+        .is_some();
 
-    let has_provider_api_key = extract_codex_auth_api_key(auth).is_some();
-    let has_oauth_login = codex_auth_has_oauth_login_material(auth);
-    !has_oauth_login || has_provider_api_key
+    // Only legacy providers whose canonical key still lives in auth.json need
+    // the generated live bearer lifted back during DB backfill. Modern
+    // providers already store the bearer in their provider table.
+    has_provider_api_key && !already_uses_provider_bearer
 }
 
 fn parse_codex_positive_u64(value: Option<&Value>) -> Option<u64> {
@@ -959,6 +988,48 @@ fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result
     Ok(doc.to_string())
 }
 
+fn is_codex_env_key_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+/// Older OcHub/cc-switch configurations sometimes wrote the secret itself into
+/// `env_key`. Codex interprets that field as an environment-variable *name*.
+fn extract_codex_legacy_inline_env_key(config_text: &str) -> Option<String> {
+    let doc = config_text.parse::<DocumentMut>().ok()?;
+    let provider_id = active_codex_model_provider_id(&doc)?;
+    let value = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(&provider_id))
+        .and_then(Item::as_table)
+        .and_then(|provider| provider.get("env_key"))
+        .and_then(Item::as_str)?
+        .trim();
+
+    (!value.is_empty() && !is_codex_env_key_name(value)).then(|| value.to_string())
+}
+
+fn remove_active_codex_env_key(config_text: &str) -> Result<String, AppError> {
+    let mut doc = config_text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
+    let Some(provider_id) = active_codex_model_provider_id(&doc) else {
+        return Ok(config_text.to_string());
+    };
+
+    if let Some(provider) = doc
+        .get_mut("model_providers")
+        .and_then(Item::as_table_mut)
+        .and_then(|providers| providers.get_mut(&provider_id))
+        .and_then(Item::as_table_mut)
+    {
+        provider.remove("env_key");
+    }
+    Ok(doc.to_string())
+}
+
 pub fn remove_codex_experimental_bearer_token_if(
     config_text: &str,
     predicate: impl Fn(&str) -> bool,
@@ -1195,9 +1266,11 @@ pub fn strip_codex_unified_session_bucket_from_settings(
 
 /// Route a Codex live write between full auth+config or config-only.
 ///
-/// Official providers with usable login material own `auth.json`. Third-party
-/// providers only touch `config.toml` when the compatibility setting is enabled
-/// so the user's ChatGPT login cache survives provider switches.
+/// Official providers with usable login material own `auth.json`. A custom
+/// provider owns it only when it explicitly enables `requires_openai_auth`,
+/// carries OAuth material, and the compatibility setting does not request that
+/// the current official login be preserved. Relay-only providers always update
+/// `config.toml` alone.
 ///
 /// 统一会话开关开启时，官方配置在落盘前注入共享的 `custom` 路由
 /// （见 `inject_codex_unified_session_bucket`）。
@@ -1216,33 +1289,80 @@ pub fn write_codex_live_for_provider(
         };
     let config_text = unified_official_config.as_deref().or(config_text);
 
-    let should_write_auth = (category == Some("official") && codex_auth_has_login_material(auth))
-        || (category != Some("official")
-            && !crate::settings::preserve_codex_official_auth_on_switch());
+    let preserve_official_auth = crate::settings::preserve_codex_official_auth_on_switch();
+    let should_write_auth = codex_provider_owns_live_auth(
+        category,
+        auth,
+        config_text.unwrap_or(""),
+        preserve_official_auth,
+    );
 
-    if should_write_auth {
-        write_codex_live_atomic(auth, config_text)
+    if category == Some("official") {
+        if should_write_auth {
+            write_codex_live_atomic(auth, config_text)
+        } else {
+            write_codex_live_config_atomic(config_text)
+        }
     } else {
         let live_config = prepare_codex_provider_live_config(auth, config_text.unwrap_or(""))?;
-        write_codex_live_config_atomic(Some(&live_config))
+        if should_write_auth {
+            let live_auth = codex_auth_without_api_key(auth);
+            write_codex_live_atomic(&live_auth, Some(&live_config))
+        } else {
+            write_codex_live_config_atomic(Some(&live_config))
+        }
     }
+}
+
+/// Whether this provider is authoritative for the live `auth.json`.
+///
+/// Kept pure (the preserve setting is an argument) so switching and backfill
+/// can make the same decision without hiding global state inside the rule.
+pub fn codex_provider_owns_live_auth(
+    category: Option<&str>,
+    auth: &Value,
+    config_text: &str,
+    preserve_official_auth: bool,
+) -> bool {
+    if category == Some("official") {
+        return codex_auth_has_login_material(auth);
+    }
+
+    !preserve_official_auth
+        && codex_config_requires_openai_auth(config_text)
+        && codex_auth_has_oauth_login_material(auth)
+}
+
+fn codex_auth_without_api_key(auth: &Value) -> Value {
+    let mut live_auth = auth.as_object().cloned().unwrap_or_default();
+    live_auth.remove("OPENAI_API_KEY");
+    Value::Object(live_auth)
 }
 
 /// Build the live Codex config for provider switching.
 ///
-/// The stored provider keeps its API key in `auth.OPENAI_API_KEY`. Live Codex
-/// requests can use a provider-scoped `experimental_bearer_token`, so switching
-/// providers only needs to update `config.toml`; `auth.json` stays as the user's
-/// long-lived ChatGPT login cache.
+/// Modern providers already keep their relay key in a provider-scoped
+/// `experimental_bearer_token`. Legacy providers may still keep it in
+/// `auth.OPENAI_API_KEY`; project that value into the provider table while
+/// leaving account-login material available for the independent auth decision.
 pub fn prepare_codex_provider_live_config(
     auth: &Value,
     config_text: &str,
 ) -> Result<String, AppError> {
-    let token = extract_codex_auth_api_key(auth)
-        .or_else(|| extract_codex_experimental_bearer_token(config_text));
+    // The explicit provider bearer matches Codex's request-auth precedence and
+    // must beat a stale legacy OPENAI_API_KEY when both happen to exist.
+    let token = extract_codex_experimental_bearer_token(config_text)
+        .or_else(|| extract_codex_auth_api_key(auth))
+        .or_else(|| extract_codex_legacy_inline_env_key(config_text));
 
     Ok(match token {
-        Some(token) => set_codex_experimental_bearer_token(config_text, &token)?,
+        Some(token) => {
+            // `env_key` is resolved before `experimental_bearer_token` by
+            // Codex. Once an explicit token is available, retaining env_key can
+            // make a missing/stale environment variable shadow the right key.
+            let config_without_env_key = remove_active_codex_env_key(config_text)?;
+            set_codex_experimental_bearer_token(&config_without_env_key, &token)?
+        }
         None => config_text.to_string(),
     })
 }
@@ -1520,6 +1640,61 @@ base_url = "https://single.example.com/v1"
     }
 
     #[test]
+    fn active_provider_requires_openai_auth_is_detected() {
+        let combined = r#"model_provider = "relay"
+
+[model_providers.relay]
+name = "OpenAI"
+base_url = "https://relay.example/v1"
+requires_openai_auth = true
+"#;
+        let relay_only = combined.replace("requires_openai_auth = true\n", "");
+
+        assert!(codex_config_requires_openai_auth(combined));
+        assert!(!codex_config_requires_openai_auth(&relay_only));
+    }
+
+    #[test]
+    fn provider_auth_ownership_matches_the_three_modes() {
+        let oauth = json!({
+            "auth_mode": "chatgpt",
+            "tokens": { "access_token": "oauth-access" }
+        });
+        let relay_only = r#"model_provider = "relay"
+
+[model_providers.relay]
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-relay"
+"#;
+        let login_or_combined = format!("{relay_only}requires_openai_auth = true\n");
+
+        assert!(!codex_provider_owns_live_auth(
+            Some("custom"),
+            &oauth,
+            relay_only,
+            false
+        ));
+        assert!(codex_provider_owns_live_auth(
+            Some("custom"),
+            &oauth,
+            &login_or_combined,
+            false
+        ));
+        assert!(!codex_provider_owns_live_auth(
+            Some("custom"),
+            &oauth,
+            &login_or_combined,
+            true
+        ));
+        assert!(codex_provider_owns_live_auth(
+            Some("official"),
+            &oauth,
+            "",
+            true
+        ));
+    }
+
+    #[test]
     fn prepare_provider_live_config_rejects_key_without_config() {
         let err = prepare_codex_provider_live_config(&json!({"OPENAI_API_KEY": "sk-test"}), "")
             .expect_err("empty config with API key should not truncate live config");
@@ -1554,6 +1729,79 @@ model = "gpt-5"
     }
 
     #[test]
+    fn prepare_provider_live_config_removes_env_key_that_would_shadow_bearer() {
+        let input = r#"model_provider = "relay"
+
+[model_providers.relay]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+env_key = "OPENAI_API_KEY"
+"#;
+
+        let output =
+            prepare_codex_provider_live_config(&json!({"OPENAI_API_KEY": "sk-provider"}), input)
+                .expect("prepare live config");
+        let provider: toml::Value = toml::from_str(&output).expect("parse output");
+        let provider = provider
+            .get("model_providers")
+            .and_then(|providers| providers.get("relay"))
+            .expect("active provider");
+
+        assert!(provider.get("env_key").is_none());
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(toml::Value::as_str),
+            Some("sk-provider")
+        );
+    }
+
+    #[test]
+    fn prepare_provider_live_config_migrates_secret_miswritten_as_env_key() {
+        let input = r#"model_provider = "relay"
+
+[model_providers.relay]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+env_key = "sk-legacy-inline-secret"
+"#;
+
+        let output =
+            prepare_codex_provider_live_config(&json!({}), input).expect("prepare live config");
+        let provider: toml::Value = toml::from_str(&output).expect("parse output");
+        let provider = provider
+            .get("model_providers")
+            .and_then(|providers| providers.get("relay"))
+            .expect("active provider");
+
+        assert!(provider.get("env_key").is_none());
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(toml::Value::as_str),
+            Some("sk-legacy-inline-secret")
+        );
+    }
+
+    #[test]
+    fn prepare_provider_live_config_keeps_real_env_only_auth() {
+        let input = r#"model_provider = "relay"
+
+[model_providers.relay]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+env_key = "RELAY_API_KEY"
+"#;
+
+        let output =
+            prepare_codex_provider_live_config(&json!({}), input).expect("prepare live config");
+        assert_eq!(output, input);
+    }
+
+    #[test]
     fn extract_bearer_uses_top_level_token_for_reserved_provider() {
         let input = r#"model_provider = "openai"
 experimental_bearer_token = "top-level-key"
@@ -1583,6 +1831,14 @@ experimental_bearer_token = "stale-table-key"
                 "OPENAI_API_KEY": "sk-test"
             }
         });
+        let provider_bearer_template = json!({
+            "auth": {},
+            "config": r#"model_provider = "relay"
+
+[model_providers.relay]
+experimental_bearer_token = "sk-provider"
+"#
+        });
 
         assert!(
             !should_restore_codex_provider_token_for_backfill(Some("custom"), &oauth_template),
@@ -1590,7 +1846,14 @@ experimental_bearer_token = "stale-table-key"
         );
         assert!(
             should_restore_codex_provider_token_for_backfill(Some("custom"), &api_key_template),
-            "custom API-key providers should still restore provider bearer tokens"
+            "legacy auth-key providers should still restore generated bearer tokens"
+        );
+        assert!(
+            !should_restore_codex_provider_token_for_backfill(
+                Some("custom"),
+                &provider_bearer_template
+            ),
+            "provider-scoped bearer tokens are already in their canonical location"
         );
         assert!(
             !should_restore_codex_provider_token_for_backfill(Some("official"), &api_key_template),
@@ -1669,6 +1932,27 @@ model = "gpt-5.4"
                 .and_then(|v| v.as_str()),
             Some("vendor_alpha"),
             "profile provider references should be preserved"
+        );
+    }
+
+    #[test]
+    fn explicit_provider_bearer_beats_stale_legacy_auth_key() {
+        let input = r#"model_provider = "vendor_alpha"
+
+[model_providers.vendor_alpha]
+name = "Vendor Alpha"
+base_url = "https://alpha.example/v1"
+wire_api = "responses"
+experimental_bearer_token = "sk-current"
+"#;
+
+        let result =
+            prepare_codex_provider_live_config(&json!({"OPENAI_API_KEY": "sk-stale"}), input)
+                .expect("prepare live config");
+
+        assert_eq!(
+            extract_codex_experimental_bearer_token(&result).as_deref(),
+            Some("sk-current")
         );
     }
 
