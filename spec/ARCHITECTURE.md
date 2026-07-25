@@ -66,12 +66,15 @@ management, deeplink, settings, update/restart, lightweight mode.
 1. SQLite under `~/.ochub/` is OcHub's source of truth; cc-switch data is imported
    once and never written back.
 2. The product exposes one complete commercial relay station (address, key,
-   upstream API format, model aliases, and reasoning policy) as the user-facing
-   unit. The in-process service remains the sole owner of protocol conversion
-   and usage accounting. Each station maps internally to one channel and one
-   hidden route; supported applications are configured once with an app-specific
+   detected API interfaces, optional model exceptions, and reasoning policy) as
+   the user-facing unit. The in-process service remains the sole owner of
+   protocol conversion and usage accounting. Each station maps internally to
+   one hidden route and one channel per API interface; native-format channels
+   are preferred automatically, while model exceptions can pin a request to one
+   interface. Supported applications are configured once with an app-specific
    local key, so switching stations does not rewrite the application config.
-   Legacy unbound keys remain readable for migration but are not exposed in the UI.
+   Legacy one-channel stations and unbound keys remain readable for migration
+   but their internal routing details are not exposed in the UI.
 3. Skills are installed and linked by `npx -y skills`; SQLite retains catalog
    metadata and enabled-app state.
 4. Gemini CLI producers and live writers are removed. Historical Gemini usage

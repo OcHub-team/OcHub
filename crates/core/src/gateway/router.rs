@@ -16,21 +16,37 @@ pub fn candidates_for_model(
     channels: &[GatewayChannel],
     model: &str,
     is_excluded: impl Fn(&GatewayChannel) -> bool,
+    entropy: impl FnMut() -> u64,
+) -> Vec<GatewayChannel> {
+    candidates_for_model_ranked(channels, model, is_excluded, |_| 0, entropy)
+}
+
+/// Like [`candidates_for_model`], with a request-specific preference inside
+/// each explicit priority group. This lets the gateway prefer a channel that
+/// speaks the client's native dialect without overriding a user's configured
+/// channel priority.
+pub fn candidates_for_model_ranked(
+    channels: &[GatewayChannel],
+    model: &str,
+    is_excluded: impl Fn(&GatewayChannel) -> bool,
+    rank: impl Fn(&GatewayChannel) -> u8,
     mut entropy: impl FnMut() -> u64,
 ) -> Vec<GatewayChannel> {
     let mut eligible: Vec<&GatewayChannel> = channels
         .iter()
         .filter(|c| c.enabled && c.matches_model(model) && !is_excluded(c))
         .collect();
-    eligible.sort_by_key(|c| c.priority);
+    eligible.sort_by_key(|c| (c.priority, rank(c)));
 
     let mut out: Vec<GatewayChannel> = Vec::with_capacity(eligible.len());
     let mut i = 0;
     while i < eligible.len() {
-        // Collect one priority group.
+        // Collect one explicit-priority + request-preference group.
         let prio = eligible[i].priority;
+        let preference = rank(eligible[i]);
         let mut group: Vec<&GatewayChannel> = Vec::new();
-        while i < eligible.len() && eligible[i].priority == prio {
+        while i < eligible.len() && eligible[i].priority == prio && rank(eligible[i]) == preference
+        {
             group.push(eligible[i]);
             i += 1;
         }
@@ -118,5 +134,21 @@ mod tests {
         let got = candidates_for_model(&channels, "m", |_| false, || 0);
         assert_eq!(got.len(), 3);
         assert_eq!(got[2].id, "c"); // lower priority always last
+    }
+
+    #[test]
+    fn request_rank_orders_equal_priority_groups() {
+        let mut messages = ch("messages", 0, 1, &[]);
+        messages.dialect = Dialect::Messages;
+        let mut responses = ch("responses", 0, 1, &[]);
+        responses.dialect = Dialect::Responses;
+        let got = candidates_for_model_ranked(
+            &[responses, messages],
+            "m",
+            |_| false,
+            |channel| u8::from(channel.dialect != Dialect::Messages),
+            || 0,
+        );
+        assert_eq!(got[0].id, "messages");
     }
 }

@@ -280,12 +280,16 @@ async fn probe_dialect(
     State(s): State<ServerState>,
     Json(body): Json<ProbeDialectBody>,
 ) -> ApiResult<Json<Value>> {
-    let dialect = s
+    let dialects = s
         .app
         .gateway
-        .detect_dialect(body.base_url, body.api_key)
+        .detect_dialects(body.base_url, body.api_key)
         .await?;
-    Ok(Json(json!({ "dialect": dialect })))
+    Ok(Json(json!({
+        // Keep the legacy field until external callers adopt the full list.
+        "dialect": dialects.first(),
+        "dialects": dialects,
+    })))
 }
 
 async fn supported_apps(State(_s): State<ServerState>) -> Json<Value> {

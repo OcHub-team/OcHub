@@ -153,7 +153,8 @@ pub fn station_route_id(channel_id: &str) -> String {
     format!("{STATION_ROUTE_PREFIX}{channel_id}")
 }
 
-/// Ensure the hidden local route backing one user-facing relay-station config.
+/// Ensure the hidden local route backing one imported or legacy relay station.
+/// The editor may later add more API-interface channels to the same route.
 pub fn ensure_station_route(
     state: &AppState,
     channel: &GatewayChannel,
@@ -221,7 +222,10 @@ fn app_label(app_type: AppType) -> &'static str {
 fn route_client_models(route: &GatewayRoute) -> Vec<String> {
     let mut models: Vec<String> = Vec::new();
     for rule in &route.model_rules {
-        if !rule.model.trim().is_empty() && !models.contains(&rule.model) {
+        if !rule.model.trim().is_empty()
+            && !rule.model.contains('*')
+            && !models.contains(&rule.model)
+        {
             models.push(rule.model.clone());
         }
     }
@@ -612,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn route_models_come_from_rules_then_default_without_duplicates() {
+    fn route_models_skip_wildcards_and_deduplicate_the_default() {
         let route = GatewayRoute {
             id: "station:x".into(),
             name: "x".into(),
@@ -629,6 +633,11 @@ mod tests {
                     model: "claude-haiku-4-5".into(),
                     upstream_model: "up-2".into(),
                     channel_id: None,
+                },
+                crate::gateway::types::GatewayModelRule {
+                    model: "claude-*".into(),
+                    upstream_model: String::new(),
+                    channel_id: Some("messages".into()),
                 },
             ],
             reasoning: GatewayReasoningConfig::default(),
@@ -679,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn station_route_is_one_to_one_with_its_hidden_channel() {
+    fn imported_station_route_starts_with_its_single_channel() {
         let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
         let channel = GatewayChannel {
             id: "new-api-primary".into(),

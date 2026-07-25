@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 
 use crate::db::Database;
-use crate::gateway::router::candidates_for_model;
+use crate::gateway::router::candidates_for_model_ranked;
 use crate::gateway::types::{
     ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayReasoningConfig,
     GatewayReasoningMode, GatewayRoute,
@@ -614,6 +614,46 @@ fn failover_worthy(status: u16) -> bool {
     status == 401 || status == 403 || status == 408 || status == 429 || status >= 500
 }
 
+/// Model availability is often scoped to one of a relay's API dialects. A
+/// recognized "this model is not served here" response should therefore try
+/// the station's next interface, while ordinary validation errors still return
+/// immediately to the client.
+fn model_unavailable_response(status: u16, body: &str) -> bool {
+    if !matches!(status, 400 | 404 | 422) {
+        return false;
+    }
+    let message = body.to_ascii_lowercase();
+    let names_model = message.contains("model") || message.contains("模型");
+    names_model
+        && [
+            "not found",
+            "not supported",
+            "unsupported",
+            "does not exist",
+            "not available",
+            "unknown model",
+            "invalid model",
+            "模型不存在",
+            "不支持",
+            "无效模型",
+        ]
+        .iter()
+        .any(|needle| message.contains(needle))
+}
+
+/// Prefer the client's native wire format, then the richer Messages ↔
+/// Responses bridge, and keep conversions involving Chat as the last automatic
+/// choice because Chat cannot preserve every advanced reasoning capability.
+fn dialect_conversion_rank(inlet: Dialect, upstream: Dialect) -> u8 {
+    if inlet == upstream {
+        0
+    } else if !matches!(inlet, Dialect::Chat) && !matches!(upstream, Dialect::Chat) {
+        1
+    } else {
+        2
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn log_usage(
     db: &Database,
@@ -709,14 +749,12 @@ pub async fn run(
         .as_ref()
         .and_then(|route| route.rule_for_model(&meta.model))
         .cloned();
-    let route_model_override = rule
-        .as_ref()
-        .map(|rule| rule.upstream_model.as_str())
-        .or_else(|| {
-            route
-                .as_ref()
-                .and_then(|route| route.default_model.as_deref())
-        });
+    let route_model_override = match rule.as_ref() {
+        Some(rule) => rule.upstream_model_override(),
+        None => route
+            .as_ref()
+            .and_then(|route| route.default_model.as_deref()),
+    };
     let convertible: Vec<GatewayChannel> = channels
         .into_iter()
         .filter(|channel| conversion_supported(inlet, channel.dialect))
@@ -738,11 +776,14 @@ pub async fn run(
     // Upstream channel model filters describe the name that will actually be
     // sent upstream, not the client-facing alias.
     let routing_model = route_model_override.unwrap_or(&meta.model);
-    let mut candidates = candidates_for_model(&convertible, routing_model, unhealthy, entropy);
+    let rank = |channel: &GatewayChannel| dialect_conversion_rank(inlet, channel.dialect);
+    let mut candidates =
+        candidates_for_model_ranked(&convertible, routing_model, unhealthy, rank, entropy);
     if candidates.is_empty() {
         // All matching channels may be marked unhealthy — retry without the
         // health filter rather than failing outright.
-        candidates = candidates_for_model(&convertible, routing_model, |_| false, entropy);
+        candidates =
+            candidates_for_model_ranked(&convertible, routing_model, |_| false, rank, entropy);
     }
     if candidates.is_empty() {
         return PipelineOutcome::Json {
@@ -802,7 +843,7 @@ pub async fn run(
                 )
                 .await;
             }
-            if failover_worthy(status) {
+            if failover_worthy(status) || model_unavailable_response(status, &text) {
                 continue;
             }
             return PipelineOutcome::Json {
@@ -997,6 +1038,39 @@ mod tests {
                 assert!(conversion_supported(inlet, channel));
             }
         }
+    }
+
+    #[test]
+    fn native_and_rich_conversion_paths_rank_before_chat() {
+        assert_eq!(
+            dialect_conversion_rank(Dialect::Messages, Dialect::Messages),
+            0
+        );
+        assert_eq!(
+            dialect_conversion_rank(Dialect::Messages, Dialect::Responses),
+            1
+        );
+        assert_eq!(dialect_conversion_rank(Dialect::Messages, Dialect::Chat), 2);
+    }
+
+    #[test]
+    fn only_model_availability_validation_errors_trigger_failover() {
+        assert!(model_unavailable_response(
+            400,
+            r#"{"error":{"message":"model gpt-x is not supported"}}"#
+        ));
+        assert!(model_unavailable_response(
+            404,
+            r#"{"message":"模型不存在"}"#
+        ));
+        assert!(!model_unavailable_response(
+            400,
+            r#"{"error":{"message":"messages is required"}}"#
+        ));
+        assert!(!model_unavailable_response(
+            401,
+            r#"{"message":"unknown model"}"#
+        ));
     }
 
     #[test]

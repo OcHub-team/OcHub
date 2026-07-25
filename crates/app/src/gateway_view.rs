@@ -1,9 +1,10 @@
 //! User-facing relay-station manager.
 //!
 //! A station is presented as one complete commercial relay configuration
-//! (New API, Sub2API, or another compatible service). The local gateway,
-//! per-CLI keys, route bindings, and protocol conversion remain implementation
-//! details and are deliberately hidden from this page.
+//! (New API, Sub2API, or another compatible service) that may expose several
+//! API interfaces. OcHub detects and chooses those interfaces automatically;
+//! users only configure model-specific exceptions. The local gateway, per-CLI
+//! keys, route bindings, and failover weights remain implementation details.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -37,8 +38,27 @@ pub enum GatewayEvent {
 
 #[derive(Clone)]
 struct RelayStation {
-    channel: GatewayChannel,
+    channels: Vec<GatewayChannel>,
     route: GatewayRoute,
+}
+
+impl RelayStation {
+    fn primary_channel(&self) -> Option<&GatewayChannel> {
+        self.channels
+            .iter()
+            .find(|channel| channel.enabled)
+            .or_else(|| self.channels.first())
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.route.enabled && self.channels.iter().any(|channel| channel.enabled)
+    }
+
+    fn supports_app(&self, app_type: AppType) -> bool {
+        self.channels
+            .iter()
+            .any(|channel| channel.enabled && apply::dialect_compatible(channel.dialect, app_type))
+    }
 }
 
 #[derive(Clone)]
@@ -53,25 +73,26 @@ struct ModelRuleEditor {
     id: u64,
     client_model: Entity<TextInput>,
     station_model: Entity<TextInput>,
+    dialect: Option<Dialect>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProbeState {
     Idle,
     Running,
-    Detected(Dialect),
+    Detected,
     Failed,
 }
 
 struct StationEditor {
-    channel_id: String,
     route_id: String,
     created_at: i64,
+    existing_channels: HashMap<Dialect, GatewayChannel>,
+    enabled_dialects: HashSet<Dialect>,
     name: Entity<TextInput>,
     base_url: Entity<TextInput>,
     api_key: Entity<TextInput>,
     default_model: Entity<TextInput>,
-    dialect: Dialect,
     rules: Vec<ModelRuleEditor>,
     reasoning_mode: GatewayReasoningMode,
     low_budget: Entity<TextInput>,
@@ -79,9 +100,11 @@ struct StationEditor {
     high_budget: Entity<TextInput>,
     max_budget: Entity<TextInput>,
     enabled: bool,
+    show_advanced: bool,
     probe: ProbeState,
     reveal_key: bool,
     name_error: Option<SharedString>,
+    dialects_error: Option<SharedString>,
     budget_error: Option<SharedString>,
     rules_error: Option<SharedString>,
 }
@@ -128,6 +151,9 @@ impl GatewayView {
         // Which fields are flagged does not change — only the wording does.
         if editor.name_error.is_some() {
             editor.name_error = Some(t(k::GATEWAY_EDITOR_ERROR_NAME));
+        }
+        if editor.dialects_error.is_some() {
+            editor.dialects_error = Some(t(k::GATEWAY_EDITOR_ERROR_DIALECTS));
         }
         if editor.budget_error.is_some() {
             editor.budget_error = Some(t(k::GATEWAY_EDITOR_ERROR_BUDGET));
@@ -214,32 +240,53 @@ impl GatewayView {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let channels = self.app.db.get_gateway_channels().unwrap_or_default();
         let routes = self.app.db.get_gateway_routes().unwrap_or_default();
-        let route_map: HashMap<String, GatewayRoute> = routes
-            .into_iter()
-            .map(|route| (route.id.clone(), route))
+        let channel_map: HashMap<&str, &GatewayChannel> = channels
+            .iter()
+            .map(|channel| (channel.id.as_str(), channel))
             .collect();
-
-        self.stations = channels
-            .into_iter()
-            .map(|channel| {
-                let route_id = apply::station_route_id(&channel.id);
-                let route = route_map
-                    .get(&route_id)
-                    .cloned()
-                    .unwrap_or_else(|| GatewayRoute {
-                        id: route_id,
-                        name: channel.name.clone(),
-                        app_type: None,
-                        channel_ids: vec![channel.id.clone()],
-                        default_model: None,
-                        model_rules: Vec::new(),
-                        reasoning: GatewayReasoningConfig::default(),
-                        enabled: channel.enabled,
-                        created_at: chrono::Utc::now().timestamp(),
-                    });
-                RelayStation { channel, route }
-            })
-            .collect();
+        let mut referenced_channels = HashSet::new();
+        let mut stations = Vec::new();
+        for route in routes
+            .iter()
+            .filter(|route| route.id.starts_with(apply::STATION_ROUTE_PREFIX))
+        {
+            let grouped: Vec<GatewayChannel> = route
+                .channel_ids
+                .iter()
+                .filter_map(|id| channel_map.get(id.as_str()).copied().cloned())
+                .collect();
+            if grouped.is_empty() {
+                continue;
+            }
+            referenced_channels.extend(grouped.iter().map(|channel| channel.id.clone()));
+            stations.push(RelayStation {
+                channels: grouped,
+                route: route.clone(),
+            });
+        }
+        // Control-API users may have created a channel without its hidden
+        // user-facing station route. Keep that legacy state visible and
+        // editable; the next save persists the synthesized grouping.
+        for channel in channels
+            .iter()
+            .filter(|channel| !referenced_channels.contains(&channel.id))
+        {
+            stations.push(RelayStation {
+                channels: vec![channel.clone()],
+                route: GatewayRoute {
+                    id: apply::station_route_id(&channel.id),
+                    name: channel.name.clone(),
+                    app_type: None,
+                    channel_ids: vec![channel.id.clone()],
+                    default_model: None,
+                    model_rules: Vec::new(),
+                    reasoning: GatewayReasoningConfig::default(),
+                    enabled: channel.enabled,
+                    created_at: chrono::Utc::now().timestamp(),
+                },
+            });
+        }
+        self.stations = stations;
 
         let keys = self.app.db.get_gateway_keys().unwrap_or_default();
         self.active_station_by_app.clear();
@@ -272,7 +319,7 @@ impl GatewayView {
         let imported_ids: HashSet<String> = self
             .stations
             .iter()
-            .map(|station| station.channel.id.clone())
+            .flat_map(|station| station.channels.iter().map(|channel| channel.id.clone()))
             .collect();
         for app_type in enabled_apps {
             if let Ok(providers) = ProviderService::list(&self.app, app_type) {
@@ -302,49 +349,54 @@ impl GatewayView {
 
     fn open_editor(&mut self, station: Option<&RelayStation>, cx: &mut Context<Self>) {
         let (
-            channel_id,
             route_id,
             created_at,
             name,
             base_url,
             api_key,
             default_model,
-            dialect,
+            channels,
             rules,
             reasoning,
             enabled,
         ) = match station {
-            Some(station) => (
-                station.channel.id.clone(),
-                station.route.id.clone(),
-                station.route.created_at,
-                station.channel.name.clone(),
-                station.channel.base_url.clone(),
-                station.channel.api_key.clone(),
-                station.route.default_model.clone().unwrap_or_default(),
-                station.channel.dialect,
-                station.route.model_rules.clone(),
-                station.route.reasoning.clone(),
-                station.channel.enabled && station.route.enabled,
-            ),
-            None => {
-                let channel_id = uuid::Uuid::new_v4().to_string();
+            Some(station) => {
+                let primary = station.primary_channel();
                 (
-                    channel_id.clone(),
-                    apply::station_route_id(&channel_id),
-                    chrono::Utc::now().timestamp(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    Dialect::Messages,
-                    Vec::new(),
-                    GatewayReasoningConfig::default(),
-                    true,
+                    station.route.id.clone(),
+                    station.route.created_at,
+                    station.route.name.clone(),
+                    primary
+                        .map(|channel| channel.base_url.clone())
+                        .unwrap_or_default(),
+                    primary
+                        .map(|channel| channel.api_key.clone())
+                        .unwrap_or_default(),
+                    station.route.default_model.clone().unwrap_or_default(),
+                    station.channels.clone(),
+                    station.route.model_rules.clone(),
+                    station.route.reasoning.clone(),
+                    station.route.enabled,
                 )
             }
+            None => (
+                format!("{}{}", apply::STATION_ROUTE_PREFIX, uuid::Uuid::new_v4()),
+                chrono::Utc::now().timestamp(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                GatewayReasoningConfig::default(),
+                true,
+            ),
         };
 
+        let channel_dialects: HashMap<String, Dialect> = channels
+            .iter()
+            .map(|channel| (channel.id.clone(), channel.dialect))
+            .collect();
         let mut rule_editors = Vec::new();
         for rule in rules {
             let id = self.next_rule_id;
@@ -365,13 +417,33 @@ impl GatewayView {
                         &rule.upstream_model,
                     )
                 }),
+                dialect: rule
+                    .channel_id
+                    .as_ref()
+                    .and_then(|channel_id| channel_dialects.get(channel_id).copied()),
             });
         }
 
+        let enabled_dialects: HashSet<Dialect> = channels
+            .iter()
+            .filter(|channel| channel.enabled)
+            .map(|channel| channel.dialect)
+            .collect();
+        let existing_channels: HashMap<Dialect, GatewayChannel> = channels
+            .into_iter()
+            .map(|channel| (channel.dialect, channel))
+            .collect();
+        let show_advanced =
+            !default_model.is_empty() || reasoning != GatewayReasoningConfig::default();
         self.editor = Some(StationEditor {
-            channel_id,
             route_id,
             created_at,
+            existing_channels,
+            enabled_dialects: if station.is_none() {
+                HashSet::from([Dialect::Messages])
+            } else {
+                enabled_dialects
+            },
             name: cx.new(|cx| text_input(cx, t(k::GATEWAY_EDITOR_NAME_PLACEHOLDER), &name)),
             base_url: cx.new(|cx| text_input(cx, "https://api.example.com", &base_url)),
             api_key: cx.new(|cx| {
@@ -384,7 +456,6 @@ impl GatewayView {
                     &default_model,
                 )
             }),
-            dialect,
             rules: rule_editors,
             reasoning_mode: reasoning.mode,
             low_budget: cx.new(|cx| text_input(cx, "4096", &reasoning.low_budget.to_string())),
@@ -393,9 +464,11 @@ impl GatewayView {
             high_budget: cx.new(|cx| text_input(cx, "16000", &reasoning.high_budget.to_string())),
             max_budget: cx.new(|cx| text_input(cx, "32000", &reasoning.max_budget.to_string())),
             enabled,
+            show_advanced,
             probe: ProbeState::Idle,
             reveal_key: false,
             name_error: None,
+            dialects_error: None,
             budget_error: None,
             rules_error: None,
         });
@@ -432,6 +505,7 @@ impl GatewayView {
                 station_model: cx.new(|cx| {
                     TextInput::new(cx, t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER))
                 }),
+                dialect: None,
             });
             cx.notify();
         }
@@ -440,6 +514,35 @@ impl GatewayView {
     fn remove_model_rule(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(editor) = &mut self.editor {
             editor.rules.retain(|rule| rule.id != id);
+            cx.notify();
+        }
+    }
+
+    fn set_rule_dialect(&mut self, id: u64, dialect: Option<Dialect>, cx: &mut Context<Self>) {
+        if let Some(rule) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| editor.rules.iter_mut().find(|rule| rule.id == id))
+        {
+            rule.dialect = dialect;
+            cx.notify();
+        }
+    }
+
+    fn toggle_editor_dialect(&mut self, dialect: Dialect, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        if !editor.enabled_dialects.remove(&dialect) {
+            editor.enabled_dialects.insert(dialect);
+        }
+        editor.probe = ProbeState::Idle;
+        cx.notify();
+    }
+
+    fn toggle_editor_advanced(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.editor {
+            editor.show_advanced = !editor.show_advanced;
             cx.notify();
         }
     }
@@ -455,6 +558,10 @@ impl GatewayView {
         } else {
             None
         };
+        let dialects_error: Option<SharedString> = editor
+            .enabled_dialects
+            .is_empty()
+            .then(|| t(k::GATEWAY_EDITOR_ERROR_DIALECTS));
 
         let budgets = (
             parse_budget(&editor.low_budget, cx),
@@ -480,23 +587,34 @@ impl GatewayView {
         for rule in &editor.rules {
             let client_model = input_value(&rule.client_model, cx);
             let station_model = input_value(&rule.station_model, cx);
-            if client_model.is_empty() && station_model.is_empty() {
+            if client_model.is_empty() && station_model.is_empty() && rule.dialect.is_none() {
                 continue;
             }
-            if client_model.is_empty() || station_model.is_empty() {
+            if client_model.is_empty()
+                || rule
+                    .dialect
+                    .is_some_and(|dialect| !editor.enabled_dialects.contains(&dialect))
+            {
                 rules_error = Some(t(k::GATEWAY_EDITOR_ERROR_RULES));
                 break;
             }
             rules.push(GatewayModelRule {
                 model: client_model,
                 upstream_model: station_model,
-                channel_id: Some(editor.channel_id.clone()),
+                channel_id: rule
+                    .dialect
+                    .map(|dialect| editor_channel_id(editor, dialect)),
             });
         }
 
-        if name_error.is_some() || budget_error.is_some() || rules_error.is_some() {
+        if name_error.is_some()
+            || dialects_error.is_some()
+            || budget_error.is_some()
+            || rules_error.is_some()
+        {
             if let Some(editor) = &mut self.editor {
                 editor.name_error = name_error;
+                editor.dialects_error = dialects_error;
                 editor.budget_error = budget_error;
                 editor.rules_error = rules_error;
             }
@@ -505,6 +623,7 @@ impl GatewayView {
         }
         if let Some(editor) = &mut self.editor {
             editor.name_error = None;
+            editor.dialects_error = None;
             editor.budget_error = None;
             editor.rules_error = None;
         }
@@ -512,31 +631,44 @@ impl GatewayView {
             return;
         };
 
-        let imported_from = self
-            .stations
-            .iter()
-            .find(|station| station.channel.id == editor.channel_id)
-            .and_then(|station| station.channel.imported_from.clone());
-        let channel = GatewayChannel {
-            id: editor.channel_id.clone(),
-            name: name.clone(),
-            dialect: editor.dialect,
-            base_url,
-            api_key: input_value(&editor.api_key, cx),
-            path_override: None,
-            models: Vec::new(),
-            model_override: None,
-            priority: 0,
-            weight: 1,
-            enabled: editor.enabled,
-            extra_headers: Vec::new(),
-            imported_from,
-        };
+        let api_key = input_value(&editor.api_key, cx);
+        let mut channels = Vec::new();
+        for dialect in Dialect::ALL {
+            if !editor.enabled_dialects.contains(&dialect)
+                && !editor.existing_channels.contains_key(&dialect)
+            {
+                continue;
+            }
+            let mut channel = editor
+                .existing_channels
+                .get(&dialect)
+                .cloned()
+                .unwrap_or_else(|| GatewayChannel {
+                    id: editor_channel_id(editor, dialect),
+                    name: name.clone(),
+                    dialect,
+                    base_url: base_url.clone(),
+                    api_key: api_key.clone(),
+                    path_override: None,
+                    models: Vec::new(),
+                    model_override: None,
+                    priority: 0,
+                    weight: 1,
+                    enabled: true,
+                    extra_headers: Vec::new(),
+                    imported_from: None,
+                });
+            channel.name = name.clone();
+            channel.base_url = base_url.clone();
+            channel.api_key = api_key.clone();
+            channel.enabled = editor.enabled_dialects.contains(&dialect);
+            channels.push(channel);
+        }
         let route = GatewayRoute {
             id: editor.route_id.clone(),
             name: name.clone(),
             app_type: None,
-            channel_ids: vec![editor.channel_id.clone()],
+            channel_ids: channels.iter().map(|channel| channel.id.clone()).collect(),
             default_model: nonempty(input_value(&editor.default_model, cx)),
             model_rules: rules,
             reasoning: GatewayReasoningConfig {
@@ -550,10 +682,9 @@ impl GatewayView {
             created_at: editor.created_at,
         };
 
-        let result = self
-            .app
-            .db
-            .upsert_gateway_channel(&channel)
+        let result = channels
+            .iter()
+            .try_for_each(|channel| self.app.db.upsert_gateway_channel(channel))
             .and_then(|_| self.app.db.upsert_gateway_route(&route));
         match result {
             Ok(()) => {
@@ -582,22 +713,15 @@ impl GatewayView {
         else {
             return;
         };
-        let enabled = !(station.channel.enabled && station.route.enabled);
-        let mut channel = station.channel;
+        let enabled = !station.is_enabled();
         let mut route = station.route;
-        channel.enabled = enabled;
         route.enabled = enabled;
-        match self
-            .app
-            .db
-            .upsert_gateway_channel(&channel)
-            .and_then(|_| self.app.db.upsert_gateway_route(&route))
-        {
+        match self.app.db.upsert_gateway_route(&route) {
             Ok(()) => {
                 let message = if enabled {
-                    tf!(k::GATEWAY_STATUS_ENABLED, name = channel.name)
+                    tf!(k::GATEWAY_STATUS_ENABLED, name = route.name)
                 } else {
-                    tf!(k::GATEWAY_STATUS_DISABLED, name = channel.name)
+                    tf!(k::GATEWAY_STATUS_DISABLED, name = route.name)
                 };
                 self.set_status(NotificationLevel::Success, message, cx);
                 self.reload(cx);
@@ -627,13 +751,20 @@ impl GatewayView {
     }
 
     fn delete_station(&mut self, route_id: String, cx: &mut Context<Self>) {
-        let channel_id = self
+        let channel_ids = self
             .stations
             .iter()
             .find(|station| station.route.id == route_id)
-            .map(|station| station.channel.id.clone());
+            .map(|station| {
+                station
+                    .channels
+                    .iter()
+                    .map(|channel| channel.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let result = self.app.db.delete_gateway_route(&route_id).and_then(|_| {
-            if let Some(channel_id) = channel_id {
+            for channel_id in channel_ids {
                 self.app.db.delete_gateway_channel(&channel_id)?;
             }
             Ok(())
@@ -690,7 +821,7 @@ impl GatewayView {
         else {
             return;
         };
-        if !station.channel.enabled || !station.route.enabled {
+        if !station.is_enabled() {
             self.set_status(
                 NotificationLevel::Warning,
                 t(k::GATEWAY_STATUS_DISABLED_BLOCKED),
@@ -698,13 +829,13 @@ impl GatewayView {
             );
             return;
         }
-        if !apply::dialect_compatible(station.channel.dialect, app_type) {
+        if !station.supports_app(app_type) {
             self.set_status(
                 NotificationLevel::Warning,
                 tf!(
                     k::GATEWAY_STATUS_DIALECT_UNSUPPORTED,
                     app = crate::app_meta::label(app_type),
-                    name = station.channel.name,
+                    name = station.route.name,
                 ),
                 cx,
             );
@@ -724,7 +855,7 @@ impl GatewayView {
             NotificationLevel::Info,
             tf!(
                 k::GATEWAY_STATUS_APPLYING,
-                name = station.channel.name,
+                name = station.route.name,
                 app = crate::app_meta::label(app_type),
             ),
             cx,
@@ -834,7 +965,7 @@ impl GatewayView {
         .detach();
     }
 
-    fn detect_dialect(&mut self, cx: &mut Context<Self>) {
+    fn detect_dialects(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = &self.editor else {
             return;
         };
@@ -857,18 +988,17 @@ impl GatewayView {
         cx.spawn(async move |this, cx| {
             let detected = app
                 .gateway
-                .detect_dialect(base_url, api_key)
+                .detect_dialects(base_url, api_key)
                 .await
-                .ok()
-                .flatten();
+                .unwrap_or_default();
             this.update(cx, |this, cx| {
                 if let Some(editor) = &mut this.editor {
-                    match detected {
-                        Some(dialect) => {
-                            editor.dialect = dialect;
-                            editor.probe = ProbeState::Detected(dialect);
-                        }
-                        None => editor.probe = ProbeState::Failed,
+                    if detected.is_empty() {
+                        editor.probe = ProbeState::Failed;
+                    } else {
+                        editor.enabled_dialects = detected.iter().copied().collect();
+                        editor.probe = ProbeState::Detected;
+                        editor.dialects_error = None;
                     }
                 }
                 cx.notify();
@@ -1003,7 +1133,7 @@ impl GatewayView {
                     .stations
                     .iter()
                     .find(|station| station.route.id == route_id)
-                    .map(|station| station.channel.name.clone())
+                    .map(|station| station.route.name.clone())
                     .unwrap_or_else(|| raw(k::GATEWAY_SUMMARY_UNKNOWN).to_string());
                 let action = if app_type.is_additive_mode() {
                     components::button(
@@ -1200,30 +1330,57 @@ impl GatewayView {
     }
 
     fn render_station(&self, station: &RelayStation, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let enabled = station.channel.enabled && station.route.enabled;
+        let enabled = station.is_enabled();
         let route_id = station.route.id.clone();
         let route_id_for_toggle = route_id.clone();
         let station_for_edit = station.clone();
         let route_id_for_delete = route_id.clone();
-        let station_name_for_delete = station.channel.name.clone();
-        let reasoning = match station.route.reasoning.mode {
-            GatewayReasoningMode::Auto => raw(k::GATEWAY_CARD_REASONING_AUTO),
-            GatewayReasoningMode::Passthrough => raw(k::GATEWAY_CARD_REASONING_PASSTHROUGH),
-            GatewayReasoningMode::Disabled => raw(k::GATEWAY_CARD_REASONING_DISABLED),
+        let station_name = station.route.name.clone();
+        let station_name_for_delete = station_name.clone();
+        let base_url = station
+            .primary_channel()
+            .map(|channel| channel.base_url.clone())
+            .unwrap_or_default();
+        let mut model_summary = if station.route.model_rules.is_empty() {
+            raw(k::GATEWAY_CARD_ROUTING_AUTO).to_string()
+        } else {
+            tf!(
+                k::GATEWAY_CARD_ROUTING_EXCEPTIONS,
+                count = station.route.model_rules.len(),
+            )
         };
-        let model_summary = match (
-            station.route.default_model.as_deref(),
-            station.route.model_rules.len(),
-        ) {
-            (Some(model), 0) => tf!(k::GATEWAY_CARD_MODEL_DEFAULT, model = model),
-            (Some(model), count) => tf!(
-                k::GATEWAY_CARD_MODEL_DEFAULT_WITH_RULES,
-                model = model,
-                count = count,
-            ),
-            (None, 0) => raw(k::GATEWAY_CARD_MODEL_PASSTHROUGH).to_string(),
-            (None, count) => tf!(k::GATEWAY_CARD_MODEL_RULES, count = count),
-        };
+        if let Some(model) = station.route.default_model.as_deref() {
+            model_summary.push_str(" · ");
+            model_summary.push_str(&tf!(k::GATEWAY_CARD_MODEL_DEFAULT, model = model));
+        }
+        match station.route.reasoning.mode {
+            GatewayReasoningMode::Auto => {}
+            GatewayReasoningMode::Passthrough => {
+                model_summary.push_str(" · ");
+                model_summary.push_str(raw(k::GATEWAY_CARD_REASONING_PASSTHROUGH));
+            }
+            GatewayReasoningMode::Disabled => {
+                model_summary.push_str(" · ");
+                model_summary.push_str(raw(k::GATEWAY_CARD_REASONING_DISABLED));
+            }
+        }
+        let dialect_badges: Vec<gpui::AnyElement> = Dialect::ALL
+            .into_iter()
+            .filter(|dialect| {
+                station
+                    .channels
+                    .iter()
+                    .any(|channel| channel.enabled && channel.dialect == *dialect)
+            })
+            .map(|dialect| {
+                components::badge(dialect_badge_tone(dialect), dialect_label(dialect))
+                    .into_any_element()
+            })
+            .collect();
+        let imported = station
+            .channels
+            .iter()
+            .any(|channel| channel.imported_from.is_some());
 
         let app_buttons: Vec<gpui::AnyElement> = apply::supported_apps()
             .iter()
@@ -1235,11 +1392,11 @@ impl GatewayView {
                     .get(&app_type)
                     .is_some_and(|active_route| active_route == &station.route.id);
                 let busy = self.applying.is_some();
-                let compatible = apply::dialect_compatible(station.channel.dialect, app_type);
+                let compatible = station.supports_app(app_type);
                 let button = components::button(
                     SharedString::from(format!(
                         "station-apply-{}-{}",
-                        station.channel.id,
+                        station.route.id,
                         app_type.as_str()
                     )),
                     if active {
@@ -1276,7 +1433,7 @@ impl GatewayView {
         let editing = self
             .editor
             .as_ref()
-            .is_some_and(|editor| editor.channel_id == station.channel.id);
+            .is_some_and(|editor| editor.route_id == station.route.id);
         components::card()
             .gap_3()
             .when(editing, |panel| panel.opacity(components::DISABLED_OPACITY))
@@ -1308,15 +1465,10 @@ impl GatewayView {
                                             .text_color(theme::text())
                                             .text_base()
                                             .font_weight(FontWeight::BOLD)
-                                            .child(SharedString::from(
-                                                station.channel.name.clone(),
-                                            )),
+                                            .child(SharedString::from(station_name.clone())),
                                     )
-                                    .child(components::badge(
-                                        BadgeTone::Neutral,
-                                        dialect_label(station.channel.dialect),
-                                    ))
-                                    .when(station.channel.imported_from.is_some(), |row| {
+                                    .children(dialect_badges)
+                                    .when(imported, |row| {
                                         row.child(components::badge(
                                             BadgeTone::Neutral,
                                             t(k::GATEWAY_CARD_BADGE_IMPORTED),
@@ -1340,11 +1492,14 @@ impl GatewayView {
                                     .text_color(theme::muted())
                                     .text_xs()
                                     .truncate()
-                                    .child(SharedString::from(station.channel.base_url.clone())),
+                                    .child(SharedString::from(base_url)),
                             )
-                            .child(div().text_color(theme::subtext()).text_xs().child(
-                                SharedString::from(format!("{model_summary} · {reasoning}")),
-                            )),
+                            .child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_xs()
+                                    .child(SharedString::from(model_summary)),
+                            ),
                     )
                     .child(
                         div()
@@ -1358,12 +1513,12 @@ impl GatewayView {
                                 layout::toggle(enabled)
                                     .id(SharedString::from(format!(
                                         "station-toggle-{}",
-                                        station.channel.id
+                                        station.route.id
                                     )))
                                     .role(gpui::Role::Switch)
                                     .aria_label(SharedString::from(tf!(
                                         k::GATEWAY_CARD_TOGGLE_ARIA,
-                                        name = station.channel.name
+                                        name = station_name
                                     )))
                                     .aria_toggled(if enabled {
                                         gpui::Toggled::True
@@ -1379,7 +1534,7 @@ impl GatewayView {
                                 components::button(
                                     SharedString::from(format!(
                                         "station-edit-{}",
-                                        station.channel.id
+                                        station.route.id
                                     )),
                                     t(k::GATEWAY_ACTION_EDIT),
                                     ButtonTone::Neutral,
@@ -1395,7 +1550,7 @@ impl GatewayView {
                                 components::button(
                                     SharedString::from(format!(
                                         "station-delete-{}",
-                                        station.channel.id
+                                        station.route.id
                                     )),
                                     t(k::GATEWAY_ACTION_DELETE),
                                     ButtonTone::Danger,
@@ -1434,30 +1589,6 @@ impl GatewayView {
     }
 
     fn render_editor(&self, editor: &StationEditor, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let dialect_index = match editor.dialect {
-            Dialect::Messages => 0,
-            Dialect::Chat => 1,
-            Dialect::Responses => 2,
-        };
-        let on_dialect_select = cx.listener(|this, index: &usize, _window, cx| {
-            let dialect = match index {
-                1 => Dialect::Chat,
-                2 => Dialect::Responses,
-                _ => Dialect::Messages,
-            };
-            if let Some(editor) = &mut this.editor {
-                editor.dialect = dialect;
-            }
-            if dialect == Dialect::Chat {
-                this.set_status(
-                    NotificationLevel::Warning,
-                    t(k::GATEWAY_STATUS_CHAT_DIALECT_CAVEAT),
-                    cx,
-                );
-            } else {
-                cx.notify();
-            }
-        });
         let reasoning_index = match editor.reasoning_mode {
             GatewayReasoningMode::Auto => 0,
             GatewayReasoningMode::Passthrough => 1,
@@ -1473,44 +1604,139 @@ impl GatewayView {
             }
             cx.notify();
         });
+        let dialect_controls: Vec<gpui::AnyElement> = Dialect::ALL
+            .into_iter()
+            .map(|dialect| {
+                let selected = editor.enabled_dialects.contains(&dialect);
+                let control = div()
+                    .id(SharedString::from(format!(
+                        "station-interface-{}",
+                        dialect.as_str()
+                    )))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(dialect_label(dialect)))
+                    .aria_selected(selected)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .border_1()
+                    .cursor_pointer()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(components::status_dot_sized(
+                        if selected {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        },
+                        7.,
+                    ))
+                    .child(dialect_label(dialect))
+                    .hover(|style| style.border_color(theme::accent().alpha(0.5)));
+                let control = if selected {
+                    control
+                        .bg(theme::accent_soft())
+                        .border_color(theme::accent().alpha(0.35))
+                        .text_color(theme::accent())
+                } else {
+                    control
+                        .bg(theme::inset())
+                        .border_color(theme::border())
+                        .text_color(theme::subtext())
+                };
+                control
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.toggle_editor_dialect(dialect, cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect();
         let rule_rows: Vec<gpui::AnyElement> = editor
             .rules
             .iter()
             .map(|rule| {
                 let rule_id = rule.id;
+                let dialect_index = match rule.dialect {
+                    None => 0,
+                    Some(Dialect::Messages) => 1,
+                    Some(Dialect::Responses) => 2,
+                    Some(Dialect::Chat) => 3,
+                };
+                let on_rule_dialect_select =
+                    cx.listener(move |this, index: &usize, _window, cx| {
+                        let dialect = match index {
+                            1 => Some(Dialect::Messages),
+                            2 => Some(Dialect::Responses),
+                            3 => Some(Dialect::Chat),
+                            _ => None,
+                        };
+                        this.set_rule_dialect(rule_id, dialect, cx);
+                    });
                 div()
                     .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_end()
-                    .gap_2()
+                    .flex_col()
+                    .gap_3()
                     .w_full()
-                    .child(div().flex_1().min_w(px(220.)).child(components::field(
-                        t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_LABEL),
-                        false,
-                        None,
-                        rule.client_model.clone(),
-                    )))
-                    .child(div().flex_1().min_w(px(220.)).child(components::field(
-                        t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_LABEL),
-                        false,
-                        None,
-                        rule.station_model.clone(),
-                    )))
+                    .p_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme::border())
+                    .bg(theme::inset())
                     .child(
-                        components::icon_button_tone(
-                            SharedString::from(format!("station-rule-delete-{rule_id}")),
-                            t(k::GATEWAY_EDITOR_RULE_DELETE),
-                            IconName::Trash,
-                            ButtonTone::Ghost,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.remove_model_rule(rule_id, cx);
-                            },
-                        )),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_end()
+                            .gap_2()
+                            .w_full()
+                            .child(div().flex_1().min_w(px(220.)).child(components::field(
+                                t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_LABEL),
+                                false,
+                                None,
+                                rule.client_model.clone(),
+                            )))
+                            .child(div().flex_1().min_w(px(220.)).child(components::field(
+                                t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_LABEL),
+                                false,
+                                Some(t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_HELP)),
+                                rule.station_model.clone(),
+                            )))
+                            .child(
+                                components::icon_button_tone(
+                                    SharedString::from(format!("station-rule-delete-{rule_id}")),
+                                    t(k::GATEWAY_EDITOR_RULE_DELETE),
+                                    IconName::Trash,
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.remove_model_rule(rule_id, cx);
+                                    },
+                                )),
+                            ),
                     )
+                    .child(components::field(
+                        t(k::GATEWAY_EDITOR_RULE_DIALECT_LABEL),
+                        false,
+                        None,
+                        components::segmented(
+                            SharedString::from(format!("station-rule-dialect-{rule_id}")),
+                            &[
+                                raw(k::GATEWAY_EDITOR_RULE_DIALECT_AUTO),
+                                "Anthropic Messages",
+                                "OpenAI Responses",
+                                "OpenAI Chat",
+                            ],
+                            dialect_index,
+                            move |index, window, cx| on_rule_dialect_select(&index, window, cx),
+                        ),
+                    ))
                     .into_any_element()
             })
             .collect();
@@ -1518,11 +1744,15 @@ impl GatewayView {
         let probe_help: SharedString = match editor.probe {
             ProbeState::Idle => t(k::GATEWAY_EDITOR_DIALECT_HELP_IDLE),
             ProbeState::Running => t(k::GATEWAY_EDITOR_DIALECT_HELP_RUNNING),
-            ProbeState::Detected(dialect) => tf!(
-                k::GATEWAY_EDITOR_DIALECT_HELP_DETECTED,
-                dialect = dialect_label(dialect)
-            )
-            .into(),
+            ProbeState::Detected => {
+                let dialects = Dialect::ALL
+                    .into_iter()
+                    .filter(|dialect| editor.enabled_dialects.contains(dialect))
+                    .map(dialect_label)
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                tf!(k::GATEWAY_EDITOR_DIALECT_HELP_DETECTED, dialect = dialects).into()
+            }
             ProbeState::Failed => t(k::GATEWAY_EDITOR_DIALECT_HELP_FAILED),
         };
         components::card()
@@ -1544,7 +1774,7 @@ impl GatewayView {
                                 if self
                                     .stations
                                     .iter()
-                                    .any(|station| station.channel.id == editor.channel_id)
+                                    .any(|station| station.route.id == editor.route_id)
                                 {
                                     t(k::GATEWAY_EDITOR_TITLE_EDIT)
                                 } else {
@@ -1656,12 +1886,7 @@ impl GatewayView {
                     .flex_wrap()
                     .items_center()
                     .gap_2()
-                    .child(components::segmented(
-                        "station-dialect",
-                        &["Anthropic Messages", "OpenAI Chat", "OpenAI Responses"],
-                        dialect_index,
-                        move |index, window, cx| on_dialect_select(&index, window, cx),
-                    ))
+                    .children(dialect_controls)
                     .child(
                         components::button(
                             "station-dialect-detect",
@@ -1675,20 +1900,48 @@ impl GatewayView {
                         )
                         .on_click(cx.listener(
                             |this, _event, _window, cx| {
-                                this.detect_dialect(cx);
+                                this.detect_dialects(cx);
                             },
                         )),
                     ),
             ))
+            .when_some(editor.dialects_error.clone(), |panel, error| {
+                panel.child(div().text_color(theme::red()).text_xs().child(error))
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(theme::accent_soft())
+                    .child(icon(IconName::Check, theme::accent(), 14.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_color(theme::accent())
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(t(k::GATEWAY_EDITOR_ROUTING_AUTO_TITLE)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_xs()
+                                    .child(t(k::GATEWAY_EDITOR_ROUTING_AUTO_DESCRIPTION)),
+                            ),
+                    ),
+            )
             .child(section_title(
                 t(k::GATEWAY_EDITOR_MODELS_TITLE),
                 t(k::GATEWAY_EDITOR_MODELS_DESCRIPTION),
-            ))
-            .child(components::field(
-                t(k::GATEWAY_EDITOR_DEFAULT_MODEL_LABEL),
-                false,
-                Some(t(k::GATEWAY_EDITOR_DEFAULT_MODEL_HELP)),
-                editor.default_model.clone(),
             ))
             .child(
                 div()
@@ -1731,57 +1984,83 @@ impl GatewayView {
                         .child(t(k::GATEWAY_EDITOR_RULES_EMPTY)),
                 )
             })
-            .child(section_title(
-                t(k::GATEWAY_EDITOR_REASONING_TITLE),
-                t(k::GATEWAY_EDITOR_REASONING_DESCRIPTION),
-            ))
-            .child(components::field(
-                t(k::GATEWAY_EDITOR_REASONING_LABEL),
-                false,
-                None,
-                components::segmented(
-                    "station-reasoning",
-                    &[
-                        raw(k::GATEWAY_EDITOR_REASONING_OPTION_AUTO),
-                        raw(k::GATEWAY_EDITOR_REASONING_OPTION_PASSTHROUGH),
-                        raw(k::GATEWAY_EDITOR_REASONING_OPTION_DISABLED),
-                    ],
-                    reasoning_index,
-                    move |index, window, cx| on_reasoning_select(&index, window, cx),
-                ),
-            ))
-            .when(
-                editor.reasoning_mode == GatewayReasoningMode::Auto,
-                |panel| {
-                    panel.child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap_2()
-                            .w_full()
-                            .children(
-                                [
-                                    ("Low", editor.low_budget.clone()),
-                                    ("Medium", editor.medium_budget.clone()),
-                                    ("High", editor.high_budget.clone()),
-                                    ("Max", editor.max_budget.clone()),
-                                ]
-                                .into_iter()
-                                .map(|(label, input)| {
-                                    div().flex_1().min_w(px(150.)).child(components::field(
-                                        label,
-                                        false,
-                                        Some(t(k::GATEWAY_EDITOR_REASONING_BUDGET_HELP)),
-                                        input,
-                                    ))
-                                }),
-                            ),
-                    )
-                },
+            .child(
+                components::disclosure(
+                    "station-advanced",
+                    t(k::GATEWAY_EDITOR_ADVANCED_TITLE),
+                    t(k::GATEWAY_EDITOR_ADVANCED_DESCRIPTION),
+                    editor.show_advanced,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.toggle_editor_advanced(cx);
+                })),
             )
-            .when_some(editor.budget_error.clone(), |panel, error| {
-                panel.child(div().text_color(theme::red()).text_xs().child(error))
+            .when(editor.show_advanced, |panel| {
+                panel
+                    .child(components::field(
+                        t(k::GATEWAY_EDITOR_DEFAULT_MODEL_LABEL),
+                        false,
+                        Some(t(k::GATEWAY_EDITOR_DEFAULT_MODEL_HELP)),
+                        editor.default_model.clone(),
+                    ))
+                    .child(section_title(
+                        t(k::GATEWAY_EDITOR_REASONING_TITLE),
+                        t(k::GATEWAY_EDITOR_REASONING_DESCRIPTION),
+                    ))
+                    .child(components::field(
+                        t(k::GATEWAY_EDITOR_REASONING_LABEL),
+                        false,
+                        None,
+                        components::segmented(
+                            "station-reasoning",
+                            &[
+                                raw(k::GATEWAY_EDITOR_REASONING_OPTION_AUTO),
+                                raw(k::GATEWAY_EDITOR_REASONING_OPTION_PASSTHROUGH),
+                                raw(k::GATEWAY_EDITOR_REASONING_OPTION_DISABLED),
+                            ],
+                            reasoning_index,
+                            move |index, window, cx| on_reasoning_select(&index, window, cx),
+                        ),
+                    ))
+                    .when(
+                        editor.reasoning_mode == GatewayReasoningMode::Auto,
+                        |panel| {
+                            panel.child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .w_full()
+                                    .children(
+                                        [
+                                            ("Low", editor.low_budget.clone()),
+                                            ("Medium", editor.medium_budget.clone()),
+                                            ("High", editor.high_budget.clone()),
+                                            ("Max", editor.max_budget.clone()),
+                                        ]
+                                        .into_iter()
+                                        .map(
+                                            |(label, input)| {
+                                                div().flex_1().min_w(px(150.)).child(
+                                                    components::field(
+                                                        label,
+                                                        false,
+                                                        Some(t(
+                                                            k::GATEWAY_EDITOR_REASONING_BUDGET_HELP,
+                                                        )),
+                                                        input,
+                                                    ),
+                                                )
+                                            },
+                                        ),
+                                    ),
+                            )
+                        },
+                    )
+                    .when_some(editor.budget_error.clone(), |panel, error| {
+                        panel.child(div().text_color(theme::red()).text_xs().child(error))
+                    })
             })
             .into_any_element()
     }
@@ -2051,6 +2330,28 @@ fn dialect_label(dialect: Dialect) -> &'static str {
         Dialect::Chat => "OpenAI Chat",
         Dialect::Responses => "OpenAI Responses",
     }
+}
+
+fn dialect_badge_tone(dialect: Dialect) -> BadgeTone {
+    match dialect {
+        Dialect::Messages => BadgeTone::Mauve,
+        Dialect::Responses => BadgeTone::Teal,
+        Dialect::Chat => BadgeTone::Neutral,
+    }
+}
+
+fn editor_channel_id(editor: &StationEditor, dialect: Dialect) -> String {
+    editor
+        .existing_channels
+        .get(&dialect)
+        .map(|channel| channel.id.clone())
+        .unwrap_or_else(|| {
+            let station_id = editor
+                .route_id
+                .strip_prefix(apply::STATION_ROUTE_PREFIX)
+                .unwrap_or(&editor.route_id);
+            format!("station-channel:{station_id}:{}", dialect.as_str())
+        })
 }
 
 fn text_input(

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Wire dialect an endpoint or channel speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Dialect {
     /// Block-structured dialect (`/v1/messages`).
@@ -21,6 +21,8 @@ pub enum Dialect {
 }
 
 impl Dialect {
+    pub const ALL: [Self; 3] = [Self::Messages, Self::Responses, Self::Chat];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Dialect::Messages => "messages",
@@ -96,7 +98,10 @@ pub struct GatewayKey {
 pub struct GatewayModelRule {
     /// Client-facing model name or wildcard pattern.
     pub model: String,
-    /// Model name sent to the selected upstream.
+    /// Model name sent to the selected upstream. Empty keeps the client model,
+    /// which lets a rule constrain only the API dialect without forcing users
+    /// to repeat an identical model name.
+    #[serde(default)]
     pub upstream_model: String,
     /// Optional hard binding to one upstream channel.
     #[serde(default)]
@@ -106,6 +111,11 @@ pub struct GatewayModelRule {
 impl GatewayModelRule {
     pub fn matches_model(&self, model: &str) -> bool {
         pattern_matches(&self.model, model)
+    }
+
+    pub fn upstream_model_override(&self) -> Option<&str> {
+        let model = self.upstream_model.trim();
+        (!model.is_empty()).then_some(model)
     }
 }
 
@@ -257,8 +267,8 @@ impl GatewayRoute {
             }
         }
         for rule in &self.model_rules {
-            if rule.model.trim().is_empty() || rule.upstream_model.trim().is_empty() {
-                return Err("模型映射两端都不能为空".to_string());
+            if rule.model.trim().is_empty() {
+                return Err("模型规则必须填写客户端模型".to_string());
             }
             if let Some(channel_id) = &rule.channel_id {
                 if channel_id.trim().is_empty() {
@@ -427,5 +437,30 @@ mod tests {
         assert!(route.validate().is_err());
         route.model_rules[0].channel_id = Some("allowed".into());
         assert!(route.validate().is_ok());
+    }
+
+    #[test]
+    fn model_rule_can_pin_a_channel_without_renaming_the_model() {
+        let route = GatewayRoute {
+            id: "route".into(),
+            name: "route".into(),
+            app_type: None,
+            channel_ids: vec!["messages".into()],
+            default_model: None,
+            model_rules: vec![GatewayModelRule {
+                model: "claude-*".into(),
+                upstream_model: String::new(),
+                channel_id: Some("messages".into()),
+            }],
+            reasoning: GatewayReasoningConfig::default(),
+            enabled: true,
+            created_at: 1,
+        };
+        assert!(route.validate().is_ok());
+        assert_eq!(
+            route.model_rules[0].upstream_model_override(),
+            None,
+            "an interface-only exception preserves the requested model"
+        );
     }
 }

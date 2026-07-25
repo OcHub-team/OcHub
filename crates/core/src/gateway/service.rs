@@ -29,10 +29,10 @@ enum GatewayCommand {
     Stop(oneshot::Sender<Result<(), AppError>>),
     Reload(oneshot::Sender<Result<GatewayConfig, AppError>>),
     Probe(oneshot::Sender<Result<(), AppError>>),
-    DetectDialect {
+    DetectDialects {
         base_url: String,
         api_key: String,
-        reply: oneshot::Sender<Option<Dialect>>,
+        reply: oneshot::Sender<Vec<Dialect>>,
     },
     Shutdown,
 }
@@ -174,15 +174,15 @@ impl GatewayService {
         })?
     }
 
-    /// Guess an upstream's dialect on the background runtime (see
-    /// [`crate::gateway::health::detect_dialect`]).
-    pub async fn detect_dialect(
+    /// Detect every API dialect exposed by an upstream on the background
+    /// runtime (see [`crate::gateway::health::detect_dialects`]).
+    pub async fn detect_dialects(
         &self,
         base_url: String,
         api_key: String,
-    ) -> Result<Option<Dialect>, AppError> {
+    ) -> Result<Vec<Dialect>, AppError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.send(GatewayCommand::DetectDialect {
+        self.send(GatewayCommand::DetectDialects {
             base_url,
             api_key,
             reply: reply_tx,
@@ -190,6 +190,19 @@ impl GatewayService {
         reply_rx.await.map_err(|_| {
             AppError::Config("gateway background service dropped the detect request".into())
         })
+    }
+
+    /// Backwards-compatible single-dialect view of [`Self::detect_dialects`].
+    pub async fn detect_dialect(
+        &self,
+        base_url: String,
+        api_key: String,
+    ) -> Result<Option<Dialect>, AppError> {
+        Ok(self
+            .detect_dialects(base_url, api_key)
+            .await?
+            .into_iter()
+            .next())
     }
 }
 
@@ -249,17 +262,17 @@ impl GatewayWorker {
                         let _ = reply.send(Ok(()));
                     });
                 }
-                GatewayCommand::DetectDialect {
+                GatewayCommand::DetectDialects {
                     base_url,
                     api_key,
                     reply,
                 } => {
                     let client = self.state.http_client.clone();
                     tokio::spawn(async move {
-                        let dialect =
-                            crate::gateway::health::detect_dialect(&client, &base_url, &api_key)
+                        let dialects =
+                            crate::gateway::health::detect_dialects(&client, &base_url, &api_key)
                                 .await;
-                        let _ = reply.send(dialect);
+                        let _ = reply.send(dialects);
                     });
                 }
                 GatewayCommand::Shutdown => break,

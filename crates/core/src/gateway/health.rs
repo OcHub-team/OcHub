@@ -42,6 +42,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// What a single endpoint probe told us about the route.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum EndpointSignal {
     /// The endpoint parsed our (deliberately invalid) body — it exists.
     Strong,
@@ -75,54 +76,68 @@ async fn post_probe(
     }
 }
 
-/// Guess which dialect an upstream speaks by probing its three candidate
-/// endpoints with a minimal invalid body. The caller's real API key is used so
-/// auth middleware passes and validation errors (route exists) shine through.
-/// Preference order when several endpoints exist: Messages > Responses > Chat
-/// (richest dialect first — it passes through for messages clients).
+fn dialects_from_signals(
+    messages: EndpointSignal,
+    responses: EndpointSignal,
+    chat: EndpointSignal,
+) -> Vec<Dialect> {
+    let signals = [
+        (Dialect::Messages, messages),
+        (Dialect::Responses, responses),
+        (Dialect::Chat, chat),
+    ];
+    let strong: Vec<Dialect> = signals
+        .iter()
+        .filter_map(|(dialect, signal)| (*signal == EndpointSignal::Strong).then_some(*dialect))
+        .collect();
+    if !strong.is_empty() {
+        return strong;
+    }
+    signals
+        .iter()
+        .filter_map(|(dialect, signal)| (*signal == EndpointSignal::Weak).then_some(*dialect))
+        .collect()
+}
+
+/// Detect every API dialect exposed by an upstream by probing the three
+/// candidate endpoints with minimal invalid bodies. Strong validation signals
+/// win; weak auth/middleware signals are returned only when none of the routes
+/// could be confirmed strongly.
+pub async fn detect_dialects(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+) -> Vec<Dialect> {
+    let base = base_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Vec::new();
+    }
+    let bearer = format!("Bearer {api_key}");
+    let messages_url = format!("{base}/v1/messages");
+    let responses_url = format!("{base}/v1/responses");
+    let chat_url = format!("{base}/v1/chat/completions");
+    let messages_headers = [("x-api-key", api_key), ("anthropic-version", "2023-06-01")];
+    let bearer_headers = [("authorization", bearer.as_str())];
+    let (messages, responses, chat) = tokio::join!(
+        post_probe(client, &messages_url, &messages_headers),
+        post_probe(client, &responses_url, &bearer_headers),
+        post_probe(client, &chat_url, &bearer_headers),
+    );
+    dialects_from_signals(messages, responses, chat)
+}
+
+/// Backwards-compatible single-dialect detector for API callers that have not
+/// adopted multi-interface stations yet. Preference remains Messages,
+/// Responses, then Chat.
 pub async fn detect_dialect(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
 ) -> Option<Dialect> {
-    let base = base_url.trim_end_matches('/');
-    if base.is_empty() {
-        return None;
-    }
-    let bearer = format!("Bearer {api_key}");
-    let messages = post_probe(
-        client,
-        &format!("{base}/v1/messages"),
-        &[("x-api-key", api_key), ("anthropic-version", "2023-06-01")],
-    )
-    .await;
-    if matches!(messages, EndpointSignal::Strong) {
-        return Some(Dialect::Messages);
-    }
-    let responses = post_probe(
-        client,
-        &format!("{base}/v1/responses"),
-        &[("authorization", bearer.as_str())],
-    )
-    .await;
-    if matches!(responses, EndpointSignal::Strong) {
-        return Some(Dialect::Responses);
-    }
-    let chat = post_probe(
-        client,
-        &format!("{base}/v1/chat/completions"),
-        &[("authorization", bearer.as_str())],
-    )
-    .await;
-    if matches!(chat, EndpointSignal::Strong) {
-        return Some(Dialect::Chat);
-    }
-    match (messages, responses, chat) {
-        (EndpointSignal::Weak, _, _) => Some(Dialect::Messages),
-        (_, EndpointSignal::Weak, _) => Some(Dialect::Responses),
-        (_, _, EndpointSignal::Weak) => Some(Dialect::Chat),
-        _ => None,
-    }
+    detect_dialects(client, base_url, api_key)
+        .await
+        .into_iter()
+        .next()
 }
 
 /// Probe all enabled channels once, updating the shared health map.
@@ -171,4 +186,33 @@ pub fn spawn_prober(
             probe_all(&db, &client, &health).await;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strong_endpoint_signals_exclude_ambiguous_weak_ones() {
+        assert_eq!(
+            dialects_from_signals(
+                EndpointSignal::Strong,
+                EndpointSignal::Weak,
+                EndpointSignal::Strong,
+            ),
+            vec![Dialect::Messages, Dialect::Chat]
+        );
+    }
+
+    #[test]
+    fn weak_signals_are_kept_when_nothing_is_confirmed() {
+        assert_eq!(
+            dialects_from_signals(
+                EndpointSignal::Absent,
+                EndpointSignal::Weak,
+                EndpointSignal::Weak,
+            ),
+            vec![Dialect::Responses, Dialect::Chat]
+        );
+    }
 }
