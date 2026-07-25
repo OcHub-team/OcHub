@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Catalog file stem paired with the generated table name. Adding a language
+/// Catalog directory name paired with the generated table name. Adding a language
 /// means adding one entry here, one `.toml` file, and one `Locale` variant in
 /// `ochub_core::i18n` — no call sites change.
 const LOCALES: &[(&str, &str)] = &[("zh-Hans", "ZH"), ("en", "EN"), ("ja", "JA")];
@@ -31,7 +31,7 @@ fn main() {
 
     let catalogs: BTreeMap<&str, BTreeMap<String, String>> = LOCALES
         .iter()
-        .map(|(stem, _)| (*stem, read_catalog(&dir.join(format!("{stem}.toml")))))
+        .map(|(stem, _)| (*stem, read_catalog(&dir.join(stem))))
         .collect();
 
     let reference = &catalogs[REFERENCE];
@@ -122,15 +122,54 @@ fn main() {
     std::fs::write(&dest, out).expect("write generated catalog");
 }
 
-fn read_catalog(path: &Path) -> BTreeMap<String, String> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-    toml::from_str::<BTreeMap<String, String>>(&text).unwrap_or_else(|err| {
-        panic!(
-            "failed to parse {} (every entry must be `\"key\" = \"text\"`): {err}",
-            path.display()
-        )
-    })
+/// Merge every `*.toml` under a locale's directory into one catalog.
+///
+/// Splitting by area keeps each file small enough to review, and means two
+/// people (or two agents) editing different areas never touch the same file.
+/// A key defined twice within a locale is an error rather than a silent
+/// last-one-wins.
+fn read_catalog(dir: &Path) -> BTreeMap<String, String> {
+    let mut merged: BTreeMap<String, String> = BTreeMap::new();
+    let mut origin: BTreeMap<String, String> = BTreeMap::new();
+
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "{} contains no .toml catalogs",
+        dir.display()
+    );
+
+    for path in files {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let entries: BTreeMap<String, String> =
+            toml::from_str(&text).unwrap_or_else(|err| {
+                panic!(
+                    "failed to parse {} (every entry must be `\"key\" = \"text\"`): {err}",
+                    path.display()
+                )
+            });
+        for (key, value) in entries {
+            if let Some(previous) = origin.insert(key.clone(), name.clone()) {
+                panic!(
+                    "{}: key `{key}` is defined in both {previous} and {name}",
+                    dir.display()
+                );
+            }
+            merged.insert(key, value);
+        }
+    }
+    merged
 }
 
 /// The set of `{name}` placeholders in a template, ignoring `{{`/`}}` escapes.
