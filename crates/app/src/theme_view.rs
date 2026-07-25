@@ -12,9 +12,12 @@ use gpui::{
 use ochub_core::settings::{self, ThemeMode};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme::{
     self, Theme, ThemeColor, ThemeFamily, ThemeRecord, ThemeWindowBackground,
     MAX_SURFACE_OPACITY_PERCENT, MIN_SURFACE_OPACITY_PERCENT, THEME_TOKENS,
@@ -45,8 +48,8 @@ impl EditorVariant {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Light => "浅色",
-            Self::Dark => "深色",
+            Self::Light => raw(k::THEME_EDITOR_VARIANT_LIGHT),
+            Self::Dark => raw(k::THEME_EDITOR_VARIANT_DARK),
         }
     }
 
@@ -102,6 +105,9 @@ enum ThemeEditorBlock {
     Information,
     Variant,
     Material,
+    /// A colour-token group, named by the identity `ThemeTokenDescriptor::group`
+    /// carries. It is matched with `==`, never rendered — `token_group_header`
+    /// maps it to the text a user sees.
     TokenGroup(&'static str),
 }
 
@@ -122,6 +128,7 @@ pub struct ThemeView {
     selected_family: String,
     mode: ThemeMode,
     status: Option<SharedString>,
+    status_level: Option<NotificationLevel>,
     editor: Option<ThemeEditor>,
     editor_list_state: ListState,
     manager_list_state: ListState,
@@ -136,6 +143,26 @@ impl ThemeView {
     /// translation that changes a row's height would otherwise leave the list
     /// scrolled to stale offsets.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        // Placeholders are captured when an input is constructed, so an editor
+        // that is already open needs them pushed in by hand. The opacity and
+        // colour fields hint at a format (`0–100%`, `#RRGGBB`) rather than at
+        // prose, so they are the same in every language.
+        if let Some(editor) = self.editor.as_ref() {
+            let (name, author, description) = (
+                editor.name.clone(),
+                editor.author.clone(),
+                editor.description.clone(),
+            );
+            name.update(cx, |input, cx| {
+                input.set_placeholder(t(k::THEME_EDITOR_INFO_NAME_PLACEHOLDER), cx)
+            });
+            author.update(cx, |input, cx| {
+                input.set_placeholder(t(k::THEME_EDITOR_INFO_AUTHOR_PLACEHOLDER), cx)
+            });
+            description.update(cx, |input, cx| {
+                input.set_placeholder(t(k::THEME_EDITOR_INFO_DESCRIPTION_PLACEHOLDER), cx)
+            });
+        }
         self.editor_list_state.remeasure();
         self.manager_list_state.remeasure();
         cx.notify();
@@ -174,17 +201,19 @@ impl ThemeView {
             theme::DEFAULT_THEME_FAMILY.to_string()
         };
         let status = (!registry.diagnostics.is_empty()).then(|| {
-            SharedString::from(format!(
-                "有 {} 个用户主题未能加载，可检查主题文件格式。",
-                registry.diagnostics.len()
+            SharedString::from(tf!(
+                k::THEME_STATUS_DIAGNOSTICS,
+                count = registry.diagnostics.len()
             ))
         });
+        let status_level = status.is_some().then_some(NotificationLevel::Warning);
         let manager_item_count = Self::manager_item_count(registry.themes.len());
         Self {
             registry,
             selected_family,
             mode: settings.theme_mode,
             status,
+            status_level,
             editor: None,
             editor_list_state: ListState::new(
                 THEME_EDITOR_BLOCKS.len(),
@@ -205,9 +234,24 @@ impl ThemeView {
             .reset(Self::manager_item_count(self.registry.themes.len()));
     }
 
-    fn set_status(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+    /// Every status carries its own severity; nothing is left to keyword
+    /// inference, which cannot survive translation.
+    fn set_status(
+        &mut self,
+        level: NotificationLevel,
+        message: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.status = Some(message.into());
+        self.status_level = Some(level);
         cx.notify();
+    }
+
+    /// Drop a pending status without emitting a toast, keeping the level in
+    /// step so it can never leak onto the next message.
+    fn clear_status(&mut self) {
+        self.status = None;
+        self.status_level = None;
     }
 
     fn persist_selection(&self) -> Result<()> {
@@ -234,20 +278,28 @@ impl ThemeView {
             .find(|record| record.family.id == family_id)
             .map(|record| record.family.clone())
         else {
-            self.set_status("主题不存在或已被移除", cx);
+            self.set_status(NotificationLevel::Error, t(k::THEME_STATUS_MISSING), cx);
             return;
         };
 
         self.selected_family = family_id;
         self.mode = mode;
         if let Err(err) = self.persist_selection() {
-            self.set_status(format!("保存主题选择失败: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::THEME_STATUS_SELECTION_SAVE_FAILED, error = err),
+                cx,
+            );
             return;
         }
         theme::install_family(&family, mode, window.appearance());
         theme::apply_window_background(window);
         cx.refresh_windows();
-        self.set_status(format!("已应用 {}", family.name), cx);
+        self.set_status(
+            NotificationLevel::Success,
+            tf!(k::THEME_STATUS_APPLIED, name = family.name),
+            cx,
+        );
     }
 
     fn set_mode(&mut self, mode: ThemeMode, window: &mut Window, cx: &mut Context<Self>) {
@@ -275,9 +327,21 @@ impl ThemeView {
 
     fn make_editor(&self, family: ThemeFamily, cx: &mut Context<Self>) -> ThemeEditor {
         let variant = EditorVariant::current();
-        let name = Self::make_input(cx, "主题名称", family.name.clone());
-        let author = Self::make_input(cx, "作者", family.author.clone());
-        let description = Self::make_input(cx, "主题说明", family.description.clone());
+        let name = Self::make_input(
+            cx,
+            raw(k::THEME_EDITOR_INFO_NAME_PLACEHOLDER),
+            family.name.clone(),
+        );
+        let author = Self::make_input(
+            cx,
+            raw(k::THEME_EDITOR_INFO_AUTHOR_PLACEHOLDER),
+            family.author.clone(),
+        );
+        let description = Self::make_input(
+            cx,
+            raw(k::THEME_EDITOR_INFO_DESCRIPTION_PLACEHOLDER),
+            family.description.clone(),
+        );
         ThemeEditor {
             family,
             variant,
@@ -339,16 +403,24 @@ impl ThemeView {
             .find(|record| record.family.id == family_id)
             .cloned()
         else {
-            self.set_status("找不到要编辑的主题", cx);
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::THEME_STATUS_EDIT_MISSING),
+                cx,
+            );
             return;
         };
         if record.built_in {
-            self.set_status("内置主题只读，请先复制再编辑", cx);
+            self.set_status(
+                NotificationLevel::Warning,
+                t(k::THEME_STATUS_BUILT_IN_READ_ONLY),
+                cx,
+            );
             return;
         }
         self.editor = Some(self.make_editor(record.family, cx));
         self.editor_list_state.remeasure();
-        self.status = None;
+        self.clear_status();
         cx.notify();
     }
 
@@ -361,11 +433,14 @@ impl ThemeView {
         let value = value.trim_end_matches('%').trim();
         let parsed = value
             .parse::<u8>()
-            .with_context(|| format!("{label}需要填写整数百分比"))?;
+            .with_context(|| tf!(k::THEME_ERROR_OPACITY_INTEGER, field = label))?;
         if !(MIN_SURFACE_OPACITY_PERCENT..=MAX_SURFACE_OPACITY_PERCENT).contains(&parsed) {
-            return Err(anyhow!(
-                "{label}必须在 {MIN_SURFACE_OPACITY_PERCENT}–{MAX_SURFACE_OPACITY_PERCENT}% 之间"
-            ));
+            return Err(anyhow!(tf!(
+                k::THEME_ERROR_OPACITY_RANGE,
+                field = label,
+                min = MIN_SURFACE_OPACITY_PERCENT,
+                max = MAX_SURFACE_OPACITY_PERCENT,
+            )));
         }
         Ok(parsed)
     }
@@ -374,7 +449,7 @@ impl ThemeView {
         let editor = self
             .editor
             .as_mut()
-            .ok_or_else(|| anyhow!("没有正在编辑的主题"))?;
+            .ok_or_else(|| anyhow!(raw(k::THEME_ERROR_NO_EDITOR)))?;
         editor.family.name = Self::input_value(&editor.name, cx);
         editor.family.author = Self::input_value(&editor.author, cx);
         editor.family.description = Self::input_value(&editor.description, cx);
@@ -384,14 +459,34 @@ impl ThemeView {
             .effects
             .sidebar_opacity
             .as_ref()
-            .map(|input| Self::opacity_value(input, &format!("{label} · 侧边栏不透明度"), cx))
+            .map(|input| {
+                Self::opacity_value(
+                    input,
+                    &tf!(
+                        k::THEME_ERROR_FIELD_QUALIFIED,
+                        variant = label,
+                        field = raw(k::THEME_EDITOR_MATERIAL_SIDEBAR_OPACITY_LABEL),
+                    ),
+                    cx,
+                )
+            })
             .transpose()?;
         let content_opacity = editor
             .variant_inputs
             .effects
             .content_opacity
             .as_ref()
-            .map(|input| Self::opacity_value(input, &format!("{label} · 主界面不透明度"), cx))
+            .map(|input| {
+                Self::opacity_value(
+                    input,
+                    &tf!(
+                        k::THEME_ERROR_FIELD_QUALIFIED,
+                        variant = label,
+                        field = raw(k::THEME_EDITOR_MATERIAL_CONTENT_OPACITY_LABEL),
+                    ),
+                    cx,
+                )
+            })
             .transpose()?;
         let colors = THEME_TOKENS
             .iter()
@@ -399,7 +494,13 @@ impl ThemeView {
             .filter_map(|(index, descriptor)| {
                 editor.variant_inputs.colors[index].as_ref().map(|input| {
                     ThemeColor::parse(&Self::input_value(input, cx))
-                        .with_context(|| format!("{label} · {}", descriptor.label))
+                        .with_context(|| {
+                            tf!(
+                                k::THEME_ERROR_FIELD_QUALIFIED,
+                                variant = label,
+                                field = descriptor.label,
+                            )
+                        })
                         .map(|color| (descriptor.token, color))
                 })
             })
@@ -432,7 +533,11 @@ impl ThemeView {
             return;
         }
         if let Err(err) = self.sync_editor(cx) {
-            self.set_status(format!("无法切换外观变体: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::THEME_STATUS_VARIANT_SWITCH_FAILED, error = err),
+                cx,
+            );
             return;
         }
         if let Some(editor) = self.editor.as_mut() {
@@ -445,7 +550,11 @@ impl ThemeView {
 
     fn preview_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(err) = self.sync_editor(cx) {
-            self.set_status(format!("无法预览: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::THEME_STATUS_PREVIEW_FAILED, error = err),
+                cx,
+            );
             return;
         }
         let Some(editor) = self.editor.as_ref() else {
@@ -456,33 +565,45 @@ impl ThemeView {
         theme::install_preview(palette, dark);
         theme::apply_window_background(window);
         cx.refresh_windows();
-        self.set_status("正在预览草稿；保存或取消后会退出预览", cx);
+        self.set_status(NotificationLevel::Info, t(k::THEME_STATUS_PREVIEWING), cx);
     }
 
     fn cancel_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editor = None;
         self.restore_saved_theme(window, cx);
-        self.status = None;
+        self.clear_status();
         cx.notify();
     }
 
     fn save_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(err) = self.sync_editor(cx) {
-            self.set_status(format!("保存失败: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::THEME_STATUS_SAVE_FAILED, error = err),
+                cx,
+            );
             return;
         }
         let Some(family) = self.editor.as_ref().map(|editor| editor.family.clone()) else {
             return;
         };
         if let Err(err) = theme::save_user_family(&family) {
-            self.set_status(format!("保存失败: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::THEME_STATUS_SAVE_FAILED, error = err),
+                cx,
+            );
             return;
         }
         self.registry = theme::load_registry();
         self.reset_manager_list();
         self.editor = None;
         self.apply_selection(family.id.clone(), self.mode, window, cx);
-        self.set_status(format!("已保存并应用 {}", family.name), cx);
+        self.set_status(
+            NotificationLevel::Success,
+            tf!(k::THEME_STATUS_SAVED, name = family.name),
+            cx,
+        );
     }
 
     fn duplicate_and_edit(&mut self, family_id: &str, cx: &mut Context<Self>) {
@@ -493,17 +614,25 @@ impl ThemeView {
             .find(|record| record.family.id == family_id)
             .map(|record| record.family.clone())
         else {
-            self.set_status("找不到要复制的主题", cx);
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::THEME_STATUS_DUPLICATE_MISSING),
+                cx,
+            );
             return;
         };
         match theme::duplicate_family(&source) {
             Ok(family) => {
                 self.editor = Some(self.make_editor(family, cx));
                 self.editor_list_state.remeasure();
-                self.status = None;
+                self.clear_status();
                 cx.notify();
             }
-            Err(err) => self.set_status(format!("复制主题失败: {err}"), cx),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::THEME_STATUS_DUPLICATE_FAILED, error = err),
+                cx,
+            ),
         }
     }
 
@@ -512,7 +641,7 @@ impl ThemeView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("导入 OcHub 主题".into()),
+            prompt: Some(t(k::THEME_IMPORT_PROMPT)),
         });
         cx.spawn(async move |this, cx| {
             let path = match receiver.await {
@@ -529,13 +658,17 @@ impl ThemeView {
                 Ok(family) => {
                     this.registry = theme::load_registry();
                     this.reset_manager_list();
-                    this.status = Some(SharedString::from(format!(
-                        "已导入 {}，浅色与深色配色均通过校验。",
-                        family.name
-                    )));
-                    cx.notify();
+                    this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::THEME_STATUS_IMPORTED, name = family.name),
+                        cx,
+                    );
                 }
-                Err(err) => this.set_status(format!("导入主题失败: {err}"), cx),
+                Err(err) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::THEME_STATUS_IMPORT_FAILED, error = err),
+                    cx,
+                ),
             })
             .ok();
         })
@@ -550,7 +683,11 @@ impl ThemeView {
             .find(|record| record.family.id == family_id)
             .map(|record| record.family.clone())
         else {
-            self.set_status("找不到要导出的主题", cx);
+            self.set_status(
+                NotificationLevel::Error,
+                t(k::THEME_STATUS_EXPORT_MISSING),
+                cx,
+            );
             return;
         };
         let directory = ochub_core::paths::get_app_config_dir();
@@ -569,8 +706,16 @@ impl ThemeView {
                 .background_spawn(async move { theme::export_family(&family, &path) })
                 .await;
             this.update(cx, |this, cx| match result {
-                Ok(()) => this.set_status(format!("主题已导出到 {display_path}"), cx),
-                Err(err) => this.set_status(format!("导出主题失败: {err}"), cx),
+                Ok(()) => this.set_status(
+                    NotificationLevel::Success,
+                    tf!(k::THEME_STATUS_EXPORTED, path = display_path),
+                    cx,
+                ),
+                Err(err) => this.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::THEME_STATUS_EXPORT_FAILED, error = err),
+                    cx,
+                ),
             })
             .ok();
         })
@@ -588,11 +733,19 @@ impl ThemeView {
             .find(|record| record.family.id == family_id)
             .cloned()
         else {
-            self.set_status("主题已不存在", cx);
+            self.set_status(
+                NotificationLevel::Warning,
+                t(k::THEME_STATUS_DELETE_MISSING),
+                cx,
+            );
             return;
         };
         if let Err(err) = theme::delete_user_family(&record) {
-            self.set_status(format!("删除主题失败: {err}"), cx);
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(k::THEME_STATUS_DELETE_FAILED, error = err),
+                cx,
+            );
             return;
         }
         if self.selected_family == family_id {
@@ -604,7 +757,11 @@ impl ThemeView {
         }
         self.registry = theme::load_registry();
         self.reset_manager_list();
-        self.set_status(format!("已删除 {}", record.family.name), cx);
+        self.set_status(
+            NotificationLevel::Success,
+            tf!(k::THEME_STATUS_DELETED, name = record.family.name),
+            cx,
+        );
     }
 
     fn mode_index(mode: ThemeMode) -> usize {
@@ -1174,7 +1331,7 @@ impl ThemeView {
             actions = actions.child(
                 components::button(
                     SharedString::from(format!("theme-apply-{family_id}")),
-                    "应用",
+                    t(k::THEME_CARD_APPLY),
                     ButtonTone::Primary,
                     ButtonSize::Sm,
                 )
@@ -1187,7 +1344,7 @@ impl ThemeView {
             actions = actions.child(
                 components::button(
                     SharedString::from(format!("theme-copy-{family_id}")),
-                    "复制并编辑",
+                    t(k::THEME_CARD_DUPLICATE),
                     ButtonTone::Neutral,
                     ButtonSize::Sm,
                 )
@@ -1200,7 +1357,7 @@ impl ThemeView {
                 .child(
                     components::button(
                         SharedString::from(format!("theme-edit-{family_id}")),
-                        "编辑",
+                        t(k::THEME_CARD_EDIT),
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
                     )
@@ -1211,7 +1368,7 @@ impl ThemeView {
                 .child(
                     components::button(
                         SharedString::from(format!("theme-delete-{family_id}")),
-                        "删除",
+                        t(k::THEME_CARD_DELETE),
                         ButtonTone::Danger,
                         ButtonSize::Sm,
                     )
@@ -1224,7 +1381,7 @@ impl ThemeView {
         actions = actions.child(
             components::button(
                 SharedString::from(format!("theme-export-{family_id}")),
-                "导出",
+                t(k::THEME_CARD_EXPORT),
                 ButtonTone::Ghost,
                 ButtonSize::Sm,
             )
@@ -1281,11 +1438,14 @@ impl ThemeView {
                                     ),
                             )
                             .child(if selected {
-                                components::badge(BadgeTone::Accent, "正在使用")
+                                components::badge(BadgeTone::Accent, t(k::THEME_CARD_BADGE_ACTIVE))
                             } else if built_in {
-                                components::badge(BadgeTone::Neutral, "内置")
+                                components::badge(
+                                    BadgeTone::Neutral,
+                                    t(k::THEME_CARD_BADGE_BUILT_IN),
+                                )
                             } else {
-                                components::badge(BadgeTone::Teal, "用户")
+                                components::badge(BadgeTone::Teal, t(k::THEME_CARD_BADGE_USER))
                             }),
                     )
                     .child(actions),
@@ -1305,7 +1465,11 @@ impl ThemeView {
             });
             let mode_control = components::segmented(
                 "theme-mode",
-                &["跟随系统", "固定浅色", "固定深色"],
+                &[
+                    raw(k::THEME_MODE_OPTION_SYSTEM),
+                    raw(k::THEME_MODE_OPTION_LIGHT),
+                    raw(k::THEME_MODE_OPTION_DARK),
+                ],
                 Self::mode_index(self.mode),
                 move |index, window, cx| mode_listener(&index, window, cx),
             );
@@ -1316,8 +1480,8 @@ impl ThemeView {
                 .w_full()
                 .pb_3()
                 .child(layout::section_header(
-                    "显示方式",
-                    "每套配色都同时包含浅色与深色；跟随系统时会在同一套配色内自动切换。",
+                    t(k::THEME_MODE_SECTION_TITLE),
+                    t(k::THEME_MODE_SECTION_DESC),
                 ))
                 .child(
                     components::card()
@@ -1327,14 +1491,14 @@ impl ThemeView {
                         .justify_between()
                         .gap_4()
                         .child(layout::row_label(
-                            "主题外观",
-                            "固定模式用于始终使用指定的浅色或深色外观。",
+                            t(k::THEME_MODE_ROW_LABEL),
+                            t(k::THEME_MODE_ROW_DESC),
                         ))
                         .child(mode_control),
                 )
                 .child(layout::section_header(
-                    "主题库",
-                    "色板样图同时展示每套配色的浅色和深色界面。",
+                    t(k::THEME_LIBRARY_SECTION_TITLE),
+                    t(k::THEME_LIBRARY_SECTION_DESC),
                 ))
                 .into_any_element();
         }
@@ -1370,10 +1534,10 @@ impl ThemeView {
         layout::page()
             .relative()
             .child(
-                layout::page_header("主题", Some("管理、预览与分享完整的深浅配色。".into())).child(
+                layout::page_header(t(k::THEME_PAGE_TITLE), Some(t(k::THEME_PAGE_SUBTITLE))).child(
                     components::icon_button_tone(
                         "theme-import",
-                        "导入主题",
+                        t(k::THEME_IMPORT_BUTTON),
                         IconName::Archive,
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
@@ -1398,20 +1562,21 @@ impl ThemeView {
                     .unwrap_or_else(|| family_id.clone());
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("删除主题"))
+                        .child(components::modal_header(t(k::THEME_DELETE_MODAL_TITLE)))
                         .child(
                             components::modal_body().child(
                                 div().text_sm().text_color(theme::subtext()).child(
-                                    SharedString::from(format!(
-                                    "确定删除用户主题「{family_name}」吗？主题文件将从本机移除。"
-                                )),
+                                    SharedString::from(tf!(
+                                        k::THEME_DELETE_MODAL_BODY,
+                                        name = family_name
+                                    )),
                                 ),
                             ),
                         )
                         .child(components::modal_footer(vec![
                             components::button(
                                 "theme-delete-cancel",
-                                "取消",
+                                t(k::THEME_DELETE_MODAL_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -1422,7 +1587,7 @@ impl ThemeView {
                             .into_any_element(),
                             components::button(
                                 "theme-delete-confirm",
-                                "删除",
+                                t(k::THEME_DELETE_MODAL_CONFIRM),
                                 ButtonTone::Danger,
                                 ButtonSize::Sm,
                             )
@@ -1493,6 +1658,38 @@ impl ThemeView {
             .child(div().text_sm().text_color(theme::muted()).child("%"))
     }
 
+    /// Heading and blurb for a colour-token group.
+    ///
+    /// The group name is an identity — `descriptor.group` is matched against it
+    /// with `==` — so it is never rendered directly; this maps it to text that
+    /// follows the locale.
+    fn token_group_header(group: &str) -> (SharedString, SharedString) {
+        match group {
+            "文字与边框" => (
+                t(k::THEME_EDITOR_TOKENS_TEXT_TITLE),
+                t(k::THEME_EDITOR_TOKENS_TEXT_DESC),
+            ),
+            "强调与选中" => (
+                t(k::THEME_EDITOR_TOKENS_ACCENT_TITLE),
+                t(k::THEME_EDITOR_TOKENS_ACCENT_DESC),
+            ),
+            "状态" => (
+                t(k::THEME_EDITOR_TOKENS_STATUS_TITLE),
+                t(k::THEME_EDITOR_TOKENS_STATUS_DESC),
+            ),
+            "效果" => (
+                t(k::THEME_EDITOR_TOKENS_EFFECT_TITLE),
+                t(k::THEME_EDITOR_TOKENS_EFFECT_DESC),
+            ),
+            // "表面", and the unreachable rest: the groups reaching here all come
+            // from `THEME_EDITOR_BLOCKS`.
+            _ => (
+                t(k::THEME_EDITOR_TOKENS_SURFACE_TITLE),
+                t(k::THEME_EDITOR_TOKENS_SURFACE_DESC),
+            ),
+        }
+    }
+
     fn render_editor_block(
         &mut self,
         block: ThemeEditorBlock,
@@ -1528,8 +1725,8 @@ impl ThemeView {
         match block {
             ThemeEditorBlock::Preview => shell
                 .child(layout::section_header(
-                    "配色样图",
-                    "更新预览后，这里和整个应用都会使用当前草稿。",
+                    t(k::THEME_EDITOR_PREVIEW_SECTION_TITLE),
+                    t(k::THEME_EDITOR_PREVIEW_SECTION_DESC),
                 ))
                 .child(
                     div()
@@ -1543,26 +1740,26 @@ impl ThemeView {
                 .into_any_element(),
             ThemeEditorBlock::Information => shell
                 .child(layout::section_header(
-                    "主题信息",
-                    "主题 ID 保持稳定，名称、作者和说明可自由修改。",
+                    t(k::THEME_EDITOR_INFO_SECTION_TITLE),
+                    t(k::THEME_EDITOR_INFO_SECTION_DESC),
                 ))
                 .child(
                     components::card()
                         .gap_3()
                         .child(components::field(
-                            "主题名称",
+                            t(k::THEME_EDITOR_INFO_NAME_LABEL),
                             true,
                             None,
                             editor.name.clone(),
                         ))
                         .child(components::field(
-                            "作者",
+                            t(k::THEME_EDITOR_INFO_AUTHOR_LABEL),
                             false,
                             None,
                             editor.author.clone(),
                         ))
                         .child(components::field(
-                            "说明",
+                            t(k::THEME_EDITOR_INFO_DESCRIPTION_LABEL),
                             false,
                             None,
                             editor.description.clone(),
@@ -1576,8 +1773,8 @@ impl ThemeView {
                 let variant_index = usize::from(editor.variant == EditorVariant::Dark);
                 shell
                     .child(layout::section_header(
-                        "外观变体",
-                        "材质和颜色分别保存在浅色与深色变体中；切换时会立即预览对应草稿。",
+                        t(k::THEME_EDITOR_VARIANT_SECTION_TITLE),
+                        t(k::THEME_EDITOR_VARIANT_SECTION_DESC),
                     ))
                     .child(
                         div()
@@ -1588,15 +1785,18 @@ impl ThemeView {
                             .w_full()
                             .child(components::segmented(
                                 "theme-editor-variant",
-                                &["浅色", "深色"],
+                                &[
+                                    raw(k::THEME_EDITOR_VARIANT_LIGHT),
+                                    raw(k::THEME_EDITOR_VARIANT_DARK),
+                                ],
                                 variant_index,
                                 move |index, window, cx| variant_listener(&index, window, cx),
                             ))
                             .child(div().text_xs().text_color(theme::muted()).child(
                                 if editor.variant == EditorVariant::Light {
-                                    "正在编辑浅色变体"
+                                    t(k::THEME_EDITOR_VARIANT_EDITING_LIGHT)
                                 } else {
-                                    "正在编辑深色变体"
+                                    t(k::THEME_EDITOR_VARIANT_EDITING_DARK)
                                 },
                             )),
                     )
@@ -1625,30 +1825,33 @@ impl ThemeView {
                 };
                 shell
                     .child(layout::section_header(
-                        "界面材质",
-                        "系统负责实际模糊；主题控制哪些区域透出背景以及透出的程度。",
+                        t(k::THEME_EDITOR_MATERIAL_SECTION_TITLE),
+                        t(k::THEME_EDITOR_MATERIAL_SECTION_DESC),
                     ))
                     .child(layout::group(vec![
                         components::field_row(
-                            "窗口背景",
-                            "毛玻璃使用系统合成效果；不透明模式保留主题颜色但不透出桌面。",
+                            t(k::THEME_EDITOR_MATERIAL_WINDOW_BACKGROUND_LABEL),
+                            t(k::THEME_EDITOR_MATERIAL_WINDOW_BACKGROUND_DESC),
                             components::segmented(
                                 "theme-editor-window-background",
-                                &["毛玻璃", "不透明"],
+                                &[
+                                    raw(k::THEME_EDITOR_MATERIAL_WINDOW_BACKGROUND_BLURRED),
+                                    raw(k::THEME_EDITOR_MATERIAL_WINDOW_BACKGROUND_OPAQUE),
+                                ],
                                 background_index,
                                 move |index, window, cx| background_listener(&index, window, cx),
                             ),
                         )
                         .into_any_element(),
                         components::field_row(
-                            "侧边栏不透明度",
-                            "可设置 0–100%，默认 40%；数值越低，侧边栏后方的系统背景越明显。",
+                            t(k::THEME_EDITOR_MATERIAL_SIDEBAR_OPACITY_LABEL),
+                            t(k::THEME_EDITOR_MATERIAL_SIDEBAR_OPACITY_DESC),
                             Self::render_opacity_input(sidebar_opacity),
                         )
                         .into_any_element(),
                         components::field_row(
-                            "主界面不透明度",
-                            "可设置 0–100%，默认 100%；调低后主界面也会透出毛玻璃。",
+                            t(k::THEME_EDITOR_MATERIAL_CONTENT_OPACITY_LABEL),
+                            t(k::THEME_EDITOR_MATERIAL_CONTENT_OPACITY_DESC),
                             Self::render_opacity_input(content_opacity),
                         )
                         .into_any_element(),
@@ -1661,17 +1864,15 @@ impl ThemeView {
                     .into_iter()
                     .map(|(index, input)| Self::render_color_row(index, palette, input))
                     .collect::<Vec<_>>();
+                let (group_title, group_description) = Self::token_group_header(group);
                 shell
                     .when(group == "表面", |section| {
                         section.child(layout::section_header(
-                            "颜色令牌",
-                            "使用 #RRGGBB；浅色与深色必须分别完整配置并通过可读性校验。",
+                            t(k::THEME_EDITOR_TOKENS_SECTION_TITLE),
+                            t(k::THEME_EDITOR_TOKENS_SECTION_DESC),
                         ))
                     })
-                    .child(layout::section_header(
-                        SharedString::from(group.to_string()),
-                        SharedString::from(format!("{group}相关语义颜色。")),
-                    ))
+                    .child(layout::section_header(group_title, group_description))
                     .child(layout::group(rows))
                     .into_any_element()
             }
@@ -1696,8 +1897,8 @@ impl ThemeView {
         layout::page()
             .child(
                 layout::page_header(
-                    SharedString::from(format!("编辑 {}", editor.family.name)),
-                    Some("内置主题的副本可以安全修改、导出和分享。".into()),
+                    SharedString::from(tf!(k::THEME_EDITOR_TITLE, name = editor.family.name)),
+                    Some(t(k::THEME_EDITOR_SUBTITLE)),
                 )
                 .child(
                     div()
@@ -1708,7 +1909,7 @@ impl ThemeView {
                         .child(
                             components::button(
                                 "theme-editor-cancel",
-                                "取消",
+                                t(k::THEME_EDITOR_ACTION_CANCEL),
                                 ButtonTone::Ghost,
                                 ButtonSize::Sm,
                             )
@@ -1721,7 +1922,7 @@ impl ThemeView {
                         .child(
                             components::button(
                                 "theme-editor-preview",
-                                "更新预览",
+                                t(k::THEME_EDITOR_ACTION_PREVIEW),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -1734,7 +1935,7 @@ impl ThemeView {
                         .child(
                             components::button(
                                 "theme-editor-save",
-                                "保存并应用",
+                                t(k::THEME_EDITOR_ACTION_SAVE),
                                 ButtonTone::Primary,
                                 ButtonSize::Sm,
                             )
@@ -1765,7 +1966,7 @@ impl Render for ThemeView {
     }
 }
 
-crate::notifications::impl_status_toasts!(ThemeView);
+crate::notifications::impl_status_toasts_leveled!(ThemeView);
 
 #[cfg(test)]
 mod tests {

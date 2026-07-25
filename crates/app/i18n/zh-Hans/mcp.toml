@@ -1,0 +1,58 @@
+# Simplified Chinese — the MCP servers panel (the reference catalog).
+#
+# The `mcp.*` area belongs to `crates/app/src/mcp_view.rs`: the server list, the
+# add/edit form and the delete confirmation. Keys are sorted alphabetically;
+# `.aria` keys are read by assistive technology only.
+#
+# `mcp.form.spec.help` embeds two literal JSON objects. The build-time
+# placeholder check reads every `{…}` run as a placeholder name, so the two
+# examples must stay byte-identical in every locale — translate the prose around
+# them, never the JSON. The JSON *placeholder* of the spec input is likewise not
+# prose and stays in the Rust source.
+
+"mcp.action.add" = "新增"
+"mcp.action.import" = "从应用导入"
+"mcp.action.sync" = "同步到应用"
+"mcp.card.app_toggle.aria" = "为 {app} 启用 MCP 服务器"
+"mcp.card.apps.label" = "应用：{apps}"
+"mcp.card.apps.none" = "未启用应用"
+"mcp.card.delete" = "删除"
+"mcp.card.edit" = "编辑"
+"mcp.delete.cancel" = "取消"
+"mcp.delete.confirm" = "删除"
+"mcp.delete.message" = "确定删除服务器「{name}」吗？此操作不可撤销。"
+"mcp.delete.title" = "删除 MCP 服务器"
+"mcp.empty.action" = "新增服务器"
+"mcp.empty.hint" = "新增服务器，或从各应用现有配置一键导入。"
+"mcp.empty.title" = "还没有配置 MCP 服务器"
+"mcp.form.app_toggle.aria" = "表单中启用 {app}"
+"mcp.form.apps.label" = "启用到应用"
+"mcp.form.back" = "← 返回"
+"mcp.form.cancel" = "取消"
+"mcp.form.description.label" = "描述"
+"mcp.form.description.placeholder" = "描述（可选）"
+"mcp.form.name.label" = "名称"
+"mcp.form.name.placeholder" = "服务器名称"
+"mcp.form.save" = "保存"
+"mcp.form.spec.help" = '示例：{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem"]} 或 {"type":"sse","url":"https://example.com/sse"}'
+"mcp.form.spec.label" = "服务器 JSON"
+"mcp.form.title.add" = "新增 MCP 服务器"
+"mcp.form.title.edit" = "编辑 MCP 服务器"
+"mcp.page.subtitle" = "统一管理 MCP，并同步到 Claude、Codex、Gemini、OpenCode 和 Hermes。"
+"mcp.page.title" = "MCP 服务器"
+"mcp.status.app_toggled" = "应用启用状态已更新"
+"mcp.status.created" = "服务器已创建"
+"mcp.status.delete_failed" = "删除失败: {error}"
+"mcp.status.deleted" = "服务器已删除"
+"mcp.status.imported" = "已从应用导入 {count} 个新服务器"
+"mcp.status.imported_partial" = "导入完成，新增 {count} 个；失败：{failures}"
+"mcp.status.json_invalid" = "JSON 解析失败: {error}"
+"mcp.status.load_failed" = "加载服务器失败: {error}"
+"mcp.status.missing" = "服务器不存在"
+"mcp.status.name_required" = "名称不能为空"
+"mcp.status.save_failed" = "保存失败: {error}"
+"mcp.status.saved" = "服务器已保存"
+"mcp.status.spec_not_object" = "服务器配置必须是 JSON 对象"
+"mcp.status.sync_failed" = "同步失败: {error}"
+"mcp.status.synced" = "已同步启用的服务器到应用"
+"mcp.status.update_failed" = "更新失败: {error}"

@@ -12,9 +12,12 @@ use ochub_core::services::McpService;
 use ochub_core::{AppState, AppType};
 
 use crate::components::{self, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,6 +31,7 @@ pub struct McpView {
     app: Arc<AppState>,
     servers: Vec<McpServer>,
     status: Option<SharedString>,
+    status_level: Option<NotificationLevel>,
     form_mode: FormMode,
     editing_id: Option<String>,
     name: Entity<TextInput>,
@@ -56,6 +60,15 @@ impl McpView {
     /// translation that changes a row's height would otherwise leave the list
     /// scrolled to stale offsets.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        // Placeholders are captured when the input is constructed, and this
+        // view outlives a locale switch, so they need pushing in by hand. The
+        // spec field's placeholder is a JSON sample and stays as written.
+        self.name.update(cx, |input, cx| {
+            input.set_placeholder(t(k::MCP_FORM_NAME_PLACEHOLDER), cx)
+        });
+        self.description.update(cx, |input, cx| {
+            input.set_placeholder(t(k::MCP_FORM_DESCRIPTION_PLACEHOLDER), cx)
+        });
         self.list_state.remeasure();
         cx.notify();
     }
@@ -79,14 +92,15 @@ impl McpView {
     }
 
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
-        let name = cx.new(|cx| TextInput::new(cx, "服务器名称"));
-        let description = cx.new(|cx| TextInput::new(cx, "描述（可选）"));
+        let name = cx.new(|cx| TextInput::new(cx, t(k::MCP_FORM_NAME_PLACEHOLDER)));
+        let description = cx.new(|cx| TextInput::new(cx, t(k::MCP_FORM_DESCRIPTION_PLACEHOLDER)));
         let spec_json = cx
             .new(|cx| TextInput::new(cx, r#"{"type":"stdio","command":"","args":[]}"#).code(true));
         let mut this = Self {
             app,
             servers: Vec::new(),
             status: None,
+            status_level: None,
             form_mode: FormMode::List,
             editing_id: None,
             name,
@@ -101,12 +115,29 @@ impl McpView {
         this
     }
 
+    /// Queue a toast with an explicit severity. Callers keep their own
+    /// `cx.notify()` so the status can also be set from `reload`, which has no
+    /// context. Never leave the level unset: `None` falls back to guessing the
+    /// severity from the message text.
+    fn set_status(&mut self, level: NotificationLevel, message: impl Into<SharedString>) {
+        self.status = Some(message.into());
+        self.status_level = Some(level);
+    }
+
+    fn clear_status(&mut self) {
+        self.status = None;
+        self.status_level = None;
+    }
+
     pub fn reload(&mut self) {
         match McpService::get_all_servers(&self.app) {
             Ok(map) => self.servers = map.into_values().collect(),
             Err(err) => {
                 self.servers = Vec::new();
-                self.status = Some(SharedString::from(format!("加载服务器失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::MCP_STATUS_LOAD_FAILED, error = err),
+                );
             }
         }
         // 行数变化由 render 里的 reset 处理；这里只失效高度缓存。
@@ -159,7 +190,7 @@ impl McpView {
     fn enabled_apps_label(server: &McpServer) -> String {
         let apps = server.apps.enabled_apps();
         if apps.is_empty() {
-            "未启用应用".to_string()
+            raw(k::MCP_CARD_APPS_NONE).to_string()
         } else {
             apps.iter()
                 .map(|a| Self::app_label(*a).to_string())
@@ -181,7 +212,7 @@ impl McpView {
     fn start_add(&mut self, cx: &mut Context<Self>) {
         self.clear_form(cx);
         self.form_mode = FormMode::Add;
-        self.status = None;
+        self.clear_status();
         cx.notify();
     }
 
@@ -198,7 +229,7 @@ impl McpView {
             .unwrap_or_else(|_| server.server.to_string());
         self.spec_json
             .update(cx, |input, cx| input.set_content(spec, cx));
-        self.status = None;
+        self.clear_status();
         cx.notify();
     }
 
@@ -216,7 +247,7 @@ impl McpView {
     fn do_save(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).content().trim().to_string();
         if name.is_empty() {
-            self.status = Some(SharedString::from("名称不能为空"));
+            self.set_status(NotificationLevel::Error, t(k::MCP_STATUS_NAME_REQUIRED));
             cx.notify();
             return;
         }
@@ -225,12 +256,15 @@ impl McpView {
         let spec = match serde_json::from_str::<serde_json::Value>(&spec_raw) {
             Ok(value) if value.is_object() => value,
             Ok(_) => {
-                self.status = Some(SharedString::from("服务器配置必须是 JSON 对象"));
+                self.set_status(NotificationLevel::Error, t(k::MCP_STATUS_SPEC_NOT_OBJECT));
                 cx.notify();
                 return;
             }
             Err(err) => {
-                self.status = Some(SharedString::from(format!("JSON 解析失败: {err}")));
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::MCP_STATUS_JSON_INVALID, error = err),
+                );
                 cx.notify();
                 return;
             }
@@ -254,25 +288,32 @@ impl McpView {
 
         match McpService::upsert_server(&self.app, server) {
             Ok(()) => {
-                self.status = Some(SharedString::from(if self.form_mode == FormMode::Edit {
-                    "服务器已保存"
+                let saved = if self.form_mode == FormMode::Edit {
+                    t(k::MCP_STATUS_SAVED)
                 } else {
-                    "服务器已创建"
-                }));
+                    t(k::MCP_STATUS_CREATED)
+                };
+                self.set_status(NotificationLevel::Success, saved);
                 self.form_mode = FormMode::List;
                 self.clear_form(cx);
                 self.reload();
             }
-            Err(err) => self.status = Some(SharedString::from(format!("保存失败: {err}"))),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::MCP_STATUS_SAVE_FAILED, error = err),
+            ),
         }
         cx.notify();
     }
 
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
         match McpService::delete_server(&self.app, &id) {
-            Ok(true) => self.status = Some(SharedString::from("服务器已删除")),
-            Ok(false) => self.status = Some(SharedString::from("服务器不存在")),
-            Err(err) => self.status = Some(SharedString::from(format!("删除失败: {err}"))),
+            Ok(true) => self.set_status(NotificationLevel::Success, t(k::MCP_STATUS_DELETED)),
+            Ok(false) => self.set_status(NotificationLevel::Warning, t(k::MCP_STATUS_MISSING)),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::MCP_STATUS_DELETE_FAILED, error = err),
+            ),
         }
         self.reload();
         cx.notify();
@@ -280,16 +321,22 @@ impl McpView {
 
     fn do_sync(&mut self, cx: &mut Context<Self>) {
         match McpService::sync_all_enabled(&self.app) {
-            Ok(()) => self.status = Some(SharedString::from("已同步启用的服务器到应用")),
-            Err(err) => self.status = Some(SharedString::from(format!("同步失败: {err}"))),
+            Ok(()) => self.set_status(NotificationLevel::Success, t(k::MCP_STATUS_SYNCED)),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::MCP_STATUS_SYNC_FAILED, error = err),
+            ),
         }
         cx.notify();
     }
 
     fn do_toggle_app(&mut self, id: String, app: AppType, enabled: bool, cx: &mut Context<Self>) {
         match McpService::toggle_app(&self.app, &id, app, enabled) {
-            Ok(()) => self.status = Some(SharedString::from("应用启用状态已更新")),
-            Err(err) => self.status = Some(SharedString::from(format!("更新失败: {err}"))),
+            Ok(()) => self.set_status(NotificationLevel::Success, t(k::MCP_STATUS_APP_TOGGLED)),
+            Err(err) => self.set_status(
+                NotificationLevel::Error,
+                tf!(k::MCP_STATUS_UPDATE_FAILED, error = err),
+            ),
         }
         self.reload();
         cx.notify();
@@ -312,16 +359,22 @@ impl McpView {
             }
         }
 
-        self.status = if failures.is_empty() {
-            Some(SharedString::from(format!(
-                "已从应用导入 {total} 个新服务器"
-            )))
+        // 部分应用导入失败时仍算完成，但降级为警告，避免看起来像全量成功。
+        if failures.is_empty() {
+            self.set_status(
+                NotificationLevel::Success,
+                tf!(k::MCP_STATUS_IMPORTED, count = total),
+            );
         } else {
-            Some(SharedString::from(format!(
-                "导入完成，新增 {total} 个；失败：{}",
-                failures.join("; ")
-            )))
-        };
+            self.set_status(
+                NotificationLevel::Warning,
+                tf!(
+                    k::MCP_STATUS_IMPORTED_PARTIAL,
+                    count = total,
+                    failures = failures.join("; ")
+                ),
+            );
+        }
         self.reload();
         cx.notify();
     }
@@ -361,7 +414,7 @@ impl McpView {
         let id = server.id.clone();
         Self::toggle_chip(
             format!("mcp-toggle-{}-{}", server.id, app.as_str()),
-            format!("为 {} 启用 MCP 服务器", Self::app_label(app)),
+            tf!(k::MCP_CARD_APP_TOGGLE_ARIA, app = Self::app_label(app)),
             enabled,
             Self::app_label(app),
         )
@@ -414,12 +467,9 @@ impl McpView {
                                         .child(SharedString::from(d)),
                                 )
                             })
-                            .child(
-                                div()
-                                    .text_color(theme::teal())
-                                    .text_xs()
-                                    .child(SharedString::from(format!("应用：{apps}"))),
-                            ),
+                            .child(div().text_color(theme::teal()).text_xs().child(
+                                SharedString::from(tf!(k::MCP_CARD_APPS_LABEL, apps = apps)),
+                            )),
                     )
                     .child(
                         div()
@@ -429,7 +479,7 @@ impl McpView {
                             .child(
                                 components::button(
                                     format!("mcp-edit-{}", server.id),
-                                    "编辑",
+                                    t(k::MCP_CARD_EDIT),
                                     ButtonTone::Neutral,
                                     ButtonSize::Sm,
                                 )
@@ -442,7 +492,7 @@ impl McpView {
                             .child(
                                 components::button(
                                     format!("mcp-delete-{}", server.id),
-                                    "删除",
+                                    t(k::MCP_CARD_DELETE),
                                     ButtonTone::Danger,
                                     ButtonSize::Sm,
                                 )
@@ -469,7 +519,7 @@ impl McpView {
         let enabled = self.apps.is_enabled_for(&app);
         Self::toggle_chip(
             format!("mcp-form-app-{}", app.as_str()),
-            format!("表单中启用 {}", Self::app_label(app)),
+            tf!(k::MCP_FORM_APP_TOGGLE_ARIA, app = Self::app_label(app)),
             enabled,
             Self::app_label(app),
         )
@@ -480,9 +530,9 @@ impl McpView {
 
     fn render_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let title = if self.form_mode == FormMode::Edit {
-            "编辑 MCP 服务器"
+            t(k::MCP_FORM_TITLE_EDIT)
         } else {
-            "新增 MCP 服务器"
+            t(k::MCP_FORM_TITLE_ADD)
         };
 
         layout::page()
@@ -490,7 +540,7 @@ impl McpView {
                 layout::page_header(title, None).child(
                     components::button(
                         "mcp-form-back",
-                        "← 返回",
+                        t(k::MCP_FORM_BACK),
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
                     )
@@ -505,15 +555,20 @@ impl McpView {
                 layout::content_column().child(
                     components::card()
                         .gap_4()
-                        .child(components::field("名称", false, None, self.name.clone()))
                         .child(components::field(
-                            "描述",
+                            t(k::MCP_FORM_NAME_LABEL),
+                            false,
+                            None,
+                            self.name.clone(),
+                        ))
+                        .child(components::field(
+                            t(k::MCP_FORM_DESCRIPTION_LABEL),
                             false,
                             None,
                             self.description.clone(),
                         ))
                         .child(components::field(
-                            "启用到应用",
+                            t(k::MCP_FORM_APPS_LABEL),
                             false,
                             None,
                             div().flex().flex_row().flex_wrap().gap_3().children(
@@ -523,11 +578,9 @@ impl McpView {
                             ),
                         ))
                         .child(components::field(
-                            "服务器 JSON",
+                            t(k::MCP_FORM_SPEC_LABEL),
                             false,
-                            Some(SharedString::from(
-                                r#"示例：{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem"]} 或 {"type":"sse","url":"https://example.com/sse"}"#,
-                            )),
+                            Some(t(k::MCP_FORM_SPEC_HELP)),
                             self.spec_json.clone(),
                         ))
                         .child(
@@ -538,24 +591,28 @@ impl McpView {
                                 .child(
                                     components::button(
                                         "mcp-form-save",
-                                        "保存",
+                                        t(k::MCP_FORM_SAVE),
                                         ButtonTone::Primary,
                                         ButtonSize::Sm,
                                     )
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.do_save(cx);
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.do_save(cx);
+                                        },
+                                    )),
                                 )
                                 .child(
                                     components::button(
                                         "mcp-form-cancel",
-                                        "取消",
+                                        t(k::MCP_FORM_CANCEL),
                                         ButtonTone::Neutral,
                                         ButtonSize::Sm,
                                     )
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.cancel_form(cx);
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.cancel_form(cx);
+                                        },
+                                    )),
                                 ),
                         ),
                 ),
@@ -588,12 +645,12 @@ impl Render for McpView {
                     Some(McpRow::EmptyState) => block
                         .child(components::empty_state(
                             IconName::Blocks,
-                            "还没有配置 MCP 服务器",
-                            "新增服务器，或从各应用现有配置一键导入。",
+                            t(k::MCP_EMPTY_TITLE),
+                            t(k::MCP_EMPTY_HINT),
                             Some(
                                 components::button(
                                     "mcp-add-empty",
-                                    "新增服务器",
+                                    t(k::MCP_EMPTY_ACTION),
                                     ButtonTone::Primary,
                                     ButtonSize::Sm,
                                 )
@@ -619,13 +676,7 @@ impl Render for McpView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(
-                    "MCP 服务器",
-                    Some(
-                        "统一管理 MCP，并同步到 Claude、Codex、Gemini、OpenCode 和 Hermes。".into(),
-                    ),
-                )
-                .child(
+                layout::page_header(t(k::MCP_PAGE_TITLE), Some(t(k::MCP_PAGE_SUBTITLE))).child(
                     div()
                         .flex()
                         .flex_row()
@@ -633,7 +684,7 @@ impl Render for McpView {
                         .child(
                             components::icon_button_tone(
                                 "mcp-add",
-                                "新增",
+                                t(k::MCP_ACTION_ADD),
                                 IconName::Add,
                                 ButtonTone::Primary,
                                 ButtonSize::Sm,
@@ -647,7 +698,7 @@ impl Render for McpView {
                         .child(
                             components::icon_button_tone(
                                 "mcp-import-all",
-                                "从应用导入",
+                                t(k::MCP_ACTION_IMPORT),
                                 IconName::Archive,
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
@@ -661,7 +712,7 @@ impl Render for McpView {
                         .child(
                             components::icon_button_tone(
                                 "mcp-sync",
-                                "同步到应用",
+                                t(k::MCP_ACTION_SYNC),
                                 IconName::Refresh,
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
@@ -683,20 +734,18 @@ impl Render for McpView {
                 let (delete_id, name) = target;
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("删除 MCP 服务器"))
+                        .child(components::modal_header(t(k::MCP_DELETE_TITLE)))
                         .child(
                             components::modal_body().child(
                                 div().text_color(theme::subtext()).text_sm().child(
-                                    SharedString::from(format!(
-                                        "确定删除服务器「{name}」吗？此操作不可撤销。"
-                                    )),
+                                    SharedString::from(tf!(k::MCP_DELETE_MESSAGE, name = name)),
                                 ),
                             ),
                         )
                         .child(components::modal_footer(vec![
                             components::button(
                                 "mcp-confirm-delete-cancel",
-                                "取消",
+                                t(k::MCP_DELETE_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -707,7 +756,7 @@ impl Render for McpView {
                             .into_any_element(),
                             components::button(
                                 "mcp-confirm-delete-ok",
-                                "删除",
+                                t(k::MCP_DELETE_CONFIRM),
                                 ButtonTone::Danger,
                                 ButtonSize::Sm,
                             )
@@ -723,4 +772,4 @@ impl Render for McpView {
     }
 }
 
-crate::notifications::impl_status_toasts!(McpView);
+crate::notifications::impl_status_toasts_leveled!(McpView);

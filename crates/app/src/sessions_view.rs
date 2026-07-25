@@ -19,9 +19,12 @@ use ochub_core::session_manager::{self, SessionMessage, SessionMeta};
 use ochub_core::AppState;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::i18n::{k, raw, t};
 use crate::icons::{icon, IconName};
 use crate::layout;
+use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
+use crate::tf;
 use crate::theme;
 
 const DEFAULT_PAGE_SIZE: usize = 20;
@@ -48,16 +51,16 @@ enum SessionDateFilter {
 impl SessionDateFilter {
     fn label(self) -> String {
         match self {
-            Self::All => "全部时间".to_string(),
-            Self::Today => "今天".to_string(),
-            Self::SevenDays => "最近 7 天".to_string(),
-            Self::ThirtyDays => "最近 30 天".to_string(),
+            Self::All => raw(k::SESSIONS_FILTER_DATE_ALL).to_string(),
+            Self::Today => raw(k::SESSIONS_FILTER_DATE_TODAY).to_string(),
+            Self::SevenDays => raw(k::SESSIONS_FILTER_DATE_SEVEN_DAYS).to_string(),
+            Self::ThirtyDays => raw(k::SESSIONS_FILTER_DATE_THIRTY_DAYS).to_string(),
             Self::Custom { start_ms, end_ms } => {
                 let start = Local
                     .timestamp_millis_opt(start_ms)
                     .single()
                     .map(|value| value.format("%m-%d %H:%M").to_string())
-                    .unwrap_or_else(|| "自定义".to_string());
+                    .unwrap_or_else(|| raw(k::SESSIONS_FILTER_DATE_CUSTOM).to_string());
                 let end = Local
                     .timestamp_millis_opt(end_ms)
                     .single()
@@ -136,6 +139,7 @@ pub struct SessionsView {
     app: Arc<AppState>,
     sessions: Vec<SessionMeta>,
     status: Option<SharedString>,
+    status_level: Option<NotificationLevel>,
     /// Zero-based current page into `sessions`.
     page: usize,
     page_size: usize,
@@ -182,6 +186,11 @@ impl SessionsView {
     /// translation that changes a row's height would otherwise leave the list
     /// scrolled to stale offsets.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        // The placeholder is captured when the input is constructed, and this
+        // view is built once at startup, so it needs pushing in by hand.
+        self.page_input.update(cx, |input, cx| {
+            input.set_placeholder(t(k::SESSIONS_PAGINATION_PAGE_PLACEHOLDER), cx)
+        });
         self.session_list_state.remeasure();
         self.transcript_list_state.remeasure();
         cx.notify();
@@ -193,6 +202,7 @@ impl SessionsView {
             app,
             sessions: Vec::new(),
             status: None,
+            status_level: None,
             page: 0,
             page_size: DEFAULT_PAGE_SIZE,
             page_size_open: false,
@@ -218,7 +228,8 @@ impl SessionsView {
             session_list_state: ListState::new(0, ListAlignment::Top, px(96.)),
             transcript_list_state: ListState::new(0, ListAlignment::Top, px(320.)),
             expanded_messages: HashSet::new(),
-            page_input: cx.new(|cx| text_input(cx, "页码").compact()),
+            page_input: cx
+                .new(|cx| text_input(cx, t(k::SESSIONS_PAGINATION_PAGE_PLACEHOLDER)).compact()),
             range_start_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss")),
             range_end_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss")),
         };
@@ -555,17 +566,17 @@ impl SessionsView {
         let start_text = self.range_start_input.read(cx).content().trim().to_string();
         let end_text = self.range_end_input.read(cx).content().trim().to_string();
         let Some(start) = parse_local_datetime(&start_text, false) else {
-            self.date_filter_error = Some(SharedString::from("请选择或输入有效的开始时间"));
+            self.date_filter_error = Some(t(k::SESSIONS_FILTER_ERROR_START_INVALID));
             cx.notify();
             return;
         };
         let Some(end) = parse_local_datetime(&end_text, true) else {
-            self.date_filter_error = Some(SharedString::from("请选择或输入有效的结束时间"));
+            self.date_filter_error = Some(t(k::SESSIONS_FILTER_ERROR_END_INVALID));
             cx.notify();
             return;
         };
         if start > end {
-            self.date_filter_error = Some(SharedString::from("开始时间不能晚于结束时间"));
+            self.date_filter_error = Some(t(k::SESSIONS_FILTER_ERROR_RANGE_ORDER));
             cx.notify();
             return;
         }
@@ -586,6 +597,16 @@ impl SessionsView {
             .unwrap_or_else(|| session.session_id.clone())
     }
 
+    /// Queue a toast with an explicit severity. The level travels with the text
+    /// so the toast host never has to guess it from the wording.
+    ///
+    /// Deliberately does not notify: callers decide when the rest of their state
+    /// change is complete.
+    fn set_status(&mut self, text: impl Into<SharedString>, level: NotificationLevel) {
+        self.status = Some(text.into());
+        self.status_level = Some(level);
+    }
+
     fn do_delete(&mut self, idx: usize, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.get(idx) else {
             return;
@@ -597,16 +618,21 @@ impl SessionsView {
             &source_path,
         ) {
             Ok(true) => {
-                self.status = Some(SharedString::from("会话已删除"));
+                self.set_status(t(k::SESSIONS_STATUS_DELETED), NotificationLevel::Success);
                 // 列表本地同步移除即可，无需整库重扫。
                 self.sessions.remove(idx);
                 self.rebuild_session_index();
             }
+            // The row was already gone on disk: the delete was a no-op, and the
+            // list the user clicked was stale.
             Ok(false) => {
-                self.status = Some(SharedString::from("未找到会话"));
+                self.set_status(t(k::SESSIONS_STATUS_NOT_FOUND), NotificationLevel::Warning);
                 self.force_reload(cx);
             }
-            Err(err) => self.status = Some(SharedString::from(format!("删除失败: {err}"))),
+            Err(err) => self.set_status(
+                tf!(k::SESSIONS_STATUS_DELETE_FAILED, error = err),
+                NotificationLevel::Error,
+            ),
         }
         cx.notify();
     }
@@ -638,7 +664,7 @@ impl SessionsView {
                 }
                 let (preview, is_long) = Self::message_content(&message.content, false);
                 let content = if message.content.trim().is_empty() {
-                    SharedString::from("（空消息）")
+                    t(k::SESSIONS_MESSAGE_EMPTY)
                 } else {
                     SharedString::from(message.content)
                 };
@@ -687,7 +713,10 @@ impl SessionsView {
                         meta: session,
                         messages: Vec::new(),
                         stats: SessionStats::default(),
-                        error: Some(SharedString::from(format!("加载对话失败: {err}"))),
+                        error: Some(SharedString::from(tf!(
+                            k::SESSIONS_DETAIL_ERROR_LOAD_FAILED,
+                            error = err
+                        ))),
                     },
                 };
                 this.transcript_list_state.reset(detail.messages.len());
@@ -719,10 +748,10 @@ impl SessionsView {
 
     fn role_label(role: &str) -> SharedString {
         match role {
-            "user" => SharedString::from("用户"),
-            "assistant" => SharedString::from("助手"),
-            "system" => SharedString::from("系统"),
-            "tool" => SharedString::from("工具"),
+            "user" => t(k::SESSIONS_ROLE_USER),
+            "assistant" => t(k::SESSIONS_ROLE_ASSISTANT),
+            "system" => t(k::SESSIONS_ROLE_SYSTEM),
+            "tool" => t(k::SESSIONS_ROLE_TOOL),
             other => SharedString::from(other.to_string()),
         }
     }
@@ -758,7 +787,7 @@ impl SessionsView {
 
     fn message_content(content: &str, expanded: bool) -> (SharedString, bool) {
         if content.trim().is_empty() {
-            return (SharedString::from("（空消息）"), false);
+            return (t(k::SESSIONS_MESSAGE_EMPTY), false);
         }
         let cutoff = content
             .char_indices()
@@ -878,7 +907,11 @@ impl SessionsView {
                             div().flex().flex_row().child(
                                 components::button(
                                     SharedString::from(format!("session-message-toggle-{index}")),
-                                    if expanded { "收起" } else { "展开详情" },
+                                    if expanded {
+                                        t(k::SESSIONS_MESSAGE_COLLAPSE)
+                                    } else {
+                                        t(k::SESSIONS_MESSAGE_EXPAND)
+                                    },
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,
                                 )
@@ -914,11 +947,19 @@ impl SessionsView {
         let duration_ms = stats.last_ts?.saturating_sub(stats.first_ts?);
         let seconds = duration_ms / 1_000;
         Some(SharedString::from(if seconds < 60 {
-            format!("{seconds} 秒")
+            tf!(k::SESSIONS_DURATION_SECONDS, seconds = seconds)
         } else if seconds < 3_600 {
-            format!("{} 分 {} 秒", seconds / 60, seconds % 60)
+            tf!(
+                k::SESSIONS_DURATION_MINUTES,
+                minutes = seconds / 60,
+                seconds = seconds % 60
+            )
         } else {
-            format!("{} 小时 {} 分", seconds / 3_600, seconds % 3_600 / 60)
+            tf!(
+                k::SESSIONS_DURATION_HOURS,
+                hours = seconds / 3_600,
+                minutes = seconds % 3_600 / 60
+            )
         }))
     }
 
@@ -935,8 +976,12 @@ impl SessionsView {
         let tool_messages = detail.stats.tool_messages;
         let duration = Self::duration_label(&detail.stats);
         let subtitle = match Self::active_time(&detail.meta, true) {
-            Some(time) => SharedString::from(format!("{count} 条消息 · {time}")),
-            None => SharedString::from(format!("{count} 条消息")),
+            Some(time) => SharedString::from(tf!(
+                k::SESSIONS_DETAIL_SUBTITLE_WITH_TIME,
+                count = count,
+                time = time
+            )),
+            None => SharedString::from(tf!(k::SESSIONS_DETAIL_SUBTITLE, count = count)),
         };
         if self.transcript_list_state.item_count() != count {
             self.transcript_list_state.reset(count);
@@ -948,7 +993,7 @@ impl SessionsView {
                 &self.empty_scroll,
                 layout::content_column().child(components::empty_state(
                     IconName::Message,
-                    "无法加载对话",
+                    t(k::SESSIONS_DETAIL_ERROR_TITLE),
                     error,
                     None,
                 )),
@@ -960,8 +1005,8 @@ impl SessionsView {
                 &self.empty_scroll,
                 layout::content_column().child(components::empty_state(
                     IconName::Message,
-                    "没有可显示的消息",
-                    "这条会话没有可显示的消息。",
+                    t(k::SESSIONS_DETAIL_EMPTY_TITLE),
+                    t(k::SESSIONS_DETAIL_EMPTY_HINT),
                     None,
                 )),
             )
@@ -982,15 +1027,27 @@ impl SessionsView {
                 .items_center()
                 .flex_wrap()
                 .gap_5()
-                .child(Self::detail_metric("消息", count.to_string()))
-                .child(Self::detail_metric("用户", user_messages.to_string()))
-                .child(Self::detail_metric("助手", assistant_messages.to_string()))
                 .child(Self::detail_metric(
-                    "工具 / 系统",
+                    raw(k::SESSIONS_METRIC_MESSAGES),
+                    count.to_string(),
+                ))
+                .child(Self::detail_metric(
+                    raw(k::SESSIONS_METRIC_USER),
+                    user_messages.to_string(),
+                ))
+                .child(Self::detail_metric(
+                    raw(k::SESSIONS_METRIC_ASSISTANT),
+                    assistant_messages.to_string(),
+                ))
+                .child(Self::detail_metric(
+                    raw(k::SESSIONS_METRIC_TOOL_SYSTEM),
                     tool_messages.to_string(),
                 ))
                 .when_some(duration, |row, duration| {
-                    row.child(Self::detail_metric("会话跨度", duration))
+                    row.child(Self::detail_metric(
+                        raw(k::SESSIONS_METRIC_DURATION),
+                        duration,
+                    ))
                 }),
         );
 
@@ -1006,7 +1063,7 @@ impl SessionsView {
                         .child(
                             components::icon_button_tone(
                                 "session-back",
-                                "返回",
+                                t(k::SESSIONS_DETAIL_BACK),
                                 IconName::ChevronLeft,
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
@@ -1048,7 +1105,7 @@ impl SessionsView {
                 div()
                     .id(SharedString::from(format!("session-open-{idx}")))
                     .role(gpui::Role::Button)
-                    .aria_label("查看完整对话")
+                    .aria_label(t(k::SESSIONS_CARD_OPEN_ARIA))
                     .flex()
                     .flex_col()
                     .gap_1()
@@ -1096,7 +1153,11 @@ impl SessionsView {
                     .child(
                         components::button(
                             SharedString::from(format!("session-view-{idx}")),
-                            if is_loading { "加载中…" } else { "查看" },
+                            if is_loading {
+                                t(k::SESSIONS_CARD_LOADING)
+                            } else {
+                                t(k::SESSIONS_CARD_VIEW)
+                            },
                             if is_loading {
                                 ButtonTone::Neutral
                             } else {
@@ -1113,7 +1174,7 @@ impl SessionsView {
                     .child(
                         components::button(
                             SharedString::from(format!("session-delete-{idx}")),
-                            "删除",
+                            t(k::SESSIONS_ACTION_DELETE),
                             ButtonTone::Danger,
                             ButtonSize::Sm,
                         )
@@ -1195,7 +1256,7 @@ impl SessionsView {
             .child(
                 components::datetime_filter_field(
                     "sessions-start-datetime-field",
-                    "开始时间",
+                    raw(k::SESSIONS_FILTER_DATE_START_LABEL),
                     self.range_start_input.clone(),
                     start_picker_open,
                 )
@@ -1225,7 +1286,7 @@ impl SessionsView {
             .child(
                 components::datetime_filter_field(
                     "sessions-end-datetime-field",
-                    "结束时间",
+                    raw(k::SESSIONS_FILTER_DATE_END_LABEL),
                     self.range_end_input.clone(),
                     end_picker_open,
                 )
@@ -1253,7 +1314,7 @@ impl SessionsView {
             .child(
                 session_dropdown_option(
                     "sessions-date-all",
-                    "全部时间",
+                    t(k::SESSIONS_FILTER_DATE_ALL),
                     self.date_filter == SessionDateFilter::All,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -1263,7 +1324,7 @@ impl SessionsView {
             .child(
                 session_dropdown_option(
                     "sessions-date-today",
-                    "今天",
+                    t(k::SESSIONS_FILTER_DATE_TODAY),
                     self.date_filter == SessionDateFilter::Today,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -1273,7 +1334,7 @@ impl SessionsView {
             .child(
                 session_dropdown_option(
                     "sessions-date-week",
-                    "最近 7 天",
+                    t(k::SESSIONS_FILTER_DATE_SEVEN_DAYS),
                     self.date_filter == SessionDateFilter::SevenDays,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -1283,7 +1344,7 @@ impl SessionsView {
             .child(
                 session_dropdown_option(
                     "sessions-date-month",
-                    "最近 30 天",
+                    t(k::SESSIONS_FILTER_DATE_THIRTY_DAYS),
                     self.date_filter == SessionDateFilter::ThirtyDays,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -1302,7 +1363,7 @@ impl SessionsView {
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::muted())
-                            .child("自定义范围"),
+                            .child(t(k::SESSIONS_FILTER_DATE_CUSTOM_RANGE)),
                     )
                     .child(start_control)
                     .child(end_control)
@@ -1312,7 +1373,7 @@ impl SessionsView {
                     .child(
                         components::button(
                             "sessions-date-apply",
-                            "应用",
+                            t(k::SESSIONS_FILTER_DATE_APPLY),
                             ButtonTone::Primary,
                             ButtonSize::Sm,
                         )
@@ -1378,10 +1439,14 @@ impl SessionsView {
             ))
             .p_1()
             .child(
-                session_dropdown_option("sessions-app-all", "全部应用", self.app_filter.is_none())
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.set_app_filter(None, cx);
-                    })),
+                session_dropdown_option(
+                    "sessions-app-all",
+                    t(k::SESSIONS_FILTER_APP_ALL),
+                    self.app_filter.is_none(),
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.set_app_filter(None, cx);
+                })),
             );
         for (index, app) in self.app_options.iter().cloned().enumerate() {
             let selected = self.app_filter.as_deref() == Some(app.as_str());
@@ -1415,7 +1480,7 @@ impl SessionsView {
             .app_filter
             .as_deref()
             .map(Self::app_label)
-            .unwrap_or_else(|| SharedString::from("全部应用"));
+            .unwrap_or_else(|| t(k::SESSIONS_FILTER_APP_ALL));
         let app_control = div()
             .relative()
             .flex_none()
@@ -1462,7 +1527,7 @@ impl SessionsView {
                     row.child(
                         components::button(
                             "sessions-clear-filters",
-                            "重置",
+                            t(k::SESSIONS_FILTER_RESET),
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
                         )
@@ -1589,7 +1654,7 @@ fn session_dropdown_option(
     }
 }
 
-fn text_input(cx: &mut Context<TextInput>, placeholder: &str) -> TextInput {
+fn text_input(cx: &mut Context<TextInput>, placeholder: impl Into<SharedString>) -> TextInput {
     TextInput::new(cx, placeholder)
 }
 
@@ -1638,14 +1703,14 @@ impl Render for SessionsView {
                 layout::content_column().child(components::empty_state(
                     IconName::Clock,
                     if scanning {
-                        "正在扫描会话…"
+                        t(k::SESSIONS_EMPTY_SCANNING_TITLE)
                     } else {
-                        "没有找到会话"
+                        t(k::SESSIONS_EMPTY_NONE_TITLE)
                     },
                     if scanning {
-                        "正在读取本机 CLI 的会话记录。"
+                        t(k::SESSIONS_EMPTY_SCANNING_HINT)
                     } else {
-                        "扫描到的 CLI 会话会显示在这里。"
+                        t(k::SESSIONS_EMPTY_NONE_HINT)
                     },
                     None,
                 )),
@@ -1657,12 +1722,12 @@ impl Render for SessionsView {
                 &self.empty_scroll,
                 layout::content_column().child(components::empty_state(
                     IconName::Search,
-                    "没有符合筛选条件的会话",
-                    "调整日期或应用筛选后再试。",
+                    t(k::SESSIONS_EMPTY_NO_MATCHES_TITLE),
+                    t(k::SESSIONS_EMPTY_NO_MATCHES_HINT),
                     Some(
                         components::button(
                             "sessions-empty-clear-filters",
-                            "清除筛选",
+                            t(k::SESSIONS_EMPTY_NO_MATCHES_CLEAR),
                             ButtonTone::Neutral,
                             ButtonSize::Sm,
                         )
@@ -1686,10 +1751,18 @@ impl Render for SessionsView {
         layout::page()
             .relative()
             .child(
-                layout::page_header("会话", Some("浏览与管理本机 CLI 的对话记录。".into())).child(
+                layout::page_header(
+                    t(k::SESSIONS_HEADER_TITLE),
+                    Some(t(k::SESSIONS_HEADER_SUBTITLE)),
+                )
+                .child(
                     components::icon_button_tone(
                         "sessions-refresh",
-                        if scanning { "扫描中…" } else { "刷新" },
+                        if scanning {
+                            t(k::SESSIONS_HEADER_SCANNING)
+                        } else {
+                            t(k::SESSIONS_HEADER_REFRESH)
+                        },
                         IconName::Refresh,
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
@@ -1710,10 +1783,12 @@ impl Render for SessionsView {
             .when(show_pagination, |s| s.child(self.render_pagination(cx)))
             .when_some(confirm, |root, (idx, title)| {
                 let message =
-                    SharedString::from(format!("确定删除会话「{title}」吗？此操作不可撤销。"));
+                    SharedString::from(tf!(k::SESSIONS_CONFIRM_DELETE_MESSAGE, title = title));
                 root.child(components::modal_overlay(
                     components::modal_card()
-                        .child(components::modal_header("删除会话"))
+                        .child(components::modal_header(t(
+                            k::SESSIONS_CONFIRM_DELETE_TITLE,
+                        )))
                         .child(
                             components::modal_body()
                                 .child(div().text_color(theme::subtext()).text_sm().child(message)),
@@ -1721,7 +1796,7 @@ impl Render for SessionsView {
                         .child(components::modal_footer(vec![
                             components::button(
                                 "session-confirm-delete-cancel",
-                                "取消",
+                                t(k::SESSIONS_CONFIRM_DELETE_CANCEL),
                                 ButtonTone::Neutral,
                                 ButtonSize::Sm,
                             )
@@ -1732,7 +1807,7 @@ impl Render for SessionsView {
                             .into_any_element(),
                             components::button(
                                 "session-confirm-delete-ok",
-                                "删除",
+                                t(k::SESSIONS_ACTION_DELETE),
                                 ButtonTone::Danger,
                                 ButtonSize::Sm,
                             )
@@ -1748,7 +1823,7 @@ impl Render for SessionsView {
     }
 }
 
-crate::notifications::impl_status_toasts!(SessionsView);
+crate::notifications::impl_status_toasts_leveled!(SessionsView);
 
 #[cfg(test)]
 mod tests {
