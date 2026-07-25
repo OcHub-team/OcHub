@@ -30,29 +30,6 @@ pub enum NotificationLevel {
 }
 
 impl NotificationLevel {
-    pub fn from_text(text: &str) -> Self {
-        if text.contains("失败")
-            || text.contains("错误")
-            || text.contains("无效")
-            || text.contains("不能为空")
-            || text.contains("不可用")
-        {
-            Self::Error
-        } else if text.contains("警告")
-            || text.contains("跳过")
-            || text.contains("冲突")
-            || text.contains("建议")
-            || text.contains("尚未")
-            || text.contains("不存在")
-        {
-            Self::Warning
-        } else if text.contains("成功") || text.contains("已") || text.contains("完成") {
-            Self::Success
-        } else {
-            Self::Info
-        }
-    }
-
     fn colors(self) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba, IconName) {
         match self {
             Self::Info => (
@@ -312,9 +289,12 @@ impl NotificationHost {
         )
     }
 
-    /// Status toast with an explicit level. `None` falls back to keyword
-    /// inference — blocking/refusal messages should always pass an explicit
-    /// level so their wording never gets mis-classified.
+    /// Status toast with an explicit level.
+    ///
+    /// `None` means the source did not classify the message and it is shown as
+    /// [`NotificationLevel::Info`]. Severity used to be guessed from Chinese
+    /// substrings, which mis-classified messages even in Chinese and could not
+    /// survive translation at all; every view now states its own level.
     pub fn status_leveled(
         &mut self,
         level: Option<NotificationLevel>,
@@ -322,7 +302,7 @@ impl NotificationHost {
         cx: &mut Context<Self>,
     ) -> u64 {
         let message = message.into();
-        let level = level.unwrap_or_else(|| NotificationLevel::from_text(message.as_ref()));
+        let level = level.unwrap_or(NotificationLevel::Info);
         self.notify(NotificationRequest::new(level, message), cx)
     }
 
@@ -645,18 +625,7 @@ pub trait ToastSource {
     }
 }
 
-macro_rules! impl_status_toasts {
-    ($view:ty) => {
-        impl $crate::notifications::ToastSource for $view {
-            fn take_toast(&mut self) -> Option<gpui::SharedString> {
-                self.status.take()
-            }
-        }
-    };
-}
-
-/// Like [`impl_status_toasts!`] but also forwards an explicit
-/// `self.status_level` set alongside `self.status`.
+/// Wires a view's `status` / `status_level` pair into the toast host.
 macro_rules! impl_status_toasts_leveled {
     ($view:ty) => {
         impl $crate::notifications::ToastSource for $view {
@@ -670,7 +639,6 @@ macro_rules! impl_status_toasts_leveled {
     };
 }
 
-pub(crate) use impl_status_toasts;
 pub(crate) use impl_status_toasts_leveled;
 
 impl Render for NotificationHost {
@@ -716,26 +684,6 @@ mod tests {
         auto_dismiss_timeout, remaining_fraction, NotificationLevel, DEFAULT_TIMEOUT,
         ERROR_TIMEOUT, MAX_VISIBLE,
     };
-
-    #[test]
-    fn infers_toast_level_from_legacy_status_copy() {
-        assert_eq!(
-            NotificationLevel::from_text("保存失败: permission denied"),
-            NotificationLevel::Error
-        );
-        assert_eq!(
-            NotificationLevel::from_text("配置尚未创建"),
-            NotificationLevel::Warning
-        );
-        assert_eq!(
-            NotificationLevel::from_text("已应用 OcHub"),
-            NotificationLevel::Success
-        );
-        assert_eq!(
-            NotificationLevel::from_text("正在检查更新..."),
-            NotificationLevel::Info
-        );
-    }
 
     #[test]
     fn resolves_auto_dismiss_duration_for_progress_bar() {
