@@ -1,0 +1,19 @@
+# English — startup notices.
+#
+# Checked against zh-Hans/startup.toml at build time: every key must be present
+# and use the same {placeholders}. Keys are sorted alphabetically.
+#
+# `{error}` is an OS error string and arrives untranslated, so the sentence
+# around it has to carry the meaning on its own. `startup.instance.unknown`
+# stands in for a PID or port that could not be read, and is substituted into
+# the middle of a sentence — keep it lowercase.
+
+"startup.control_api.bind_failed" = "Could not listen on 127.0.0.1:{port}: {error}. The OcHub interface and the relay still work, but integrations that rely on the control API are unavailable."
+"startup.control_api.listener_failed" = "Could not configure the listener on 127.0.0.1:{port}: {error}. The OcHub interface and the relay still work, but integrations that rely on the control API are unavailable."
+"startup.control_api.port_in_use" = "Port {port} is already in use by another process. The OcHub interface and the relay still work, but integrations that rely on the control API are unavailable. Quit whatever is holding the port and restart OcHub, or point MS_PORT at a different one."
+"startup.control_api.title" = "Control API didn't start"
+"startup.instance.activated" = "OcHub is already running (PID {pid}, control API port {port}); the existing window has been asked to come forward."
+"startup.instance.activation_failed" = "OcHub is already running (PID {pid}, control API port {port}), but the existing window could not be asked to come forward."
+"startup.instance.unknown" = "unknown"
+"startup.services.failed" = "Could not start the OcHub background service thread: {error}. The interface still works, but the control API and relay autostart are both unavailable. Restart OcHub."
+"startup.services.title" = "Background services didn't start"

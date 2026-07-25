@@ -100,17 +100,59 @@ impl Section {
     }
 }
 
+/// A degradation detected during startup, before any window exists.
+///
+/// Deliberately *not* a rendered sentence. These are constructed before
+/// `i18n::install` has run, and the user can change language afterwards, so a
+/// notice stores only the condition and the runtime values that belong in the
+/// text — the port, the OS error. [`AppRoot::render_startup_notice`] turns that
+/// into prose on every frame, which is what makes the banner follow the
+/// current locale.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StartupNotice {
-    pub title: String,
-    pub message: String,
+pub enum StartupNotice {
+    /// The control API port is held by another process.
+    ControlApiPortInUse { port: u16 },
+    /// Binding the control API port failed for any other reason.
+    ControlApiBindFailed { port: u16, error: String },
+    /// The port was bound, but the listener could not be configured.
+    ControlApiListenerFailed { port: u16, error: String },
+    /// The background service thread could not be spawned, so neither the
+    /// control API nor gateway autostart is running.
+    ServicesUnavailable { error: String },
 }
 
 impl StartupNotice {
-    pub fn new(title: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            title: title.into(),
-            message: message.into(),
+    /// The heading, in the current locale.
+    pub fn title(&self) -> SharedString {
+        match self {
+            Self::ControlApiPortInUse { .. }
+            | Self::ControlApiBindFailed { .. }
+            | Self::ControlApiListenerFailed { .. } => t(k::STARTUP_CONTROL_API_TITLE),
+            Self::ServicesUnavailable { .. } => t(k::STARTUP_SERVICES_TITLE),
+        }
+    }
+
+    /// What degraded and what still works, in the current locale.
+    pub fn message(&self) -> String {
+        match self {
+            Self::ControlApiPortInUse { port } => {
+                tf!(k::STARTUP_CONTROL_API_PORT_IN_USE, port = port)
+            }
+            Self::ControlApiBindFailed { port, error } => {
+                tf!(
+                    k::STARTUP_CONTROL_API_BIND_FAILED,
+                    port = port,
+                    error = error
+                )
+            }
+            Self::ControlApiListenerFailed { port, error } => {
+                tf!(
+                    k::STARTUP_CONTROL_API_LISTENER_FAILED,
+                    port = port,
+                    error = error
+                )
+            }
+            Self::ServicesUnavailable { error } => tf!(k::STARTUP_SERVICES_FAILED, error = error),
         }
     }
 }
@@ -2630,7 +2672,12 @@ impl AppRoot {
         }
     }
 
-    fn render_startup_notice(notice: StartupNotice) -> impl IntoElement {
+    /// Resolve a startup notice against the current locale.
+    ///
+    /// This runs per frame, so the banner is translated *now* rather than when
+    /// the condition was detected — which for these notices is before the UI,
+    /// and the locale, exist at all.
+    fn render_startup_notice(notice: &StartupNotice) -> impl IntoElement {
         div()
             .id("startup-degradation-notice")
             .flex()
@@ -2667,13 +2714,13 @@ impl AppRoot {
                             .text_color(theme::text())
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(notice.title)),
+                            .child(notice.title()),
                     )
                     .child(
                         div()
                             .text_color(theme::subtext())
                             .text_xs()
-                            .child(SharedString::from(notice.message)),
+                            .child(SharedString::from(notice.message())),
                     ),
             )
     }
@@ -2699,7 +2746,7 @@ impl Render for AppRoot {
             .flex_1()
             .min_w_0()
             .min_h(px(0.))
-            .when_some(self.startup_notice.clone(), |content, notice| {
+            .when_some(self.startup_notice.as_ref(), |content, notice| {
                 content.child(Self::render_startup_notice(notice))
             })
             .child(self.render_content(cx));

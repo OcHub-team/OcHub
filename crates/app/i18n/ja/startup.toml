@@ -1,0 +1,19 @@
+# Japanese — startup notices.
+#
+# Checked against zh-Hans/startup.toml at build time: every key must be present
+# and use the same {placeholders}. Keys are sorted alphabetically.
+#
+# `{error}` is an OS error string and arrives untranslated, so the sentence
+# around it has to carry the meaning on its own. `startup.instance.unknown`
+# stands in for a PID or port that could not be read, so it is a noun that fits
+# mid-sentence.
+
+"startup.control_api.bind_failed" = "127.0.0.1:{port} を待ち受けできませんでした：{error}。OcHub の画面と中継は引き続き利用できますが、コントロール API を利用する外部連携は使用できません。"
+"startup.control_api.listener_failed" = "127.0.0.1:{port} のリスナーを設定できませんでした：{error}。OcHub の画面と中継は引き続き利用できますが、コントロール API を利用する外部連携は使用できません。"
+"startup.control_api.port_in_use" = "ポート {port} は他のプロセスが使用しています。OcHub の画面と中継は引き続き利用できますが、コントロール API を利用する外部連携は使用できません。ポートを使用しているプログラムを終了して OcHub を再起動するか、MS_PORT で別のポートを指定してください。"
+"startup.control_api.title" = "コントロール API が起動していません"
+"startup.instance.activated" = "OcHub はすでに実行中です（PID {pid}、コントロール API ポート {port}）。既存のウィンドウの表示を要求しました。"
+"startup.instance.activation_failed" = "OcHub はすでに実行中です（PID {pid}、コントロール API ポート {port}）。ただし既存のウィンドウの表示は要求できませんでした。"
+"startup.instance.unknown" = "不明"
+"startup.services.failed" = "OcHub のバックグラウンドサービススレッドを起動できませんでした：{error}。画面の閲覧は引き続き可能ですが、コントロール API と中継の自動起動はどちらも利用できません。OcHub を再起動してください。"
+"startup.services.title" = "バックグラウンドサービスが起動していません"

@@ -49,6 +49,7 @@ use ochub_core::db::Database;
 use ochub_core::AppState;
 
 use app_ui::{AppRoot, StartupNotice};
+use i18n::{k, raw};
 
 struct Assets {
     base: PathBuf,
@@ -132,33 +133,29 @@ fn parse_control_api_port(value: Option<&str>) -> u16 {
         .unwrap_or(8787)
 }
 
+/// Reserve the control API port, reporting a degradation rather than a message.
+///
+/// This runs before the UI, so it cannot produce translated text: the notice
+/// names the condition and carries the port and OS error, and the banner
+/// renders it once a locale exists.
 fn bind_control_api(port: u16) -> std::result::Result<TcpListener, StartupNotice> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr).map_err(|err| {
         if err.kind() == io::ErrorKind::AddrInUse {
-            StartupNotice::new(
-                "控制 API 未启动",
-                format!(
-                    "端口 {port} 已被其他进程占用。OcHub 界面与转发站仍可使用；依赖控制 API 的外部集成暂不可用。请关闭占用程序后重启 OcHub，或使用 MS_PORT 指定其他端口。"
-                ),
-            )
+            StartupNotice::ControlApiPortInUse { port }
         } else {
-            StartupNotice::new(
-                "控制 API 未启动",
-                format!(
-                    "无法监听 127.0.0.1:{port}：{err}。OcHub 界面与转发站仍可使用，但依赖控制 API 的外部集成暂不可用。"
-                ),
-            )
+            StartupNotice::ControlApiBindFailed {
+                port,
+                error: err.to_string(),
+            }
         }
     })?;
-    listener.set_nonblocking(true).map_err(|err| {
-        StartupNotice::new(
-            "控制 API 未启动",
-            format!(
-                "无法配置 127.0.0.1:{port} 的监听器：{err}。OcHub 界面与转发站仍可使用，但依赖控制 API 的外部集成暂不可用。"
-            ),
-        )
-    })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|err| StartupNotice::ControlApiListenerFailed {
+            port,
+            error: err.to_string(),
+        })?;
     Ok(listener)
 }
 
@@ -206,10 +203,12 @@ mod control_api_startup_tests {
         let port = blocker.local_addr().expect("blocking address").port();
 
         let notice = bind_control_api(port).expect_err("port conflict must be reported");
-        assert_eq!(notice.title, "控制 API 未启动");
-        assert!(notice.message.contains(&format!("端口 {port}")));
-        assert!(notice.message.contains("其他进程占用"));
-        assert!(notice.message.contains("界面与转发站仍可使用"));
+        assert_eq!(notice, StartupNotice::ControlApiPortInUse { port });
+        // The notice is deliberately not a sentence, so assert on the one thing
+        // the rendered text must still carry. The port reads the same in every
+        // locale, so this holds whichever one happens to be installed.
+        let message = notice.message();
+        assert!(message.contains(&port.to_string()), "{message}");
     }
 
     #[test]
@@ -291,6 +290,13 @@ pub(crate) fn apply_quit_mode(cx: &mut App) {
 fn main() {
     shell_support::setup_panic_hook();
     env_logger_init();
+    // Startup can print and log before a window ever opens — a second launch
+    // reports the running instance and exits right here. Resolve the locale from
+    // the persisted setting first so those lines are in the user's language;
+    // the UI re-resolves nothing, it simply reads the same installed locale.
+    ochub_core::i18n::install(ochub_core::i18n::resolve(
+        ochub_core::settings::get_settings().language.as_deref(),
+    ));
 
     let port = control_api_port();
     let (_instance_lock, mut activation_rx) = match shell_support::acquire_single_instance(port) {
@@ -308,21 +314,29 @@ fn main() {
             (lock, activation_rx)
         }
         Ok(shell_support::InstanceAcquire::AlreadyRunning(existing)) => {
+            let unknown = || raw(k::STARTUP_INSTANCE_UNKNOWN).to_string();
             let port = existing
                 .control_port
                 .map(|port| port.to_string())
-                .unwrap_or_else(|| "未知".to_string());
+                .unwrap_or_else(unknown);
             let pid = existing
                 .pid
                 .map(|pid| pid.to_string())
-                .unwrap_or_else(|| "未知".to_string());
-            if existing.activation_requested {
-                println!("OcHub 已在运行（PID {pid}，控制 API 端口 {port}），已请求显示现有窗口。");
-            } else {
-                println!(
-                    "OcHub 已在运行（PID {pid}，控制 API 端口 {port}），但无法请求显示现有窗口。"
-                );
-            }
+                .unwrap_or_else(unknown);
+            // Read by whoever launched this second copy from a terminal, so it
+            // follows the persisted language setting rather than a running UI.
+            println!(
+                "{}",
+                if existing.activation_requested {
+                    tf!(k::STARTUP_INSTANCE_ACTIVATED, pid = pid, port = port)
+                } else {
+                    tf!(
+                        k::STARTUP_INSTANCE_ACTIVATION_FAILED,
+                        pid = pid,
+                        port = port
+                    )
+                }
+            );
             return;
         }
         Err(err) => {
@@ -334,7 +348,7 @@ fn main() {
     let (control_listener, mut startup_notice) = match bind_control_api(port) {
         Ok(listener) => (Some(listener), None),
         Err(notice) => {
-            log::warn!("{}: {}", notice.title, notice.message);
+            log::warn!("{}: {}", notice.title(), notice.message());
             (None, Some(notice))
         }
     };
@@ -351,12 +365,9 @@ fn main() {
 
     if let Err(err) = spawn_app_services(app_state.clone(), control_listener) {
         log::error!("failed to start application services: {err}");
-        startup_notice = Some(StartupNotice::new(
-            "后台服务未启动",
-            format!(
-                "无法启动 OcHub 后台服务线程：{err}。界面仍可浏览，但控制 API 与转发站自动启动均不可用；请重启 OcHub。"
-            ),
-        ));
+        startup_notice = Some(StartupNotice::ServicesUnavailable {
+            error: err.to_string(),
+        });
     }
 
     application()
@@ -369,10 +380,9 @@ fn main() {
             shortcuts::bind_keys(cx);
             shell_menu::install(app_state.clone(), cx);
             apply_quit_mode(cx);
+            // The locale is already installed (see the top of `main`); this only
+            // needs the appearance and startup fields.
             let appearance_settings = ochub_core::settings::get_settings();
-            ochub_core::i18n::install(ochub_core::i18n::resolve(
-                appearance_settings.language.as_deref(),
-            ));
             // Gate on the stored setting as well as the flag, so a stale login
             // item cannot keep hiding the window after the user turns it off.
             let start_hidden = launched_by_login_item(std::env::args().collect::<Vec<_>>())
