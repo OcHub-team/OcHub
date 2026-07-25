@@ -42,7 +42,10 @@ impl Database {
     }
 
     /// 在事务中执行迁移
-    fn migrate_from_json_tx(
+    ///
+    /// `pub(super)` 是给 `db::import_ccswitch` 用的：旧 `config.json` 的一次性
+    /// 导入和这里是同一件事，不该有第二份实现。
+    pub(super) fn migrate_from_json_tx(
         tx: &rusqlite::Transaction<'_>,
         config: &MultiAppConfig,
     ) -> Result<(), AppError> {
@@ -100,7 +103,14 @@ impl Database {
                 )
                 .map_err(|e| AppError::Database(format!("Migrate provider failed: {e}")))?;
 
-                // 迁移 Endpoints
+                // 迁移 Endpoints。provider_endpoints 的主键是自增 id，所以
+                // 重复导入同一个供应商会攒出重复行 —— 先清掉它自己的旧行，
+                // 让这一步和上面的 INSERT OR REPLACE 一样是覆盖语义。
+                tx.execute(
+                    "DELETE FROM provider_endpoints WHERE provider_id = ?1 AND app_type = ?2",
+                    params![id, app_type],
+                )
+                .map_err(|e| AppError::Database(format!("Clear stale endpoints failed: {e}")))?;
                 for (url, endpoint) in endpoints {
                     tx.execute(
                         "INSERT INTO provider_endpoints (provider_id, app_type, url, added_at)

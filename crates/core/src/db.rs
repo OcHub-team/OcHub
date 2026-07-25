@@ -84,6 +84,9 @@ pub fn notify_db_changed(table: &str) {
 /// rusqlite::Connection 本身不是 Sync 的，因此需要这层包装。
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
+    /// 这次启动才建出来的数据库文件（即「首次启动」）。决定还要不要提
+    /// cc-switch 导入，由调用方按自己的界面条件决定怎么用。
+    created_fresh: bool,
 }
 
 fn register_db_change_hook(conn: &Connection) {
@@ -134,6 +137,7 @@ impl Database {
 
         let db = Self {
             conn: Mutex::new(conn),
+            created_fresh: !db_exists,
         };
         db.create_tables()?;
 
@@ -158,21 +162,11 @@ impl Database {
         }
         db.ensure_model_pricing_seeded()?;
 
-        // 全新数据库：尝试从旧 cc-switch 数据一次性导入（只读，失败不阻塞启动）
-        if !db_exists {
-            match db.import_from_ccswitch() {
-                Ok(Some(report)) => log::info!(
-                    "imported cc-switch data (source schema v{}): {} rows across {} tables",
-                    report.source_schema_version,
-                    report.total_rows(),
-                    report.tables.len()
-                ),
-                Ok(None) => {}
-                Err(e) => {
-                    log::warn!("cc-switch import failed, starting with a fresh database: {e}")
-                }
-            }
-        }
+        // The cc-switch import deliberately does *not* run here. It rewrites
+        // providers, MCP servers and pricing wholesale, so the GPUI app asks
+        // first (see the first-run modal in `app_ui.rs`) and calls
+        // `import_from_ccswitch_source` on confirmation. Headless callers with
+        // nobody to ask opt in explicitly via `auto_import_from_ccswitch`.
 
         // Startup cleanup: prune old logs and reclaim space
         if let Err(e) = db.cleanup_old_stream_check_logs(7) {
@@ -205,11 +199,39 @@ impl Database {
 
         let db = Self {
             conn: Mutex::new(conn),
+            created_fresh: true,
         };
         db.create_tables()?;
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)
+    }
+
+    /// Whether `init` created the database file rather than opening an existing
+    /// one — i.e. whether this is the user's first launch.
+    pub fn created_fresh(&self) -> bool {
+        self.created_fresh
+    }
+
+    /// Import cc-switch data on a brand-new database, for callers with no UI to
+    /// ask through. Never overwrites an established install, and a failure is
+    /// logged rather than propagated: an import that does not happen is not a
+    /// reason to refuse to start.
+    pub fn auto_import_from_ccswitch(&self) {
+        if !self.created_fresh {
+            return;
+        }
+        match self.import_from_ccswitch() {
+            Ok(Some(report)) => log::info!(
+                "imported cc-switch data from {} (source version v{}): {} rows across {} tables",
+                report.source_path,
+                report.source_schema_version,
+                report.total_rows(),
+                report.tables.len()
+            ),
+            Ok(None) => {}
+            Err(e) => log::warn!("cc-switch import failed, starting with a fresh database: {e}"),
+        }
     }
 
     pub(crate) fn get_auto_vacuum_mode(conn: &Connection) -> Result<i32, AppError> {

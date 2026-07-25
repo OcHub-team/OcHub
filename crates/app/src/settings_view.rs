@@ -45,6 +45,7 @@ use gpui::{
     div, point, prelude::*, px, Context, Entity, FontWeight, ListAlignment, ListState,
     ScrollHandle, SharedString, Window,
 };
+use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::settings::{self, AppSettings};
 use ochub_core::AppState;
 
@@ -68,6 +69,9 @@ pub enum SettingsEvent {
     /// strings captured at construction time (text-input placeholders) and
     /// memoized list-item heights have to be refreshed explicitly.
     LocaleChanged,
+    /// A cc-switch import rewrote providers, MCP servers and skill repos. The
+    /// shell has to re-read all of them; nothing here can do that for it.
+    DataImported,
 }
 
 impl gpui::EventEmitter<SettingsEvent> for SettingsView {}
@@ -82,13 +86,15 @@ pub(crate) enum Page {
     Sync,
 }
 
-/// A pending confirmation. Both are modal because both are irreversible from
-/// the user's point of view: one overwrites the database, the other throws away
-/// typing.
+/// A pending confirmation. All three are modal because all three are
+/// irreversible from the user's point of view: two rewrite database records,
+/// the other throws away typing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Confirm {
     Restore,
     DiscardDraft,
+    /// Importing cc-switch data over an install that already has records.
+    CcswitchImport,
 }
 
 pub struct SettingsView {
@@ -123,6 +129,11 @@ pub struct SettingsView {
     confirm: Option<Confirm>,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
+    /// cc-switch data found on disk, or `None` when there is nothing to import.
+    /// The row only exists while this does — offering an import with no source
+    /// would be a permanently dead control.
+    ccswitch_source: Option<DetectedSource>,
+    ccswitch_busy: bool,
 }
 
 /// Root blocks when no search query is active.
@@ -153,6 +164,8 @@ impl SettingsView {
             confirm: None,
             status: None,
             status_level: None,
+            ccswitch_source: import_ccswitch::detect_source().filter(|source| !source.is_empty()),
+            ccswitch_busy: false,
         };
 
         // Filtering re-lays the list; ignore the notifications that carry no
@@ -383,7 +396,54 @@ impl SettingsView {
         match confirm {
             Confirm::Restore => self.render_restore_confirm(cx),
             Confirm::DiscardDraft => self.render_discard_confirm(cx),
+            Confirm::CcswitchImport => self.render_ccswitch_confirm(cx),
         }
+    }
+
+    fn render_ccswitch_confirm(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let path = self
+            .ccswitch_source
+            .as_ref()
+            .map(|source| ochub_core::paths::abbreviate_home(&source.path))
+            .unwrap_or_default();
+        components::modal_overlay(
+            components::modal_card()
+                .child(components::modal_header(t(k::SETTINGS_DATA_CCSWITCH_LABEL)))
+                .child(
+                    components::modal_body()
+                        .child(
+                            div()
+                                .text_color(theme::subtext())
+                                .text_sm()
+                                .child(t(k::SETTINGS_DATA_CCSWITCH_CONFIRM_BODY)),
+                        )
+                        .child(div().text_color(theme::muted()).text_xs().child(path)),
+                )
+                .child(components::modal_footer(vec![
+                    components::button(
+                        "settings-ccswitch-cancel",
+                        t(k::SETTINGS_ACTION_CANCEL),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.confirm = None;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                    components::button(
+                        "settings-ccswitch-ok",
+                        t(k::SETTINGS_DATA_CCSWITCH_ACTION),
+                        ButtonTone::Primary,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.confirm = None;
+                        this.start_ccswitch_import(cx);
+                    }))
+                    .into_any_element(),
+                ])),
+        )
     }
 
     fn render_restore_confirm(&self, cx: &mut Context<Self>) -> gpui::Div {

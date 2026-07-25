@@ -108,6 +108,26 @@ pub fn get_legacy_ccswitch_database_path() -> PathBuf {
     get_legacy_ccswitch_dir().join("cc-switch.db")
 }
 
+/// Legacy cc-switch JSON config path (`~/.cc-switch/config.json`), used by
+/// cc-switch before it moved to SQLite. Second choice as an import source:
+/// the database carries everything this file does and more.
+pub fn get_legacy_ccswitch_config_path() -> PathBuf {
+    get_legacy_ccswitch_dir().join("config.json")
+}
+
+/// A path with the home directory written as `~`, for display.
+///
+/// Paths under the home directory are most of what OcHub shows, and the
+/// absolute form spends its first thirty characters saying nothing while
+/// pushing the part that identifies the file out of a narrow container.
+pub fn abbreviate_home(path: &Path) -> String {
+    let home = get_home_dir();
+    match path.strip_prefix(&home) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
 /// Sanitize a provider name into a filesystem-safe lowercase string.
 pub fn sanitize_provider_name(name: &str) -> String {
     name.chars()
@@ -281,6 +301,19 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&sort_json_keys(&Value::Object(a))).unwrap(),
             serde_json::to_string(&sort_json_keys(&Value::Object(b))).unwrap(),
+        );
+    }
+
+    #[test]
+    fn abbreviate_home_replaces_only_the_home_prefix() {
+        let home = get_home_dir();
+        assert_eq!(
+            abbreviate_home(&home.join(".cc-switch/config.json")),
+            "~/.cc-switch/config.json"
+        );
+        assert_eq!(
+            abbreviate_home(Path::new("/opt/shared/config.json")),
+            "/opt/shared/config.json"
         );
     }
 

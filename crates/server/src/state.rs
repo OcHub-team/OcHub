@@ -13,8 +13,13 @@ pub struct ServerState {
 
 impl ServerState {
     /// Build state by initializing the SQLite store at the standard location.
+    ///
+    /// Running headless there is nobody to show the first-run import prompt to,
+    /// so a brand-new database takes cc-switch data automatically — the
+    /// behaviour this path has always had.
     pub fn init() -> Result<Self, AppError> {
         let db = Arc::new(Database::init()?);
+        db.auto_import_from_ccswitch();
         let app = Arc::new(ochub_core::app_state::AppState::new(db));
         app.bootstrap();
         Ok(Self { app })

@@ -1,24 +1,48 @@
 //! cc-switch → OcHub 一次性数据导入。
 //!
-//! 只在全新 OcHub 数据库首次初始化时运行：以只读方式 ATTACH
-//! `~/.cc-switch/cc-switch.db`，把数据翻译进 OcHub 自己的 schema。
-//! 对 `~/.cc-switch/` 零写入，原版 cc-switch 可继续照常使用。
+//! 由用户在首启弹窗里确认后运行（无界面的 `ochub-server` 则在全新数据库上
+//! 自动运行）。cc-switch 有两代存储，两代都能作为来源：
+//!
+//! | 来源 | 路径 | 说明 |
+//! | --- | --- | --- |
+//! | [`ImportSourceKind::Database`] | `~/.cc-switch/cc-switch.db` | v3.x 起的 SQLite 库 |
+//! | [`ImportSourceKind::ConfigJson`] | `~/.cc-switch/config.json` | 更早的 JSON 配置文件 |
+//!
+//! 数据库是 JSON 的超集（还带用量历史、备用端点、计价与设置），检测到就优先
+//! 用它。两条路径都对 `~/.cc-switch/` 零写入，原版 cc-switch 可继续照常使用。
 //!
 //! 兼容策略（宽容读取）：cc-switch 的历史迁移全部是加表/加列（additive），
 //! 因此逐表按「目标列 ∩ 源列」的交集拷贝即可同时兼容 v11..v16 乃至更新的
 //! 源库 —— 未知表/列自然被忽略，缺失列落到目标默认值。源版本高于已验证
-//! 范围时仅告警，不拒绝导入。
+//! 范围时仅告警，不拒绝导入。JSON 路径同理：认不出的配置段记进报告后跳过，
+//! 单个供应商解析失败只丢它自己，不连累整份文件。
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
-use serde::Serialize;
+use indexmap::IndexMap;
+use rusqlite::{Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use super::legacy_json::{CommonConfigSnippets, McpRoot, MultiAppConfig, SkillStore};
 use super::{lock_conn, Database};
+use crate::app_type::AppType;
 use crate::error::AppError;
+use crate::model::{Provider, ProviderManager};
 
 /// 已验证过导入兼容性的最高 cc-switch schema 版本。
 const MAX_VERIFIED_SOURCE_VERSION: i32 = 16;
+
+/// 记录用户对首启导入的选择（`imported` / `skipped`）。存在即表示已经问过，
+/// 首启弹窗不再提第二次；「设置 → 数据」里的手动入口不看这个键。
+pub const IMPORT_DECISION_KEY: &str = "ccswitch_import_decision";
+/// 导入报告的 settings 键。
+pub const IMPORT_REPORT_KEY: &str = "ccswitch_import_report";
+
+/// Gemini CLI 的写入端已经移除，但历史数据仍可读（见 `spec/ARCHITECTURE.md`
+/// 集成规则 4），所以它不是 [`AppType`] 却仍然是合法的导入 app_type。
+const LEGACY_GEMINI_APP: &str = "gemini";
 
 /// OcHub 认识的 app_type 值（`AppType` 的全部字符串形态 + 历史别名）。
 /// 带 app_type 语义行的表按此过滤，避免导入 OcHub 无法解析的行
@@ -35,10 +59,42 @@ pub struct TableImport {
     pub rows: usize,
 }
 
-/// 一次性导入报告，持久化到 settings（key = `ccswitch_import_report`）。
+/// cc-switch 的两代存储形态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportSourceKind {
+    /// `cc-switch.db`：v3.x 起的 SQLite 库，内容是 JSON 配置的超集。
+    Database,
+    /// `config.json`：更早的 `MultiAppConfig` JSON 配置文件。
+    ConfigJson,
+}
+
+/// 磁盘上找到的一份 cc-switch 数据，附带够首启弹窗说清「会带来什么」的清点。
+///
+/// 清点是只读的：检测本身不写任何一边。
+#[derive(Debug, Clone, Serialize)]
+pub struct DetectedSource {
+    pub kind: ImportSourceKind,
+    pub path: PathBuf,
+    pub providers: usize,
+    pub mcp_servers: usize,
+    pub skill_repos: usize,
+}
+
+impl DetectedSource {
+    /// 是否清点到了任何值得导入的东西。空壳来源（例如刚装好、还没配过的
+    /// cc-switch）不值得在首启时打扰用户。
+    pub fn is_empty(&self) -> bool {
+        self.providers == 0 && self.mcp_servers == 0 && self.skill_repos == 0
+    }
+}
+
+/// 一次性导入报告，持久化到 settings（key = [`IMPORT_REPORT_KEY`]）。
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportReport {
+    pub source_kind: ImportSourceKind,
     pub source_path: String,
+    /// 数据库来源是 `PRAGMA user_version`；JSON 来源是文件里的 `version` 字段。
     pub source_schema_version: i32,
     pub imported_at: i64,
     pub tables: Vec<TableImport>,
@@ -49,6 +105,15 @@ pub struct ImportReport {
 impl ImportReport {
     pub fn total_rows(&self) -> usize {
         self.tables.iter().map(|t| t.rows).sum()
+    }
+
+    /// 报告里某张目标表的行数（没导入过该表就是 0）。
+    pub fn rows_for(&self, table: &str) -> usize {
+        self.tables
+            .iter()
+            .find(|t| t.table == table)
+            .map(|t| t.rows)
+            .unwrap_or(0)
     }
 }
 
@@ -107,26 +172,102 @@ const IMPORT_SIDE_FILES: &[&str] = &[
 ];
 
 impl Database {
-    /// 从旧 cc-switch 数据库一次性导入数据。
+    /// 检测并导入，没有可用来源时返回 `Ok(None)`。
     ///
-    /// 返回 `Ok(None)` 表示没有可导入的源（首次全新安装）。仅应在全新
-    /// OcHub 数据库上调用；所有插入使用 INSERT OR REPLACE，因此对种子
-    /// 数据（官方 provider、内置定价、用量定价设置）是覆盖语义。
+    /// 无界面的 `ochub-server` 用这个：没人可问，就在全新数据库上照旧自动
+    /// 导入。GPUI 应用走 [`Self::import_from_ccswitch_source`]，先让用户确认。
     pub fn import_from_ccswitch(&self) -> Result<Option<ImportReport>, AppError> {
-        let source_path = crate::paths::get_legacy_ccswitch_database_path();
-        if !source_path.exists() {
+        let Some(source) = detect_source() else {
             return Ok(None);
+        };
+        self.import_from_ccswitch_source(&source).map(Some)
+    }
+
+    /// 从一份已检测到的 cc-switch 数据一次性导入。
+    ///
+    /// 所有插入使用 INSERT OR REPLACE，因此对种子数据（官方 provider、内置
+    /// 定价、用量定价设置）以及重复导入的同 id 记录都是覆盖语义。
+    pub fn import_from_ccswitch_source(
+        &self,
+        source: &DetectedSource,
+    ) -> Result<ImportReport, AppError> {
+        // Importing into an install that already holds providers merges
+        // cc-switch's records over whatever shares their ids. A snapshot first
+        // makes that reversible. The test is what the database actually holds,
+        // not whether this is the first launch: a user can add providers and
+        // then run the import from Settings within the same session.
+        if self.has_provider_rows().unwrap_or(false) {
+            match self.backup_database_file() {
+                Ok(Some(path)) => log::info!("pre-import database backup: {}", path.display()),
+                Ok(None) => {}
+                Err(e) => log::warn!("pre-import database backup failed, continuing: {e}"),
+            }
         }
 
-        let conn = lock_conn!(self.conn);
-        let report = Self::import_from_ccswitch_on_conn(&conn, &source_path)?;
-        drop(conn);
+        let report = match source.kind {
+            ImportSourceKind::Database => {
+                let conn = lock_conn!(self.conn);
+                Self::import_from_ccswitch_on_conn(&conn, &source.path)?
+            }
+            ImportSourceKind::ConfigJson => self.import_from_ccswitch_json(&source.path)?,
+        };
 
         // 报告持久化 + 旁路文件复制都在数据导入成功之后进行
         self.persist_import_report(&report)?;
         copy_side_files();
 
-        Ok(Some(report))
+        Ok(report)
+    }
+
+    /// 目标库里已经有供应商记录 —— 也就是「这次导入会覆盖到东西」。
+    fn has_provider_rows(&self) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(count > 0)
+    }
+
+    /// 用户对首启导入的选择；`None` = 还没问过。
+    pub fn ccswitch_import_decision(&self) -> Result<Option<String>, AppError> {
+        self.get_setting(IMPORT_DECISION_KEY)
+    }
+
+    /// 记下用户的选择，让首启弹窗不再提第二次。
+    pub fn set_ccswitch_import_decision(&self, decision: &str) -> Result<(), AppError> {
+        self.set_setting(IMPORT_DECISION_KEY, decision)
+    }
+
+    /// 最近一次导入报告的原始 JSON。
+    pub fn ccswitch_import_report_json(&self) -> Result<Option<String>, AppError> {
+        self.get_setting(IMPORT_REPORT_KEY)
+    }
+
+    /// 从旧 `config.json`（`MultiAppConfig`）一次性导入。
+    ///
+    /// 复用 JSON → SQLite 的迁移实现，整体包在 savepoint 里：任何一步失败都
+    /// 回滚到导入前，不留半份数据。
+    fn import_from_ccswitch_json(&self, source_path: &Path) -> Result<ImportReport, AppError> {
+        let loaded = load_legacy_config(source_path)?;
+
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(format!("开启导入事务失败: {e}")))?;
+        Self::migrate_from_json_tx(&tx, &loaded.config)?;
+        tx.commit()
+            .map_err(|e| AppError::Database(format!("提交导入事务失败: {e}")))?;
+        drop(conn);
+
+        Ok(ImportReport {
+            source_kind: ImportSourceKind::ConfigJson,
+            source_path: source_path.to_string_lossy().to_string(),
+            source_schema_version: loaded.config.version as i32,
+            imported_at: now_unix(),
+            tables: loaded.counts(),
+            skipped_tables: loaded.skipped,
+            warnings: loaded.warnings,
+        })
     }
 
     fn import_from_ccswitch_on_conn(
@@ -229,14 +370,11 @@ impl Database {
             Ok((tables, skipped_tables)) => {
                 conn.execute("RELEASE ccswitch_import;", [])
                     .map_err(|e| AppError::Database(format!("提交导入 savepoint 失败: {e}")))?;
-                let imported_at = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
                 Ok(ImportReport {
+                    source_kind: ImportSourceKind::Database,
                     source_path: source_path.to_string_lossy().to_string(),
                     source_schema_version: source_version,
-                    imported_at,
+                    imported_at: now_unix(),
                     tables,
                     skipped_tables,
                     warnings,
@@ -286,13 +424,299 @@ impl Database {
     /// 把导入报告写进 settings，供 UI / 排查溯源。
     fn persist_import_report(&self, report: &ImportReport) -> Result<(), AppError> {
         let json = super::to_json_string(report)?;
-        let conn = lock_conn!(self.conn);
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('ccswitch_import_report', ?1)",
-            [json.as_str()],
-        )
-        .map_err(|e| AppError::Database(format!("写入导入报告失败: {e}")))?;
-        Ok(())
+        self.set_setting(IMPORT_REPORT_KEY, &json)
+    }
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// 来源检测
+// ---------------------------------------------------------------------------
+
+/// 在默认位置（`~/.cc-switch/`）找一份可导入的 cc-switch 数据。
+///
+/// 数据库优先：它是 JSON 配置的超集。数据库存在但读不动（损坏、权限）时
+/// 退回 JSON，而不是直接判定「无可导入」。
+pub fn detect_source() -> Option<DetectedSource> {
+    let db_path = crate::paths::get_legacy_ccswitch_database_path();
+    if db_path.exists() {
+        match count_database_source(&db_path) {
+            Ok(source) => return Some(source),
+            Err(e) => log::warn!("cc-switch 数据库无法清点，尝试回退到 config.json: {e}"),
+        }
+    }
+
+    let json_path = crate::paths::get_legacy_ccswitch_config_path();
+    if json_path.exists() {
+        match count_config_json_source(&json_path) {
+            Ok(source) => return Some(source),
+            Err(e) => log::warn!("cc-switch config.json 无法清点: {e}"),
+        }
+    }
+
+    None
+}
+
+/// 清点用户手动选中的一份文件。按扩展名/文件名判定属于哪一代存储。
+pub fn detect_source_at(path: &Path) -> Result<DetectedSource, AppError> {
+    if !path.exists() {
+        return Err(AppError::Config(format!("文件不存在: {}", path.display())));
+    }
+    let looks_like_json = path
+        .extension()
+        .map(|ext| ext.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+    if looks_like_json {
+        count_config_json_source(path)
+    } else {
+        count_database_source(path)
+    }
+}
+
+fn count_database_source(path: &Path) -> Result<DetectedSource, AppError> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| AppError::Database(format!("只读打开 cc-switch 数据库失败: {e}")))?;
+
+    Ok(DetectedSource {
+        kind: ImportSourceKind::Database,
+        path: path.to_path_buf(),
+        providers: count_rows(&conn, "providers", Some(KNOWN_APP_TYPES)),
+        mcp_servers: count_rows(&conn, "mcp_servers", None),
+        skill_repos: count_rows(&conn, "skill_repos", None),
+    })
+}
+
+/// 清点单表行数。表不存在或查询失败都算 0：清点只用于弹窗里的摘要，
+/// 不该因为一张表缺失就让整个来源看起来不可用。
+fn count_rows(conn: &Connection, table: &str, app_types: Option<&str>) -> usize {
+    let where_clause = app_types
+        .map(|set| format!(" WHERE app_type IN {set}"))
+        .unwrap_or_default();
+    let sql = format!("SELECT COUNT(*) FROM \"{table}\"{where_clause}");
+    conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
+        .map(|count| count.max(0) as usize)
+        .unwrap_or(0)
+}
+
+fn count_config_json_source(path: &Path) -> Result<DetectedSource, AppError> {
+    let loaded = load_legacy_config(path)?;
+    Ok(DetectedSource {
+        kind: ImportSourceKind::ConfigJson,
+        path: path.to_path_buf(),
+        providers: loaded.provider_count(),
+        mcp_servers: loaded.mcp_count(),
+        skill_repos: loaded.config.skills.repos.len(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 旧版 config.json 的宽容读取
+// ---------------------------------------------------------------------------
+
+/// 一份读进来的旧配置，连同读取过程中攒下的告警与跳过项。
+struct LoadedLegacyConfig {
+    config: MultiAppConfig,
+    skipped: Vec<String>,
+    warnings: Vec<String>,
+}
+
+impl LoadedLegacyConfig {
+    fn provider_count(&self) -> usize {
+        self.config.apps.values().map(|m| m.providers.len()).sum()
+    }
+
+    fn mcp_count(&self) -> usize {
+        self.config.mcp.servers.as_ref().map_or(0, HashMap::len)
+    }
+
+    /// 迁移写入的行数。`migrate_from_json_tx` 对每条记录都是一次 INSERT OR
+    /// REPLACE，所以入参条数就是写入条数。
+    fn counts(&self) -> Vec<TableImport> {
+        let snippets = &self.config.common_config_snippets;
+        let settings_rows = [&snippets.claude, &snippets.codex, &snippets.gemini]
+            .iter()
+            .filter(|value| value.is_some())
+            .count();
+
+        [
+            ("providers", self.provider_count()),
+            ("provider_endpoints", self.endpoint_count()),
+            ("mcp_servers", self.mcp_count()),
+            ("skill_repos", self.config.skills.repos.len()),
+            ("settings", settings_rows),
+        ]
+        .into_iter()
+        .filter(|(_, rows)| *rows > 0)
+        .map(|(table, rows)| TableImport {
+            table: table.to_string(),
+            rows,
+        })
+        .collect()
+    }
+
+    fn endpoint_count(&self) -> usize {
+        self.config
+            .apps
+            .values()
+            .flat_map(|manager| manager.providers.values())
+            .map(|provider| {
+                provider
+                    .meta
+                    .as_ref()
+                    .map_or(0, |meta| meta.custom_endpoints.len())
+            })
+            .sum()
+    }
+}
+
+/// 一个 app 段的宽容形态。
+///
+/// [`ProviderManager`] 的两个字段都没有 serde 默认值，缺一个就整段读不出来；
+/// `providers` 收成 [`Value`] 则让坏掉的单个供应商只丢自己。
+#[derive(Deserialize)]
+struct LegacyAppSection {
+    #[serde(default)]
+    providers: IndexMap<String, Value>,
+    #[serde(default)]
+    current: String,
+}
+
+/// 把 cc-switch 的 app 段名归一成 OcHub 的 app_type。
+///
+/// `None` = 不是 app 段（`prompts` 之类）或 OcHub 不认识的应用。
+fn canonical_app_key(key: &str) -> Option<String> {
+    if key == LEGACY_GEMINI_APP {
+        return Some(LEGACY_GEMINI_APP.to_string());
+    }
+    key.parse::<AppType>()
+        .ok()
+        .map(|app| app.as_str().to_string())
+}
+
+/// 读一份旧版 `config.json`，任何一段读不出来都不至于让整份文件作废。
+///
+/// [`MultiAppConfig`] 用 `#[serde(flatten)]` 收 app 段，于是每个它没声明的
+/// 顶层键都会被喂给 [`ProviderManager`] —— 真实配置里都有的 `prompts` 过不了
+/// 这一关，会把整份文件一起带走。所以这里手工遍历对象：认不出的键留在 app
+/// 表外面，坏掉的段降级成一条告警。
+fn load_legacy_config(path: &Path) -> Result<LoadedLegacyConfig, AppError> {
+    let text = std::fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+    let root: Value = serde_json::from_str(&text).map_err(|e| AppError::json(path, e))?;
+    let Value::Object(root) = root else {
+        return Err(AppError::Config(format!(
+            "{} 不是一个 JSON 对象",
+            path.display()
+        )));
+    };
+
+    let mut config = MultiAppConfig {
+        version: root
+            .get("version")
+            .and_then(Value::as_u64)
+            .unwrap_or(2)
+            .min(u32::MAX as u64) as u32,
+        apps: HashMap::new(),
+        mcp: McpRoot {
+            servers: Some(HashMap::new()),
+            ..McpRoot::default()
+        },
+        // `SkillStore::default()` 带四个内置仓库；这里要的是「文件里写了什么」，
+        // 凭空多出来的仓库会被当成用户自己配的一起导进去。
+        skills: SkillStore {
+            skills: HashMap::new(),
+            repos: Vec::new(),
+        },
+        common_config_snippets: CommonConfigSnippets::default(),
+        claude_common_config_snippet: None,
+    };
+    let mut skipped = Vec::new();
+    let mut warnings = Vec::new();
+
+    for (key, value) in root {
+        match key.as_str() {
+            "version" => {}
+            "mcp" => match serde_json::from_value::<McpRoot>(value) {
+                Ok(mcp) => config.mcp = mcp,
+                Err(e) => warnings.push(format!("mcp 段解析失败，已跳过: {e}")),
+            },
+            "skills" => match serde_json::from_value::<SkillStore>(value) {
+                Ok(skills) => config.skills = skills,
+                Err(e) => warnings.push(format!("skills 段解析失败，已跳过: {e}")),
+            },
+            "common_config_snippets" => {
+                match serde_json::from_value::<CommonConfigSnippets>(value) {
+                    Ok(snippets) => config.common_config_snippets = snippets,
+                    Err(e) => {
+                        warnings.push(format!("common_config_snippets 解析失败，已跳过: {e}"))
+                    }
+                }
+            }
+            "claude_common_config_snippet" => {
+                config.claude_common_config_snippet = value.as_str().map(str::to_string);
+            }
+            other => match canonical_app_key(other) {
+                Some(app_type) => merge_app_section(
+                    &mut config.apps,
+                    &app_type,
+                    other,
+                    value,
+                    &mut warnings,
+                    &mut skipped,
+                ),
+                None => skipped.push(format!("{other}（不是 OcHub 认识的应用配置段）")),
+            },
+        }
+    }
+
+    Ok(LoadedLegacyConfig {
+        config,
+        skipped,
+        warnings,
+    })
+}
+
+/// 把一个 app 段并进 app 表。
+///
+/// 归一化会让 `claude_desktop` 与 `claude-desktop` 落到同一个键上，所以这里
+/// 是合并而不是覆盖：供应商累加，`current` 以先到的非空值为准。
+fn merge_app_section(
+    apps: &mut HashMap<String, ProviderManager>,
+    app_type: &str,
+    source_key: &str,
+    value: Value,
+    warnings: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+) {
+    let section = match serde_json::from_value::<LegacyAppSection>(value) {
+        Ok(section) => section,
+        Err(e) => {
+            warnings.push(format!("{source_key} 段解析失败，已跳过: {e}"));
+            return;
+        }
+    };
+
+    if section.providers.is_empty() {
+        skipped.push(format!("{source_key}（没有供应商）"));
+        return;
+    }
+
+    let manager = apps.entry(app_type.to_string()).or_default();
+    if manager.current.is_empty() {
+        manager.current = section.current;
+    }
+    for (id, raw) in section.providers {
+        match serde_json::from_value::<Provider>(raw) {
+            Ok(provider) => {
+                manager.providers.insert(id, provider);
+            }
+            Err(e) => warnings.push(format!("{source_key} 的供应商 {id} 解析失败，已跳过: {e}")),
+        }
     }
 }
 
@@ -311,6 +735,247 @@ fn copy_side_files() {
             Ok(_) => log::info!("imported cc-switch side file: {name}"),
             Err(e) => log::warn!("failed to copy cc-switch side file {name}: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+    use crate::db::Database;
+
+    /// A legacy `config.json` shaped like the ones cc-switch actually wrote:
+    /// a `prompts` section that is not an app, a retired `gemini` app, an
+    /// underscore spelling of claude-desktop, and one unparseable provider.
+    const LEGACY_CONFIG: &str = r#"{
+      "version": 2,
+      "claude": {
+        "current": "c1",
+        "providers": {
+          "c1": {
+            "id": "c1",
+            "name": "My Claude",
+            "settingsConfig": {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-1"}},
+            "websiteUrl": "https://example.com",
+            "meta": {"custom_endpoints": {"https://a.example": {"url": "https://a.example", "addedAt": 42}}}
+          },
+          "broken": {"name": "no id here"}
+        }
+      },
+      "claude_desktop": {
+        "current": "d1",
+        "providers": {
+          "d1": {"id": "d1", "name": "Desktop", "settingsConfig": {}}
+        }
+      },
+      "gemini": {"current": "", "providers": {}},
+      "grokbuild": {
+        "current": "g1",
+        "providers": {"g1": {"id": "g1", "name": "Grok", "settingsConfig": {}}}
+      },
+      "prompts": {"claude": {"prompts": {}}, "codex": {"prompts": {}}},
+      "mcp": {
+        "servers": {
+          "ctx7": {
+            "id": "ctx7",
+            "name": "Context7",
+            "server": {"command": "npx"},
+            "apps": {"claude": true}
+          }
+        }
+      },
+      "skills": {"repos": [{"owner": "anthropics", "name": "skills", "branch": "main", "enabled": true}]},
+      "common_config_snippets": {"claude": "{\"model\":\"opus\"}"},
+      "future_section": {"anything": 1}
+    }"#;
+
+    fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("config.json");
+        std::fs::write(&path, LEGACY_CONFIG).unwrap();
+        path
+    }
+
+    /// The reason `load_legacy_config` walks the object by hand: serde's
+    /// `flatten` feeds every undeclared key — including the `prompts` section
+    /// real configs carry — to `ProviderManager`, which has no field defaults.
+    /// One such key loses the entire file, providers and all.
+    #[test]
+    fn naive_multi_app_config_parse_chokes_on_prompts() {
+        let with_prompts = r#"{
+          "version": 2,
+          "claude": {"current": "c1", "providers": {}},
+          "prompts": {"claude": {"prompts": {}}}
+        }"#;
+        let err = serde_json::from_str::<MultiAppConfig>(with_prompts)
+            .expect_err("prompts must break the flattened parse");
+        assert!(
+            err.to_string().contains("missing field `providers`"),
+            "unexpected failure: {err}"
+        );
+
+        // Same file without that one section parses fine — `prompts` is the
+        // whole difference.
+        let without_prompts = r#"{"version": 2, "claude": {"current": "c1", "providers": {}}}"#;
+        assert!(serde_json::from_str::<MultiAppConfig>(without_prompts).is_ok());
+    }
+
+    #[test]
+    fn tolerant_loader_keeps_apps_and_drops_everything_else() {
+        let loaded = {
+            let dir = tempfile::tempdir().unwrap();
+            let path = write_config(dir.path());
+            load_legacy_config(&path).unwrap()
+        };
+
+        // Alias spellings land on the canonical app_type.
+        let mut apps: Vec<_> = loaded.config.apps.keys().cloned().collect();
+        apps.sort();
+        assert_eq!(apps, ["claude", "claude-desktop", "grokbuild"]);
+
+        // `gemini` had no providers and `prompts` is not an app at all.
+        assert!(loaded.skipped.iter().any(|s| s.starts_with("gemini")));
+        assert!(loaded.skipped.iter().any(|s| s.starts_with("prompts")));
+        assert!(loaded
+            .skipped
+            .iter()
+            .any(|s| s.starts_with("future_section")));
+
+        // The one bad provider is reported and skipped; its siblings survive.
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+        assert!(loaded.warnings[0].contains("broken"));
+        assert_eq!(loaded.provider_count(), 3);
+        assert_eq!(loaded.mcp_count(), 1);
+        assert_eq!(loaded.config.skills.repos.len(), 1);
+    }
+
+    /// An absent `skills` section must not conjure `SkillStore::default()`'s
+    /// four built-in repos into the user's data.
+    #[test]
+    fn missing_sections_import_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{"version": 2}"#).unwrap();
+
+        let loaded = load_legacy_config(&path).unwrap();
+        assert!(loaded.config.skills.repos.is_empty());
+        assert_eq!(loaded.mcp_count(), 0);
+        assert!(loaded.counts().is_empty());
+    }
+
+    #[test]
+    fn config_json_import_writes_providers_endpoints_and_snippets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path());
+
+        let db = Database::memory().unwrap();
+        let report = db.import_from_ccswitch_json(&path).unwrap();
+
+        assert_eq!(report.source_kind, ImportSourceKind::ConfigJson);
+        assert_eq!(report.source_schema_version, 2);
+        assert_eq!(report.rows_for("providers"), 3);
+        assert_eq!(report.rows_for("provider_endpoints"), 1);
+        assert_eq!(report.rows_for("mcp_servers"), 1);
+        assert_eq!(report.rows_for("skill_repos"), 1);
+
+        let conn = db.conn.lock().unwrap();
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM providers WHERE id='c1' AND app_type='claude'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "My Claude");
+
+        // The `claude_desktop` spelling was normalized on the way in.
+        let desktop: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM providers WHERE app_type='claude-desktop'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(desktop, 1);
+
+        let is_current: i64 = conn
+            .query_row("SELECT is_current FROM providers WHERE id='c1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(is_current, 1);
+
+        let url: String = conn
+            .query_row(
+                "SELECT url FROM provider_endpoints WHERE provider_id='c1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(url, "https://a.example");
+
+        let snippet: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='common_config_claude'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(snippet, "{\"model\":\"opus\"}");
+    }
+
+    /// The Settings-page entry can run against a populated database, so a
+    /// second pass has to overwrite rather than accumulate.
+    #[test]
+    fn repeated_import_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path());
+
+        let db = Database::memory().unwrap();
+        db.import_from_ccswitch_json(&path).unwrap();
+        db.import_from_ccswitch_json(&path).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let providers: i64 = conn
+            .query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(providers, 3);
+        let endpoints: i64 = conn
+            .query_row("SELECT COUNT(*) FROM provider_endpoints", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(endpoints, 1, "endpoints must not accumulate across imports");
+    }
+
+    #[test]
+    fn detect_at_counts_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(dir.path());
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        let source = detect_source_at(&path).unwrap();
+        assert_eq!(source.kind, ImportSourceKind::ConfigJson);
+        assert_eq!(source.providers, 3);
+        assert_eq!(source.mcp_servers, 1);
+        assert_eq!(source.skill_repos, 1);
+        assert!(!source.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn empty_source_is_reported_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"version": 2, "claude": {"current": "", "providers": {}}}"#,
+        )
+        .unwrap();
+
+        assert!(detect_source_at(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn detect_at_rejects_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(detect_source_at(&dir.path().join("nope.json")).is_err());
     }
 }
 

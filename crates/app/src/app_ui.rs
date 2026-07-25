@@ -12,6 +12,7 @@ use gpui::{
     div, prelude::*, px, App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton,
     ScrollHandle, SharedString, Window, WindowAppearance,
 };
+use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
 use ochub_core::services::provider::{self, ProviderService};
@@ -172,6 +173,12 @@ pub struct AppRoot {
     confirm_delete: Option<Provider>,
     /// One-time acknowledgement shown after the first successful launch.
     show_first_run_notice: bool,
+    /// cc-switch data found on disk that the first-run notice is offering to
+    /// import. `None` when there is nothing to import or the user was already
+    /// asked once — the notice then keeps its plain single-button form.
+    ccswitch_import: Option<DetectedSource>,
+    /// Set while the import runs, so the modal cannot be answered twice.
+    ccswitch_importing: bool,
     /// Persistent startup degradation notice, such as a control API port
     /// conflict. Unlike a toast, this remains visible while the condition lasts.
     startup_notice: Option<StartupNotice>,
@@ -649,6 +656,10 @@ impl AppRoot {
         let tools_view = cx.new(|cx| ToolsView::new(app.clone(), cx));
         let theme_view = cx.new(ThemeView::new);
         let gallery_view = cx.new(GalleryView::new);
+        let show_first_run_notice = crate::shell_support::first_run_notice_pending();
+        let ccswitch_import = show_first_run_notice
+            .then(|| Self::pending_ccswitch_import(&app))
+            .flatten();
         let initial_section = Section::from_env();
         let enabled = Self::visible_apps();
         let initial_app = std::env::var("MS_START_APP")
@@ -669,7 +680,9 @@ impl AppRoot {
             notifications,
             editor: None,
             confirm_delete: None,
-            show_first_run_notice: crate::shell_support::first_run_notice_pending(),
+            show_first_run_notice,
+            ccswitch_import,
+            ccswitch_importing: false,
             startup_notice,
             settings_view,
             gateway_view,
@@ -703,6 +716,9 @@ impl AppRoot {
             }
             crate::settings_view::SettingsEvent::LocaleChanged => {
                 this.relocalize(cx);
+            }
+            crate::settings_view::SettingsEvent::DataImported => {
+                this.reload_after_ccswitch_import(cx);
             }
         })
         .detach();
@@ -1490,6 +1506,219 @@ impl AppRoot {
         crate::shell_support::confirm_first_run_notice();
         self.show_first_run_notice = false;
         cx.notify();
+    }
+
+    /// cc-switch data worth offering to import on this launch.
+    ///
+    /// Nothing is offered once the question has been answered, nor for an
+    /// install that holds no providers, MCP servers or skill repositories —
+    /// an empty import is not worth a decision. Users who skip, or who get
+    /// here after the notice was dismissed, still have Settings → Data.
+    fn pending_ccswitch_import(app: &Arc<AppState>) -> Option<DetectedSource> {
+        if app.db.ccswitch_import_decision().ok().flatten().is_some() {
+            return None;
+        }
+        import_ccswitch::detect_source().filter(|source| !source.is_empty())
+    }
+
+    /// Record the answer so the notice stops asking, whichever way it went.
+    fn record_ccswitch_decision(&mut self, decision: &str) {
+        if let Err(err) = self.app.db.set_ccswitch_import_decision(decision) {
+            log::warn!("保存 cc-switch 导入选择失败: {err}");
+        }
+        self.ccswitch_import = None;
+    }
+
+    /// Re-read everything a cc-switch import rewrites. Shared by the first-run
+    /// modal and the Settings → Data entry, which land the same rows.
+    fn reload_after_ccswitch_import(&mut self, cx: &mut Context<Self>) {
+        self.ensure_valid_selection(cx);
+        self.reload(cx);
+        self.mcp_view.update(cx, |view, _| view.reload());
+        self.skills_view.update(cx, |view, cx| view.reload(cx));
+        shell_menu::refresh(&self.app, cx);
+        cx.notify();
+    }
+
+    fn skip_ccswitch_import(&mut self, cx: &mut Context<Self>) {
+        self.record_ccswitch_decision("skipped");
+        self.acknowledge_first_run(cx);
+    }
+
+    /// Import, then dismiss the notice and reload everything the new rows feed.
+    ///
+    /// The copy runs on a background thread: a cc-switch database carrying
+    /// months of usage history takes long enough that doing it inline would
+    /// freeze the window mid-answer.
+    fn run_ccswitch_import(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = self.ccswitch_import.clone() else {
+            return;
+        };
+        if self.ccswitch_importing {
+            return;
+        }
+        self.ccswitch_importing = true;
+        cx.notify();
+
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { app.db.import_from_ccswitch_source(&source) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.ccswitch_importing = false;
+                match result {
+                    Ok(report) => {
+                        this.record_ccswitch_decision("imported");
+                        this.notify_success(
+                            tf!(
+                                k::SHELL_FIRST_RUN_IMPORT_SUCCEEDED,
+                                rows = report.total_rows()
+                            ),
+                            cx,
+                        );
+                        this.reload_after_ccswitch_import(cx);
+                    }
+                    // A failed import leaves the decision unrecorded on
+                    // purpose, so the offer comes back on the next launch.
+                    Err(err) => {
+                        this.notify_error(t(k::SHELL_FIRST_RUN_IMPORT_FAILED), err.to_string(), cx)
+                    }
+                }
+                this.acknowledge_first_run(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The import offer: a heading naming the source, the app's own grouped
+    /// row card listing what comes across, and one line of reassurance.
+    ///
+    /// Built from `layout::group` / `layout::row` rather than a bespoke
+    /// diagram, so it uses the label-left / value-right grid the rest of the
+    /// app already reads on every settings page. One alignment axis, one level
+    /// of nesting, and nothing shaped like a button the user might try to press.
+    ///
+    /// Absent when there is nothing to offer, which leaves the plain notice.
+    fn render_ccswitch_import_card(&self) -> Option<gpui::Div> {
+        let source = self.ccswitch_import.as_ref()?;
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(layout::section_header(
+                    t(k::SHELL_FIRST_RUN_IMPORT_HEADING),
+                    SharedString::from(ochub_core::paths::abbreviate_home(&source.path)),
+                ))
+                .child(layout::group(Self::import_item_rows(source)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(t(k::SHELL_FIRST_RUN_IMPORT_SOURCE_NOTE)),
+                ),
+        )
+    }
+
+    /// One row per kind of record: the icon it carries in the sidebar, its
+    /// name, and the count right-aligned so the numbers line up and can be
+    /// compared at a glance. Kinds the source has none of are left out rather
+    /// than shown as a zero.
+    fn import_item_rows(source: &DetectedSource) -> Vec<gpui::AnyElement> {
+        [
+            (
+                IconName::Cloud,
+                t(k::SHELL_FIRST_RUN_IMPORT_PROVIDERS),
+                source.providers,
+            ),
+            (
+                IconName::Blocks,
+                t(k::SHELL_FIRST_RUN_IMPORT_MCP),
+                source.mcp_servers,
+            ),
+            (
+                IconName::Wrench,
+                t(k::SHELL_FIRST_RUN_IMPORT_REPOS),
+                source.skill_repos,
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, _, count)| *count > 0)
+        .map(|(name, label, count)| {
+            layout::row()
+                .child(icon(name, theme::muted(), 15.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(theme::text())
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme::text())
+                        .child(SharedString::from(count.to_string())),
+                )
+                .into_any_element()
+        })
+        .collect()
+    }
+
+    /// With something to import the notice becomes a choice (skip / import);
+    /// without, it stays the single acknowledgement it has always been.
+    fn first_run_actions(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(_) = self.ccswitch_import.as_ref() else {
+            return vec![components::button(
+                "first-run-confirm",
+                t(k::SHELL_FIRST_RUN_CONFIRM),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.acknowledge_first_run(cx);
+            }))
+            .into_any_element()];
+        };
+
+        if self.ccswitch_importing {
+            return vec![components::disabled_button(
+                "first-run-import-busy",
+                t(k::SHELL_FIRST_RUN_IMPORT_BUSY),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+                true,
+            )
+            .into_any_element()];
+        }
+
+        vec![
+            components::button(
+                "first-run-import-skip",
+                t(k::SHELL_FIRST_RUN_IMPORT_SKIP),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.skip_ccswitch_import(cx);
+            }))
+            .into_any_element(),
+            components::button(
+                "first-run-import-confirm",
+                t(k::SHELL_FIRST_RUN_IMPORT_CONFIRM),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.run_ccswitch_import(cx);
+            }))
+            .into_any_element(),
+        ]
     }
 
     fn open_add_editor(&mut self, cx: &mut Context<Self>) {
@@ -2849,27 +3078,28 @@ impl Render for AppRoot {
                     components::modal_card()
                         .child(components::modal_header(t(k::SHELL_FIRST_RUN_TITLE)))
                         .child(
-                            components::modal_body().child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .text_color(theme::subtext())
-                                    .text_sm()
-                                    .child(t(k::SHELL_FIRST_RUN_STORAGE))
-                                    .child(t(k::SHELL_FIRST_RUN_BACKUP)),
-                            ),
+                            components::modal_body()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .text_color(theme::subtext())
+                                        .text_sm()
+                                        .child(t(k::SHELL_FIRST_RUN_STORAGE))
+                                        // The backup advice is for someone with
+                                        // nothing to import. When there is an
+                                        // import on screen it is a fourth
+                                        // paragraph in front of a yes/no, and
+                                        // the diagram already says cc-switch is
+                                        // left alone.
+                                        .when(self.ccswitch_import.is_none(), |body| {
+                                            body.child(t(k::SHELL_FIRST_RUN_BACKUP))
+                                        }),
+                                )
+                                .children(self.render_ccswitch_import_card()),
                         )
-                        .child(components::modal_footer(vec![components::button(
-                            "first-run-confirm",
-                            t(k::SHELL_FIRST_RUN_CONFIRM),
-                            ButtonTone::Primary,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.acknowledge_first_run(cx);
-                        }))
-                        .into_any_element()])),
+                        .child(components::modal_footer(self.first_run_actions(cx))),
                 ))
             })
     }

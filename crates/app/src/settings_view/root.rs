@@ -24,7 +24,7 @@ use super::options;
 use super::rows;
 use super::search::RowId;
 use super::sync::SyncTarget;
-use super::{Page, SettingsEvent, SettingsView};
+use super::{Confirm, Page, SettingsEvent, SettingsView};
 
 /// What the 检查更新 row knows. `info` is `None` until a check has run, which
 /// is why the row reads "当前 x.y.z" rather than claiming to be up to date.
@@ -137,6 +137,9 @@ impl SettingsView {
                 if app_store::get_app_config_dir_override().is_some() {
                     group.push(self.render_row(RowId::DataDirReset, cx));
                 }
+                if self.ccswitch_source.is_some() {
+                    group.push(self.render_row(RowId::DataCcswitchImport, cx));
+                }
                 group.push(self.render_row(RowId::BackupInterval, cx));
                 group.push(self.render_row(RowId::BackupRetain, cx));
                 rows::group_block(t(k::SETTINGS_DATA_TITLE), t(k::SETTINGS_DATA_DESC), group)
@@ -176,6 +179,9 @@ impl SettingsView {
         ];
         if app_store::get_app_config_dir_override().is_some() {
             rows.push(RowId::DataDirReset);
+        }
+        if self.ccswitch_source.is_some() {
+            rows.push(RowId::DataCcswitchImport);
         }
         rows.extend([
             RowId::BackupInterval,
@@ -302,6 +308,22 @@ impl SettingsView {
                 false,
                 None,
                 |this, cx| this.reset_data_dir(cx),
+            ),
+            RowId::DataCcswitchImport => rows::act(
+                cx,
+                row,
+                if self.ccswitch_busy {
+                    t(k::SETTINGS_DATA_CCSWITCH_BUSY)
+                } else {
+                    t(k::SETTINGS_DATA_CCSWITCH_ACTION)
+                },
+                ButtonTone::Neutral,
+                self.ccswitch_busy,
+                self.ccswitch_description(),
+                |this, cx| {
+                    this.confirm = Some(Confirm::CcswitchImport);
+                    cx.notify();
+                },
             ),
             RowId::BackupInterval => {
                 let (values, labels, selected) =
@@ -567,6 +589,70 @@ impl SettingsView {
 
     fn reset_data_dir(&mut self, cx: &mut Context<Self>) {
         self.apply_data_dir(None, cx);
+    }
+
+    // ── cc-switch import ────────────────────────────────────────────────────
+
+    /// What the detected cc-switch install holds. The row is only drawn when a
+    /// source exists, so falling back to the generic description is a formality.
+    fn ccswitch_description(&self) -> Option<SharedString> {
+        let source = self.ccswitch_source.as_ref()?;
+        Some(SharedString::from(tf!(
+            k::SETTINGS_DATA_CCSWITCH_FOUND,
+            path = ochub_core::paths::abbreviate_home(&source.path),
+            providers = source.providers,
+            mcp = source.mcp_servers
+        )))
+    }
+
+    /// Import off the main thread — a cc-switch database can carry months of
+    /// usage history, and the settings page has to stay responsive.
+    pub(super) fn start_ccswitch_import(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = self.ccswitch_source.clone() else {
+            return;
+        };
+        if self.ccswitch_busy {
+            return;
+        }
+        self.ccswitch_busy = true;
+        cx.notify();
+
+        let app = self.app.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { app.db.import_from_ccswitch_source(&source) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.ccswitch_busy = false;
+                match result {
+                    Ok(report) => {
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(
+                                k::SETTINGS_DATA_CCSWITCH_SUCCEEDED,
+                                rows = report.total_rows()
+                            ),
+                            cx,
+                        );
+                        // The import answers the first-run question too, so a
+                        // later fresh profile does not ask again pointlessly.
+                        if let Err(err) = this.app.db.set_ccswitch_import_decision("imported") {
+                            log::warn!("保存 cc-switch 导入选择失败: {err}");
+                        }
+                        cx.emit(SettingsEvent::DataImported);
+                    }
+                    Err(err) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_DATA_CCSWITCH_FAILED, error = err),
+                        cx,
+                    ),
+                }
+                this.root_list.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn apply_data_dir(&mut self, path: Option<String>, cx: &mut Context<Self>) {

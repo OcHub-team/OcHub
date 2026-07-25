@@ -42,11 +42,26 @@ Hermes** without requiring a browser shell or webview.
 | Relay station | Route supported clients through a local gateway with model aliases, reasoning mapping, failover, health checks, and usage accounting |
 | Shared tools | Manage MCP servers and reusable skills across supported clients |
 | Operations | Browse sessions, inspect usage, configure sync, and manage app behavior |
-| Migration | One-time, read-only import from compatible cc-switch databases |
+| Migration | One-time, read-only import from a cc-switch database or config file |
 
 OcHub owns `~/.ochub/` and never writes back to `~/.cc-switch/`. It does update
 the live configuration directories of tools you explicitly manage, so quit
 cc-switch before switching providers in OcHub.
+
+### Importing from cc-switch
+
+On its first launch OcHub looks for an existing cc-switch install and offers to
+bring it over, showing what it found before anything is copied. Both storage
+generations are read: the `cc-switch.db` database used from v3.x on, and the
+older `config.json`. The database is preferred when both are present, because it
+also carries usage history, backup endpoints and pricing.
+
+Nothing is imported unless you accept, and the import only ever reads
+`~/.cc-switch/`, so cc-switch keeps working afterwards. If you skip the prompt —
+or you had already started OcHub before installing cc-switch — the same import
+stays available under **Settings → Data and backups → Import from cc-switch**.
+Running it against an install that already has providers takes a database
+snapshot first, and records that share an ID are replaced by cc-switch's copy.
 
 ## Downloads
 
