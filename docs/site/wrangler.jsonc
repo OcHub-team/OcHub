@@ -1,14 +1,23 @@
 {
-  // Cloudflare Pages project config.
+  // Cloudflare Workers static-assets config.
   //
-  // Deploys normally happen through the dashboard's Git integration
-  // (Cloudflare builds on every push and gives each PR a preview URL), so
-  // this file is only consulted when someone runs `pnpm deploy` by hand.
-  // `pages_build_output_dir` is the Pages equivalent of the Workers
-  // `assets.directory` the Nimbus starter ships with; 404s are served from
-  // dist/404.html automatically, so no `not_found_handling` is needed.
+  // The site is deployed by Workers Builds: Cloudflare clones the repo,
+  // runs `pnpm build` from this directory, then runs `npx wrangler deploy`.
+  // That deploy command is a Workers command, so this file must describe a
+  // Worker — `assets.directory` — and NOT `pages_build_output_dir`. Setting
+  // the Pages key here makes wrangler warn that it's a Pages project and
+  // then fail with "Missing entry-point to Worker script or to assets
+  // directory", because a Worker deploy has nothing to upload.
+  //
+  // Serving static files needs no Worker script: with `assets` and no
+  // `main`, Cloudflare serves the directory directly.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ochub-docs",
   "compatibility_date": "2026-07-25",
-  "pages_build_output_dir": "./dist"
+  "assets": {
+    "directory": "./dist",
+    // Astro emits dist/404.html; serve it for unmatched paths instead of
+    // returning a bare 404 with no body.
+    "not_found_handling": "404-page"
+  }
 }

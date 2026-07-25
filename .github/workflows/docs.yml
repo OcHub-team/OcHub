@@ -2,12 +2,12 @@ name: Docs
 
 # Quality gate for the documentation site.
 #
-# Deployment is NOT handled here — Cloudflare Pages builds and deploys via
-# its dashboard Git integration, including a preview URL per pull request.
-# That keeps the Cloudflare API token out of this repo entirely. This
-# workflow only enforces the checks Cloudflare's build command doesn't run
-# (prose/MDX lint and typecheck), so a broken page fails review rather than
-# shipping to a preview.
+# Deployment is NOT handled here — Cloudflare Workers Builds clones the
+# repo, runs `pnpm build` in docs/site, and deploys with `wrangler deploy`
+# (see docs/site/wrangler.jsonc). It authenticates with a Cloudflare-managed
+# build token, so no API token needs to live in this repo. This workflow
+# only enforces the checks that deploy pipeline doesn't run — prose/MDX lint
+# and typecheck — so a broken page fails review rather than shipping.
 on:
   push:
     branches:
