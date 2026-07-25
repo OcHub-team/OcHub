@@ -52,11 +52,14 @@ pub enum AppError {
     Message(String),
     #[error("HTTP {status}: {body}")]
     HttpStatus { status: u16, body: String },
-    #[error("{zh} ({en})")]
+    #[error("{}", localized_message(zh, en, ja.as_deref()))]
     Localized {
         key: &'static str,
         zh: String,
         en: String,
+        /// `None` falls back to English, which is closer for a Japanese
+        /// reader than Chinese and marks the string as not yet translated.
+        ja: Option<String>,
     },
     #[error("数据库错误: {0}")]
     Database(String),
@@ -103,7 +106,36 @@ impl AppError {
             key,
             zh: zh.into(),
             en: en.into(),
+            ja: None,
         }
+    }
+
+    /// [`AppError::localized`] with a Japanese rendering.
+    pub fn localized_ja(
+        key: &'static str,
+        zh: impl Into<String>,
+        en: impl Into<String>,
+        ja: impl Into<String>,
+    ) -> Self {
+        Self::Localized {
+            key,
+            zh: zh.into(),
+            en: en.into(),
+            ja: Some(ja.into()),
+        }
+    }
+}
+
+/// Pick the rendering for the installed locale.
+///
+/// This used to be `"{zh} ({en})"` — both languages concatenated, so every
+/// reader saw one language they did not want. Now that core owns the locale,
+/// an error can answer in it.
+fn localized_message<'a>(zh: &'a str, en: &'a str, ja: Option<&'a str>) -> &'a str {
+    match crate::i18n::current() {
+        crate::i18n::Locale::Zh => zh,
+        crate::i18n::Locale::En => en,
+        crate::i18n::Locale::Ja => ja.unwrap_or(en),
     }
 }
 
@@ -154,4 +186,65 @@ pub fn format_skill_error(
     });
 
     serde_json::to_string(&error_obj).unwrap_or_else(|_| format!("ERROR:{code}"))
+}
+
+#[cfg(test)]
+mod localized_display_tests {
+    use super::*;
+    use crate::i18n::{self, Locale};
+    use std::sync::Mutex;
+
+    /// The locale is process-global and tests run in parallel.
+    static LOCALE: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn renders_only_the_installed_locale() {
+        let _guard = LOCALE.lock().unwrap_or_else(|err| err.into_inner());
+        let before = i18n::current();
+        let err = AppError::localized_ja("t.key", "连接失败", "Connection failed", "接続に失敗");
+
+        i18n::install(Locale::Zh);
+        assert_eq!(err.to_string(), "连接失败");
+        i18n::install(Locale::En);
+        assert_eq!(err.to_string(), "Connection failed");
+        i18n::install(Locale::Ja);
+        assert_eq!(err.to_string(), "接続に失敗");
+
+        i18n::install(before);
+    }
+
+    #[test]
+    fn japanese_falls_back_to_english_not_chinese() {
+        let _guard = LOCALE.lock().unwrap_or_else(|err| err.into_inner());
+        let before = i18n::current();
+        // The 131 existing call sites supply no Japanese yet. English is the
+        // closer fallback for a Japanese reader, and leaving Chinese in place
+        // would hide which strings still need translating.
+        let err = AppError::localized("t.key", "连接失败", "Connection failed");
+
+        i18n::install(Locale::Ja);
+        assert_eq!(err.to_string(), "Connection failed");
+
+        i18n::install(before);
+    }
+
+    #[test]
+    fn no_locale_renders_both_languages_concatenated() {
+        let _guard = LOCALE.lock().unwrap_or_else(|err| err.into_inner());
+        let before = i18n::current();
+        let err = AppError::localized("t.key", "连接失败", "Connection failed");
+
+        // Regression guard: the old Display was "{zh} ({en})", which showed
+        // every reader one language they did not ask for.
+        for locale in Locale::ALL {
+            i18n::install(locale);
+            let rendered = err.to_string();
+            assert!(
+                !(rendered.contains("连接失败") && rendered.contains("Connection failed")),
+                "{locale:?} rendered both languages: {rendered}"
+            );
+        }
+
+        i18n::install(before);
+    }
 }

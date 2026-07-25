@@ -48,11 +48,12 @@ impl IntoResponse for ApiError {
         // Preserve the localized key + bilingual messages so the UI can render
         // a friendly, translated error rather than a flat string.
         let body = match &self.0 {
-            AppError::Localized { key, zh, en } => json!({
+            AppError::Localized { key, zh, en, ja } => json!({
                 "error": self.0.to_string(),
                 "key": key,
                 "zh": zh,
                 "en": en,
+                "ja": ja,
             }),
             other => json!({ "error": other.to_string() }),
         };
