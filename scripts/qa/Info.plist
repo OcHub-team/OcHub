@@ -6,6 +6,12 @@
 	<string>ochub</string>
 	<key>CFBundleIconFile</key>
 	<string>ochub.icns</string>
+	<!--
+	  macOS 26 resolves this against Assets.car and gets the light/dark pair;
+	  anything older ignores it and falls back to CFBundleIconFile above.
+	-->
+	<key>CFBundleIconName</key>
+	<string>OcHub</string>
 	<key>CFBundleIdentifier</key>
     <string>io.ochub.debug.qa</string>
     <key>CFBundleName</key>

@@ -1,0 +1,23 @@
+{
+  "fill" : { "solid" : "srgb:1.00000,1.00000,1.00000,1.00000" },
+  "fill-specializations" : [
+    { "appearance" : "dark", "value" : { "solid" : "srgb:0.00784,0.00784,0.00784,1.00000" } }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "name" : "Robot Light",
+          "image-name" : "robot-light.svg",
+          "hidden-specializations" : [ { "appearance" : "dark", "value" : true } ]
+        },
+        {
+          "name" : "Robot Dark",
+          "image-name" : "robot-dark.svg",
+          "hidden-specializations" : [ { "appearance" : "light", "value" : true } ]
+        }
+      ]
+    }
+  ],
+  "supported-platforms" : { "circles" : [ "watchOS" ], "squares" : [ "iOS", "macOS" ] }
+}

@@ -18,6 +18,14 @@ version="$(
 cargo build --release --locked --target "${target}" -p ochub-app
 "target/${target}/release/ochub" --version
 
+# Compile the app icon catalog before packaging. It ships as a bundle resource
+# rather than being copied in afterwards: `cargo packager` signs the bundle it
+# assembles, and adding a file to a signed bundle breaks the seal.
+icon_build_dir="$(mktemp -d)"
+trap 'rm -rf "${icon_build_dir}"' EXIT
+"${script_dir}/../build-app-icon.sh" "${icon_build_dir}"
+icon_catalog="${icon_build_dir}/Assets.car"
+
 # The updater payload is a tarred .app rather than the .dmg: mounting a disk
 # image to update means hdiutil, an extra failure mode, and a copy of a copy.
 # `tar` also preserves the symlinks and extended attributes that a signed
@@ -91,6 +99,7 @@ verify_signed_outputs() {
 #      without any credentials can still build.
 signing_identity=""
 notarize=false
+signed=true
 if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     signing_identity="${APPLE_SIGNING_IDENTITY}"
     notarize=true
@@ -136,14 +145,12 @@ elif [[ -n "${MACOS_SELFSIGN_CERTIFICATE:-}" ]]; then
 else
     printf 'no signing credentials; producing an UNSIGNED build\n' >&2
     printf 'macOS will report it as damaged when downloaded with quarantine set\n' >&2
-    cargo packager \
-        --release \
-        --packages ochub-app \
-        --formats app,dmg \
-        --out-dir "${out_dir}" \
-        --target "${target}"
-    archive_app_bundle
-    exit 0
+    # Falls through to the same packager invocation as the signed paths rather
+    # than running its own. It used to package straight from the Cargo.toml
+    # metadata, which meant any resource added to the config below -- the icon
+    # catalog, most recently -- silently missed this build.
+    signing_identity=""
+    signed=false
 fi
 
 icons=()
@@ -159,6 +166,7 @@ config_json="$(
         --arg binaries_dir "${repo_root}/target/${target}/release" \
         --arg out_dir "${out_dir}" \
         --arg assets "${repo_root}/crates/app/assets" \
+        --arg icon_catalog "${icon_catalog}" \
         --arg license "${repo_root}/LICENSE" \
         --arg entitlements "${repo_root}/packaging/macos/entitlements.plist" \
         --arg info_plist "${repo_root}/packaging/macos/Info.plist" \
@@ -179,6 +187,7 @@ config_json="$(
             icons: $icons,
             resources: [
                 { src: $assets, target: "assets" },
+                { src: $icon_catalog, target: "Assets.car" },
                 { src: $license, target: "LICENSE" }
             ],
             macos: {
@@ -200,7 +209,9 @@ cargo packager --config "${config_json}" --formats app,dmg
 # Before archiving, while the .app is still on disk. `archive_app_bundle`
 # removes it, and the tarball is what the in-app updater installs -- so an
 # unsigned .app here would be pushed to every existing install.
-verify_signed_outputs
+if [[ "${signed}" == true ]]; then
+    verify_signed_outputs
+fi
 
 if [[ "${notarize}" == true ]]; then
     # cargo-packager notarizes and staples the .app but only *signs* the .dmg
