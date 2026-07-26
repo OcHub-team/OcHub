@@ -90,15 +90,31 @@ jobs:
         if: matrix.kind == 'linux'
         run: ./scripts/ci/install-linux-deps.sh
 
+      # Restore-only. A tag push writes its cache into that tag's own scope,
+      # which no later tag can read -- so saving here produced ~1.1GB per
+      # platform that was never restored once, spent 2min of the critical path
+      # uploading it, and evicted the main-branch CI caches that *are* read.
+      # Restoring stays on so a cache published on the default branch under
+      # this key would be picked up.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: release-${{ matrix.target }}
           cache-bin: true
           cache-targets: true
+          save-if: false
+
+      # Prebuilt rather than `cargo install`, which compiled the packager from
+      # source on every runner (~5min on the slowest). Upstream ships no
+      # binaries, so binstall sources this from cargo-quickinstall -- a
+      # third-party rebuild service, and therefore a different trust root than
+      # crates.io for the tool that packages what we then sign. Drop the
+      # binstall steps to go back to building it from source.
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@e00d2c94cc0067b77737821097a62d91c0301baa # v1.21.1
 
       - name: Install cargo-packager
-        run: cargo install cargo-packager --version 0.11.8 --locked
+        run: cargo binstall cargo-packager --version 0.11.8 --locked --no-confirm
 
       - name: Package macOS
         if: matrix.kind == 'macos'
