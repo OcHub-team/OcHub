@@ -327,10 +327,21 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
         None => None,
     };
     let mut models: Vec<String> = Vec::new();
+    let mapped_targets: std::collections::HashSet<&str> = route
+        .as_ref()
+        .into_iter()
+        .flat_map(|route| route.model_rules.iter())
+        .filter(|rule| !rule.model.contains('*'))
+        .filter_map(|rule| rule.upstream_model_override())
+        .collect();
     if let Some(route) = &route {
         for rule in &route.model_rules {
-            if !rule.model.contains('*') && !models.contains(&rule.model) {
-                models.push(rule.model.clone());
+            let model = rule.model.trim();
+            if !model.is_empty()
+                && !model.contains('*')
+                && !models.iter().any(|existing| existing == model)
+            {
+                models.push(model.to_string());
             }
         }
         if let Some(default_model) = &route.default_model {
@@ -347,8 +358,13 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
                     .is_none_or(|route| route.allows_channel(&channel.id))
         }) {
             for m in &c.models {
-                if !m.contains('*') && !models.contains(m) {
-                    models.push(m.clone());
+                let model = m.trim();
+                if !model.is_empty()
+                    && !model.contains('*')
+                    && !mapped_targets.contains(model)
+                    && !models.iter().any(|existing| existing == model)
+                {
+                    models.push(model.to_string());
                 }
             }
         }

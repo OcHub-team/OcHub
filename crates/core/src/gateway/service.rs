@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use crate::db::Database;
 use crate::error::AppError;
 use crate::gateway::pipeline::GatewayState;
-use crate::gateway::types::{ChannelHealth, Dialect, GatewayConfig};
+use crate::gateway::types::{ChannelHealth, Dialect, GatewayConfig, GatewayEndpointTestResult};
 
 /// Externally visible gateway status.
 #[derive(Debug, Clone, Serialize, Default)]
@@ -33,6 +33,16 @@ enum GatewayCommand {
         base_url: String,
         api_key: String,
         reply: oneshot::Sender<Vec<Dialect>>,
+    },
+    FetchModels {
+        base_url: String,
+        api_key: String,
+        reply: oneshot::Sender<Result<Vec<String>, String>>,
+    },
+    TestEndpoint {
+        base_url: String,
+        api_key: String,
+        reply: oneshot::Sender<Result<GatewayEndpointTestResult, String>>,
     },
     Shutdown,
 }
@@ -204,6 +214,47 @@ impl GatewayService {
             .into_iter()
             .next())
     }
+
+    /// Fetch the upstream's OpenAI-compatible model list on the background
+    /// runtime. The UI may still add or edit models manually afterwards.
+    pub async fn fetch_models(
+        &self,
+        base_url: String,
+        api_key: String,
+    ) -> Result<Vec<String>, AppError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.send(GatewayCommand::FetchModels {
+            base_url,
+            api_key,
+            reply: reply_tx,
+        })?;
+        reply_rx
+            .await
+            .map_err(|_| {
+                AppError::Config("gateway background service dropped the model request".into())
+            })?
+            .map_err(AppError::Config)
+    }
+
+    /// Run a user-triggered HTTP latency test against one upstream URL.
+    pub async fn test_endpoint(
+        &self,
+        base_url: String,
+        api_key: String,
+    ) -> Result<GatewayEndpointTestResult, AppError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.send(GatewayCommand::TestEndpoint {
+            base_url,
+            api_key,
+            reply: reply_tx,
+        })?;
+        reply_rx
+            .await
+            .map_err(|_| {
+                AppError::Config("gateway background service dropped the endpoint test".into())
+            })?
+            .map_err(AppError::Config)
+    }
 }
 
 impl Drop for GatewayService {
@@ -273,6 +324,33 @@ impl GatewayWorker {
                             crate::gateway::health::detect_dialects(&client, &base_url, &api_key)
                                 .await;
                         let _ = reply.send(dialects);
+                    });
+                }
+                GatewayCommand::FetchModels {
+                    base_url,
+                    api_key,
+                    reply,
+                } => {
+                    let client = self.state.http_client.clone();
+                    tokio::spawn(async move {
+                        let result = crate::gateway::health::fetch_endpoint_models(
+                            &client, &base_url, &api_key,
+                        )
+                        .await;
+                        let _ = reply.send(result);
+                    });
+                }
+                GatewayCommand::TestEndpoint {
+                    base_url,
+                    api_key,
+                    reply,
+                } => {
+                    let client = self.state.http_client.clone();
+                    tokio::spawn(async move {
+                        let result =
+                            crate::gateway::health::test_endpoint(&client, &base_url, &api_key)
+                                .await;
+                        let _ = reply.send(result);
                     });
                 }
                 GatewayCommand::Shutdown => break,

@@ -1251,8 +1251,13 @@ impl AppRoot {
     }
 
     fn do_switch(&mut self, id: String, cx: &mut Context<Self>) {
-        if id == apply::GATEWAY_PROVIDER_ID {
-            self.connect_local_gateway(cx);
+        if self
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .is_some_and(Provider::is_local_gateway)
+        {
+            self.connect_local_gateway(id, cx);
             return;
         }
         if self.provider_action_in_flight {
@@ -1524,13 +1529,21 @@ impl AppRoot {
         )
     }
 
-    /// The enabled station route currently bound to the selected app, if any.
-    fn bound_station_route(&self) -> Option<&GatewayRoute> {
-        let route_id = self
-            .gateway_keys
-            .iter()
-            .find(|key| key.name == self.selected_app.as_str() && key.enabled)
-            .and_then(|key| key.route_id.as_deref())
+    fn station_route_for_provider(&self, provider: &Provider) -> Option<&GatewayRoute> {
+        let route_id = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.gateway_route_id.as_deref())
+            .or_else(|| {
+                (provider.id == apply::GATEWAY_PROVIDER_ID)
+                    .then(|| {
+                        self.gateway_keys
+                            .iter()
+                            .find(|key| key.name == self.selected_app.as_str() && key.enabled)
+                            .and_then(|key| key.route_id.as_deref())
+                    })
+                    .flatten()
+            })
             .filter(|route_id| route_id.starts_with(apply::STATION_ROUTE_PREFIX))?;
         self.gateway_routes
             .iter()
@@ -1552,11 +1565,17 @@ impl AppRoot {
         text
     }
 
-    fn connect_local_gateway(&mut self, cx: &mut Context<Self>) {
+    fn connect_local_gateway(&mut self, provider_id: String, cx: &mut Context<Self>) {
         if self.provider_action_in_flight {
             return;
         }
-        if self.bound_station_route().is_none() {
+        let station_route_id = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .and_then(|provider| self.station_route_for_provider(provider))
+            .map(|route| route.id.clone());
+        let Some(station_route_id) = station_route_id else {
             self.notify_warning(
                 t(k::SHELL_GATEWAY_NEEDS_STATION_TITLE),
                 t(k::SHELL_GATEWAY_NEEDS_STATION_MESSAGE),
@@ -1564,7 +1583,7 @@ impl AppRoot {
             );
             self.select_section(Section::Gateway, cx);
             return;
-        }
+        };
         self.provider_action_in_flight = true;
         self.notify_info(t(k::SHELL_GATEWAY_SWITCHING), cx);
         let app = self.app.clone();
@@ -1591,14 +1610,21 @@ impl AppRoot {
                 .await;
             let result = async {
                 prepare?;
-                app.gateway
+                let status = app
+                    .gateway
                     .start()
                     .await
                     .map_err(|error| ProviderGatewayConnectError::Start(error.to_string()))?;
                 let app_for_switch = app.clone();
+                let base_url = status.base_url;
                 cx.background_spawn(async move {
-                    ProviderService::switch(&app_for_switch, app_type, apply::GATEWAY_PROVIDER_ID)
-                        .map_err(|error| ProviderGatewayConnectError::Switch(error.to_string()))
+                    apply::apply_station_to_app(
+                        &app_for_switch,
+                        app_type,
+                        &base_url,
+                        &station_route_id,
+                    )
+                    .map_err(|error| ProviderGatewayConnectError::Switch(error.to_string()))
                 })
                 .await
             }
@@ -1606,15 +1632,8 @@ impl AppRoot {
             this.update(cx, |this, cx| {
                 this.provider_action_in_flight = false;
                 match result {
-                    Ok(result) if result.warnings.is_empty() => {
+                    Ok(_) => {
                         this.notify_success(t(k::SHELL_GATEWAY_SWITCHED), cx);
-                    }
-                    Ok(result) => {
-                        this.notify_warning(
-                            t(k::SHELL_GATEWAY_SWITCHED),
-                            Self::warnings_summary(&result.warnings),
-                            cx,
-                        );
                     }
                     Err(ProviderGatewayConnectError::Config(error)) => {
                         this.notify_error(t(k::SHELL_GATEWAY_CONFIG_READ_FAILED), error, cx);
@@ -2725,7 +2744,7 @@ impl AppRoot {
             .is_some_and(|state| state.source_id == provider.id);
         let drag_offset = self.provider_drag_offset(&provider.id, cx.reduce_motion());
         let base_url = if is_gateway {
-            SharedString::from(self.gateway_via_station_line())
+            SharedString::from(self.gateway_via_station_line(provider))
         } else {
             self.provider_base_url(provider)
         };
@@ -2739,7 +2758,7 @@ impl AppRoot {
         // In switch mode the gateway card needs a bound station before it can
         // be switched to; without one the button becomes a setup shortcut.
         let gateway_needs_setup =
-            is_gateway && !is_additive && self.bound_station_route().is_none();
+            is_gateway && !is_additive && self.station_route_for_provider(provider).is_none();
         // One key per branch, label and aria sentence together: a screen reader
         // cannot be handed a verb and a name to glue into a sentence itself.
         let (main_label_key, main_aria_key) = if gateway_needs_setup {
@@ -2979,8 +2998,8 @@ impl AppRoot {
 
     /// Third line for gateway cards/hero: name the station actually serving
     /// the selected app instead of a generic explanation.
-    fn gateway_via_station_line(&self) -> String {
-        match self.bound_station_route() {
+    fn gateway_via_station_line(&self, provider: &Provider) -> String {
+        match self.station_route_for_provider(provider) {
             Some(route) => tf!(k::SHELL_GATEWAY_VIA_STATION, name = route.name),
             None => raw(k::SHELL_GATEWAY_NO_STATION).to_string(),
         }
@@ -3029,7 +3048,7 @@ impl AppRoot {
                 let base_url = self.provider_base_url(provider);
                 let provider_name = self.provider_name(provider);
                 let endpoint = if is_gateway {
-                    SharedString::from(self.gateway_via_station_line())
+                    SharedString::from(self.gateway_via_station_line(provider))
                 } else {
                     base_url
                 };

@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use serde_json::json;
+use std::fmt::Write as _;
 
 use crate::app_state::AppState;
 use crate::app_type::AppType;
@@ -15,13 +16,32 @@ use crate::error::AppError;
 use crate::gateway::types::{
     Dialect, GatewayChannel, GatewayKey, GatewayReasoningConfig, GatewayRoute,
 };
-use crate::model::Provider;
+use crate::model::{ClaudeDesktopModelRoute, Provider, ProviderMeta};
 use crate::services::provider::ProviderService;
 
 /// Fixed provider id for gateway entries (per app list).
 pub const GATEWAY_PROVIDER_ID: &str = "local-gateway";
+#[cfg(test)]
 const GATEWAY_PROVIDER_NAME: &str = "OcHub 转发站模式";
 pub const STATION_ROUTE_PREFIX: &str = "station:";
+
+/// Stable provider id for one relay station. Hex encoding makes arbitrary
+/// route ids safe in app config formats without introducing collision-prone
+/// slug normalization.
+pub fn gateway_provider_id(route_id: &str) -> String {
+    let route_id = route_id
+        .strip_prefix(STATION_ROUTE_PREFIX)
+        .unwrap_or(route_id);
+    let mut encoded = String::with_capacity(route_id.len() * 2);
+    for byte in route_id.bytes() {
+        let _ = write!(&mut encoded, "{byte:02x}");
+    }
+    format!("{GATEWAY_PROVIDER_ID}-{encoded}")
+}
+
+pub fn gateway_key_label(app_type: AppType, route_id: &str) -> String {
+    format!("{}:{route_id}", app_type.as_str())
+}
 
 /// Result surfaced to the UI after a one-click apply (or for manual clients).
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +157,7 @@ pub fn ensure_app_route(state: &AppState, app_type: AppType) -> Result<GatewayRo
     let route = GatewayRoute {
         id: format!("route-{}", app_type.as_str()),
         name: format!("{} 默认路由", app_label(app_type)),
+        website_url: None,
         app_type: Some(app_type.as_str().to_string()),
         channel_ids: Vec::new(),
         default_model: None,
@@ -166,6 +187,7 @@ pub fn ensure_station_route(
     let route = GatewayRoute {
         id: route_id,
         name: channel.name.clone(),
+        website_url: None,
         app_type: None,
         channel_ids: vec![channel.id.clone()],
         default_model: None,
@@ -219,8 +241,14 @@ fn app_label(app_type: AppType) -> &'static str {
 /// Client-facing model names declared on a route (mapping aliases + default),
 /// used to seed model lists for clients that require one (OpenCode/OpenClaw/
 /// Hermes pickers).
-fn route_client_models(route: &GatewayRoute) -> Vec<String> {
+fn route_client_models(route: &GatewayRoute, channels: &[GatewayChannel]) -> Vec<String> {
     let mut models: Vec<String> = Vec::new();
+    let mapped_targets: std::collections::HashSet<&str> = route
+        .model_rules
+        .iter()
+        .filter(|rule| !rule.model.contains('*'))
+        .filter_map(|rule| rule.upstream_model_override())
+        .collect();
     for rule in &route.model_rules {
         if !rule.model.trim().is_empty()
             && !rule.model.contains('*')
@@ -234,11 +262,46 @@ fn route_client_models(route: &GatewayRoute) -> Vec<String> {
             models.push(default.clone());
         }
     }
+    for channel in channels
+        .iter()
+        .filter(|channel| channel.enabled && route.allows_channel(&channel.id))
+    {
+        for model in &channel.models {
+            let model = model.trim();
+            if model.is_empty()
+                || model.contains('*')
+                || mapped_targets.contains(model)
+                || models.iter().any(|existing| existing == model)
+            {
+                continue;
+            }
+            models.push(model.to_string());
+        }
+    }
     models
 }
 
+#[cfg(test)]
 fn gateway_settings_for(
     app_type: AppType,
+    base_url: &str,
+    key: &str,
+    models: &[String],
+) -> Result<serde_json::Value, AppError> {
+    gateway_settings_for_provider(
+        app_type,
+        GATEWAY_PROVIDER_ID,
+        GATEWAY_PROVIDER_NAME,
+        base_url,
+        key,
+        models,
+    )
+}
+
+fn gateway_settings_for_provider(
+    app_type: AppType,
+    provider_id: &str,
+    provider_name: &str,
     base_url: &str,
     key: &str,
     models: &[String],
@@ -251,53 +314,62 @@ fn gateway_settings_for(
             }
         })),
         AppType::Codex => {
-            let toml = format!(
-                concat!(
-                    "model_provider = \"{id}\"\n",
-                    "disable_response_storage = true\n",
-                    "\n",
-                    "[model_providers.{id}]\n",
-                    "name = \"{name}\"\n",
-                    "base_url = \"{base}/v1\"\n",
-                    "wire_api = \"responses\"\n",
-                    "experimental_bearer_token = \"{key}\"\n",
-                ),
-                id = GATEWAY_PROVIDER_ID,
-                name = GATEWAY_PROVIDER_NAME,
-                base = base_url,
-                key = key,
-            );
-            Ok(json!({
+            let mut document = toml_edit::DocumentMut::new();
+            document["model_provider"] = toml_edit::value(provider_id);
+            document["disable_response_storage"] = toml_edit::value(true);
+            document["model_providers"] = toml_edit::table();
+            document["model_providers"][provider_id] = toml_edit::table();
+            document["model_providers"][provider_id]["name"] = toml_edit::value(provider_name);
+            document["model_providers"][provider_id]["base_url"] =
+                toml_edit::value(format!("{base_url}/v1"));
+            document["model_providers"][provider_id]["wire_api"] = toml_edit::value("responses");
+            document["model_providers"][provider_id]["experimental_bearer_token"] =
+                toml_edit::value(key);
+            let toml = document.to_string();
+            let mut config = json!({
                 "auth": {},
                 "config": toml,
-            }))
+            });
+            if !models.is_empty() {
+                config["modelCatalog"] = json!({
+                    "models": models.iter().map(|model| json!({
+                        "model": model,
+                        "displayName": model,
+                    })).collect::<Vec<_>>()
+                });
+            }
+            Ok(config)
         }
         AppType::GrokBuild => {
-            let profile = models
-                .first()
-                .map(String::as_str)
-                .unwrap_or(crate::apps::grokbuild::DEFAULT_MODEL);
+            let profiles: Vec<&str> = if models.is_empty() {
+                vec![crate::apps::grokbuild::DEFAULT_MODEL]
+            } else {
+                models.iter().map(String::as_str).collect()
+            };
+            let profile = profiles[0];
             let mut document = toml_edit::DocumentMut::new();
             document["models"] = toml_edit::table();
             document["model"] = toml_edit::table();
             document["models"]["default"] = toml_edit::value(profile);
-            document["model"]
-                .as_table_mut()
-                .expect("Grok model registry is a TOML table")
-                .insert(profile, toml_edit::Item::Table(toml_edit::Table::new()));
-            document["model"][profile]["model"] = toml_edit::value(profile);
-            document["model"][profile]["base_url"] = toml_edit::value(format!("{base_url}/v1"));
-            document["model"][profile]["name"] = toml_edit::value(GATEWAY_PROVIDER_NAME);
-            document["model"][profile]["api_key"] = toml_edit::value(key);
-            document["model"][profile]["api_backend"] = toml_edit::value("responses");
-            document["model"][profile]["context_window"] =
-                toml_edit::value(crate::apps::grokbuild::DEFAULT_CONTEXT_WINDOW);
+            for profile in profiles {
+                document["model"]
+                    .as_table_mut()
+                    .expect("Grok model registry is a TOML table")
+                    .insert(profile, toml_edit::Item::Table(toml_edit::Table::new()));
+                document["model"][profile]["model"] = toml_edit::value(profile);
+                document["model"][profile]["base_url"] = toml_edit::value(format!("{base_url}/v1"));
+                document["model"][profile]["name"] = toml_edit::value(provider_name);
+                document["model"][profile]["api_key"] = toml_edit::value(key);
+                document["model"][profile]["api_backend"] = toml_edit::value("responses");
+                document["model"][profile]["context_window"] =
+                    toml_edit::value(crate::apps::grokbuild::DEFAULT_CONTEXT_WINDOW);
+            }
             Ok(json!({ "config": document.to_string() }))
         }
         AppType::OpenCode => {
             let mut config = json!({
                 "npm": "@ai-sdk/openai-compatible",
-                "name": GATEWAY_PROVIDER_NAME,
+                "name": provider_name,
                 "options": {
                     "baseURL": format!("{base_url}/v1"),
                     "apiKey": key,
@@ -320,7 +392,7 @@ fn gateway_settings_for(
         })),
         AppType::Hermes => {
             let mut config = json!({
-                "name": GATEWAY_PROVIDER_ID,
+                "name": provider_id,
                 "base_url": format!("{base_url}/v1"),
                 "api_key": key,
                 "api_mode": "chat_completions",
@@ -424,33 +496,64 @@ fn apply_route_to_app(
     base_url: &str,
     route: GatewayRoute,
 ) -> Result<ApplyResult, AppError> {
-    let key = ensure_key_for_route(state, app_type.as_str(), Some(&route.id))?;
-    let settings =
-        gateway_settings_for(app_type, base_url, &key.key, &route_client_models(&route))?;
+    let provider_id = gateway_provider_id(&route.id);
+    let provider_name = format!("OcHub · {}", route.name);
+    let key_label = gateway_key_label(app_type, &route.id);
+    let key = ensure_key_for_route(state, &key_label, Some(&route.id))?;
+    let channels = state.db.get_gateway_channels()?;
+    let client_models = route_client_models(&route, &channels);
+    let settings = gateway_settings_for_provider(
+        app_type,
+        &provider_id,
+        &provider_name,
+        base_url,
+        &key.key,
+        &client_models,
+    )?;
+    let mut meta = ProviderMeta {
+        gateway_route_id: Some(route.id.clone()),
+        ..Default::default()
+    };
+    if app_type == AppType::ClaudeDesktop {
+        meta.claude_desktop_model_routes = client_models
+            .iter()
+            .filter(|model| crate::apps::claude_desktop::is_claude_safe_model_id(model))
+            .map(|model| {
+                (
+                    model.clone(),
+                    ClaudeDesktopModelRoute {
+                        model: model.clone(),
+                        label_override: Some(model.clone()),
+                        supports_1m: None,
+                    },
+                )
+            })
+            .collect();
+    }
 
     let provider = Provider {
-        id: GATEWAY_PROVIDER_ID.to_string(),
-        name: GATEWAY_PROVIDER_NAME.to_string(),
+        id: provider_id.clone(),
+        name: provider_name,
         settings_config: settings,
-        website_url: None,
+        website_url: route.website_url.clone(),
         category: Some("gateway".to_string()),
         created_at: Some(chrono::Utc::now().timestamp()),
         sort_index: None,
         notes: Some("由 OcHub 转发站模式自动管理".to_string()),
-        meta: None,
+        meta: Some(meta),
         icon: None,
         icon_color: None,
     };
 
     let existing = state
         .db
-        .get_provider_by_id(GATEWAY_PROVIDER_ID, app_type.as_str())?;
+        .get_provider_by_id(&provider_id, app_type.as_str())?;
     if existing.is_some() {
-        ProviderService::update(state, app_type, Some(GATEWAY_PROVIDER_ID), provider)?;
+        ProviderService::update(state, app_type, Some(&provider_id), provider)?;
     } else {
         ProviderService::add(state, app_type, provider, false)?;
     }
-    ProviderService::switch(state, app_type, GATEWAY_PROVIDER_ID)?;
+    ProviderService::switch(state, app_type, &provider_id)?;
 
     Ok(ApplyResult {
         base_url: base_url.to_string(),
@@ -471,6 +574,7 @@ pub fn generic_client_info(state: &AppState, base_url: &str) -> Result<ApplyResu
             let route = GatewayRoute {
                 id: "route-generic-client".to_string(),
                 name: "通用客户端默认路由".to_string(),
+                website_url: None,
                 app_type: None,
                 channel_ids: Vec::new(),
                 default_model: None,
@@ -537,6 +641,7 @@ pub fn import_provider_as_channel(
     };
     let channel = GatewayChannel {
         id: format!("imported-{}-{}", app_type.as_str(), provider.id),
+        endpoint_id: Some(format!("imported-{}-{}", app_type.as_str(), provider.id)),
         name: provider.name,
         dialect,
         base_url: normalize_upstream_origin(&base_url),
@@ -592,6 +697,10 @@ mod tests {
         assert!(toml.contains("wire_api = \"responses\""));
         assert!(toml.contains("experimental_bearer_token = \"rd-k\""));
         assert!(!toml.contains("env_key"));
+        assert_eq!(
+            codex["modelCatalog"]["models"][0]["model"],
+            "claude-sonnet-4-6"
+        );
 
         let opencode = gateway_settings_for(AppType::OpenCode, base, "rd-k", &models).unwrap();
         assert_eq!(opencode["npm"], "@ai-sdk/openai-compatible");
@@ -623,6 +732,7 @@ mod tests {
         let route = GatewayRoute {
             id: "station:x".into(),
             name: "x".into(),
+            website_url: None,
             app_type: None,
             channel_ids: vec!["x".into()],
             default_model: Some("claude-sonnet-4-6".into()),
@@ -631,28 +741,67 @@ mod tests {
                     model: "claude-sonnet-4-6".into(),
                     upstream_model: "up-1".into(),
                     channel_id: None,
+                    dialect: None,
                 },
                 crate::gateway::types::GatewayModelRule {
                     model: "claude-haiku-4-5".into(),
                     upstream_model: "up-2".into(),
                     channel_id: None,
+                    dialect: None,
                 },
                 crate::gateway::types::GatewayModelRule {
                     model: "claude-*".into(),
                     upstream_model: String::new(),
                     channel_id: Some("messages".into()),
+                    dialect: Some(Dialect::Messages),
                 },
             ],
             reasoning: GatewayReasoningConfig::default(),
             enabled: true,
             created_at: 0,
         };
+        let channel = GatewayChannel {
+            id: "x".into(),
+            endpoint_id: Some("endpoint-x".into()),
+            name: "x".into(),
+            dialect: Dialect::Messages,
+            base_url: "https://example.com".into(),
+            api_key: String::new(),
+            path_override: None,
+            models: vec!["up-1".into(), "direct-model".into()],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: Vec::new(),
+            imported_from: None,
+        };
         assert_eq!(
-            route_client_models(&route),
+            route_client_models(&route, &[channel]),
             vec![
                 "claude-sonnet-4-6".to_string(),
-                "claude-haiku-4-5".to_string()
+                "claude-haiku-4-5".to_string(),
+                "direct-model".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn each_station_gets_a_distinct_provider_and_key_identity() {
+        let first = gateway_provider_id("station:first");
+        let second = gateway_provider_id("station:second");
+        assert_ne!(first, second);
+        assert!(first.starts_with("local-gateway-"));
+        assert!(first
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-'));
+        assert_ne!(
+            gateway_key_label(AppType::Claude, "station:first"),
+            gateway_key_label(AppType::Claude, "station:second")
+        );
+        assert_ne!(
+            gateway_key_label(AppType::Claude, "station:first"),
+            gateway_key_label(AppType::Codex, "station:first")
         );
     }
 
@@ -665,6 +814,7 @@ mod tests {
         let alternate = GatewayRoute {
             id: "route-claude-fast".into(),
             name: "Claude 快速".into(),
+            website_url: None,
             app_type: Some("claude".into()),
             channel_ids: Vec::new(),
             default_model: Some("claude-haiku-4-5".into()),
@@ -695,6 +845,7 @@ mod tests {
         let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
         let channel = GatewayChannel {
             id: "new-api-primary".into(),
+            endpoint_id: Some("primary".into()),
             name: "New API 主站".into(),
             dialect: Dialect::Chat,
             base_url: "https://relay.example.com".into(),
@@ -740,6 +891,7 @@ mod tests {
     fn station_fixture(state: &AppState, id: &str, dialect: Dialect) -> GatewayRoute {
         let channel = GatewayChannel {
             id: id.into(),
+            endpoint_id: Some(format!("endpoint-{id}")),
             name: format!("站点 {id}"),
             dialect,
             base_url: "https://relay.example.com".into(),

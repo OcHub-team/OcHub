@@ -93,6 +93,18 @@ pub struct GatewayKey {
     pub enabled: bool,
 }
 
+/// Result of the user-triggered HTTP reachability test for one upstream URL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayEndpointTestResult {
+    pub url: String,
+    pub status: u16,
+    pub latency_ms: u64,
+    /// Any non-5xx HTTP response proves that the endpoint is reachable. Auth
+    /// errors remain useful test results instead of being transport failures.
+    pub reachable: bool,
+}
+
 /// Model alias exposed to a client by one route profile.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayModelRule {
@@ -106,6 +118,10 @@ pub struct GatewayModelRule {
     /// Optional hard binding to one upstream channel.
     #[serde(default)]
     pub channel_id: Option<String>,
+    /// Optional binding to an upstream protocol. Unlike `channel_id`, this
+    /// keeps every URL that exposes the selected protocol eligible.
+    #[serde(default)]
+    pub dialect: Option<Dialect>,
 }
 
 impl GatewayModelRule {
@@ -209,6 +225,10 @@ fn default_max_budget() -> u32 {
 pub struct GatewayRoute {
     pub id: String,
     pub name: String,
+    /// Optional public website for the commercial relay. This is display-only
+    /// and is never used to build inference requests.
+    #[serde(default)]
+    pub website_url: Option<String>,
     #[serde(default)]
     pub app_type: Option<String>,
     /// Empty means every enabled channel can participate.
@@ -299,6 +319,10 @@ impl GatewayRoute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayChannel {
     pub id: String,
+    /// Stable identifier shared by every protocol interface exposed by one API
+    /// base URL. Legacy rows leave this empty and are grouped by `base_url`.
+    #[serde(default)]
+    pub endpoint_id: Option<String>,
     pub name: String,
     /// Dialect the upstream speaks.
     pub dialect: Dialect,
@@ -399,6 +423,7 @@ mod tests {
     fn channel_model_match_and_url() {
         let ch = GatewayChannel {
             id: "c1".into(),
+            endpoint_id: Some("endpoint-1".into()),
             name: "n".into(),
             dialect: Dialect::Messages,
             base_url: "https://api.example.com/".into(),
@@ -422,6 +447,7 @@ mod tests {
         let mut route = GatewayRoute {
             id: "route".into(),
             name: "route".into(),
+            website_url: None,
             app_type: Some("claude".into()),
             channel_ids: vec!["allowed".into()],
             default_model: None,
@@ -429,6 +455,7 @@ mod tests {
                 model: "sonnet".into(),
                 upstream_model: "claude-sonnet".into(),
                 channel_id: Some("other".into()),
+                dialect: None,
             }],
             reasoning: GatewayReasoningConfig::default(),
             enabled: true,
@@ -444,6 +471,7 @@ mod tests {
         let route = GatewayRoute {
             id: "route".into(),
             name: "route".into(),
+            website_url: None,
             app_type: None,
             channel_ids: vec!["messages".into()],
             default_model: None,
@@ -451,6 +479,7 @@ mod tests {
                 model: "claude-*".into(),
                 upstream_model: String::new(),
                 channel_id: Some("messages".into()),
+                dialect: Some(Dialect::Messages),
             }],
             reasoning: GatewayReasoningConfig::default(),
             enabled: true,
@@ -462,5 +491,17 @@ mod tests {
             None,
             "an interface-only exception preserves the requested model"
         );
+    }
+
+    #[test]
+    fn legacy_model_rules_default_to_no_protocol_binding() {
+        let rule: GatewayModelRule = serde_json::from_value(serde_json::json!({
+            "model": "sonnet",
+            "upstream_model": "claude-sonnet",
+            "channel_id": "legacy-channel"
+        }))
+        .unwrap();
+        assert_eq!(rule.channel_id.as_deref(), Some("legacy-channel"));
+        assert_eq!(rule.dialect, None);
     }
 }

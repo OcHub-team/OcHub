@@ -10,49 +10,52 @@ use rusqlite::params;
 const GATEWAY_CONFIG_KEY: &str = "gateway_config";
 
 fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayChannel> {
-    let dialect_str: String = row.get(2)?;
-    let models_str: String = row.get(6)?;
-    let extra_headers_str: String = row.get(11)?;
+    let dialect_str: String = row.get(3)?;
+    let models_str: String = row.get(7)?;
+    let extra_headers_str: String = row.get(12)?;
     Ok(GatewayChannel {
         id: row.get(0)?,
-        name: row.get(1)?,
+        endpoint_id: row.get(1)?,
+        name: row.get(2)?,
         dialect: Dialect::parse(&dialect_str).unwrap_or(Dialect::Messages),
-        base_url: row.get(3)?,
-        api_key: row.get(4)?,
-        path_override: row.get(5)?,
+        base_url: row.get(4)?,
+        api_key: row.get(5)?,
+        path_override: row.get(6)?,
         models: serde_json::from_str(&models_str).unwrap_or_default(),
-        model_override: row.get(7)?,
-        priority: row.get(8)?,
-        weight: row.get::<_, i64>(9)?.max(1) as u32,
-        enabled: row.get(10)?,
+        model_override: row.get(8)?,
+        priority: row.get(9)?,
+        weight: row.get::<_, i64>(10)?.max(1) as u32,
+        enabled: row.get(11)?,
         extra_headers: serde_json::from_str(&extra_headers_str).unwrap_or_default(),
-        imported_from: row.get(12)?,
+        imported_from: row.get(13)?,
     })
 }
 
-const CHANNEL_COLUMNS: &str = "id, name, dialect, base_url, api_key, path_override, models, \
+const CHANNEL_COLUMNS: &str =
+    "id, endpoint_id, name, dialect, base_url, api_key, path_override, models, \
      model_override, priority, weight, enabled, extra_headers, imported_from";
 
 fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
-    let channel_ids: String = row.get(3)?;
-    let model_rules: String = row.get(5)?;
-    let reasoning: String = row.get(6)?;
+    let channel_ids: String = row.get(4)?;
+    let model_rules: String = row.get(6)?;
+    let reasoning: String = row.get(7)?;
     Ok(GatewayRoute {
         id: row.get(0)?,
         name: row.get(1)?,
-        app_type: row.get(2)?,
+        website_url: row.get(2)?,
+        app_type: row.get(3)?,
         channel_ids: serde_json::from_str(&channel_ids).unwrap_or_default(),
-        default_model: row.get(4)?,
+        default_model: row.get(5)?,
         model_rules: serde_json::from_str(&model_rules).unwrap_or_default(),
         reasoning: serde_json::from_str(&reasoning)
             .unwrap_or_else(|_| GatewayReasoningConfig::default()),
-        enabled: row.get(7)?,
-        created_at: row.get(8)?,
+        enabled: row.get(8)?,
+        created_at: row.get(9)?,
     })
 }
 
 const ROUTE_COLUMNS: &str =
-    "id, name, app_type, channel_ids, default_model, model_rules, reasoning, enabled, created_at";
+    "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, enabled, created_at";
 
 impl Database {
     // -- settings blob ------------------------------------------------------
@@ -89,11 +92,12 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.execute(
             "INSERT INTO gateway_channels (
-                id, name, dialect, base_url, api_key, path_override, models,
+                id, endpoint_id, name, dialect, base_url, api_key, path_override, models,
                 model_override, priority, weight, enabled, extra_headers, created_at,
                 imported_from
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(id) DO UPDATE SET
+                endpoint_id = excluded.endpoint_id,
                 name = excluded.name, dialect = excluded.dialect,
                 base_url = excluded.base_url, api_key = excluded.api_key,
                 path_override = excluded.path_override, models = excluded.models,
@@ -103,6 +107,7 @@ impl Database {
                 imported_from = excluded.imported_from",
             params![
                 channel.id,
+                channel.endpoint_id,
                 channel.name,
                 channel.dialect.as_str(),
                 channel.base_url,
@@ -223,11 +228,12 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.execute(
             "INSERT INTO gateway_routes (
-                id, name, app_type, channel_ids, default_model, model_rules,
+                id, name, website_url, app_type, channel_ids, default_model, model_rules,
                 reasoning, enabled, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name, app_type = excluded.app_type,
+                name = excluded.name, website_url = excluded.website_url,
+                app_type = excluded.app_type,
                 channel_ids = excluded.channel_ids,
                 default_model = excluded.default_model,
                 model_rules = excluded.model_rules,
@@ -236,6 +242,7 @@ impl Database {
             params![
                 route.id,
                 route.name,
+                route.website_url,
                 route.app_type,
                 to_json_string(&route.channel_ids)?,
                 route.default_model,
@@ -361,6 +368,7 @@ mod tests {
     fn channel(id: &str) -> GatewayChannel {
         GatewayChannel {
             id: id.into(),
+            endpoint_id: Some(format!("endpoint-{id}")),
             name: format!("channel-{id}"),
             dialect: Dialect::Responses,
             base_url: "https://up.example.com".into(),
@@ -411,6 +419,7 @@ mod tests {
         db.upsert_gateway_route(&GatewayRoute {
             id: "route".into(),
             name: "route".into(),
+            website_url: None,
             app_type: Some("claude".into()),
             channel_ids: vec!["a".into(), "b".into()],
             default_model: None,
@@ -419,11 +428,13 @@ mod tests {
                     model: "a".into(),
                     upstream_model: "model-a".into(),
                     channel_id: Some("a".into()),
+                    dialect: None,
                 },
                 GatewayModelRule {
                     model: "b".into(),
                     upstream_model: "model-b".into(),
                     channel_id: Some("b".into()),
+                    dialect: None,
                 },
             ],
             reasoning: GatewayReasoningConfig::default(),
@@ -471,6 +482,7 @@ mod tests {
         let route = GatewayRoute {
             id: "route-claude".into(),
             name: "Claude Code 默认路由".into(),
+            website_url: Some("https://relay.example.com".into()),
             app_type: Some("claude".into()),
             channel_ids: vec!["a".into()],
             default_model: Some("sonnet".into()),
@@ -478,6 +490,7 @@ mod tests {
                 model: "sonnet".into(),
                 upstream_model: "claude-sonnet-4-6".into(),
                 channel_id: Some("a".into()),
+                dialect: Some(Dialect::Responses),
             }],
             reasoning: GatewayReasoningConfig::default(),
             enabled: true,
@@ -487,6 +500,10 @@ mod tests {
 
         let got = db.get_gateway_route_for_app("claude").unwrap().unwrap();
         assert_eq!(got.id, "route-claude");
+        assert_eq!(
+            got.website_url.as_deref(),
+            Some("https://relay.example.com")
+        );
         assert_eq!(got.model_rules, route.model_rules);
 
         let key = GatewayKey {

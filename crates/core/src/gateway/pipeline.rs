@@ -788,6 +788,11 @@ pub async fn run(
                 .and_then(|rule| rule.channel_id.as_deref())
                 .is_none_or(|channel_id| channel.id == channel_id)
         })
+        .filter(|channel| {
+            rule.as_ref()
+                .and_then(|rule| rule.dialect)
+                .is_none_or(|dialect| channel.dialect == dialect)
+        })
         .collect();
 
     let health = state.health.read().await.clone();
@@ -1152,6 +1157,7 @@ mod tests {
         let store = ochub_convert::MemorySignatureStore::default();
         let channel = GatewayChannel {
             id: "c".into(),
+            endpoint_id: None,
             name: "c".into(),
             dialect: Dialect::Messages,
             base_url: "https://x".into(),
@@ -1189,6 +1195,7 @@ mod tests {
         let store = ochub_convert::MemorySignatureStore::default();
         let channel = GatewayChannel {
             id: "c".into(),
+            endpoint_id: None,
             name: "c".into(),
             dialect: Dialect::Responses,
             base_url: "https://x".into(),
@@ -1233,6 +1240,7 @@ mod tests {
         let store = ochub_convert::MemorySignatureStore::default();
         let channel = GatewayChannel {
             id: "c".into(),
+            endpoint_id: None,
             name: "c".into(),
             dialect: Dialect::Chat,
             base_url: "https://x".into(),
@@ -1279,6 +1287,7 @@ mod tests {
         let store = ochub_convert::MemorySignatureStore::default();
         let channel = GatewayChannel {
             id: "c".into(),
+            endpoint_id: None,
             name: "c".into(),
             dialect: Dialect::Chat,
             base_url: "https://x".into(),
@@ -1458,6 +1467,7 @@ mod tests {
         let db = Arc::new(crate::db::Database::memory().unwrap());
         db.upsert_gateway_channel(&GatewayChannel {
             id: "ch1".into(),
+            endpoint_id: Some("mock".into()),
             name: "mock".into(),
             dialect: Dialect::Messages,
             base_url: format!("http://{addr}"),
@@ -1576,6 +1586,7 @@ mod tests {
         let db = Arc::new(crate::db::Database::memory().unwrap());
         db.upsert_gateway_channel(&GatewayChannel {
             id: "allowed".into(),
+            endpoint_id: Some("allowed-endpoint".into()),
             name: "allowed".into(),
             dialect: Dialect::Messages,
             base_url: format!("http://{addr}"),
@@ -1594,8 +1605,9 @@ mod tests {
         .unwrap();
         db.upsert_gateway_channel(&GatewayChannel {
             id: "blocked".into(),
+            endpoint_id: Some("blocked-endpoint".into()),
             name: "blocked".into(),
-            dialect: Dialect::Messages,
+            dialect: Dialect::Chat,
             base_url: "http://127.0.0.1:9".into(),
             api_key: "k".into(),
             path_override: None,
@@ -1611,13 +1623,15 @@ mod tests {
         db.upsert_gateway_route(&GatewayRoute {
             id: "route-test".into(),
             name: "test".into(),
+            website_url: None,
             app_type: Some("claude".into()),
-            channel_ids: vec!["allowed".into()],
+            channel_ids: vec!["allowed".into(), "blocked".into()],
             default_model: None,
             model_rules: vec![crate::gateway::types::GatewayModelRule {
                 model: "sonnet".into(),
                 upstream_model: "claude-sonnet-4-6".into(),
-                channel_id: Some("allowed".into()),
+                channel_id: None,
+                dialect: Some(Dialect::Messages),
             }],
             reasoning: GatewayReasoningConfig {
                 mode: GatewayReasoningMode::Auto,

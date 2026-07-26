@@ -77,6 +77,7 @@ mod tests {
     fn ch(id: &str, priority: i32, weight: u32, models: &[&str]) -> GatewayChannel {
         GatewayChannel {
             id: id.into(),
+            endpoint_id: None,
             name: id.into(),
             dialect: Dialect::Messages,
             base_url: "https://x".into(),

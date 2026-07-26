@@ -282,6 +282,10 @@ pub struct ProviderMeta {
     pub provider_type: Option<String>,
     #[serde(rename = "githubAccountId", skip_serializing_if = "Option::is_none")]
     pub github_account_id: Option<String>,
+    /// Hidden linkage for one OcHub-managed provider entry. Each
+    /// `(application, relay station)` pair gets its own provider and key.
+    #[serde(rename = "gatewayRouteId", skip_serializing_if = "Option::is_none")]
+    pub gateway_route_id: Option<String>,
 }
 
 impl ProviderMeta {

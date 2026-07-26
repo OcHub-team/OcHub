@@ -257,6 +257,7 @@ impl Database {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS gateway_channels (
                 id TEXT PRIMARY KEY,
+                endpoint_id TEXT,
                 name TEXT NOT NULL,
                 dialect TEXT NOT NULL,
                 base_url TEXT NOT NULL,
@@ -281,6 +282,7 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS gateway_routes (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                website_url TEXT,
                 app_type TEXT,
                 channel_ids TEXT NOT NULL DEFAULT '[]',
                 default_model TEXT,
@@ -548,6 +550,31 @@ impl Database {
                                 AppError::Database(format!("清理旧模型连通检测日志失败: {e}"))
                             })?;
                         Self::set_user_version(conn, 7)?;
+                    }
+                    7 => {
+                        if Self::table_exists(conn, "gateway_channels")?
+                            && !Self::has_column(conn, "gateway_channels", "endpoint_id")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE gateway_channels ADD COLUMN endpoint_id TEXT",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!("为转发站渠道添加端点分组失败: {e}"))
+                            })?;
+                        }
+                        if Self::table_exists(conn, "gateway_routes")?
+                            && !Self::has_column(conn, "gateway_routes", "website_url")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE gateway_routes ADD COLUMN website_url TEXT",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!("为转发站添加官网地址失败: {e}"))
+                            })?;
+                        }
+                        Self::set_user_version(conn, 8)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -2107,5 +2134,71 @@ mod schema_migration_tests {
         assert_eq!(preserved, 1);
         assert!(!Database::table_exists(&conn, "stream_check_logs").unwrap());
         assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrates_v7_gateway_stations_to_endpoint_groups_and_websites() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_channels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                dialect TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key TEXT NOT NULL DEFAULT '',
+                path_override TEXT,
+                models TEXT NOT NULL DEFAULT '[]',
+                model_override TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                weight INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                extra_headers TEXT NOT NULL DEFAULT '[]',
+                imported_from TEXT,
+                created_at INTEGER NOT NULL,
+                sort_index INTEGER
+             );
+             CREATE TABLE gateway_routes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                app_type TEXT,
+                channel_ids TEXT NOT NULL DEFAULT '[]',
+                default_model TEXT,
+                model_rules TEXT NOT NULL DEFAULT '[]',
+                reasoning TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                sort_index INTEGER
+             );
+             INSERT INTO gateway_channels (
+                id, name, dialect, base_url, created_at
+             ) VALUES ('c1', 'Relay', 'messages', 'https://api.example.com', 1);
+             INSERT INTO gateway_routes (
+                id, name, channel_ids, created_at
+             ) VALUES ('station:c1', 'Relay', '[\"c1\"]', 1);
+             PRAGMA user_version = 7;",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "gateway_channels", "endpoint_id").unwrap());
+        assert!(Database::has_column(&conn, "gateway_routes", "website_url").unwrap());
+        let endpoint_id: Option<String> = conn
+            .query_row(
+                "SELECT endpoint_id FROM gateway_channels WHERE id = 'c1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let website_url: Option<String> = conn
+            .query_row(
+                "SELECT website_url FROM gateway_routes WHERE id = 'station:c1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(endpoint_id.is_none());
+        assert!(website_url.is_none());
     }
 }

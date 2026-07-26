@@ -9,11 +9,109 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use tokio::sync::RwLock;
 
 use crate::db::Database;
-use crate::gateway::types::{ChannelHealth, Dialect, GatewayChannel};
+use crate::gateway::types::{ChannelHealth, Dialect, GatewayChannel, GatewayEndpointTestResult};
+
+const USER_TEST_TIMEOUT_SECS: u64 = 15;
+
+fn models_request(client: &reqwest::Client, url: &str, api_key: &str) -> reqwest::RequestBuilder {
+    let mut request = client
+        .get(url)
+        .timeout(Duration::from_secs(USER_TEST_TIMEOUT_SECS));
+    if !api_key.trim().is_empty() {
+        request = request
+            .bearer_auth(api_key)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01");
+    }
+    request
+}
+
+fn truncate_body(body: String) -> String {
+    let mut value: String = body.chars().take(300).collect();
+    if body.chars().count() > 300 {
+        value.push('…');
+    }
+    value
+}
+
+/// Fetch the OpenAI-compatible `/v1/models` list from one upstream endpoint.
+/// Both common auth headers are sent so Messages-only relay stations work too.
+pub async fn fetch_endpoint_models(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+) -> Result<Vec<String>, String> {
+    let candidates =
+        crate::services::model_fetch::build_models_url_candidates(base_url, false, None)?;
+    let mut last_error = None;
+
+    for url in candidates {
+        let response = models_request(client, &url, api_key)
+            .send()
+            .await
+            .map_err(|error| format!("Request failed: {error}"))?;
+        let status = response.status();
+        if status.is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|error| format!("Failed to parse model list: {error}"))?;
+            let mut models: Vec<String> = body
+                .get("data")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect();
+            models.sort();
+            models.dedup();
+            return Ok(models);
+        }
+
+        let error = format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            truncate_body(response.text().await.unwrap_or_default())
+        );
+        if matches!(status.as_u16(), 404 | 405) {
+            last_error = Some(error);
+            continue;
+        }
+        return Err(error);
+    }
+
+    Err(last_error.unwrap_or_else(|| "No models endpoint found".to_string()))
+}
+
+/// Measure an authenticated HTTP round trip to the endpoint's model-list URL.
+pub async fn test_endpoint(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+) -> Result<GatewayEndpointTestResult, String> {
+    let url = crate::services::model_fetch::build_models_url_candidates(base_url, false, None)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No models endpoint found".to_string())?;
+    let started = Instant::now();
+    let response = models_request(client, &url, api_key)
+        .send()
+        .await
+        .map_err(|error| format!("Request failed: {error}"))?;
+    let status = response.status().as_u16();
+    Ok(GatewayEndpointTestResult {
+        url,
+        status,
+        latency_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+        reachable: status < 500,
+    })
+}
 
 /// Probe a single channel once.
 pub async fn probe_channel(client: &reqwest::Client, channel: &GatewayChannel) -> ChannelHealth {
@@ -214,5 +312,54 @@ mod tests {
             ),
             vec![Dialect::Responses, Dialect::Chat]
         );
+    }
+
+    #[tokio::test]
+    async fn model_fetch_and_latency_test_use_the_endpoint_models_route() {
+        let app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                let authorized = headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("Bearer sk-test")
+                    && headers
+                        .get("x-api-key")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("sk-test");
+                if !authorized {
+                    return (
+                        axum::http::StatusCode::UNAUTHORIZED,
+                        axum::Json(serde_json::json!({"error": "missing auth"})),
+                    );
+                }
+                (
+                    axum::http::StatusCode::OK,
+                    axum::Json(serde_json::json!({
+                        "object": "list",
+                        "data": [
+                            {"id": "z-model"},
+                            {"id": "a-model"},
+                            {"id": "a-model"}
+                        ]
+                    })),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let base_url = format!("http://{address}");
+        let client = reqwest::Client::new();
+
+        let models = fetch_endpoint_models(&client, &base_url, "sk-test")
+            .await
+            .unwrap();
+        assert_eq!(models, vec!["a-model", "z-model"]);
+
+        let result = test_endpoint(&client, &base_url, "sk-test").await.unwrap();
+        assert_eq!(result.url, format!("{base_url}/v1/models"));
+        assert_eq!(result.status, 200);
+        assert!(result.reachable);
     }
 }
