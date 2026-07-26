@@ -122,7 +122,6 @@ impl ImportReport {
 /// 明确排除：
 /// - `proxy_live_backup` — cc-switch 的运行时 live-config 接管状态，导入会让
 ///   OcHub 误以为持有待恢复的备份；
-/// - `stream_check_logs` — 瞬态测速日志，无长期价值；
 /// - `sqlite_sequence` — SQLite 内部表。
 const IMPORT_TABLES: &[(&str, &str, Option<&str>, &str)] = &[
     (
@@ -148,7 +147,8 @@ const IMPORT_TABLES: &[(&str, &str, Option<&str>, &str)] = &[
         Some(LEGACY_USAGE_CONFIG_APP_TYPES),
         "OR REPLACE",
     ),
-    // model_pricing：REPLACE 覆盖内置种子 —— 源库可能带用户自定义定价与更新的价目
+    // Imported pricing has no source marker in cc-switch, so preserve it as
+    // manual overrides. LiteLLM catalog rows live in separate local-only tables.
     ("model_pricing", "model_pricing", None, "OR REPLACE"),
     // Preserve historical usage under the gateway-neutral target table name.
     ("proxy_request_logs", "usage_logs", None, "OR REPLACE"),

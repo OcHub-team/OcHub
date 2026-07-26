@@ -4,7 +4,7 @@ use super::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use super::parser::TokenUsage;
 use crate::db::{Database, PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
 use crate::error::AppError;
-use crate::services::usage_stats::{find_model_pricing_row, is_placeholder_pricing_model};
+use crate::services::usage_stats::is_placeholder_pricing_model;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -195,9 +195,18 @@ impl<'a> UsageLogger<'a> {
     }
 
     /// 获取模型定价
-    pub fn get_model_pricing(&self, model_id: &str) -> Result<Option<ModelPricing>, AppError> {
+    pub fn get_model_pricing(
+        &self,
+        model_id: &str,
+        usage: &TokenUsage,
+    ) -> Result<Option<ModelPricing>, AppError> {
         let conn = crate::db::lock_conn!(self.db.conn);
-        let row = find_model_pricing_row(&conn, model_id)?;
+        let row = crate::services::usage_stats::find_model_pricing_row_for_requirements(
+            &conn,
+            model_id,
+            usage.cache_read_tokens > 0,
+            usage.cache_creation_tokens > 0,
+        )?;
         match row {
             Some((input, output, cache_read, cache_creation)) => {
                 ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
@@ -321,7 +330,7 @@ impl<'a> UsageLogger<'a> {
         provider_type: Option<String>,
         is_streaming: bool,
     ) -> Result<(), AppError> {
-        let pricing = self.get_model_pricing(&pricing_model)?;
+        let pricing = self.get_model_pricing(&pricing_model, &usage)?;
 
         let has_usage = usage.input_tokens > 0
             || usage.output_tokens > 0
@@ -330,6 +339,7 @@ impl<'a> UsageLogger<'a> {
 
         if pricing.is_none() && has_usage && !is_placeholder_pricing_model(&pricing_model) {
             log::warn!("[USG-002] 模型定价未找到，成本将记录为 0: {pricing_model}");
+            crate::services::pricing_catalog::notify_pricing_catalog_miss();
         }
 
         let cost = CostCalculator::try_calculate_for_app(

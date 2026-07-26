@@ -12,7 +12,6 @@
 //! ├── import_ccswitch.rs - cc-switch 数据库一次性导入
 //! ├── migration.rs     - JSON → SQLite 数据迁移
 //! ├── legacy_json.rs   - 旧版 config.json (MultiAppConfig) + 域结构
-//! ├── stream_check_types.rs - 连通性检查类型
 //! └── dao/             - 数据访问对象
 //! ```
 
@@ -22,7 +21,6 @@ pub mod import_ccswitch;
 pub mod legacy_json;
 pub mod migration;
 mod schema;
-pub mod stream_check_types;
 
 // DAO 类型导出供外部使用（这些是供尚未移植的服务层使用的接缝，暂时未被调用）
 #[allow(unused_imports)]
@@ -37,7 +35,6 @@ pub use legacy_json::{
     CommonConfigSnippets, InstalledSkill, McpApps, McpConfig, McpRoot, McpServer, MultiAppConfig,
     SkillApps, SkillRepo, SkillState, SkillStore,
 };
-pub use stream_check_types::{HealthStatus, StreamCheckConfig, StreamCheckResult};
 
 use crate::error::AppError;
 use rusqlite::{hooks::Action, Connection};
@@ -46,7 +43,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号（OcHub 自有版本线，与 cc-switch 的版本序列无关）
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 6;
+pub(crate) const SCHEMA_VERSION: i32 = 7;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -160,7 +157,6 @@ impl Database {
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
-        db.ensure_model_pricing_seeded()?;
 
         // The cc-switch import deliberately does *not* run here. It rewrites
         // providers, MCP servers and pricing wholesale, so the GPUI app asks
@@ -168,10 +164,7 @@ impl Database {
         // `import_from_ccswitch_source` on confirmation. Headless callers with
         // nobody to ask opt in explicitly via `auto_import_from_ccswitch`.
 
-        // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.cleanup_old_stream_check_logs(7) {
-            log::warn!("Startup stream_check_logs cleanup failed: {e}");
-        }
+        // Startup cleanup: roll up old usage logs and reclaim space.
         if let Err(e) = db.rollup_and_prune(30) {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }
@@ -202,7 +195,6 @@ impl Database {
             created_fresh: true,
         };
         db.create_tables()?;
-        db.ensure_model_pricing_seeded()?;
 
         Ok(db)
     }

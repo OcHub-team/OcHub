@@ -473,7 +473,7 @@ fn insert_codex_session_entry(
         message_id: None,
     };
 
-    let pricing = find_codex_pricing(&conn, model);
+    let pricing = find_codex_pricing(&conn, model, &usage);
     let multiplier = Decimal::from(1);
     let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
     {
@@ -487,13 +487,16 @@ fn insert_codex_session_entry(
                 cost.total_cost.to_string(),
             )
         }
-        None => (
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-        ),
+        None => {
+            super::pricing_catalog::notify_pricing_catalog_miss();
+            (
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+            )
+        }
     };
 
     let inserted_rows = conn
@@ -542,8 +545,12 @@ fn insert_codex_session_entry(
 }
 
 /// 查找 Codex 模型定价（带归一化）
-fn find_codex_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<ModelPricing> {
-    find_model_pricing(conn, &normalize_codex_model(model_id))
+fn find_codex_pricing(
+    conn: &rusqlite::Connection,
+    model_id: &str,
+    usage: &TokenUsage,
+) -> Option<ModelPricing> {
+    find_model_pricing(conn, &normalize_codex_model(model_id), usage)
 }
 
 #[cfg(test)]

@@ -517,7 +517,6 @@ fn local_day_start_rfc3339(day: NaiveDate) -> String {
 
 impl Database {
     pub fn get_model_pricing(&self) -> Result<Vec<ModelPricingInfo>, AppError> {
-        self.ensure_model_pricing_seeded()?;
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
@@ -1984,12 +1983,24 @@ impl Database {
         conn: &Connection,
         cache: &mut HashMap<String, PricingInfo>,
         model: &str,
+        needs_cache_read: bool,
+        needs_cache_creation: bool,
     ) -> Result<Option<PricingInfo>, AppError> {
-        if let Some(info) = cache.get(model) {
+        let cache_key = format!(
+            "{model}\u{1f}{}\u{1f}{}",
+            u8::from(needs_cache_read),
+            u8::from(needs_cache_creation)
+        );
+        if let Some(info) = cache.get(&cache_key) {
             return Ok(Some(info.clone()));
         }
 
-        let row = find_model_pricing_row(conn, model)?;
+        let row = find_model_pricing_row_for_requirements(
+            conn,
+            model,
+            needs_cache_read,
+            needs_cache_creation,
+        )?;
         let Some((input, output, cache_read, cache_creation)) = row else {
             return Ok(None);
         };
@@ -2005,7 +2016,7 @@ impl Database {
                 .map_err(|e| AppError::Database(format!("解析缓存写入价格失败: {e}")))?,
         };
 
-        cache.insert(model.to_string(), pricing.clone());
+        cache.insert(cache_key, pricing.clone());
         Ok(Some(pricing))
     }
 
@@ -2014,6 +2025,8 @@ impl Database {
         cache: &mut HashMap<String, PricingInfo>,
         log: &RequestLogDetail,
     ) -> Result<Option<PricingInfo>, AppError> {
+        let needs_cache_read = log.cache_read_tokens > 0;
+        let needs_cache_creation = log.cache_creation_tokens > 0;
         // 写入时的计价基准已落库（v11+）：回填只按它重算，找不到就保持 0 成本
         // 等补价。不能换用 model/request_model 猜——网关路由 + request 计价模式下
         // 三者可能各不相同（model=上游回显、request_model=客户端别名、
@@ -2024,10 +2037,22 @@ impl Database {
             .as_deref()
             .filter(|pm| !is_placeholder_pricing_model(pm))
         {
-            return Self::get_model_pricing_cached(conn, cache, pricing_model);
+            return Self::get_model_pricing_cached(
+                conn,
+                cache,
+                pricing_model,
+                needs_cache_read,
+                needs_cache_creation,
+            );
         }
 
-        if let Some(pricing) = Self::get_model_pricing_cached(conn, cache, &log.model)? {
+        if let Some(pricing) = Self::get_model_pricing_cached(
+            conn,
+            cache,
+            &log.model,
+            needs_cache_read,
+            needs_cache_creation,
+        )? {
             return Ok(Some(pricing));
         }
 
@@ -2047,32 +2072,96 @@ impl Database {
             return Ok(None);
         }
 
-        Self::get_model_pricing_cached(conn, cache, request_model)
+        Self::get_model_pricing_cached(
+            conn,
+            cache,
+            request_model,
+            needs_cache_read,
+            needs_cache_creation,
+        )
     }
 }
 
 pub(crate) fn find_model_pricing(
     conn: &Connection,
     model_id: &str,
+    usage: &crate::usage_tracking::parser::TokenUsage,
 ) -> Option<crate::usage_tracking::calculator::ModelPricing> {
-    find_model_pricing_row(conn, model_id)
+    find_model_pricing_row_for_requirements(
+        conn,
+        model_id,
+        usage.cache_read_tokens > 0,
+        usage.cache_creation_tokens > 0,
+    )
+    .ok()
+    .flatten()
+    .and_then(|(input, output, cache_read, cache_creation)| {
+        crate::usage_tracking::calculator::ModelPricing::from_strings(
+            &input,
+            &output,
+            &cache_read,
+            &cache_creation,
+        )
         .ok()
-        .flatten()
-        .and_then(|(input, output, cache_read, cache_creation)| {
-            crate::usage_tracking::calculator::ModelPricing::from_strings(
-                &input,
-                &output,
-                &cache_read,
-                &cache_creation,
-            )
-            .ok()
-        })
+    })
 }
 
+#[cfg(test)]
 pub(crate) fn find_model_pricing_row(
     conn: &Connection,
     model_id: &str,
 ) -> Result<Option<(String, String, String, String)>, AppError> {
+    find_model_pricing_row_for_requirements(conn, model_id, false, false)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedPricingRow {
+    input: String,
+    output: String,
+    cache_read: Option<String>,
+    cache_creation: Option<String>,
+}
+
+impl ResolvedPricingRow {
+    fn into_complete_tuple(
+        self,
+        needs_cache_read: bool,
+        needs_cache_creation: bool,
+    ) -> Option<(String, String, String, String)> {
+        if (needs_cache_read && self.cache_read.is_none())
+            || (needs_cache_creation && self.cache_creation.is_none())
+        {
+            return None;
+        }
+        Some((
+            self.input,
+            self.output,
+            self.cache_read.unwrap_or_else(|| "0".to_string()),
+            self.cache_creation.unwrap_or_else(|| "0".to_string()),
+        ))
+    }
+}
+
+pub(crate) fn find_model_pricing_row_for_requirements(
+    conn: &Connection,
+    model_id: &str,
+    needs_cache_read: bool,
+    needs_cache_creation: bool,
+) -> Result<Option<(String, String, String, String)>, AppError> {
+    // Preserve a user-authored provider/region-qualified key before the
+    // compatibility normalizer strips slash namespaces and Bedrock suffixes.
+    // This lets a precise manual override beat both a generic manual alias and
+    // the matching catalog row.
+    let exact_manual_key = model_id
+        .trim()
+        .trim_end_matches(crate::apps::claude_desktop::ONE_M_CONTEXT_MARKER)
+        .trim();
+    if !exact_manual_key.is_empty() {
+        if let Some(row) = query_model_pricing_exact(conn, exact_manual_key)? {
+            return Ok(Some(row));
+        }
+    }
+
     let candidates = model_pricing_candidates(model_id);
     if candidates.is_empty() {
         return Ok(None);
@@ -2089,6 +2178,36 @@ pub(crate) fn find_model_pricing_row(
             if let Some(row) = query_model_pricing_prefix(conn, candidate)? {
                 return Ok(Some(row));
             }
+        }
+    }
+
+    // Preserve the complete key for provider/region-qualified LiteLLM rows.
+    // The manual normalizer intentionally strips slash namespaces, which is
+    // useful for user aliases but would collapse distinct provider prices.
+    let exact_catalog_key = model_id
+        .trim()
+        .trim_end_matches(crate::apps::claude_desktop::ONE_M_CONTEXT_MARKER)
+        .trim();
+    if !exact_catalog_key.is_empty() {
+        if let Some(row) = query_catalog_pricing_exact(conn, exact_catalog_key)? {
+            return Ok(row.into_complete_tuple(needs_cache_read, needs_cache_creation));
+        }
+    }
+
+    // Prefer a direct LiteLLM model key (normally the first-party provider)
+    // before consulting aliases shared by Bedrock, Vertex, Azure, and relays.
+    for candidate in &candidates {
+        if let Some(row) = query_catalog_pricing_exact(conn, candidate)? {
+            return Ok(row.into_complete_tuple(needs_cache_read, needs_cache_creation));
+        }
+    }
+
+    // Alias fallback is safe only when every provider/region candidate agrees
+    // on all four prices. A differing regional price remains visibly missing
+    // instead of being guessed.
+    for candidate in &candidates {
+        if let Some(row) = query_catalog_pricing_alias_unique(conn, candidate)? {
+            return Ok(row.into_complete_tuple(needs_cache_read, needs_cache_creation));
         }
     }
 
@@ -2176,7 +2295,7 @@ fn query_model_pricing_exact(
         "SELECT input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million
          FROM model_pricing
-         WHERE model_id = ?1",
+         WHERE model_id = ?1 COLLATE NOCASE",
         [model_id],
         |row| {
             Ok((
@@ -2217,7 +2336,66 @@ fn query_model_pricing_prefix(
     .map_err(|e| AppError::Database(format!("查询模型前缀定价失败: {e}")))
 }
 
-fn model_pricing_candidates(model_id: &str) -> Vec<String> {
+fn query_catalog_pricing_exact(
+    conn: &Connection,
+    model_key: &str,
+) -> Result<Option<ResolvedPricingRow>, AppError> {
+    conn.query_row(
+        "SELECT input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million
+         FROM litellm_pricing_catalog
+         WHERE model_key = ?1 COLLATE NOCASE",
+        [model_key],
+        |row| {
+            Ok(ResolvedPricingRow {
+                input: row.get(0)?,
+                output: row.get(1)?,
+                cache_read: row.get(2)?,
+                cache_creation: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| AppError::Database(format!("查询 LiteLLM 模型定价失败: {e}")))
+}
+
+fn query_catalog_pricing_alias_unique(
+    conn: &Connection,
+    alias: &str,
+) -> Result<Option<ResolvedPricingRow>, AppError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT c.input_cost_per_million, c.output_cost_per_million,
+                    c.cache_read_cost_per_million, c.cache_creation_cost_per_million
+             FROM litellm_pricing_aliases a
+             JOIN litellm_pricing_catalog c ON c.model_key = a.model_key
+             WHERE a.alias = ?1 COLLATE NOCASE",
+        )
+        .map_err(|e| AppError::Database(format!("准备 LiteLLM 别名查价失败: {e}")))?;
+    let rows = statement
+        .query_map([alias], |row| {
+            Ok(ResolvedPricingRow {
+                input: row.get(0)?,
+                output: row.get(1)?,
+                cache_read: row.get(2)?,
+                cache_creation: row.get(3)?,
+            })
+        })
+        .map_err(|e| AppError::Database(format!("查询 LiteLLM 别名定价失败: {e}")))?;
+
+    let mut unique: Option<ResolvedPricingRow> = None;
+    for row in rows {
+        let row = row.map_err(|e| AppError::Database(format!("读取 LiteLLM 别名定价失败: {e}")))?;
+        match unique.as_ref() {
+            None => unique = Some(row),
+            Some(current) if current == &row => {}
+            Some(_) => return Ok(None),
+        }
+    }
+    Ok(unique)
+}
+
+pub(crate) fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     let cleaned = clean_model_id_for_pricing(model_id);
     if is_placeholder_pricing_model(&cleaned) {
         return Vec::new();
@@ -2422,6 +2600,25 @@ fn should_try_pricing_prefix_match(model_id: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn insert_test_pricing(
+        conn: &Connection,
+        model_id: &str,
+        input: &str,
+        output: &str,
+        cache_read: &str,
+        cache_creation: &str,
+    ) -> Result<(), AppError> {
+        conn.execute(
+            "INSERT OR REPLACE INTO model_pricing (
+                model_id, display_name, input_cost_per_million,
+                output_cost_per_million, cache_read_cost_per_million,
+                cache_creation_cost_per_million
+             ) VALUES (?1, ?1, ?2, ?3, ?4, ?5)",
+            params![model_id, input, output, cache_read, cache_creation],
+        )?;
+        Ok(())
+    }
+
     fn local_ts(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
         match Local.with_ymd_and_hms(year, month, day, hour, minute, second) {
             chrono::LocalResult::Single(dt) => dt.timestamp(),
@@ -2619,6 +2816,7 @@ mod tests {
 
         {
             let conn = lock_conn!(db.conn);
+            insert_test_pricing(&conn, "gpt-5.5", "5", "30", "0.5", "0")?;
             insert_usage_log(
                 &conn,
                 "codex-gpt-5-5-zero-cost",
@@ -2658,6 +2856,7 @@ mod tests {
 
         {
             let conn = lock_conn!(db.conn);
+            insert_test_pricing(&conn, "gpt-5.5", "5", "30", "0.5", "0")?;
             insert_usage_log(
                 &conn,
                 "codex-gpt-5-5-multiplier",
@@ -2702,6 +2901,7 @@ mod tests {
 
         {
             let conn = lock_conn!(db.conn);
+            insert_test_pricing(&conn, "gpt-5.5", "5", "30", "0.5", "0")?;
             conn.execute(
                 "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model,
@@ -2910,6 +3110,7 @@ mod tests {
 
         {
             let conn = lock_conn!(db.conn);
+            insert_test_pricing(&conn, "claude-haiku-4-5", "1", "5", "0.1", "1.25")?;
             insert_usage_log(
                 &conn,
                 "claude-cache-fresh-input",
@@ -4065,23 +4266,24 @@ mod tests {
         let db = Database::memory()?;
         let conn = lock_conn!(db.conn);
 
-        // 准备额外定价数据，覆盖前缀/后缀清洗场景
-        conn.execute(
-            "INSERT OR REPLACE INTO model_pricing (
-                model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-            ) VALUES (?, ?, ?, ?, ?, ?)",
-            params![
-                "claude-haiku-4.5",
-                "Claude Haiku 4.5",
-                "1.0",
-                "2.0",
-                "0.0",
-                "0.0"
-            ],
-        )?;
+        // Explicit manual overrides cover the normalization cases. Memory
+        // databases deliberately have no built-in model prices.
+        for model_id in [
+            "claude-haiku-4.5",
+            "claude-sonnet-4-5-20250929",
+            "kimi-k2-0905",
+            "gpt-5.2-codex-low",
+            "gpt-5.5",
+            "gpt-5.5-high",
+            "gemini-3-pro-preview",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-8",
+            "gpt-5.4",
+        ] {
+            insert_test_pricing(&conn, model_id, "1", "2", "0", "0")?;
+        }
 
-        // 测试精确匹配（seed_model_pricing 已预置 claude-sonnet-4-5-20250929）
+        // 测试精确匹配
         let result = find_model_pricing_row(&conn, "claude-sonnet-4-5-20250929")?;
         assert!(
             result.is_some(),
@@ -4100,7 +4302,7 @@ mod tests {
             "带前缀+冒号后缀的模型应清洗后匹配到 kimi-k2-0905"
         );
 
-        // 清洗：@ 替换为 -（seed_model_pricing 已预置 gpt-5.2-codex-low）
+        // 清洗：@ 替换为 -
         let result = find_model_pricing_row(&conn, "gpt-5.2-codex@low")?;
         assert!(
             result.is_some(),

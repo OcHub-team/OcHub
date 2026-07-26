@@ -101,7 +101,8 @@ as long-term bidirectional sync.
 
 - **Same ID:** the cc-switch record replaces the OcHub record.
 - **Different ID, same name:** both may remain and require manual cleanup.
-- **Built-in pricing with the same ID:** imported custom pricing may replace it.
+- **Manual pricing with the same ID:** imported pricing may replace the existing
+  override; the LiteLLM catalog is not imported.
 - **Existing OcHub providers:** a snapshot is created first.
 - **Unknown fields or newer tables:** supported content continues to import
   while unknown content is skipped or warned about.

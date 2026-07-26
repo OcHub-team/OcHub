@@ -1,6 +1,6 @@
 //! Usage statistics workbench. Mirrors the reference cc-switch dashboard while
 //! staying native GPUI: scoped filters, trends, provider/model tables, request
-//! detail, pricing configuration, and stream-check parameters.
+//! detail and pricing configuration.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -14,13 +14,15 @@ use gpui::{
     Animation, AnimationExt, Bounds, Context, ElementId, Entity, FontWeight, ListAlignment,
     ListState, MouseButton, Pixels, Point, ScrollHandle, SharedString, Window,
 };
-use ochub_core::db::StreamCheckConfig;
 use ochub_core::services::session_usage::{
     get_data_source_breakdown, sync_claude_session_logs, DataSourceSummary, SessionSyncResult,
 };
 use ochub_core::services::usage_stats::{
     DailyStats, LogFilters, ModelPricingInfo, ModelStats, ProviderStats, RequestLogDetail,
     UsageSummaryByApp,
+};
+use ochub_core::services::{
+    PricingCatalogRefreshKind, PricingCatalogRefreshOutcome, PricingCatalogStatus,
 };
 use ochub_core::{services, AppState, UsageSummary};
 
@@ -41,8 +43,8 @@ const AUTO_SESSION_SYNC_INTERVAL: StdDuration = StdDuration::from_secs(60);
 
 /// Number of top-level blocks rendered by [`UsageView::render_block`] into the
 /// virtualized list (filters, data sources, summary, trend, scope, tabs,
-/// active section, pricing, stream config).
-const USAGE_BLOCK_COUNT: usize = 9;
+/// active section and pricing).
+const USAGE_BLOCK_COUNT: usize = 8;
 
 /// Everything [`UsageView::reload`] fetches, loaded in one background pass so
 /// the UI thread never blocks on the SQLite connection while the gateway records usage.
@@ -58,7 +60,7 @@ struct UsageData {
     log_total: u32,
     data_sources: Vec<DataSourceSummary>,
     pricing: Vec<ModelPricingInfo>,
-    stream_config: StreamCheckConfig,
+    pricing_catalog: PricingCatalogStatus,
     errors: Vec<String>,
 }
 
@@ -198,7 +200,7 @@ fn load_usage_data(
         log_total,
         data_sources: get_data_source_breakdown(&app.db).unwrap_or_default(),
         pricing: app.db.get_model_pricing().unwrap_or_default(),
-        stream_config: app.db.get_stream_check_config().unwrap_or_default(),
+        pricing_catalog: app.db.get_pricing_catalog_status().unwrap_or_default(),
         errors,
     }
 }
@@ -300,7 +302,7 @@ pub struct UsageView {
     log_total: u32,
     data_sources: Vec<DataSourceSummary>,
     pricing: Vec<ModelPricingInfo>,
-    stream_config: StreamCheckConfig,
+    pricing_catalog: PricingCatalogStatus,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
     range: UsageRange,
@@ -315,7 +317,6 @@ pub struct UsageView {
     show_trend: bool,
     show_scope_options: bool,
     show_pricing: bool,
-    show_stream_config: bool,
     open_filter_popover: Option<FilterPopover>,
     log_page_size_open: bool,
     active_datetime_picker: Option<RangeEndpoint>,
@@ -336,9 +337,6 @@ pub struct UsageView {
     pricing_cache_creation_cost: Entity<TextInput>,
     multiplier_claude: Entity<TextInput>,
     multiplier_codex: Entity<TextInput>,
-    stream_timeout_secs: Entity<TextInput>,
-    stream_max_retries: Entity<TextInput>,
-    stream_degraded_threshold_ms: Entity<TextInput>,
     log_page_input: Entity<TextInput>,
     range_start_input: Entity<TextInput>,
     range_end_input: Entity<TextInput>,
@@ -346,6 +344,7 @@ pub struct UsageView {
     /// later successful reload knows it may clear it (and only it).
     load_error: bool,
     mutation_in_flight: bool,
+    catalog_sync_in_flight: bool,
     session_sync_in_flight: bool,
     last_session_sync_started_at: Option<Instant>,
     /// Drives the virtualized page body (one item per top-level block).
@@ -393,7 +392,7 @@ impl UsageView {
             log_total: 0,
             data_sources: Vec::new(),
             pricing: Vec::new(),
-            stream_config: StreamCheckConfig::default(),
+            pricing_catalog: PricingCatalogStatus::default(),
             status: None,
             status_level: None,
             range: UsageRange::Today,
@@ -408,7 +407,6 @@ impl UsageView {
             show_trend: true,
             show_scope_options: false,
             show_pricing: false,
-            show_stream_config: false,
             open_filter_popover: None,
             log_page_size_open: false,
             active_datetime_picker: None,
@@ -431,15 +429,13 @@ impl UsageView {
             pricing_cache_creation_cost: cx.new(|cx| text_input(cx, "3.75", "0")),
             multiplier_claude: cx.new(|cx| text_input(cx, "1", "1")),
             multiplier_codex: cx.new(|cx| text_input(cx, "1", "1")),
-            stream_timeout_secs: cx.new(|cx| text_input(cx, "8", "8")),
-            stream_max_retries: cx.new(|cx| text_input(cx, "1", "1")),
-            stream_degraded_threshold_ms: cx.new(|cx| text_input(cx, "6000", "6000")),
             log_page_input: cx
                 .new(|cx| text_input(cx, raw(k::USAGE_PAGINATION_PAGE_PLACEHOLDER), "").compact()),
             range_start_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             range_end_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss", "")),
             load_error: false,
             mutation_in_flight: false,
+            catalog_sync_in_flight: false,
             session_sync_in_flight: false,
             last_session_sync_started_at: None,
             list_state: ListState::new(USAGE_BLOCK_COUNT, ListAlignment::Top, px(600.)),
@@ -483,6 +479,7 @@ impl UsageView {
     /// unchanged history is skipped on later visits.
     pub fn activate(&mut self, cx: &mut Context<Self>) {
         self.reload(cx);
+        self.sync_pricing_catalog(false, false, cx);
         let now = Instant::now();
         if auto_session_sync_due(self.last_session_sync_started_at, now) {
             self.sync_sessions(false, cx);
@@ -591,7 +588,7 @@ impl UsageView {
         self.log_total = data.log_total;
         self.data_sources = data.data_sources;
         self.pricing = data.pricing;
-        self.stream_config = data.stream_config;
+        self.pricing_catalog = data.pricing_catalog;
         self.list_state.remeasure();
         cx.notify();
     }
@@ -661,7 +658,6 @@ impl UsageView {
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_spawn(async move {
-                    let stream_config = app.db.get_stream_check_config().ok();
                     let mut pricing_defaults = Vec::new();
                     for name in PRICING_APPS {
                         let multiplier = app
@@ -676,26 +672,11 @@ impl UsageView {
                             .unwrap_or_else(|_| "response".to_string());
                         pricing_defaults.push((name, multiplier, source));
                     }
-                    (stream_config, pricing_defaults)
+                    pricing_defaults
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let (stream_config, pricing_defaults) = loaded;
-                if let Some(config) = stream_config {
-                    this.stream_config = config.clone();
-                    set_input(
-                        &this.stream_timeout_secs,
-                        config.timeout_secs.to_string(),
-                        cx,
-                    );
-                    set_input(&this.stream_max_retries, config.max_retries.to_string(), cx);
-                    set_input(
-                        &this.stream_degraded_threshold_ms,
-                        config.degraded_threshold_ms.to_string(),
-                        cx,
-                    );
-                }
-                for (name, multiplier, source) in pricing_defaults {
+                for (name, multiplier, source) in loaded {
                     this.pricing_sources.insert(name.to_string(), source);
                     match name {
                         "claude" => set_input(&this.multiplier_claude, multiplier, cx),
@@ -1165,6 +1146,74 @@ impl UsageView {
         );
     }
 
+    fn sync_pricing_catalog(&mut self, force: bool, announce: bool, cx: &mut Context<Self>) {
+        if self.catalog_sync_in_flight {
+            return;
+        }
+        self.catalog_sync_in_flight = true;
+        let db = self.app.db.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(
+                services::pricing_catalog::refresh_pricing_catalog(db, force),
+            )
+            .await;
+            this.update(cx, |this, cx| {
+                this.catalog_sync_in_flight = false;
+                match result {
+                    Ok(PricingCatalogRefreshOutcome {
+                        kind: PricingCatalogRefreshKind::Updated,
+                        entry_count,
+                        backfilled_rows,
+                        ..
+                    }) => {
+                        if announce {
+                            this.set_status(
+                                NotificationLevel::Success,
+                                tf!(
+                                    k::USAGE_PRICING_CATALOG_SYNCED,
+                                    count = entry_count,
+                                    backfilled = backfilled_rows
+                                ),
+                                cx,
+                            );
+                        }
+                        this.reload(cx);
+                    }
+                    Ok(PricingCatalogRefreshOutcome {
+                        kind:
+                            PricingCatalogRefreshKind::NotModified
+                            | PricingCatalogRefreshKind::Skipped,
+                        entry_count,
+                        ..
+                    }) => {
+                        if announce {
+                            this.set_status(
+                                NotificationLevel::Success,
+                                tf!(k::USAGE_PRICING_CATALOG_CURRENT, count = entry_count),
+                                cx,
+                            );
+                        }
+                        this.reload(cx);
+                    }
+                    Err(error) => {
+                        if announce {
+                            this.set_status(
+                                NotificationLevel::Error,
+                                tf!(k::USAGE_PRICING_CATALOG_SYNC_FAILED, error = error),
+                                cx,
+                            );
+                        } else {
+                            log::warn!("automatic LiteLLM pricing sync failed: {error}");
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn set_pricing_source(
         &mut self,
         app: &'static str,
@@ -1232,38 +1281,6 @@ impl UsageView {
             .ok();
         })
         .detach();
-    }
-
-    fn save_stream_config(&mut self, cx: &mut Context<Self>) {
-        let config = match parse_stream_config(self, cx) {
-            Ok(config) => config,
-            Err(err) => {
-                self.set_status(NotificationLevel::Error, err, cx);
-                return;
-            }
-        };
-
-        let app = self.app.clone();
-        self.run_mutation(
-            cx,
-            move || {
-                app.db
-                    .save_stream_check_config(&config)
-                    .map(|_| config)
-                    .map_err(|error| error.to_string())
-            },
-            |this, result, cx| match result {
-                Ok(config) => {
-                    this.stream_config = config;
-                    this.set_status(NotificationLevel::Success, t(k::USAGE_STREAM_SAVED), cx);
-                }
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::USAGE_STREAM_SAVE_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
     }
 
     fn render_datetime_picker(
@@ -2968,6 +2985,7 @@ impl UsageView {
 
         components::card()
             .gap_4()
+            .child(self.render_pricing_catalog_status(cx))
             .child(section_label(raw(k::USAGE_PRICING_DEFAULTS_TITLE)))
             .child(Self::pricing_defaults_header())
             .children(
@@ -3078,6 +3096,153 @@ impl UsageView {
             )
     }
 
+    fn render_pricing_catalog_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let revision = self
+            .pricing_catalog
+            .source_revision
+            .as_deref()
+            .map(short_catalog_revision)
+            .unwrap_or_else(|| raw(k::USAGE_PRICING_CATALOG_UNKNOWN).to_string());
+        let summary = self
+            .pricing_catalog
+            .updated_at
+            .map(|updated_at| {
+                tf!(
+                    k::USAGE_PRICING_CATALOG_SUMMARY,
+                    count = self.pricing_catalog.entry_count,
+                    time = format_local_timestamp(updated_at, false),
+                    revision = revision
+                )
+            })
+            .unwrap_or_else(|| raw(k::USAGE_PRICING_CATALOG_UNAVAILABLE).to_string());
+        let sync_button = if self.catalog_sync_in_flight {
+            components::disabled_button(
+                "usage-sync-pricing-catalog",
+                t(k::USAGE_PRICING_CATALOG_SYNCING),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+                true,
+            )
+        } else {
+            components::icon_button_tone(
+                "usage-sync-pricing-catalog",
+                t(k::USAGE_PRICING_CATALOG_SYNC),
+                IconName::Refresh,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.sync_pricing_catalog(true, true, cx);
+            }))
+        };
+
+        let missing_count = self.pricing_catalog.missing_models.len();
+        let missing_requests = self
+            .pricing_catalog
+            .missing_models
+            .iter()
+            .map(|model| model.request_count)
+            .sum::<u64>();
+        let mut missing_names = self
+            .pricing_catalog
+            .missing_models
+            .iter()
+            .take(4)
+            .map(|model| model.model_id.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if missing_count > 4 {
+            missing_names.push_str(&tf!(
+                k::USAGE_PRICING_MISSING_MORE,
+                count = missing_count - 4
+            ));
+        }
+
+        components::card()
+            .gap_3()
+            .bg(theme::inset())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_color(theme::text())
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t(k::USAGE_PRICING_CATALOG_TITLE)),
+                                    )
+                                    .child(components::badge(BadgeTone::Accent, "LiteLLM")),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_xs()
+                                    .child(SharedString::from(summary)),
+                            ),
+                    )
+                    .child(sync_button),
+            )
+            .child(
+                div()
+                    .text_color(theme::subtext())
+                    .text_xs()
+                    .child(t(k::USAGE_PRICING_CATALOG_NOTE)),
+            )
+            .when(missing_count > 0, |card| {
+                card.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap_3()
+                        .p_3()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme::yellow().alpha(0.32))
+                        .bg(theme::yellow_soft())
+                        .child(icon(IconName::Diamond, theme::yellow(), 15.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(tf!(
+                                            k::USAGE_PRICING_MISSING_TITLE,
+                                            count = missing_count
+                                        )),
+                                )
+                                .child(div().text_color(theme::subtext()).text_xs().child(tf!(
+                                    k::USAGE_PRICING_MISSING_DETAIL,
+                                    models = missing_names,
+                                    requests = missing_requests
+                                ))),
+                        ),
+                )
+            })
+    }
+
     /// 计费默认配置的列标签行：标签只出现一次（表头式），下方每行不再重复。
     /// 列宽与 [`Self::render_pricing_default_row`] 保持一致。
     fn pricing_defaults_header() -> impl IntoElement {
@@ -3142,58 +3307,6 @@ impl UsageView {
                 if source == "response" { 0 } else { 1 },
                 move |ix, window, cx| on_source(&ix, window, cx),
             ))
-    }
-
-    fn render_stream_config(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        components::card()
-            .gap_4()
-            .child(
-                div()
-                    .p_3()
-                    .rounded_md()
-                    .bg(theme::surface_hover())
-                    .text_color(theme::subtext())
-                    .text_xs()
-                    .child(t(k::USAGE_STREAM_NOTICE)),
-            )
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(3)
-                    .gap_3()
-                    .child(components::field(
-                        t(k::USAGE_STREAM_FIELD_TIMEOUT),
-                        false,
-                        None,
-                        self.stream_timeout_secs.clone(),
-                    ))
-                    .child(components::field(
-                        t(k::USAGE_STREAM_FIELD_RETRIES),
-                        false,
-                        None,
-                        self.stream_max_retries.clone(),
-                    ))
-                    .child(components::field(
-                        t(k::USAGE_STREAM_FIELD_THRESHOLD),
-                        false,
-                        None,
-                        self.stream_degraded_threshold_ms.clone(),
-                    )),
-            )
-            .child(
-                div().flex().flex_row().child(
-                    components::icon_button_tone(
-                        "usage-save-stream-config",
-                        t(k::USAGE_STREAM_SAVE),
-                        IconName::Check,
-                        ButtonTone::Primary,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.save_stream_config(cx);
-                    })),
-                ),
-            )
     }
 
     /// Render one top-level page block as a virtualized list item. Only the
@@ -3263,7 +3376,11 @@ impl UsageView {
                     components::disclosure(
                         "usage-pricing-toggle",
                         t(k::USAGE_PRICING_TOGGLE_TITLE),
-                        tf!(k::USAGE_PRICING_TOGGLE_DETAIL, count = self.pricing.len()),
+                        tf!(
+                            k::USAGE_PRICING_TOGGLE_DETAIL,
+                            catalog = self.pricing_catalog.entry_count,
+                            manual = self.pricing.len()
+                        ),
                         self.show_pricing,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -3274,32 +3391,6 @@ impl UsageView {
                 )
                 .when(self.show_pricing, |s| {
                     s.child(self.render_pricing_config(cx))
-                })
-                .into_any_element(),
-            8 => block
-                .flex()
-                .flex_col()
-                .gap_4()
-                .child(
-                    components::disclosure(
-                        "usage-stream-toggle",
-                        t(k::USAGE_STREAM_TOGGLE_TITLE),
-                        tf!(
-                            k::USAGE_STREAM_TOGGLE_DETAIL,
-                            timeout = self.stream_config.timeout_secs,
-                            retries = self.stream_config.max_retries,
-                            threshold = self.stream_config.degraded_threshold_ms
-                        ),
-                        self.show_stream_config,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.show_stream_config = !this.show_stream_config;
-                        this.list_state.remeasure();
-                        cx.notify();
-                    })),
-                )
-                .when(self.show_stream_config, |s| {
-                    s.child(self.render_stream_config(cx))
                 })
                 .into_any_element(),
             _ => gpui::Empty.into_any_element(),
@@ -3388,6 +3479,15 @@ fn range_filter_label(range: UsageRange) -> String {
         format_local_timestamp(start, false),
         format_local_timestamp(end, false)
     )
+}
+
+fn short_catalog_revision(revision: &str) -> String {
+    let clean = revision.trim().trim_start_matches("W/").trim_matches('"');
+    if clean.chars().count() <= 12 {
+        clean.to_string()
+    } else {
+        clean.chars().take(12).collect()
+    }
 }
 
 fn shifted_year_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
@@ -3727,23 +3827,6 @@ fn set_input(
     cx: &mut Context<UsageView>,
 ) {
     input.update(cx, |input, cx| input.set_content(value, cx));
-}
-
-fn parse_stream_config(
-    this: &UsageView,
-    cx: &mut Context<UsageView>,
-) -> Result<StreamCheckConfig, String> {
-    Ok(StreamCheckConfig {
-        timeout_secs: input_value(&this.stream_timeout_secs, cx)
-            .parse::<u64>()
-            .map_err(|_| raw(k::USAGE_STREAM_ERROR_TIMEOUT).to_string())?,
-        max_retries: input_value(&this.stream_max_retries, cx)
-            .parse::<u32>()
-            .map_err(|_| raw(k::USAGE_STREAM_ERROR_RETRIES).to_string())?,
-        degraded_threshold_ms: input_value(&this.stream_degraded_threshold_ms, cx)
-            .parse::<u64>()
-            .map_err(|_| raw(k::USAGE_STREAM_ERROR_THRESHOLD).to_string())?,
-    })
 }
 
 /// 表格标题块：卡片顶部的标题 + 说明（配合 `components::card().p_0()` 使用）。

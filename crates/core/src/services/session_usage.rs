@@ -452,7 +452,7 @@ fn insert_session_log_entry(
         message_id: None,
     };
 
-    let pricing = find_model_pricing_for_session(&conn, &msg.model);
+    let pricing = find_model_pricing_for_session(&conn, &msg.model, &usage);
     let multiplier = Decimal::from(1);
     let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
     {
@@ -466,13 +466,16 @@ fn insert_session_log_entry(
                 cost.total_cost.to_string(),
             )
         }
-        None => (
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-        ),
+        None => {
+            super::pricing_catalog::notify_pricing_catalog_miss();
+            (
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+            )
+        }
     };
 
     let inserted_rows = conn
@@ -525,8 +528,9 @@ fn insert_session_log_entry(
 fn find_model_pricing_for_session(
     conn: &rusqlite::Connection,
     model_id: &str,
+    usage: &TokenUsage,
 ) -> Option<ModelPricing> {
-    find_model_pricing(conn, model_id)
+    find_model_pricing(conn, model_id, usage)
 }
 
 /// 查询数据来源分布统计

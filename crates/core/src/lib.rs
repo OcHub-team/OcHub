@@ -45,8 +45,8 @@ pub use deeplink::{
 pub use error::{AppError, Result};
 pub use model::{
     parse_custom_user_agent, AuthBinding, AuthBindingSource, ClaudeDesktopModelRoute,
-    CodexChatReasoningConfig, Provider, ProviderManager, ProviderMeta, ProviderTestConfig,
-    UsageData, UsageResult, UsageScript,
+    CodexChatReasoningConfig, Provider, ProviderManager, ProviderMeta, UsageData, UsageResult,
+    UsageScript,
 };
 pub use services::{
     build_models_url_candidates, check_env_conflicts, delete_env_vars, fetch_models,

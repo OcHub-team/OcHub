@@ -74,23 +74,19 @@ to fields the individual CLI recorded.
 
 Under Model pricing:
 
-1. Enter a model ID, display name, and per-million-token prices for input,
-   output, cache writes, and cache reads.
-2. Choose request-model or response-model pricing.
-3. Set default multipliers and pricing-model sources for Claude and Codex.
-4. Save, refresh, and confirm the pricing model and cost on a request detail.
+1. Review the bundled offline LiteLLM catalog, its update time, and revision.
+2. Use Sync now to check LiteLLM `main`; a conditional check also runs daily
+   in the background.
+3. Choose request-model or response-model pricing.
+4. Set default multipliers and pricing-model sources for Claude and Codex.
+5. Add a manual per-million-token override only when the catalog is missing a
+   model, provider or region prices are ambiguous, or your settled rate differs.
+6. Save, refresh, and confirm the pricing model and cost on a request detail.
 
-The model ID must match the logs. When aliases or relay mappings are common,
-response-model pricing is often a better default.
+Manual overrides always win and are never changed by catalog sync. The model ID
+must match the logs. When aliases or relay mappings are common, response-model
+pricing is often a better default. Missing models are grouped into one notice
+instead of producing repeated dialogs.
 
 For historical cost backfill, cache-token semantics, and bill reconciliation,
 continue to [Model pricing and cost calibration](/advanced/pricing).
-
-## Model check parameters
-
-Model check parameters control probe timeout, maximum retries, and the
-degradation threshold. They apply to connectivity and degradation checks, not
-to the timeout of a normal model request.
-
-Any HTTP response proves that the address is reachable. It does not prove that
-authentication, quota, or the model name is valid.

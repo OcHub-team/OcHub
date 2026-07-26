@@ -153,7 +153,8 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
         Self::create_request_logs_usage_indexes_if_supported(conn)?;
 
-        // 9. Model Pricing 表
+        // 9. Manual model-pricing overrides. Remote LiteLLM data lives in the
+        // separate replaceable catalog below and never overwrites these rows.
         conn.execute(
             "CREATE TABLE IF NOT EXISTS model_pricing (
             model_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
@@ -165,22 +166,40 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 10. Stream Check Logs 表
-        conn.execute("CREATE TABLE IF NOT EXISTS stream_check_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL, provider_name TEXT NOT NULL,
-            app_type TEXT NOT NULL, status TEXT NOT NULL, success INTEGER NOT NULL, message TEXT NOT NULL,
-            response_time_ms INTEGER, http_status INTEGER, model_used TEXT,
-            retry_count INTEGER DEFAULT 0, tested_at INTEGER NOT NULL
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_stream_check_logs_provider
-             ON stream_check_logs(app_type, provider_id, tested_at DESC)",
-            [],
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS litellm_pricing_catalog (
+                model_key TEXT PRIMARY KEY COLLATE NOCASE,
+                provider TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                input_cost_per_million TEXT NOT NULL,
+                output_cost_per_million TEXT NOT NULL,
+                cache_read_cost_per_million TEXT,
+                cache_creation_cost_per_million TEXT,
+                special_pricing_fields TEXT NOT NULL DEFAULT '[]',
+                source_url TEXT
+             );
+             CREATE TABLE IF NOT EXISTS litellm_pricing_aliases (
+                alias TEXT NOT NULL COLLATE NOCASE,
+                model_key TEXT NOT NULL COLLATE NOCASE,
+                PRIMARY KEY (alias, model_key),
+                FOREIGN KEY (model_key) REFERENCES litellm_pricing_catalog(model_key)
+                    ON DELETE CASCADE
+             );
+             CREATE INDEX IF NOT EXISTS idx_litellm_pricing_alias
+                 ON litellm_pricing_aliases(alias);
+             CREATE TABLE IF NOT EXISTS litellm_pricing_meta (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                source_url TEXT NOT NULL,
+                source_revision TEXT NOT NULL,
+                source_generated_at TEXT NOT NULL,
+                etag TEXT,
+                updated_at INTEGER NOT NULL,
+                checked_at INTEGER NOT NULL
+             );",
         )
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        .map_err(|e| AppError::Database(format!("创建 LiteLLM 定价目录失败: {e}")))?;
 
-        // 11. Usage Daily Rollups 表 (日聚合统计)
+        // 10. Usage Daily Rollups 表 (日聚合统计)
         // request_model 保留网关路由的「客户端别名 → 真实模型」映射维度，
         // pricing_model 保留写入时的计价基准（request 计价模式下与 model 分叉），
         // 否则明细被 prune 后接管计费不可审计；历史行迁移时填 ''（未知）。
@@ -511,6 +530,25 @@ impl Database {
                         }
                         Self::set_user_version(conn, 6)?;
                     }
+                    6 => {
+                        // v6 and earlier mixed OcHub's seeded prices with user
+                        // edits in one table and carried no provenance column.
+                        // Retire only rows that still exactly match a known
+                        // seed; any changed value or label is preserved as a
+                        // manual override.
+                        if Self::table_exists(conn, "model_pricing")? {
+                            Self::remove_legacy_builtin_model_pricing(conn)?;
+                            Self::remove_legacy_repaired_model_pricing(conn)?;
+                        }
+                        // The model connectivity probe was removed together
+                        // with its settings and UI. Its transient history has
+                        // no remaining reader, so retire the legacy table too.
+                        conn.execute("DROP TABLE IF EXISTS stream_check_logs", [])
+                            .map_err(|e| {
+                                AppError::Database(format!("清理旧模型连通检测日志失败: {e}"))
+                            })?;
+                        Self::set_user_version(conn, 7)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -536,10 +574,12 @@ impl Database {
         }
     }
 
-    /// 插入默认模型定价数据
-    /// 格式: (model_id, display_name, input, output, cache_read, cache_creation)
-    /// 注意: model_id 使用短横线格式（如 claude-haiku-4-5），与 API 返回的模型名称标准化后一致
-    fn seed_model_pricing(conn: &Connection) -> Result<(), AppError> {
+    /// One-time v6 → v7 retirement list for OcHub's former built-in prices.
+    ///
+    /// This is migration metadata, not an active price source. Exact tuple
+    /// matching is the only signal the old schema gives us that a row was not
+    /// edited by the user.
+    fn remove_legacy_builtin_model_pricing(conn: &Connection) -> Result<(), AppError> {
         let pricing_data = [
             // Claude Fable 5（Opus 之上的新档）
             (
@@ -1348,29 +1388,34 @@ impl Database {
 
         let mut stmt = conn
             .prepare(
-                "INSERT OR IGNORE INTO model_pricing (
-                    model_id, display_name, input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "DELETE FROM model_pricing
+                 WHERE model_id = ?1
+                   AND display_name = ?2
+                   AND input_cost_per_million = ?3
+                   AND output_cost_per_million = ?4
+                   AND cache_read_cost_per_million = ?5
+                   AND cache_creation_cost_per_million = ?6",
             )
-            .map_err(|e| AppError::Database(format!("准备模型定价语句失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("准备旧定价清理语句失败: {e}")))?;
+        let mut removed = 0;
         for (model_id, display_name, input, output, cache_read, cache_creation) in pricing_data {
-            stmt.execute(rusqlite::params![
-                model_id,
-                display_name,
-                input,
-                output,
-                cache_read,
-                cache_creation
-            ])
-            .map_err(|e| AppError::Database(format!("插入模型定价失败: {e}")))?;
+            removed += stmt
+                .execute(rusqlite::params![
+                    model_id,
+                    display_name,
+                    input,
+                    output,
+                    cache_read,
+                    cache_creation
+                ])
+                .map_err(|e| AppError::Database(format!("清理旧定价 {model_id} 失败: {e}")))?;
         }
 
-        log::info!("已插入 {} 条默认模型定价数据", pricing_data.len());
+        log::info!("removed {removed} unchanged legacy built-in pricing rows");
         Ok(())
     }
 
-    fn repair_current_model_pricing(conn: &Connection) -> Result<(), AppError> {
+    fn remove_legacy_repaired_model_pricing(conn: &Connection) -> Result<(), AppError> {
         let pricing_fixes = [
             // 2026-06-10 全量核价（厂商官方 list 价；CNY 按 ~7.14 折算）
             // GLM 4.6/4.7：旧值是中转/OpenRouter 折扣价，统一到 Z.ai 官方（与 glm-5/5.1 一致）
@@ -1649,17 +1694,20 @@ impl Database {
         ) in pricing_fixes
         {
             conn.execute(
-                "UPDATE model_pricing SET
-                    display_name = ?2,
-                    input_cost_per_million = ?3,
-                    output_cost_per_million = ?4,
-                    cache_read_cost_per_million = ?5,
-                    cache_creation_cost_per_million = ?6
+                "DELETE FROM model_pricing
                  WHERE model_id = ?1
-                   AND input_cost_per_million = ?7
-                   AND output_cost_per_million = ?8
-                   AND cache_read_cost_per_million = ?9
-                   AND cache_creation_cost_per_million = ?10",
+                   AND display_name = ?2
+                   AND (
+                       (input_cost_per_million = ?3
+                        AND output_cost_per_million = ?4
+                        AND cache_read_cost_per_million = ?5
+                        AND cache_creation_cost_per_million = ?6)
+                       OR
+                       (input_cost_per_million = ?7
+                        AND output_cost_per_million = ?8
+                        AND cache_read_cost_per_million = ?9
+                        AND cache_creation_cost_per_million = ?10)
+                   )",
                 rusqlite::params![
                     model_id,
                     display_name,
@@ -1673,22 +1721,10 @@ impl Database {
                     old_cache_creation
                 ],
             )
-            .map_err(|e| AppError::Database(format!("修复模型 {model_id} 定价失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("清理旧修复定价 {model_id} 失败: {e}")))?;
         }
 
         Ok(())
-    }
-
-    /// 确保模型定价表具备默认数据
-    pub fn ensure_model_pricing_seeded(&self) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-        Self::ensure_model_pricing_seeded_on_conn(&conn)
-    }
-
-    fn ensure_model_pricing_seeded_on_conn(conn: &Connection) -> Result<(), AppError> {
-        // 每次启动都执行 INSERT OR IGNORE，增量追加新模型；仅修复仍等于旧内置值的定价。
-        Self::seed_model_pricing(conn)?;
-        Self::repair_current_model_pricing(conn)
     }
 
     // --- 辅助方法 ---
@@ -2029,5 +2065,47 @@ mod schema_migration_tests {
             )
             .unwrap();
         assert!(origin.is_none());
+    }
+
+    #[test]
+    fn migrates_v6_prices_to_manual_overrides_without_reseeding() {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO model_pricing (
+                model_id, display_name, input_cost_per_million,
+                output_cost_per_million, cache_read_cost_per_million,
+                cache_creation_cost_per_million
+             ) VALUES
+                ('gpt-5', 'GPT-5', '1.25', '10', '0.125', '0'),
+                ('gpt-5-mini', 'My GPT-5 Mini', '9', '9', '0', '0');
+             CREATE TABLE stream_check_logs (
+                id INTEGER PRIMARY KEY,
+                model_id TEXT NOT NULL
+             );
+             PRAGMA user_version = 6;",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+
+        let retired: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM model_pricing WHERE model_id = 'gpt-5'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM model_pricing WHERE model_id = 'gpt-5-mini'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retired, 0);
+        assert_eq!(preserved, 1);
+        assert!(!Database::table_exists(&conn, "stream_check_logs").unwrap());
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 }

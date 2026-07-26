@@ -494,8 +494,15 @@ mod tests {
 
         {
             let conn = crate::db::lock_conn!(db.conn);
-            // >30 天的 0 成本行：pricing_model（gpt-5.5）在 seed 定价表中有价。
+            // >30 天的 0 成本行：显式手动价格可用于不可逆剪枝前回填。
             // 剪枝是不可逆的，rollup 必须先回填再汇总，否则按 0 永久入账。
+            conn.execute(
+                "INSERT INTO model_pricing (
+                    model_id, display_name, input_cost_per_million,
+                    output_cost_per_million
+                 ) VALUES ('gpt-5.5', 'GPT-5.5', '5', '30')",
+                [],
+            )?;
             conn.execute(
                 "INSERT INTO usage_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,

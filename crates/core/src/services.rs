@@ -16,6 +16,7 @@ pub mod env;
 pub mod mcp;
 pub mod model_fetch;
 pub mod omo;
+pub mod pricing_catalog;
 pub mod provider;
 pub mod s3;
 pub mod s3_auto_sync;
@@ -26,7 +27,6 @@ pub mod session_usage_opencode;
 pub mod skill;
 pub mod speedtest;
 pub mod sql_helpers;
-pub mod stream_check;
 pub mod subscription;
 pub mod sync_protocol;
 pub mod update;
@@ -52,10 +52,13 @@ pub use env::{
 pub use mcp::McpService;
 pub use model_fetch::{build_models_url_candidates, fetch_models, FetchedModel};
 pub use omo::OmoService;
+pub use pricing_catalog::{
+    MissingPricingModel, PricingCatalogRefreshKind, PricingCatalogRefreshOutcome,
+    PricingCatalogStatus,
+};
 pub use provider::{ProviderService, ProviderSortUpdate, SwitchResult};
 pub use skill::SkillService;
 pub use speedtest::{EndpointLatency, SpeedtestService};
-pub use stream_check::StreamCheckService;
 pub use update::{latest_release_url, UpdateCheckResult};
 pub use usage_cache::UsageCache;
 pub use usage_stats::{

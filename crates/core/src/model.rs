@@ -176,22 +176,6 @@ pub struct UsageResult {
     pub error: Option<String>,
 }
 
-/// Per-provider connectivity-check override config.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProviderTestConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(rename = "timeoutSecs", skip_serializing_if = "Option::is_none")]
-    pub timeout_secs: Option<u64>,
-    #[serde(
-        rename = "degradedThresholdMs",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub degraded_threshold_ms: Option<u64>,
-    #[serde(rename = "maxRetries", skip_serializing_if = "Option::is_none")]
-    pub max_retries: Option<u32>,
-}
-
 /// Auth binding source.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -276,8 +260,6 @@ pub struct ProviderMeta {
     pub limit_daily_usd: Option<String>,
     #[serde(rename = "limitMonthlyUsd", skip_serializing_if = "Option::is_none")]
     pub limit_monthly_usd: Option<String>,
-    #[serde(rename = "testConfig", skip_serializing_if = "Option::is_none")]
-    pub test_config: Option<ProviderTestConfig>,
     #[serde(rename = "apiFormat", skip_serializing_if = "Option::is_none")]
     pub api_format: Option<String>,
     #[serde(rename = "authBinding", skip_serializing_if = "Option::is_none")]

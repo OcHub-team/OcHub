@@ -7,8 +7,9 @@ sidebar:
 ---
 
 OcHub cost is a local estimate calculated from request tokens, model prices,
-and a multiplier. It is not the provider's invoice. A request can succeed while
-showing 0 or the wrong cost when model IDs or pricing sources do not match.
+and a multiplier. It is not the provider's invoice. OcHub does not maintain its
+own built-in price list. A request can succeed while showing 0 when model IDs
+or pricing sources do not match.
 
 ## What determines cost
 
@@ -37,6 +38,30 @@ app-specific cache semantics: Claude-style input is usually fresh input,
 whereas Codex / Responses input can include cache reads that must be subtracted
 before applying the ordinary input rate.
 
+## Price sources and synchronization
+
+The app bundle includes an offline catalog that CI filters, validates, and pins
+to a specific revision of LiteLLM's official data. First launch therefore does
+not require the network, and the prices are not a separately maintained OcHub
+list. OcHub makes at most one conditional background check per day. Use
+**Sync now** under **Usage → Model pricing** to check immediately. If an update
+fails, the last valid catalog remains active.
+
+Price resolution follows these rules:
+
+1. User-saved manual overrides always win and catalog sync never changes them.
+2. The catalog first matches a complete provider or regional model key, then a
+   direct model key.
+3. An alias is used only when every matching catalog entry has the same four
+   rates. OcHub does not guess when providers or regions disagree.
+4. When a request used cache tokens but the catalog omits the corresponding
+   cache rate, the missing value is not treated as `0`.
+
+Models with tokens but no reliable price are grouped into one missing-price
+notice instead of repeated dialogs. After catalog sync or a manual override,
+OcHub attempts to backfill zero-cost historical requests with tokens. Existing
+nonzero costs are not rewritten in bulk.
+
 ## Find the correct model ID
 
 Do not guess from a marketing page:
@@ -51,11 +76,12 @@ If Pricing model is a custom alias, choose among response-model pricing, adding
 an equivalent alias price, or changing the route mapping. The most reliable
 setup makes Pricing model equal the provider's priced model ID.
 
-## Add a model price
+## Add a manual price override
 
 <Steps>
 
-1. **Expand Model pricing configuration** on the Usage page.
+1. **Expand Model pricing configuration** on the Usage page and find the manual
+   override table.
 
 2. **Enter the model ID.** It must match the pricing model; case, provider
    prefixes, and version suffixes may matter.
@@ -73,10 +99,10 @@ setup makes Pricing model equal the provider's priced model ID.
 
 </Steps>
 
-After a new price is saved, OcHub attempts to backfill historical requests for
-that model whose token count is nonzero but total cost is still 0. Existing
-nonzero historical costs are not all recalculated, so a price change can create
-a before-and-after reporting boundary.
+After a manual override is saved, OcHub attempts to backfill historical
+requests for that model whose token count is nonzero but total cost is still 0.
+Existing nonzero historical costs are not all recalculated, so a price change
+can create a before-and-after reporting boundary.
 
 <Aside type="note" title="Pricing changes do not alter provider billing">
 
@@ -169,7 +195,7 @@ OcHub cannot infer reliable cost when model or token data is absent.
 
 | Symptom | Check | Fix |
 | --- | --- | --- |
-| Tokens exist but cost is 0 | Price for Pricing model | Add that exact ID |
+| Tokens exist but cost is 0 | Missing-price notice, pricing model, and cache rates | Sync or override that exact ID |
 | New requests are right, old ones are not | Old records already had nonzero cost | Treat the price change as a boundary |
 | Cache cost looks too high | Input and cache read overlap | Confirm app and upstream semantics |
 | Routed request prices the client alias | Source is Request model | Use Response model or price the alias |

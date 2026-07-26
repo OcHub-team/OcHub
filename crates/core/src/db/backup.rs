@@ -21,10 +21,22 @@ use tempfile::NamedTempFile;
 const OCHUB_SQL_EXPORT_HEADER: &str = "-- OcHub SQLite 导出";
 
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
-const SYNC_SKIP_TABLES: &[&str] = &["usage_logs", "stream_check_logs", "usage_daily_rollups"];
+const SYNC_SKIP_TABLES: &[&str] = &[
+    "usage_logs",
+    "usage_daily_rollups",
+    "litellm_pricing_catalog",
+    "litellm_pricing_aliases",
+    "litellm_pricing_meta",
+];
 
 /// Tables whose local data is preserved (restored from local snapshot) during WebDAV import.
-const SYNC_PRESERVE_TABLES: &[&str] = &["usage_logs", "stream_check_logs", "usage_daily_rollups"];
+const SYNC_PRESERVE_TABLES: &[&str] = &[
+    "usage_logs",
+    "usage_daily_rollups",
+    "litellm_pricing_catalog",
+    "litellm_pricing_aliases",
+    "litellm_pricing_meta",
+];
 
 /// A database backup entry for the UI
 #[derive(Debug, serde::Serialize)]
@@ -260,23 +272,13 @@ impl Database {
         }
 
         // Periodic maintenance is always enabled, regardless of auto-backup settings.
-        let mut reclaimed_rows = 0u64;
-        match self.cleanup_old_stream_check_logs(7) {
-            Ok(deleted) => {
-                reclaimed_rows += deleted;
-            }
-            Err(e) => {
-                log::warn!("Periodic stream_check_logs cleanup failed: {e}");
-            }
-        }
-        match self.rollup_and_prune(30) {
-            Ok(deleted) => {
-                reclaimed_rows += deleted;
-            }
+        let reclaimed_rows = match self.rollup_and_prune(30) {
+            Ok(deleted) => deleted,
             Err(e) => {
                 log::warn!("Periodic rollup_and_prune failed: {e}");
+                0
             }
-        }
+        };
         if reclaimed_rows > 0 {
             let conn = lock_conn!(self.conn);
             if let Err(e) = conn.execute_batch("PRAGMA incremental_vacuum;") {
@@ -598,7 +600,6 @@ impl Database {
         // Step 3: Run schema migrations (backup may be from an older version)
         self.create_tables()?;
         self.apply_schema_migrations()?;
-        self.ensure_model_pricing_seeded()?;
 
         log::info!("Database restored from backup: {filename}, safety backup: {safety_id}");
         Ok(safety_id)

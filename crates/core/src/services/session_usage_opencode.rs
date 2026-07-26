@@ -356,7 +356,7 @@ fn insert_opencode_message(
                 msg.cost.to_string(),
             )
         } else {
-            // opencode 费用为 0（如免费模型），尝试用 OcHub 自带的模型定价计算
+            // opencode 费用为 0（如免费模型），尝试用手动覆盖或 LiteLLM 目录计算
             let usage = TokenUsage {
                 input_tokens: msg.input_tokens,
                 output_tokens: output_with_reasoning,
@@ -366,7 +366,7 @@ fn insert_opencode_message(
                 message_id: None,
             };
 
-            match find_model_pricing(&conn, &msg.model_id) {
+            match find_model_pricing(&conn, &msg.model_id, &usage) {
                 Some(pricing) => {
                     let cost = CostCalculator::calculate_for_app(
                         "opencode",
@@ -382,13 +382,16 @@ fn insert_opencode_message(
                         cost.total_cost.to_string(),
                     )
                 }
-                None => (
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                ),
+                None => {
+                    super::pricing_catalog::notify_pricing_catalog_miss();
+                    (
+                        "0".to_string(),
+                        "0".to_string(),
+                        "0".to_string(),
+                        "0".to_string(),
+                        "0".to_string(),
+                    )
+                }
             }
         };
 

@@ -368,8 +368,6 @@ pub struct AppSettings {
     pub last_update_check_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_confirmed: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream_check_confirmed: Option<bool>,
     #[serde(default)]
     pub preserve_codex_official_auth_on_switch: bool,
     #[serde(default)]
@@ -474,7 +472,6 @@ impl Default for AppSettings {
             skipped_update_version: None,
             last_update_check_at: None,
             usage_confirmed: None,
-            stream_check_confirmed: None,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,

@@ -1,0 +1,69 @@
+name: Update LiteLLM pricing snapshot
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-litellm-pricing
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Generate snapshot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/pricing/update_litellm_snapshot.py
+
+      - name: Validate snapshot
+        run: >-
+          python3 scripts/pricing/update_litellm_snapshot.py
+          --check crates/app/assets/data/litellm-model-prices.json
+
+      - name: Open or update pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if git diff --quiet -- crates/app/assets/data/litellm-model-prices.json; then
+            echo "LiteLLM pricing snapshot is already current."
+            exit 0
+          fi
+
+          branch="automation/litellm-pricing"
+          revision="$(
+            jq -r '.source.revision' \
+              crates/app/assets/data/litellm-model-prices.json
+          )"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${branch}"
+          git add crates/app/assets/data/litellm-model-prices.json
+          git commit -m "chore: update LiteLLM pricing snapshot"
+          git push --force origin "${branch}"
+
+          if gh pr view "${branch}" --json number >/dev/null 2>&1; then
+            gh pr edit "${branch}" \
+              --title "chore: update LiteLLM pricing snapshot" \
+              --body "Updates the bundled LiteLLM pricing catalog to \`${revision}\`."
+          else
+            gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "chore: update LiteLLM pricing snapshot" \
+              --body "Updates the bundled LiteLLM pricing catalog to \`${revision}\`."
+          fi

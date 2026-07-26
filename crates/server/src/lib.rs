@@ -35,6 +35,7 @@ pub async fn serve(state: ServerState, addr: std::net::SocketAddr) -> anyhow::Re
     // Autostart is independent from the control-API listener. In particular,
     // a control-port conflict must not prevent the in-process gateway from
     // coming online for the desktop app.
+    ochub_core::services::pricing_catalog::start_background_pricing_sync(state.app.db.clone());
     state.app.gateway.maybe_autostart().await;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     serve_listener(state, listener).await

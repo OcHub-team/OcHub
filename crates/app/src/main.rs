@@ -227,6 +227,9 @@ fn spawn_app_services(app: Arc<AppState>, control_listener: Option<TcpListener>)
         .name("ochub-server".into())
         .spawn(move || {
             handle.block_on(async move {
+                ochub_core::services::pricing_catalog::start_background_pricing_sync(
+                    app.db.clone(),
+                );
                 app.gateway.maybe_autostart().await;
                 if let Some(listener) = control_listener {
                     if let Err(err) = ochub_server::serve_with_app_on_listener(app, listener).await
@@ -421,6 +424,7 @@ fn main() {
         }
     };
 
+    let asset_root = assets_base();
     let db = match Database::init() {
         Ok(db) => Arc::new(db),
         Err(err) => {
@@ -428,6 +432,25 @@ fn main() {
             return;
         }
     };
+    let bundled_pricing_path = asset_root.join("data/litellm-model-prices.json");
+    match fs::read_to_string(&bundled_pricing_path) {
+        Ok(snapshot) => match db.install_bundled_pricing_catalog(&snapshot) {
+            Ok(outcome) if outcome.installed => log::info!(
+                "installed bundled LiteLLM pricing catalog: {} entries at {}",
+                outcome.entry_count,
+                outcome.source_revision
+            ),
+            Ok(_) => {}
+            Err(err) => log::warn!(
+                "failed to install bundled LiteLLM pricing catalog from {}: {err}",
+                bundled_pricing_path.display()
+            ),
+        },
+        Err(err) => log::warn!(
+            "bundled LiteLLM pricing catalog is unavailable at {}: {err}",
+            bundled_pricing_path.display()
+        ),
+    }
     let app_state = Arc::new(AppState::new(db));
     app_state.bootstrap();
 
@@ -439,9 +462,7 @@ fn main() {
     }
 
     application()
-        .with_assets(Assets {
-            base: assets_base(),
-        })
+        .with_assets(Assets { base: asset_root })
         .run(move |cx: &mut App| {
             text_input::bind_keys(cx);
             code_editor::bind_keys(cx);
