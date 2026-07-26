@@ -1,0 +1,67 @@
+---
+title: Settings and themes
+description: Adjust app behavior, terminals, app visibility, and complete light and dark themes.
+audience: human
+sidebar:
+  order: 4
+---
+
+Device-wide options live under Settings, while interface colors live under
+Theme. **App settings** in the upper-right corner of a provider page affects
+only that AI tool.
+
+## General settings
+
+| Setting | Effect |
+| --- | --- |
+| Language | Follow the system or choose a supported language |
+| Preferred terminal | Terminal used to open sessions; Auto detects the local environment |
+| Launch at login | Start OcHub after system login |
+| Start without showing the window | Applies only when launch at login is enabled |
+| Keep running after closing the window | Close the main window but keep the background process |
+| System-menu quick switching | Show provider shortcuts in the macOS menu bar or Windows taskbar |
+
+If you combine silent startup with background operation and system-menu
+shortcuts both disabled, reopening the main window becomes inconvenient. Keep
+at least one visible entry point.
+
+## Manage apps and plugins
+
+Open **Settings → Apps and plugins**:
+
+- Toggles control whether an app appears in the sidebar and system menu.
+- At least one app must remain enabled.
+- Disabling keeps provider data and does not rewrite the tool's current config.
+- User plugins load from `~/.ochub/apps/*.toml`.
+- After editing a manifest, select **Reload plugins**. Errors appear on the same
+  page.
+
+## Switch themes
+
+1. Open **Theme**.
+2. Choose Follow system, Always light, or Always dark.
+3. Select **Apply** on a theme.
+4. Follow system switches between that theme's light and dark variants.
+
+## Import, export, and edit
+
+- Built-in themes are read-only. Use **Duplicate and edit** to create a user
+  copy.
+- A user theme can change its name, author, description, material, opacity, and
+  color tokens.
+- **Update preview** temporarily applies the draft across the app; Save or
+  Cancel ends the preview.
+- Configure light and dark variants independently and pass readability checks
+  for text, accent colors, and surfaces.
+- Export shares a theme file. Import validates both variants before adding it
+  to the library.
+
+Use full `#RRGGBB` values. If saving reports insufficient contrast, adjust the
+foreground or background named in the error until the ratio is at least 4.5:1.
+
+## Restore
+
+- Cancel an unwanted preview to return to the previous theme.
+- Built-in themes cannot be deleted.
+- Deleting a user theme removes its local file permanently. Export it first if
+  you may need it again.

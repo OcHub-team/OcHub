@@ -1,0 +1,163 @@
+---
+title: Advanced features
+description: Configure model routing, reasoning translation, CLI maintenance, and app-specific options.
+audience: human
+sidebar:
+  order: 30
+  group:
+    label: Advanced features
+    icon: ph:sliders-horizontal
+---
+
+Advanced features can directly affect routing, history, or tool configuration.
+First establish one working direct connection and make a real request so you
+always have a known-good state to return to.
+
+## Recommended path
+
+| Goal | Guide |
+| --- | --- |
+| Solve real routing needs with aliases, protocol conversion, and exceptions | [Relay routing recipes](/advanced/routing-recipes) |
+| Align token cost with prices, multipliers, and billing | [Model pricing and cost calibration](/advanced/pricing) |
+| Create snapshots and sync with WebDAV or S3/R2 | [Data, backups, and sync](/advanced/data-sync) |
+
+## Automatic routing and protocol conversion
+
+A relay station can enable:
+
+- Anthropic Messages
+- OpenAI Chat
+- OpenAI Responses
+
+Automatic routing prefers the client's native interface, then tries another
+enabled interface if the model is unavailable there or the interface fails.
+Keep at least one interface enabled. Detection is only a starting point; when
+the upstream documents an explicit limitation, configure it manually.
+
+## Default model
+
+When a default model is set, OcHub uses it for requests that do not match a
+model exception. This is useful for an upstream that exposes only one model.
+
+Do not fill it “just in case.” A default can hide a misspelled client model and
+route unrelated workloads to the same model.
+
+## Model exceptions
+
+Add an exception only when automatic routing cannot express the requirement:
+
+| Field | Purpose |
+| --- | --- |
+| Model or pattern | Match the client model, including supported wildcards |
+| Interface | Force an enabled interface or keep automatic selection |
+| Upstream model | Rewrite the client model; leave blank to preserve it |
+
+Put specific rules before broad patterns and verify each with a real request.
+Any interface referenced by a rule must remain enabled.
+
+For complete precedence rules and examples, see
+[Relay routing recipes](/advanced/routing-recipes).
+
+## Reasoning effort
+
+Relay stations offer three modes:
+
+- **Automatic mapping** translates CLI effort levels to upstream token budgets.
+- **Pass through** leaves the client's reasoning parameters unchanged.
+- **Disable reasoning** removes or disables those parameters.
+
+Automatic mapping defines Low, Medium, High, and Maximum budgets. All four must
+be positive and ascending. If the upstream accepts only effort names instead of
+token budgets, follow its interface documentation.
+
+## Fast switching and a backup upstream
+
+Once a station has been applied to a tool, its provider page can switch the
+active upstream without rewriting tool configuration.
+
+Keep a verified backup. When the primary fails:
+
+1. Switch the app to the backup station.
+2. Make one short request.
+3. Compare status and latency in Usage.
+4. Switch back after recovery, without changing model rules during the outage.
+
+Automatic routing selects and retries interfaces inside one station. Moving
+between primary and backup station cards is still manual.
+
+## Usage and pricing
+
+If a request succeeds but costs 0, the pricing model usually has no matching
+price. Record Request model, Model, and Pricing model from the detail view,
+then configure input, output, cache-read, and cache-write rates.
+
+Claude and Codex also have a default cost multiplier and pricing-model source.
+After aliases or routing rewrites, confirm that the pricing model represents
+the model the provider actually bills. See
+[Model pricing and cost calibration](/advanced/pricing).
+
+## Advanced provider editing
+
+### Common configuration
+
+Common configuration is a snippet shared by providers for one app. Enabling
+**Apply common configuration to this provider** merges it during writes.
+
+Before extracting from the current config, make sure it contains no key or
+model that belongs to only one provider, or that value will spread to every
+provider that enables the snippet.
+
+### Raw file editing
+
+Under Files to be written, choose Edit to change generated content directly.
+After applying the edit, OcHub attempts to reflect it back into the form.
+
+Use raw editing only for supported fields the form cannot express. Refresh the
+preview before saving and confirm that custom fields remain.
+
+## CLI tool maintenance
+
+Open **Advanced tools**:
+
+1. Select **Refresh versions** for local versions, latest versions, and
+   environment sources.
+2. Select **Scan install locations** to inspect the `PATH` default, duplicate
+   installs, and broken executables.
+3. Use **Install missing tools** when needed.
+4. **Update all tools** runs the displayed update commands. Review the command
+   and confirmation requirement first.
+
+If multiple package managers installed the same CLI, decide which source to
+keep and clean up `PATH` manually. OcHub reports conflicts but does not delete
+unknown installations.
+
+## Environment-variable conflicts
+
+Environment-variable conflict scanning finds values that can override config
+files. Before selecting **Delete and back up**:
+
+1. Verify the variable and target app.
+2. Record the backup path.
+3. Restart the terminal and target CLI after the change.
+4. To undo it, select **Restore backup** and provide that path.
+
+Variables can originate from shell startup files, launchers, or managed-device
+policy. If a removed variable returns, inspect its actual source.
+
+## App-specific advanced tools
+
+| Tool | Advanced capabilities |
+| --- | --- |
+| Codex | Check unified-history backups and restore official history |
+| Claude | Skip or restore onboarding, apply or restore the OcHub plugin, read and validate MCP |
+| OpenCode | Read and disable OMO / OMO Slim |
+| OpenClaw | Check config; edit default model, environment, and tool JSON |
+| Hermes | Edit model JSON, MEMORY and USER content, and their enabled state |
+
+These operations may overwrite files. OpenClaw, Hermes, and environment
+operations create backups when possible. Record any backup path shown in a
+status message.
+
+For restoration and remote sync, read
+[Data, backups, and sync](/advanced/data-sync). For cc-switch data, use
+[Migrate from cc-switch](/guides/migration).

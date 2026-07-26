@@ -11,13 +11,13 @@ without a browser shell or webview.
 
 ## What OcHub manages
 
-OcHub manages **Claude Code, Claude Desktop, Codex, OpenCode, OpenClaw, and
-Hermes**.
+OcHub manages **Claude Code, Claude Desktop, Codex, Grok Build, OpenCode,
+OpenClaw, and Hermes**.
 
 | Area | Capabilities |
 | --- | --- |
 | Providers | Discover, import, edit, switch, and test direct API providers |
-| Relay station | Route supported clients through a local gateway with model aliases, reasoning mapping, failover, health checks, and usage accounting |
+| Relay station | Route supported clients through a local gateway with model aliases, reasoning mapping, interface-candidate retry, backup-station switching, health checks, and usage accounting |
 | Shared tools | Manage MCP servers and reusable skills across supported clients |
 | Operations | Browse sessions, inspect usage, configure sync, and manage app behavior |
 | Migration | One-time, read-only import from compatible cc-switch databases |
@@ -40,5 +40,9 @@ configuration before trying an early build.
 ## Where to go next
 
 - [Install](/install) — Homebrew, direct downloads, and first-launch approval
-- [Architecture](/architecture) — the Rust workspace behind the app
-- [Build from source](/build-from-source) — toolchain and development commands
+- [Quick start](/getting-started) — choose an app and complete the first connection
+- [Everyday features](/guides) — providers, MCP, skills, sessions, and usage
+- [Advanced features](/advanced) — routing, CLI maintenance, backup, and sync
+- [App-specific guides](/guides/claude) — Claude, Codex, OpenCode, and the other supported tools
+- [Migrate from cc-switch](/guides/migration) — import, collision handling, and rollback
+- [Troubleshooting](/troubleshooting) — diagnose configuration and connection problems by symptom

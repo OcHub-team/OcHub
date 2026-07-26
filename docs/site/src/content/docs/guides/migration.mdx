@@ -1,0 +1,187 @@
+---
+title: Migrate from cc-switch
+description: Import providers, MCP, skills, and history safely while preserving a rollback path.
+audience: human
+sidebar:
+  order: 8
+---
+
+OcHub provides a one-time, read-only cc-switch import. It reads
+`~/.cc-switch/`, copies recognized data into OcHub, and never modifies or
+deletes the cc-switch source.
+
+Importing data and switching live tool configuration are separate actions. A
+target CLI keeps its current live configuration until you explicitly use Add
+to tool or Switch in OcHub.
+
+## What can be imported
+
+OcHub recognizes two cc-switch storage generations:
+
+| Source | Default file | Notes |
+| --- | --- | --- |
+| SQLite database | `~/.cc-switch/cc-switch.db` | Used by cc-switch v3.x and later; the most complete source |
+| Legacy JSON | `~/.cc-switch/config.json` | Used by earlier releases |
+
+The database takes precedence when both exist. It can bring across recognized
+providers and endpoints, MCP servers, skills and repositories, settings, model
+pricing, usage history, and profiles. The legacy JSON imports the supported
+configuration it actually contains.
+
+OcHub deliberately excludes:
+
+- cc-switch's takeover backup of live tool configuration.
+- Transient speed-check logs.
+- App types or fields OcHub does not recognize.
+- cc-switch data-directory redirection.
+
+After migration, compare providers, MCP, skills, pricing, and critical settings
+instead of only comparing file sizes.
+
+## Prepare for migration
+
+Choose a time with no active AI sessions:
+
+1. Fully quit cc-switch.
+2. Quit Claude Code, Codex, OpenCode, and other targets.
+3. Back up all of `~/.cc-switch/`.
+4. If OcHub already contains data, create a snapshot under **Advanced tools →
+   Database backups**.
+5. Record one known-good provider and model for each tool.
+6. Pause WebDAV / S3 automatic sync so unverified imported data is not uploaded.
+
+<Aside type="caution" title="Do not let two managers write at once">
+
+The import itself only reads cc-switch, but later switches modify live tool
+files. Keep cc-switch closed while validating OcHub.
+
+</Aside>
+
+## Import on first launch
+
+When OcHub first detects cc-switch, it shows the source and counts before
+copying anything.
+
+<Steps>
+
+1. **Review the inventory.** Check the path and provider and MCP counts.
+
+2. **Choose Import and start.** Nothing is copied until you confirm. Skip does
+   not change cc-switch.
+
+3. **Wait for completion.** Do not launch target CLIs or close OcHub while the
+   import runs.
+
+4. **Inspect app pages.** Providers should appear under the correct apps.
+
+5. **Verify OcHub data first.** Review names, endpoints, models, MCP, and skills
+   before switching live tools.
+
+</Steps>
+
+If you skipped the first-launch prompt, manual import remains available.
+
+## Import after OcHub already has data
+
+Open **Settings → Data and backups → Import from cc-switch**:
+
+1. Review the detected path and provider and MCP counts.
+2. Select Import and read the overwrite warning.
+3. OcHub creates a database snapshot before importing when providers already
+   exist.
+4. cc-switch records replace OcHub records with the same ID; different IDs are
+   merged.
+5. The result reports the imported row count.
+
+Rerun import when you skipped initially, restored cc-switch to its default
+location later, or made one final round of changes in cc-switch. Do not use it
+as long-term bidirectional sync.
+
+## Collision rules
+
+- **Same ID:** the cc-switch record replaces the OcHub record.
+- **Different ID, same name:** both may remain and require manual cleanup.
+- **Built-in pricing with the same ID:** imported custom pricing may replace it.
+- **Existing OcHub providers:** a snapshot is created first.
+- **Unknown fields or newer tables:** supported content continues to import
+  while unknown content is skipped or warned about.
+
+If you have already edited the same provider in OcHub, duplicate it under a new
+ID or make a database backup before importing.
+
+## Validate after migration
+
+### 1. Providers
+
+- Each provider belongs to the correct app.
+- Base URLs do not repeat `/v1` or a full request path.
+- Keys and authentication modes match.
+- Imported does not get mistaken for Current.
+- Generated previews preserve native tool fields.
+
+### 2. MCP and skills
+
+- MCP JSON is a complete object and targets the right apps.
+- Import does not mean live config has been synced; select Sync to apps only
+  after review.
+- Skill repositories refresh and installed-skill sources are recognized.
+- Disable an obsolete repository for observation before deleting it.
+
+### 3. Pricing and usage
+
+- Model IDs match pricing models in request logs.
+- Input, output, cache-read, and cache-write prices are in the right columns.
+- Default multipliers and pricing sources still fit your setup.
+- Historical cost requires enough token and model information.
+
+### 4. Settings and sync
+
+- The data directory remains `~/.ochub/` or an intentionally selected path.
+- No legacy redirect points OcHub back to `~/.cc-switch/`.
+- WebDAV / S3 target, profile, and remote directory are correct.
+- Resume automatic sync only after validation, then upload one verified
+  snapshot manually.
+
+### 5. A real request
+
+Use one app as a pilot:
+
+1. Back up its live directory.
+2. Switch to one verified provider in OcHub.
+3. Restart the CLI.
+4. Send a short request.
+5. Check model, status, and usage.
+6. Repeat with the next app only after success.
+
+## Roll back a problem
+
+For a single affected tool, stop switching, return to a known-good official
+login or provider, restore its directory backup if needed, and compare the live
+file with OcHub's preview.
+
+For an incorrect overall import:
+
+1. Quit target CLIs.
+2. Open **Advanced tools → Database backups**.
+3. Select the automatically created pre-import snapshot.
+4. Restore it. OcHub first makes another safety backup of the current database.
+5. Restart and inspect the data again.
+
+Restoring the OcHub database does not automatically restore every live tool
+file already modified by later Switch actions, which is why directory backups
+still matter.
+
+## When cc-switch can be retired
+
+Wait until:
+
+- All required providers can be edited and previewed in OcHub.
+- At least one direct connection and required relay station have passed a real
+  request.
+- MCP and skills are synced to intended apps.
+- Sessions, usage, and pricing look correct.
+- A local database backup exists.
+- A verified remote snapshot has been uploaded.
+
+Even then, archive `~/.cc-switch/` for a while before deleting it. See
+[Data, backups, and sync](/advanced/data-sync) for backup and restore options.

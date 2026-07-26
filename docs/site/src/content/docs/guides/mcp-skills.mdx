@@ -1,0 +1,128 @@
+---
+title: Manage MCP and skills
+description: Store, install, enable, and sync shared capabilities across supported apps.
+audience: human
+sidebar:
+  order: 2
+---
+
+MCP servers and skills can both be distributed to multiple apps, but their
+sync models differ:
+
+- OcHub stores MCP JSON and writes it into enabled apps.
+- The skills CLI installs skills, while per-app toggles on each card control
+  distribution.
+
+## App support
+
+| App | MCP | Skills |
+| --- | --- | --- |
+| Claude Code | Supported | Supported |
+| Claude Desktop | Not supported | Not supported |
+| Codex | Supported | Supported |
+| Grok Build | Supported | Not supported |
+| OpenCode | Supported | Supported |
+| OpenClaw | Not supported | Not supported |
+| Hermes | Supported | Supported |
+
+App toggles appear only where the capability is actually supported. OcHub does
+not manage native Claude Desktop or OpenClaw extensions through these pages.
+
+## Import existing MCP configuration
+
+<Steps>
+
+1. Open **MCP servers**.
+2. Select **Import from app**.
+3. OcHub scans supported apps and adds only servers that are not already in
+   its shared store.
+4. Review the app list on each card, then select **Sync to apps**.
+
+</Steps>
+
+Importing does not delete unknown entries from an app automatically. A partial
+failure lists the entries that could not be imported.
+
+## Add an MCP server manually
+
+Select **Add**, enter a name, optional description, and server JSON.
+
+A stdio example:
+
+```json
+{
+  "type": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+}
+```
+
+An SSE example:
+
+```json
+{
+  "type": "sse",
+  "url": "https://example.com/sse"
+}
+```
+
+Choose at least one target app before saving. The JSON must be an object.
+Commands, arguments, environment variables, and related fields are converted
+to the format expected by each target tool.
+
+<Aside type="caution" title="Verify command provenance">
+
+A stdio MCP runs its `command` locally. Sync only packages and commands you
+trust, and verify that the command is on the target tool's `PATH`.
+
+</Aside>
+
+## Enable and sync MCP
+
+1. Toggle apps on or off on each server card.
+2. After making several changes, select **Sync to apps**.
+3. Restart the target CLI so it reloads configuration.
+4. If the server is missing, check that the app is enabled, the config
+   directory is correct, and the server transport is supported by the tool.
+
+After deleting an MCP server from OcHub, sync again to update the managed live
+configuration. Deletion cannot be undone, so copy the JSON first if needed.
+
+## Install a skill from the marketplace
+
+<Steps>
+
+1. Open **Skills → Discover** and choose Marketplace search.
+2. Search for a use case such as `pdf`, `frontend`, or `testing`.
+3. Select target apps under Install to.
+4. Select **Install** on the skill card.
+5. Return to Installed and confirm the skill and its source.
+
+</Steps>
+
+## Discover skills from a repository
+
+1. Switch the Discover page to Repository browser.
+2. Enter `owner/repo`, `owner/repo@branch`, or a full GitHub URL.
+3. Add the repository, then select **Refresh discovery**.
+4. Install the skills you need from the results.
+
+Disabling a repository removes it from discovery without uninstalling existing
+skills. Deleting the repository also does not uninstall those skills.
+
+## Update and distribute skills
+
+- **Check for updates** compares local and remote versions.
+- Update individually or use **Update all**.
+- Per-app toggles control where the skill is synced.
+- **Directory** opens the local install; **Repository** opens its remote source.
+- Uninstalling asks the skills CLI to remove the skill from enabled apps.
+
+Marketplace search and updates require network access. If the skills CLI is
+unavailable, use [Advanced features → CLI maintenance](/advanced#cli-tool-maintenance)
+to inspect its installation and `PATH`.
+
+For Claude plugin integration, Codex directories, and OpenCode or Hermes
+differences, see the [Claude guide](/guides/claude),
+[Codex guide](/guides/codex), and
+[other-tool guide](/guides/open-tools).

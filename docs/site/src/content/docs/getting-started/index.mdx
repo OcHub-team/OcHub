@@ -1,0 +1,88 @@
+---
+title: Quick start
+description: Understand OcHub from first launch through choosing your first connection method.
+audience: human
+sidebar:
+  order: 10
+  group:
+    label: Quick start
+    icon: ph:rocket-launch
+---
+
+OcHub's core workflow is simple: choose an AI tool, then decide whether it
+should connect **directly to a provider** or go through OcHub's **local relay
+station**. On your first run, complete only one of these paths.
+
+## Before you begin
+
+- Quit cc-switch so the two apps do not write the same tool configuration at
+  the same time.
+- Back up the target tool's configuration directory, such as `~/.claude` or
+  `~/.codex`.
+- Have the API endpoint and key you intend to use ready. You do not need a
+  third-party key when using the tool's own official login.
+
+If you have used cc-switch for a while, read the
+[migration guide](/guides/migration) before deciding whether to import from the
+first-launch prompt.
+
+<Aside type="note" title="What OcHub changes">
+
+OcHub keeps its own data in `~/.ochub/`. When you use **Add to tool**,
+**Switch**, or **Sync to apps**, it also writes the live configuration of the
+corresponding AI tool. OcHub never writes back to `~/.cc-switch/`.
+
+</Aside>
+
+## First launch
+
+<Steps>
+
+1. **Review the welcome notice.** Read the configuration-write explanation. If
+   OcHub detects cc-switch, it lists the providers, MCP servers, and skill
+   repositories available to import.
+
+2. **Decide whether to migrate.** **Import and start** reads cc-switch data.
+   **Skip** does not delete or modify cc-switch, and you can import later from
+   **Settings → Data and backups**.
+
+3. **Choose the apps to manage.** In **Settings → Apps and plugins**, keep only
+   the tools you need. Disabling an app removes it from the sidebar and system
+   menu without deleting its data or changing its configuration files.
+
+4. **Open an app page.** Under Apps in the sidebar, choose Claude Code, Codex,
+   OpenCode, OpenClaw, Hermes, Grok Build, or Claude Desktop.
+
+</Steps>
+
+## The main areas
+
+| Area | Purpose |
+| --- | --- |
+| Apps | Manage direct connections and app-specific settings |
+| MCP servers | Store MCP configuration once and sync it to supported tools |
+| Skills | Discover, install, update, and distribute reusable skills |
+| Usage | Inspect tokens, cost, cache, latency, and individual requests |
+| Sessions | Browse local CLI conversation history |
+| Advanced tools | Maintain CLIs, backups, environment variables, and app-specific files |
+| Relay stations | Manage local-gateway upstreams, model mapping, and fallback |
+| Theme / Settings | Control appearance, app behavior, data, and remote sync |
+
+## Choose a connection method
+
+| Goal | Recommended method |
+| --- | --- |
+| Configure one API endpoint for one tool | [Direct connection](/getting-started/direct-connection) |
+| Keep using the tool's own account login | Official login under Direct connections |
+| Share one upstream across multiple tools | [Relay station](/getting-started/relay) |
+| Rename models, convert protocols, or switch to a backup upstream | [Relay station](/getting-started/relay) |
+
+For a first setup, start with a direct connection. Once the target CLI can make
+a real request, add MCP servers, skills, or more advanced routing rules.
+
+## Next steps
+
+- [Configure your first direct connection](/getting-started/direct-connection)
+- [Configure your first relay station](/getting-started/relay)
+- [Migrate safely from cc-switch](/guides/migration)
+- [Troubleshoot first-run problems](/troubleshooting)

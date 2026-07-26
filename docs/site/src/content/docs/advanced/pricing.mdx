@@ -1,0 +1,182 @@
+---
+title: Model pricing and cost calibration
+description: Configure per-million-token prices, pricing-model source, and multipliers, then reconcile local cost.
+audience: human
+sidebar:
+  order: 3
+---
+
+OcHub cost is a local estimate calculated from request tokens, model prices,
+and a multiplier. It is not the provider's invoice. A request can succeed while
+showing 0 or the wrong cost when model IDs or pricing sources do not match.
+
+## What determines cost
+
+One request can have three model names:
+
+| Name | Meaning |
+| --- | --- |
+| Request model | Model or alias sent by the client |
+| Model | Model returned by or used upstream |
+| Pricing model | Model OcHub uses to look up a price |
+
+With relay rewriting, all three can differ. For example, the client may request
+`claude-sonnet-current`, routing may send
+`anthropic/claude-sonnet-4-6`, and the pricing model should follow whichever
+real ID matches billing.
+
+The price table stores four USD rates per million tokens:
+
+- Input
+- Output
+- Cache read
+- Cache write, also called cache creation internally
+
+OcHub adds these base costs and then applies the multiplier. It also handles
+app-specific cache semantics: Claude-style input is usually fresh input,
+whereas Codex / Responses input can include cache reads that must be subtracted
+before applying the ordinary input rate.
+
+## Find the correct model ID
+
+Do not guess from a marketing page:
+
+1. Make a real request.
+2. Open it under **Usage → Request logs**.
+3. Record Request model, Model, and Pricing model.
+4. Compare them with the provider's price list.
+5. Add the ID that represents the model actually billed.
+
+If Pricing model is a custom alias, choose among response-model pricing, adding
+an equivalent alias price, or changing the route mapping. The most reliable
+setup makes Pricing model equal the provider's priced model ID.
+
+## Add a model price
+
+<Steps>
+
+1. **Expand Model pricing configuration** on the Usage page.
+
+2. **Enter the model ID.** It must match the pricing model; case, provider
+   prefixes, and version suffixes may matter.
+
+3. **Enter a display name.** It improves readability but does not affect
+   routing.
+
+4. **Enter all four rates.** Values are USD per million tokens. Use `0` when the
+   provider's rules genuinely have no cache-read or cache-write charge.
+
+5. **Save.** Prices must be non-negative numbers. Saving the same ID updates it.
+
+6. **Refresh and inspect a request.** Verify its pricing model and itemized and
+   total cost.
+
+</Steps>
+
+After a new price is saved, OcHub attempts to backfill historical requests for
+that model whose token count is nonzero but total cost is still 0. Existing
+nonzero historical costs are not all recalculated, so a price change can create
+a before-and-after reporting boundary.
+
+<Aside type="note" title="Pricing changes do not alter provider billing">
+
+Backfill affects only the local OcHub usage database. It cannot change provider
+invoices, balance, or actual charges.
+
+</Aside>
+
+## Request model versus response model
+
+Claude and Codex have a default pricing-model source:
+
+| Choice | Use it when | Risk |
+| --- | --- | --- |
+| Response model | The upstream returns the actual model after aliases or rewriting | Some upstreams return no model or echo the alias |
+| Request model | The client ID is stable and matches the price list | Routing may cause the wrong model price |
+
+Compare both names on a direct request and a routed request, choose the source
+that consistently finds the real price, save defaults, then verify the Pricing
+model on a new request.
+
+Claude Desktop inherits the Claude default multiplier and pricing source.
+
+## Cost multiplier
+
+The default multiplier `1` leaves base prices unchanged.
+
+| Settlement rule | Multiplier |
+| --- | --- |
+| Same as list price | `1` |
+| 20% markup | `1.2` |
+| 20% discount | `0.8` |
+| Track tokens but omit cost from totals | `0` |
+
+The multiplier applies after input, output, and cache base costs are added. It
+does not change token counts.
+
+If a provider marks up models differently, enter settled per-model rates and
+keep the multiplier at `1`.
+
+## Check one calculation by hand
+
+| Item | Tokens | Per-million price | Base cost |
+| --- | ---: | ---: | ---: |
+| Fresh input | 10,000 | $3.00 | $0.03000 |
+| Output | 2,000 | $15.00 | $0.03000 |
+| Cache read | 20,000 | $0.30 | $0.00600 |
+| Cache write | 5,000 | $3.75 | $0.01875 |
+
+The base total is `$0.08475`. At a `1.2` multiplier:
+
+```text
+$0.08475 × 1.2 = $0.10170
+```
+
+Use token values from one request detail, not the page-wide Actual tokens
+summary. OcHub already normalizes Codex / Responses cache semantics.
+
+## Reconcile with provider billing
+
+When local estimates differ:
+
+1. Use the same date range and timezone.
+2. Filter to one provider.
+3. Compare request counts, including upstream treatment of failures and
+   retries.
+4. Verify the pricing model.
+5. Check whether system prompts, tools, or reasoning tokens are billed
+   separately.
+6. Verify input and cache semantics.
+7. Check multiplier, discount, or currency conversion.
+8. Reconcile one request before comparing daily totals.
+
+Account plans, tiered prices, batch discounts, regions, or minimum charges may
+not fit one model price and multiplier. Treat OcHub as a request-level estimate
+and the provider invoice as the settlement record.
+
+## Data-source limits
+
+| Source | Usually includes | May omit |
+| --- | --- | --- |
+| Relay request | Request ID, status, model, tokens, latency | Fields omitted by upstream |
+| CLI session | Model, some tokens, session time | Gateway status and first-token time |
+| Legacy local request | Historical tokens and cost | Current pricing-model semantics |
+| Synchronized session | Fields in the original session file | Provider or detailed cache split |
+
+OcHub cannot infer reliable cost when model or token data is absent.
+
+## Common problems
+
+| Symptom | Check | Fix |
+| --- | --- | --- |
+| Tokens exist but cost is 0 | Price for Pricing model | Add that exact ID |
+| New requests are right, old ones are not | Old records already had nonzero cost | Treat the price change as a boundary |
+| Cache cost looks too high | Input and cache read overlap | Confirm app and upstream semantics |
+| Routed request prices the client alias | Source is Request model | Use Response model or price the alias |
+| Cost changes suddenly | Multiplier, suffix, or price update | Compare pricing model and multiplier |
+| Total differs slightly from invoice | Rounding, timezone, failures, plan rules | Reconcile individual requests first |
+| Price will not save | Empty display name, negative, or invalid number | Enter a name and non-negative decimals |
+
+After setup, verify one new request with a known model. See
+[View sessions and usage](/guides/sessions-usage) for daily filtering and
+drill-down.

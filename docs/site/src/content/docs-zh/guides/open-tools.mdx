@@ -1,0 +1,183 @@
+---
+title: 配置 Grok Build、OpenCode、OpenClaw 与 Hermes
+description: 理解四类工具的写入模式、协议字段与专属维护功能。
+audience: human
+sidebar:
+  order: 7
+---
+
+这四个工具都能管理供应商，但写入方式和共享能力不同。先根据下表确认 OcHub 会修改什么。
+
+| 应用 | 写入模式 | MCP | 技能 | 默认配置目录 |
+| --- | --- | --- | --- | --- |
+| Grok Build | 当前供应商切换 | 支持 | 不支持 | `~/.grok` |
+| OpenCode | 多供应商共存 | 支持 | 支持 | `~/.config/opencode` |
+| OpenClaw | 多供应商共存 | 不支持 | 不支持 | `~/.openclaw` |
+| Hermes | 多供应商共存 | 支持 | 支持 | `~/.hermes` |
+
+“当前供应商切换”表示工具侧主要保存当前连接；“多供应商共存”表示 OcHub 会把多个 Provider
+都写入同一份工具配置。多供应商模式下，“从工具移除”只移除选中的 Provider，不会清空其他
+Provider。
+
+## Grok Build
+
+Grok Build 以一个当前模型配置工作。新增供应商时可以从预设开始，也可以手工填写。
+
+<Steps>
+
+1. **定义配置名称。** “配置名称”是客户端使用的 profile 名，也是 `[models].default` 指向的名称。
+
+2. **填写上游模型。** 它是实际发送给供应商的模型 ID；显示名只用于界面识别。
+
+3. **填写 Base URL。** 使用上游对应协议的基础地址。
+
+4. **选择鉴权方式。** “API Key”会把密钥写进配置；“环境变量”只保存变量名，例如 `XAI_API_KEY`，运行 Grok Build 的环境中必须真的存在该变量。
+
+5. **选择 API Backend。** 根据上游选择 OpenAI Responses、OpenAI Chat Completions 或 Anthropic Messages。
+
+6. **填写上下文窗口。** 使用上游模型真实支持的 Token 数，不要用营销页面上的总长度猜测。
+
+7. **查看 `config.toml` 预览并切换。** 重开 Grok Build 后发起真实请求。
+
+</Steps>
+
+如果环境变量模式在 OcHub 测试成功、Grok Build 却鉴权失败，通常是两个进程继承的环境不同。
+从同一个终端启动 Grok Build，或把变量写入它实际读取的启动环境。
+
+## OpenCode
+
+OpenCode 把每个供应商写在 `opencode.json` 的 `provider.<id>` 下，因此 Provider ID 必须唯一。
+OcHub 编辑其中一项时会保留同文件里的其他 Provider。
+
+### 新增 OpenCode Provider
+
+1. 填写稳定的 Provider ID，例如 `openrouter` 或 `company_ai`。
+2. 选择与上游一致的 AI SDK 包：
+
+   | 上游类型 | 常用选择 |
+   | --- | --- |
+   | OpenAI 兼容第三方 | `@ai-sdk/openai-compatible` |
+   | OpenAI 官方 | `@ai-sdk/openai` |
+   | Anthropic / Claude | `@ai-sdk/anthropic` |
+   | Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
+   | Google Gemini | `@ai-sdk/google` |
+
+3. 填写 Base URL 和 API Key。官方 SDK 使用默认地址时，Base URL 可以按表单提示留空。
+4. 添加模型 ID、显示名，以及可选的上下文窗口和最大输出。
+5. 只有上游要求时才增加 `options.*` 扩展或自定义请求头。
+6. 展开预览，确认只新增或更新目标 `provider.<id>`。
+7. 保存后使用“添加到工具”或“切换”，再从 OpenCode 中选择模型验证。
+
+“选项扩展”会把布尔值和数字按字面量解析，适合 `setCacheKey` 或 Bedrock 的区域与鉴权字段。
+不确定字段类型时先查上游或 OpenCode 配置要求，避免把 `true` 错写成字符串。
+
+### OMO 配置
+
+OcHub 的**高级工具**可以读取并禁用 OMO / OMO Slim。禁用会删除对应配置文件并清除相关
+供应商的当前标记，因此：
+
+1. 先点击“读取 OMO”或“读取 OMO Slim”确认状态。
+2. 备份 OpenCode 配置目录。
+3. 只有明确不再使用时才执行禁用。
+4. 回到 OpenCode 页面重新确认当前 Provider。
+
+## OpenClaw
+
+OpenClaw 的 Provider 位于 `openclaw.json` 的 `models.providers.<id>`。它可以同时保存多个
+Provider，但 OcHub 不为 OpenClaw 管理 MCP 或技能。
+
+### 配置 Provider 与模型
+
+1. 选择上游真实使用的 API 协议：
+
+   - `openai-completions`
+   - `openai-responses`
+   - `anthropic-messages`
+   - `google-generative-ai`
+   - `bedrock-converse-stream`
+
+2. 填写 Base URL 和 API Key。
+3. 为每个模型添加 ID、显示名、上下文窗口，并标记是否为推理模型。
+4. 需要租户或路由头时，在高级区域增加自定义请求头。
+5. 查看预览，确认 Provider 位于正确 ID 下，再保存。
+
+协议字段是必填项。API Key 正确但接口协议选错时，常见表现是 404、请求体字段错误或流式
+响应无法解析。
+
+### 默认模型、环境变量与工具权限
+
+打开**高级工具 → OpenClaw 高级配置**可以维护：
+
+| 区域 | 对应内容 | 适合操作 |
+| --- | --- | --- |
+| 默认模型 JSON | `agents.defaults.model` | 设置 `primary`、`fallbacks` 等 |
+| 环境变量 JSON | `env` | 添加 OpenClaw 运行时需要的键值 |
+| 工具配置 JSON | `tools` | 设置 `profile`、`allow`、`deny` |
+
+先点击“检查 OpenClaw 配置”。保存前 JSON 必须是正确类型：对象、数组和字符串不能互相替代。
+OcHub 会在可用时生成备份；状态提示出现备份路径后立即记录。
+
+<Aside type="caution" title="工具权限会改变 Agent 能做什么">
+
+修改 `tools.allow` 或 `tools.deny` 可能扩大或缩小 OpenClaw 的本机操作权限。只加入任务必需的
+工具，并在修改后执行一次受控测试。
+
+</Aside>
+
+## Hermes
+
+Hermes 默认可能未在应用列表中启用。先到**设置 → 应用与插件**开启 Hermes，再回到应用页。
+
+### 配置自定义 Provider
+
+1. 选择 API 模式：
+
+   | API 模式 | 上游 |
+   | --- | --- |
+   | `chat_completions` | OpenAI 兼容 Chat |
+   | `anthropic_messages` | Claude Messages |
+   | `codex_responses` | OpenAI Responses |
+   | `bedrock_converse` | AWS Bedrock Converse |
+
+2. 填写 Base URL 与 API Key。
+3. 添加模型列表。第一行模型 ID 会同时成为 Hermes 运行时和 `/model` 选择器的默认模型。
+4. 按需填写显示名和上下文长度。
+5. 上游要求控制调用间隔时，填写 `rate_limit_delay` 秒数；留空表示不额外限流。
+6. 检查生成的 `config.yaml`，保存并重开 Hermes。
+
+缺省 API 模式会按 Chat Completions 处理，因此 Anthropic、Responses 或 Bedrock 上游必须明确
+选择对应模式。
+
+### 模型与记忆维护
+
+在**高级工具 → Hermes 模型与记忆**中可以：
+
+- 读取和保存 `config.yaml` 的 `model` 节点。
+- 编辑 MEMORY 与 USER 记忆内容。
+- 分别启用或关闭两类记忆。
+- 查看当前字符数量和启用状态。
+
+保存模型或切换记忆时，OcHub 会在可用时给出备份路径。不要在 Hermes 正在写入记忆时同时
+修改，先退出运行中的 Agent。
+
+## 验证与排查
+
+每个应用都按同一套最小流程验收：
+
+1. 展开“将写入的文件”，确认路径与格式。
+2. 保存后确认卡片状态是“已添加”或“当前”。
+3. 完全退出目标工具并重新打开。
+4. 选择刚配置的 Provider 与模型。
+5. 发起一条短请求。
+6. 检查目标工具错误、OcHub 用量记录或上游请求日志。
+
+| 问题 | 常见原因 |
+| --- | --- |
+| Provider 没出现在工具里 | 保存后未“添加到工具”，或配置目录不对 |
+| 一个 Provider 覆盖了另一个 | 多供应商应用使用了重复 Provider ID |
+| 401 | API Key、环境变量或进程启动环境不一致 |
+| 404 / 请求体错误 | API Backend、API 协议或 API 模式选错 |
+| 模型列表可见但调用失败 | 模型 ID、上下文或上游权限不匹配 |
+| 高级字段保存失败 | JSON/YAML 节点类型不正确 |
+
+通用的复制、删除和配置漂移处理请阅读[管理供应商](/zh/guides/providers)。

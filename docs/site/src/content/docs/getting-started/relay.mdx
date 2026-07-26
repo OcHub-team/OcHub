@@ -1,0 +1,85 @@
+---
+title: Configure a relay station
+description: Create a local relay upstream, apply it to a CLI, and verify that requests pass through OcHub.
+audience: human
+sidebar:
+  order: 2
+---
+
+Relay mode points a tool at OcHub's local gateway, which then sends requests to
+the active upstream. You can switch upstreams without repeatedly rewriting tool
+configuration, while centralizing protocol conversion, model mapping, and usage
+tracking.
+
+## Create a relay station
+
+<Steps>
+
+1. **Open Relay stations.** If compatible local configuration already contains
+   an API key, try **Import from existing configuration** first.
+
+2. **Add a station.** Enter a name, upstream API origin, and access key. The
+   origin does not need to end in `/v1`; the page shows the normalized request
+   target.
+
+3. **Detect interfaces.** Select **Detect** to probe Anthropic Messages, OpenAI
+   Chat, and OpenAI Responses. If automatic detection fails, enable only the
+   interfaces documented by the upstream.
+
+4. **Keep the first setup simple.** Leave the default model, model exceptions,
+   and custom reasoning budgets empty.
+
+5. **Save and check reachability.** After saving, use the card's connectivity
+   check. Reachability does not prove that authentication or a real model
+   request will succeed.
+
+6. **Apply it to a tool.** Under **Apply to** on the card, select the target app.
+   Its live configuration will then point to the local gateway.
+
+</Steps>
+
+## Switch relay stations
+
+After applying a station once, return to the corresponding app page:
+
+1. In the Relay mode section, choose an enabled station.
+2. Switching now updates only the local route instead of repeatedly rewriting
+   tool configuration.
+3. Current relay shows the upstream, default model, or number of model mappings
+   in use.
+
+## Verify the request path
+
+- Start the target CLI and make a short request.
+- In **Usage → Request logs**, find an entry whose source is Relay station
+  request.
+- Open it and verify the request model, pricing model, provider, status, and
+  latency.
+
+If the tool cannot connect, first confirm that OcHub is still running, then
+check that the station is enabled.
+
+## Connect another local tool
+
+The **Connect other tools** section provides a loopback URL and local key. Any
+local client that supports OpenAI Chat can use them.
+
+<Aside type="note" title="The local key is not the upstream key">
+
+OcHub generates and validates this key on the local machine. It cannot be used
+on another computer or with the upstream service. Do not expose the loopback
+listener to the public internet.
+
+</Aside>
+
+## Disconnect or restore direct mode
+
+- Under Current connections on the Relay stations page, use **Disconnect** to
+  remove an app's relation to the station.
+- A station in use cannot be deleted; switch or disconnect affected apps first.
+- Disabling a station in use immediately breaks those tool requests, and the
+  confirmation lists the affected apps.
+- To return to direct mode, switch to a direct connection on the app page.
+
+For model mappings, interface exceptions, and backup-upstream workflows, read
+[Advanced features](/advanced).

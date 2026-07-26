@@ -1,0 +1,208 @@
+---
+title: Relay routing recipes
+description: Solve common routing needs with model exceptions, protocol conversion, defaults, and reasoning mapping.
+audience: human
+sidebar:
+  order: 2
+---
+
+This guide assumes you have a [working relay station](/getting-started/relay)
+and at least one tool can make a request through OcHub. Each recipe adds only
+one layer so its effect is visible in the request log.
+
+## Understand the decision order
+
+A relayed request:
+
+1. Identifies the client protocol: Anthropic Messages, OpenAI Chat, or OpenAI
+   Responses.
+2. Finds the station connected to that app.
+3. Matches the client model against the first applicable exception.
+4. Chooses the upstream model name.
+5. Builds candidates from enabled interfaces.
+6. Prefers the client's native interface, then tries convertible alternatives.
+7. Maps or removes reasoning parameters.
+8. Records request model, upstream model, pricing model, tokens, status, and
+   latency.
+
+Enter an upstream origin or custom prefix as the station API address, not a
+standard inference endpoint. If the final endpoint is
+`https://api.example.com/v1/messages`, normally enter
+`https://api.example.com`. OcHub appends the path for the selected interface.
+
+<Aside type="caution" title="Detected does not mean every model works">
+
+Detection uses a minimal request to see whether an endpoint exists. Model
+access, quota, authentication scope, and special parameters still require a
+real request.
+
+</Aside>
+
+## Model-name precedence
+
+| Match | Model sent upstream |
+| --- | --- |
+| Exception matches and has an upstream model | The exception's upstream model |
+| Exception matches and leaves it blank | The original client model |
+| No exception matches and a default exists | The default model |
+| No exception and no default | The original client model |
+
+An exception that only forces an interface and leaves the model blank bypasses
+the default model. This is useful for protocol constraints but can surprise you
+when you expected a global model override.
+
+Patterns support `*`, such as `claude-*`, `*-reasoning`, or `gpt-*-mini`. The
+first matching rule wins, so put exact models before broad patterns.
+
+## Recipe 1: rewrite a client alias
+
+Goal: let the client request `claude-sonnet-current` while the upstream receives
+`anthropic/claude-sonnet-4-6`.
+
+1. Edit the station and expand Model exceptions.
+2. Add an exception.
+3. Set Model or pattern to `claude-sonnet-current`.
+4. Set Upstream model to `anthropic/claude-sonnet-4-6`.
+5. Leave Interface on Automatic.
+6. Save and make a request with the alias.
+7. In request details, compare Request model, actual Model, and Pricing model.
+
+Some upstreams echo the client alias even after rewriting. Compare OcHub and
+provider-side logs when needed.
+
+## Recipe 2: use a Chat-only upstream from Codex
+
+Goal: Codex sends Responses requests, while the commercial upstream exposes
+only Chat Completions.
+
+1. Add or edit a station.
+2. Enter the Chat upstream base without `/v1/chat/completions`.
+3. Enable only **OpenAI Chat**.
+4. Apply the station to **Codex**.
+5. Add no model exception initially; let automatic routing convert Responses
+   to Chat.
+6. Restart Codex and send a short request that does not depend on special
+   Responses features.
+7. Check status, model, and output in Usage.
+
+Ordinary requests can be converted, but:
+
+- Codex remote compaction requires a Responses upstream.
+- Responses-only fields may be removed or may not have an exact equivalent.
+- Tool calls, structured output, and reasoning depend on upstream behavior.
+
+If the provider later adds Responses, detect and enable it. Automatic routing
+will prefer the native interface.
+
+## Recipe 3: pin model families to interfaces
+
+Goal: Claude models use Messages and GPT models use Responses on one upstream.
+
+Enable both real interfaces, then add:
+
+| Model or pattern | Upstream model | Interface |
+| --- | --- | --- |
+| `claude-*` | Blank | Anthropic Messages |
+| `gpt-*` | Blank | OpenAI Responses |
+
+The rules constrain only the protocol and preserve the model names. Use this
+when provider documentation recommends one endpoint, a model exists only on
+one endpoint, or tool calls fail on an otherwise responsive interface.
+
+An exception cannot reference an interface you disable.
+
+## Recipe 4: one-model upstream
+
+If every client request should become `company-model-v2`, set:
+
+```text
+Default model: company-model-v2
+```
+
+Do not also add a catch-all `*` exception. A default already covers requests
+that do not match an exception.
+
+Defaults fit a one-model internal gateway or a client whose default cannot be
+changed. They are a poor fit when you need model choice, want misspellings to
+surface, or models have very different prices.
+
+## Recipe 5: rewrite model and interface together
+
+To send all `claude-*` aliases to an OpenAI Chat model:
+
+| Field | Value |
+| --- | --- |
+| Model or pattern | `claude-*` |
+| Upstream model | `company-reasoner` |
+| Interface | OpenAI Chat |
+
+This combines model rewrite and Messages-to-Chat conversion. Test plain text
+first, then tools. To isolate a failure, temporarily return Interface to
+Automatic to verify the model, then pin Chat again.
+
+## Recipe 6: normalize reasoning effort
+
+| Mode | Behavior | Best use |
+| --- | --- | --- |
+| Automatic mapping | Translate effort levels and token budgets | Multiple CLIs sharing an upstream |
+| Pass through | Leave client parameters untouched | Client and upstream protocols match |
+| Disable reasoning | Remove or disable the parameter | Upstream rejects reasoning fields |
+
+The four automatic budgets must be positive and ascending:
+
+1. Check upstream minimum, common, and maximum budgets.
+2. Give Low the smallest useful value.
+3. Increase Medium, High, and Maximum without exceeding the limit.
+4. Verify Medium first.
+5. Compare latency, output, and token use before tuning the others.
+
+Higher reasoning budgets can increase both time to first token and billed
+output or reasoning tokens.
+
+## Recipe 7: prepare a backup station
+
+OcHub automatically selects and retries **enabled interfaces inside one
+station**. It does not automatically move from one station card to another.
+
+1. Create Primary and Backup stations.
+2. Verify both with detection and a real request.
+3. Configure equivalent aliases.
+4. Keep the app on Primary normally.
+5. During an outage, switch it manually to Backup.
+6. Make a short request and inspect the log.
+7. Switch back after recovery.
+
+Do not change protocols, mappings, budgets, and pricing simultaneously during
+an outage. Restore a working path first.
+
+## Verify with request logs
+
+| Field | Confirms |
+| --- | --- |
+| App | Correct client attribution |
+| Provider | Expected station |
+| Request model | Original model or alias |
+| Model | Upstream-returned or actual model |
+| Pricing model | Price-table model |
+| Status | HTTP success or failure |
+| Time to first token | Delay before content begins |
+| Duration | Full request time |
+| Error | Authentication, routing, model, or upstream failure |
+
+Change one variable per test and use a recognizable short prompt.
+
+## Diagnosis table
+
+| Symptom | Likely cause | Next step |
+| --- | --- | --- |
+| 404 and every probe fails | Base includes a full endpoint or extra `/v1` | Use the upstream origin or prefix |
+| `no gateway channel serves model` | Rules and interfaces leave no candidate | Check pattern and enabled interfaces |
+| Model not rewritten | Rule did not match or ordering is wrong | Test an exact model and move it earlier |
+| Default ignored | Another exception matched | Remove it or set its upstream model |
+| Text works, tools fail | Conversion or upstream capability gap | Prefer the client's native interface |
+| Codex compaction fails | No Responses upstream | Enable Responses or disable that feature |
+| Latency jumps | Conversion, reasoning budget, or upstream health | Compare request details and backup |
+| Cost is 0 | Pricing model has no price | Add it under [Pricing](/advanced/pricing) |
+
+After rules stabilize, apply the station to other tools one at a time and make
+a real request from each protocol.

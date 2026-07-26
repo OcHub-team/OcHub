@@ -1,0 +1,161 @@
+---
+title: Configure Codex
+description: Choose account and API authentication, configure a Responses upstream, and manage session history.
+audience: human
+sidebar:
+  order: 6
+---
+
+Codex uses both `config.toml` and `auth.json`. The first stores models and
+providers; the second stores official account login material. OcHub manages
+them as one provider configuration without pretending that an API key is an
+official login.
+
+## Choose an authentication mode
+
+| Mode | Account state | Model-request credential | Use it for |
+| --- | --- | --- | --- |
+| API relay only | ChatGPT login not required | Relay API key | A fully third-party Responses upstream |
+| ChatGPT login only | Uses `auth.json` | Official login state | Official Codex account and endpoint |
+| ChatGPT login + API relay | Preserves `auth.json` | Relay API key | Account features with third-party model requests |
+
+In combined mode, `auth.json` still owns the account. Model requests use the
+current provider's `experimental_bearer_token`.
+
+<Aside type="note" title="OAuth and API keys have separate jobs">
+
+**Keep current OAuth for third-party providers** prevents a switch from
+overwriting `auth.json`. It does not replace an API key required by a
+third-party upstream.
+
+</Aside>
+
+## Configure a third-party Responses upstream
+
+<Steps>
+
+1. **Open Codex and add a provider.** Start from a preset when one matches, then
+   verify every field.
+
+2. **Set the Provider ID.** This is the key under
+   `[model_providers.<id>]` and the value of `model_provider`. Use a short,
+   stable identifier without spaces, such as `company_proxy`.
+
+3. **Set the provider name.** This is an internal Codex provider name, not the
+   display name of the OcHub card.
+
+4. **Enter the Base URL.** Third-party mode normally ends in `/v1`, after which
+   Codex appends `/responses`.
+
+5. **Choose auth and enter a key.** API relay and combined mode use the relay
+   key. Login-only mode does not.
+
+6. **Choose a model.** Use an ID actually supported upstream. Add `minimal`,
+   `low`, `medium`, `high`, or `xhigh` reasoning only when needed.
+
+7. **Keep `wire_api = responses`.** Codex no longer supports `chat`.
+   Chat-only upstreams require OcHub relay conversion.
+
+8. **Review and switch.** Confirm the Provider ID, endpoint, model, and auth
+   mode in the `config.toml` preview.
+
+9. **Open a new Codex session.** Make a short request and verify request model,
+   pricing model, and status in Usage.
+
+</Steps>
+
+## When to use a relay station
+
+Prefer [relay mode](/getting-started/relay) when:
+
+- The upstream supports Chat Completions but not Responses.
+- A Codex model alias must be rewritten to an upstream ID.
+- Routing should choose among Anthropic, Chat, and Responses.
+- You need gateway-level time to first token, total latency, and errors.
+- Future upstream changes should not rewrite `config.toml` repeatedly.
+
+Codex remote compaction requires an OpenAI Responses upstream. Ordinary
+requests can convert to Chat, but remote compaction cannot use a Chat-only
+upstream.
+
+## Models and reasoning
+
+The model field becomes the current Codex model. Reasoning effort works only
+when the model and upstream support Responses reasoning parameters.
+
+1. First verify the model with no effort set.
+2. Try `medium`.
+3. Compare latency and output before moving to `low`, `high`, or `xhigh`.
+4. If the upstream rejects the parameter, clear it instead of changing the
+   key and model at the same time.
+
+Remote compaction is enabled by Codex only when the provider name is exactly
+`OpenAI`. Leave it off unless a third party fully implements the Responses
+compaction behavior.
+
+## Advanced request options
+
+| Field | Purpose | Example |
+| --- | --- | --- |
+| Disable response storage | Set `disable_response_storage = true` | ZDR or an upstream without storage |
+| Query parameters | Append values to every request URL | Azure `api-version` |
+| HTTP headers | Add custom request headers | Tenant, project, or route ID |
+
+Complete a normal request first, then add one option at a time. Keep long-lived
+secrets in the dedicated API-key field rather than ordinary custom headers.
+
+## Official login
+
+If Codex is already signed in:
+
+1. Add or choose an Official login provider.
+2. Switch and confirm the official endpoint behavior returns.
+3. Restart Codex.
+4. Make one request and verify that no third-party provider error remains.
+
+Enable **Keep current OAuth for third-party providers** in Codex App settings
+to preserve `auth.json` while using third-party model requests and make
+switching back easy.
+
+## Unified and migrated history
+
+Two Codex settings have different purposes:
+
+- **Migrate existing Codex sessions** imports official history during the next
+  migration.
+- **Unify Codex session history** places official and third-party sessions in
+  one history location.
+
+Before changing them, quit Codex, back up `~/.codex` or the custom directory,
+change one option at a time, restart, and inspect the session count and date
+range.
+
+Under **Advanced tools → Codex history**:
+
+- Check unified-history backup reports whether a restorable backup exists.
+- Restore official-history backup may overwrite current official history, so
+  make another directory backup first.
+
+## MCP and skills
+
+Codex supports OcHub-managed MCP and skills.
+
+- Enable Codex on an MCP card and sync it into `config.toml`.
+- Choose Codex when installing a skill or enable it on an installed card.
+- A custom Codex directory changes both destinations; restart after syncing.
+- OcHub tolerates legacy `[mcp.servers.*]` input during import and writes the
+  current format.
+
+## Common problems
+
+| Symptom | Likely direction | Fix |
+| --- | --- | --- |
+| `chat` was removed | Wrong `wire_api` or Chat-only upstream | Use Responses or relay conversion |
+| Base URL returns 404 | Incorrect `/v1` level | Verify the final path is `/v1/responses` |
+| Account remains but request gets 401 | OAuth is not the third-party key | Check mode and relay API key |
+| Remote compaction fails | Incomplete Responses support | Disable it or use a Responses upstream |
+| Model did not change | An old Codex process is running | Restart and inspect the preview |
+| Session count is wrong | History directory or unify setting changed | Verify the directory and backup |
+
+For a Chat-only upstream, continue to
+[Relay routing recipes](/advanced/routing-recipes).

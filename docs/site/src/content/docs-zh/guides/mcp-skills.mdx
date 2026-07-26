@@ -11,6 +11,21 @@ MCP 服务器与技能都可以分发到多个应用，但同步方式不同：
 - MCP 由 OcHub 保存 JSON 配置，再统一写入已启用的应用。
 - 技能通过 skills CLI 安装，并按技能卡片上的应用开关分发。
 
+## 应用支持范围
+
+| 应用 | MCP | 技能 |
+| --- | --- | --- |
+| Claude Code | 支持 | 支持 |
+| Claude Desktop | 不支持 | 不支持 |
+| Codex | 支持 | 支持 |
+| Grok Build | 支持 | 不支持 |
+| OpenCode | 支持 | 支持 |
+| OpenClaw | 不支持 | 不支持 |
+| Hermes | 支持 | 支持 |
+
+应用开关只会显示该工具真实支持的能力。Claude Desktop 与 OpenClaw 的原生扩展配置不由这两个
+页面管理。
+
 ## MCP：导入现有配置
 
 <Steps>
@@ -98,3 +113,7 @@ stdio MCP 会在本机执行 `command`。只同步你信任的包和命令，并
 
 市场搜索或更新需要网络。如果提示 skills CLI 不可用，前往
 [高级功能 → CLI 工具维护](/zh/advanced#cli-工具维护)检查安装与 `PATH`。
+
+Claude 的插件集成、Codex 配置目录以及 OpenCode / Hermes 的应用差异见
+[Claude 专项教程](/zh/guides/claude)、[Codex 专项教程](/zh/guides/codex)和
+[其他工具专项教程](/zh/guides/open-tools)。

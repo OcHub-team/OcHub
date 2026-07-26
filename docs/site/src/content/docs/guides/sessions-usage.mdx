@@ -1,0 +1,96 @@
+---
+title: View sessions and usage
+description: Browse local conversations and analyze requests, tokens, and cost with a consistent model.
+audience: human
+sidebar:
+  order: 3
+---
+
+Sessions describe complete conversations, while Usage describes requests and
+aggregates. They come from different sources: one session may contain many
+requests, or it may be found in local history without gateway-level latency.
+
+## Browse sessions
+
+Open **Sessions** to scan history written by supported local CLIs.
+
+1. Filter by app.
+2. Choose Today, Last 7 days, Last 30 days, or a custom range.
+3. Select **View** to open a full conversation.
+4. Use **Expand details** for long tool or system messages.
+5. Return to the list to reset filters or refresh the scan.
+
+Session cards summarize total messages, user and assistant messages, tool or
+system messages, and the conversation span.
+
+<Aside type="caution" title="Deleting a session changes local history">
+
+Session deletion cannot be undone. Verify the app, title, and time before
+confirming. Back up the corresponding CLI session directory when the history
+must be retained.
+
+</Aside>
+
+## Understand the Usage summary
+
+The top of Usage shows four aggregates:
+
+- **Total cost**: input, output, and cache cost under current pricing and
+  multipliers.
+- **Total requests**: request count and success rate in the current filter.
+- **Actual tokens**: input, output, cache creation, and cache reads.
+- **Cache hit rate**: the share of repeated input served from cache.
+
+The trend view plots tokens, cost, and request count by time bucket. It needs at
+least two buckets.
+
+## Filter and drill down
+
+1. Choose a time range.
+2. Narrow by status, provider, or model.
+3. Select a Provider statistics row to filter the whole page to that provider.
+4. Select a model row to narrow it again.
+5. Open a request log entry to inspect request model, pricing model, tokens,
+   cache, cost, time to first token, and total latency.
+6. Use Reset to return to the full range.
+
+## Data sources
+
+OcHub can combine:
+
+- Relay station requests
+- Claude sessions
+- Codex database or session files
+- OpenCode sessions
+- Gemini sessions
+- Legacy local requests
+- Manually synchronized sessions
+
+Only requests that pass through the local relay consistently include
+gateway-level status, latency, and request IDs. Session-file imports are limited
+to fields the individual CLI recorded.
+
+## Configure model pricing
+
+Under Model pricing:
+
+1. Enter a model ID, display name, and per-million-token prices for input,
+   output, cache writes, and cache reads.
+2. Choose request-model or response-model pricing.
+3. Set default multipliers and pricing-model sources for Claude and Codex.
+4. Save, refresh, and confirm the pricing model and cost on a request detail.
+
+The model ID must match the logs. When aliases or relay mappings are common,
+response-model pricing is often a better default.
+
+For historical cost backfill, cache-token semantics, and bill reconciliation,
+continue to [Model pricing and cost calibration](/advanced/pricing).
+
+## Model check parameters
+
+Model check parameters control probe timeout, maximum retries, and the
+degradation threshold. They apply to connectivity and degradation checks, not
+to the timeout of a normal model request.
+
+Any HTTP response proves that the address is reachable. It does not prove that
+authentication, quota, or the model name is valid.
