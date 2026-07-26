@@ -1,0 +1,95 @@
+---
+title: Configure a direct connection
+description: Add a provider, write it to a target tool, and make your first safe switch.
+audience: human
+sidebar:
+  order: 1
+---
+
+A direct connection writes provider configuration to the selected AI tool, and
+the tool calls that provider without passing through the OcHub relay. It is the
+best way to get started.
+
+## Add a provider
+
+<Steps>
+
+1. **Choose an app.** Open the tool you want to configure under Apps in the
+   sidebar.
+
+2. **Open the editor.** Select **Add connection**. If OcHub already discovered
+   local configuration, edit the discovered entry instead of creating a
+   duplicate.
+
+3. **Choose a starting point.** Use a preset when one fits, or start blank.
+   Give the connection a descriptive name such as “Work account” or “Backup
+   endpoint.”
+
+4. **Enter connection details.** Use the endpoint and key documented by the
+   provider. The relay editor handles `/v1` itself; for a direct connection,
+   rely on the generated file preview shown by the page.
+
+5. **Run available checks.** Try **Test URL**, **Fetch models**, or **Check
+   balance** where available. A successful URL test only proves that the
+   endpoint returned an HTTP response; it does not prove that the key and model
+   work.
+
+6. **Review the write preview.** Expand **Files to be written** and verify the
+   destination path and important fields. If the preview is empty, complete the
+   name and connection details first.
+
+7. **Save.** Saving adds the provider to OcHub. Whether it is immediately
+   written to the tool depends on the action offered by that app page.
+
+</Steps>
+
+<Aside type="caution" title="Keep real keys out of docs and screenshots">
+
+API keys belong only in local configuration. Before sharing a log or preview,
+replace keys, access tokens, and authenticated URL parameters with placeholders.
+
+</Aside>
+
+## Add versus switch
+
+| Action | Meaning |
+| --- | --- |
+| Add to tool | Add the provider to the tool configuration without necessarily making it current |
+| Switch | Write or select the provider and make it the current connection |
+| Remove from tool | Remove the live tool entry while keeping the provider in OcHub |
+| Delete | Permanently remove the provider from OcHub |
+
+After a successful switch, **Current connection** at the top of the page shows
+the new provider and its card is marked Current.
+
+## Verify the change
+
+1. Quit and reopen the target CLI so an existing process does not keep cached
+   configuration.
+2. Send a short request.
+3. If it succeeds, refresh **Usage** in OcHub and look for the session or
+   request record.
+4. If the tool still uses the old configuration, check whether its configured
+   directory matches the actual installation.
+
+## Handle external edits
+
+If another program changes the live configuration after OcHub last read it, a
+**Configuration file was modified externally** dialog appears during the next
+switch:
+
+- **Keep my changes** attempts to merge external edits and lists fields that
+  cannot be preserved safely.
+- **Discard my changes** uses OcHub's pending preview as the source of truth.
+- **Cancel** leaves the file untouched so you can back it up and compare it.
+
+Choose Cancel when you are unsure. Copy the original file before attempting the
+switch again.
+
+## Roll back
+
+- To use another provider, select **Switch** on its card.
+- To restore the tool's own account state, switch to an Official login
+  provider.
+- To stop OcHub from managing the tool, disable it in **Settings → Apps and
+  plugins**. Disabling does not modify the tool's current live configuration.

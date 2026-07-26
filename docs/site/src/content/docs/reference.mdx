@@ -1,0 +1,128 @@
+---
+title: User reference
+description: Supported apps, default paths, connection states, and common terms at a glance.
+audience: human
+sidebar:
+  order: 50
+  group:
+    label: User reference
+    icon: ph:book-open-text
+---
+
+## Supported apps
+
+| App | Provider write mode | MCP | Skills | App-specific capabilities |
+| --- | --- | --- | --- | --- |
+| Claude Code | Current-provider switching | Yes | Yes | Plugins, role models, sessions |
+| Claude Desktop | Current-provider switching | No | No | Official and third-party connections |
+| Codex | Current-provider switching | Yes | Yes | OAuth, model catalog, session history |
+| Grok Build | Current-provider switching | Yes | No | Profiles and API backends |
+| OpenCode | Multiple providers coexist | Yes | Yes | Multiple models, sessions, OMO |
+| OpenClaw | Multiple providers coexist | No | No | Default model, tools, environment |
+| Hermes | Multiple providers coexist | Yes | Yes | Models, rate limiting, memory |
+
+Current-provider switching emphasizes one live connection. Coexistence writes
+multiple providers into the tool so it or OcHub can select among them.
+
+## Default paths
+
+| Content | Default location |
+| --- | --- |
+| OcHub data | `~/.ochub/` |
+| OcHub database | `~/.ochub/ochub.db` |
+| User app plugins | `~/.ochub/apps/*.toml` |
+| cc-switch migration source | `~/.cc-switch/` |
+| Claude Code | `~/.claude/`; MCP is commonly `~/.claude.json` |
+| Codex | `~/.codex/` |
+| Grok Build | `~/.grok/` |
+| OpenCode | `~/.config/opencode/` |
+| OpenClaw | `~/.openclaw/` |
+| Hermes | `~/.hermes/` |
+| Claude Desktop (macOS) | `~/Library/Application Support/Claude/` and `Claude-3p/` |
+| Claude Desktop (Windows) | `%LOCALAPPDATA%\\Claude\\` and `Claude-3p\\` |
+
+A custom directory in App settings overrides this table. Restart OcHub after
+changing it.
+
+## Connection states
+
+| State | Meaning |
+| --- | --- |
+| Current | The target app is currently using this connection |
+| Added | Present in the tool, but not current |
+| Direct connection | The tool calls the provider directly |
+| Relay mode | The tool calls the OcHub local gateway |
+| Applied | A relay station has been written to the app |
+| Disabled | Configuration remains, but cannot be applied or routed |
+| Not checked | No connectivity check has run yet |
+
+## Relay interfaces
+
+| Interface | Typical client |
+| --- | --- |
+| Anthropic Messages | Claude-compatible clients |
+| OpenAI Chat | Chat Completions-compatible clients |
+| OpenAI Responses | Clients using the Responses API |
+
+Automatic routing prefers the client's native interface and tries another
+enabled interface when the model or interface fails. Conversion cannot add a
+model or capability the upstream does not have.
+
+## Minimal MCP JSON
+
+stdio:
+
+```json
+{
+  "type": "stdio",
+  "command": "my-mcp",
+  "args": ["--stdio"]
+}
+```
+
+SSE:
+
+```json
+{
+  "type": "sse",
+  "url": "https://example.com/sse"
+}
+```
+
+Server configuration must be a JSON object. Exact fields depend on both the MCP
+server and target app.
+
+## Terms
+
+<dl>
+  <dt>App</dt>
+  <dd>An AI tool whose configuration OcHub manages, such as Claude Code or Codex.</dd>
+
+  <dt>Provider</dt>
+  <dd>A set of API, official-login, or model-service connection details.</dd>
+
+  <dt>Direct connection</dt>
+  <dd>A tool-to-provider request that does not pass through the OcHub gateway.</dd>
+
+  <dt>Relay station</dt>
+  <dd>An upstream configuration used by the local gateway for protocol conversion, model mapping, and interface-candidate retry.</dd>
+
+  <dt>Configuration drift</dt>
+  <dd>A live file changed outside OcHub after OcHub last read it.</dd>
+
+  <dt>Pricing model</dt>
+  <dd>The model whose price is used for a usage record; it may come from the request or response.</dd>
+
+  <dt>Profile</dt>
+  <dd>A logical name inside remote sync storage that isolates multiple OcHub datasets.</dd>
+</dl>
+
+## Security reminders
+
+- Never publish API keys, OAuth tokens, or personal sessions in an issue,
+  screenshot, or document.
+- Do not expose the local gateway directly to the public internet.
+- Run only trusted MCP commands and skills.
+- Back up before replacing a database or deleting sessions or providers.
+- Do not let OcHub and another configuration manager write the same file at
+  once.

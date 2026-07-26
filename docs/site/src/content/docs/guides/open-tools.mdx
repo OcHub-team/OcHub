@@ -1,0 +1,194 @@
+---
+title: Configure Grok Build, OpenCode, OpenClaw, and Hermes
+description: Understand each tool's write mode, protocol fields, and app-specific maintenance features.
+audience: human
+sidebar:
+  order: 7
+---
+
+All four tools support provider management, but their write modes and shared
+capabilities differ.
+
+| App | Write mode | MCP | Skills | Default directory |
+| --- | --- | --- | --- | --- |
+| Grok Build | Current-provider switching | Yes | No | `~/.grok` |
+| OpenCode | Multiple providers coexist | Yes | Yes | `~/.config/opencode` |
+| OpenClaw | Multiple providers coexist | No | No | `~/.openclaw` |
+| Hermes | Multiple providers coexist | Yes | Yes | `~/.hermes` |
+
+In coexistence mode, OcHub writes several providers into one tool
+configuration. Remove from tool deletes only that provider, not the others.
+
+## Grok Build
+
+Grok Build operates with one current model profile. Start from a preset or fill
+the form manually.
+
+<Steps>
+
+1. **Define the profile.** It is the client configuration name used by
+   `[models].default`.
+
+2. **Enter the upstream model.** This is the model ID sent to the provider; the
+   display name is only for readability.
+
+3. **Enter the Base URL.** Use the base address for the selected protocol.
+
+4. **Choose credentials.** API Key writes the secret to configuration.
+   Environment variable stores only a name such as `XAI_API_KEY`, which must
+   exist in Grok Build's runtime environment.
+
+5. **Choose an API backend.** Select OpenAI Responses, OpenAI Chat Completions,
+   or Anthropic Messages to match the upstream.
+
+6. **Set the context window.** Use the actual token limit supported by the
+   upstream model.
+
+7. **Review `config.toml` and switch.** Restart Grok Build and make a real
+   request.
+
+</Steps>
+
+If environment-variable mode works in an OcHub check but not in Grok Build, the
+two processes probably inherited different environments. Launch from the same
+terminal or define the variable in the environment Grok Build actually reads.
+
+## OpenCode
+
+OpenCode stores providers under `provider.<id>` in `opencode.json`, so every
+Provider ID must be unique. Editing one provider preserves the others.
+
+### Add an OpenCode provider
+
+1. Enter a stable ID such as `openrouter` or `company_ai`.
+2. Choose an AI SDK package that matches the upstream:
+
+   | Upstream | Common package |
+   | --- | --- |
+   | OpenAI-compatible third party | `@ai-sdk/openai-compatible` |
+   | Official OpenAI | `@ai-sdk/openai` |
+   | Anthropic / Claude | `@ai-sdk/anthropic` |
+   | Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
+   | Google Gemini | `@ai-sdk/google` |
+
+3. Enter Base URL and API key. An official SDK may use its default endpoint.
+4. Add model IDs, display names, and optional context and output limits.
+5. Add `options.*` extensions or request headers only when required.
+6. Confirm that the preview changes only the intended `provider.<id>`.
+7. Save, add or switch, then choose the provider and model in OpenCode.
+
+Option extensions parse booleans and numbers as literals. They can express
+`setCacheKey` or Bedrock region and credentials. Verify the expected type.
+
+### OMO configuration
+
+Advanced tools can read and disable OMO / OMO Slim. Disabling deletes the
+corresponding file and clears current markers on related providers:
+
+1. Read OMO or OMO Slim first.
+2. Back up the OpenCode directory.
+3. Disable only when it is no longer needed.
+4. Return to the OpenCode page and verify the current provider.
+
+## OpenClaw
+
+OpenClaw providers live under `models.providers.<id>` in `openclaw.json`. It
+keeps several providers, but OcHub does not manage OpenClaw MCP or skills.
+
+### Configure provider and models
+
+1. Choose the actual upstream protocol:
+
+   - `openai-completions`
+   - `openai-responses`
+   - `anthropic-messages`
+   - `google-generative-ai`
+   - `bedrock-converse-stream`
+
+2. Enter Base URL and API key.
+3. Add model ID, display name, context window, and reasoning marker.
+4. Add custom headers only for required tenant or routing information.
+5. Confirm the provider appears under the right ID and save.
+
+The protocol is required. A correct key with the wrong protocol commonly
+produces a 404, invalid request body, or broken streaming.
+
+### Default model, environment, and tool permissions
+
+Under **Advanced tools → OpenClaw advanced configuration**:
+
+| Area | Content | Typical use |
+| --- | --- | --- |
+| Default model JSON | `agents.defaults.model` | `primary`, `fallbacks`, and related fields |
+| Environment JSON | `env` | Runtime key-value pairs |
+| Tool configuration JSON | `tools` | `profile`, `allow`, and `deny` |
+
+Run Check OpenClaw configuration first. JSON values must have the right object,
+array, and string types. Record the backup path OcHub reports when saving.
+
+<Aside type="caution" title="Tool permissions change what the agent can do">
+
+Changing `tools.allow` or `tools.deny` can expand or reduce local access. Add
+only what a task needs and run a controlled test afterward.
+
+</Aside>
+
+## Hermes
+
+Hermes may be disabled by default. Enable it under **Settings → Apps and
+plugins** before opening its page.
+
+### Configure a custom provider
+
+1. Choose an API mode:
+
+   | Mode | Upstream |
+   | --- | --- |
+   | `chat_completions` | OpenAI-compatible Chat |
+   | `anthropic_messages` | Claude Messages |
+   | `codex_responses` | OpenAI Responses |
+   | `bedrock_converse` | AWS Bedrock Converse |
+
+2. Enter Base URL and API key.
+3. Add models. The first model ID also becomes the runtime and `/model` default.
+4. Add optional display names and context lengths.
+5. Use `rate_limit_delay` for a required delay between calls.
+6. Review the generated `config.yaml`, save, and restart Hermes.
+
+Without an explicit mode, Hermes treats a provider as Chat Completions, so
+Anthropic, Responses, and Bedrock upstreams must select the matching mode.
+
+### Model and memory maintenance
+
+Under **Advanced tools → Hermes model and memory**, you can:
+
+- Read and save the `model` node in `config.yaml`.
+- Edit MEMORY and USER memory content.
+- Toggle each memory type.
+- Inspect character counts and enabled state.
+
+Do not edit while a running Hermes agent is writing memory. Record any backup
+path shown after a save or toggle.
+
+## Verify and troubleshoot
+
+For each app:
+
+1. Review the generated file and path.
+2. Confirm the card is Added or Current after saving.
+3. Fully restart the target tool.
+4. Select the new provider and model.
+5. Make one short request.
+6. Check tool errors, OcHub usage, or upstream logs.
+
+| Problem | Common cause |
+| --- | --- |
+| Provider missing | It was saved but not added, or the directory is wrong |
+| One provider replaced another | Duplicate Provider ID in a coexistence app |
+| 401 | Key, environment variable, or launch environment mismatch |
+| 404 / body error | Wrong backend, protocol, or API mode |
+| Model appears but fails | Model ID, context limit, or permission mismatch |
+| Advanced save fails | Incorrect JSON/YAML node type |
+
+For copy, deletion, and configuration drift, see
+[Manage providers](/guides/providers).

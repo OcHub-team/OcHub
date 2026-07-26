@@ -1,6 +1,6 @@
 ---
 title: 日常功能
-description: 供应商、MCP、技能、会话、用量与界面设置的常用操作。
+description: 供应商、应用专项、MCP、技能、会话、用量与界面设置的常用操作。
 audience: human
 sidebar:
   order: 20
@@ -47,5 +47,21 @@ sidebar:
 </Card>
 
 </CardGrid>
+
+## 按应用继续
+
+通用供应商流程相同，但鉴权、配置格式与高级能力不同：
+
+| 你的工具 | 专项教程 | 重点 |
+| --- | --- | --- |
+| Claude Code / Claude Desktop | [配置 Claude](/zh/guides/claude) | 鉴权变量、角色模型、插件与 MCP |
+| Codex | [配置 Codex](/zh/guides/codex) | OAuth、Responses、推理与历史 |
+| Grok Build | [配置其他工具](/zh/guides/open-tools#grok-build) | Profile、API Backend 与环境变量 |
+| OpenCode | [配置其他工具](/zh/guides/open-tools#opencode) | AI SDK、多 Provider、OMO |
+| OpenClaw | [配置其他工具](/zh/guides/open-tools#openclaw) | API 协议、默认模型、工具权限 |
+| Hermes | [配置其他工具](/zh/guides/open-tools#hermes) | API 模式、模型与记忆 |
+
+从 cc-switch 迁入现有配置时，先阅读[迁移教程](/zh/guides/migration)，了解同 ID 覆盖、备份
+和分批验收。
 
 涉及模型路由、数据库恢复或工具专属 JSON 时，请转到[高级功能](/zh/advanced)。

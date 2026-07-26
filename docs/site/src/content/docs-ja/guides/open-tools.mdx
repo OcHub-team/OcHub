@@ -1,0 +1,181 @@
+---
+title: Grok Build、OpenCode、OpenClaw、Hermes を設定する
+description: 各ツールの書き込み方式、プロトコル項目、固有メンテナンス機能を理解します。
+audience: human
+sidebar:
+  order: 7
+---
+
+4 つともプロバイダーを管理できますが、書き込み方式と共有機能が異なります。
+
+| アプリ | 方式 | MCP | スキル | 既定ディレクトリ |
+| --- | --- | --- | --- | --- |
+| Grok Build | 現在のプロバイダーを切り替え | 対応 | 非対応 | `~/.grok` |
+| OpenCode | 複数プロバイダー共存 | 対応 | 対応 | `~/.config/opencode` |
+| OpenClaw | 複数プロバイダー共存 | 非対応 | 非対応 | `~/.openclaw` |
+| Hermes | 複数プロバイダー共存 | 対応 | 対応 | `~/.hermes` |
+
+共存方式では複数プロバイダーを 1 つのツール設定へ書き込みます。「ツールから削除」は
+選択した 1 項目だけを削除します。
+
+## Grok Build
+
+Grok Build は 1 つの現在モデルプロファイルで動作します。プリセットまたは手入力で設定します。
+
+<Steps>
+
+1. **プロファイルを定義します。** `[models].default` が参照するクライアント設定名です。
+
+2. **上流モデルを入力します。** プロバイダーへ送る実 ID です。表示名は読みやすさだけに作用します。
+
+3. **Base URL を入力します。** 選択したプロトコルの基点を使います。
+
+4. **認証方式を選びます。** API キーは設定へ秘密値を書き込みます。環境変数は
+   `XAI_API_KEY` などの名前だけを保存し、Grok Build の実行環境にその値が必要です。
+
+5. **API バックエンドを選びます。** OpenAI Responses、OpenAI Chat Completions、
+   Anthropic Messages から上流に合うものを選びます。
+
+6. **コンテキスト長を設定します。** 上流モデルが実際に対応するトークン数を使います。
+
+7. **`config.toml` を確認して切り替えます。** Grok Build を再起動し、実リクエストを送ります。
+
+</Steps>
+
+環境変数方式が OcHub では成功し Grok Build で失敗する場合、プロセスが異なる環境を継承
+しています。同じターミナルから起動するか、実際に読み取る起動環境へ変数を定義します。
+
+## OpenCode
+
+OpenCode は `opencode.json` の `provider.<id>` に保存するため、Provider ID は一意にします。
+1 項目を編集しても他のプロバイダーは保持されます。
+
+### OpenCode プロバイダーを追加する
+
+1. `openrouter` や `company_ai` のような安定した ID を入力します。
+2. 上流に合う AI SDK を選びます。
+
+   | 上流 | 一般的なパッケージ |
+   | --- | --- |
+   | OpenAI 互換サードパーティー | `@ai-sdk/openai-compatible` |
+   | OpenAI 公式 | `@ai-sdk/openai` |
+   | Anthropic / Claude | `@ai-sdk/anthropic` |
+   | Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
+   | Google Gemini | `@ai-sdk/google` |
+
+3. Base URL と API キーを入力します。公式 SDK は既定アドレスを使える場合があります。
+4. モデル ID、表示名、任意のコンテキスト／出力上限を追加します。
+5. 必要な場合だけ `options.*` 拡張やリクエストヘッダーを追加します。
+6. プレビューが対象 `provider.<id>` だけを変更することを確認します。
+7. 保存してツールへ追加または切り替え、OpenCode 内でモデルを選びます。
+
+オプション拡張では真偽値と数値をリテラルとして解析します。`setCacheKey` や Bedrock の
+リージョン・認証項目に使えますが、型を確認してください。
+
+### OMO 設定
+
+高度なツールから OMO / OMO Slim を読み取り、無効化できます。無効化は対応ファイルを削除し、
+関連プロバイダーの現在マークを消します。
+
+1. 先に OMO または OMO Slim を読み取ります。
+2. OpenCode ディレクトリをバックアップします。
+3. 不要と確認できた場合だけ無効化します。
+4. OpenCode ページで現在のプロバイダーを再確認します。
+
+## OpenClaw
+
+OpenClaw のプロバイダーは `openclaw.json` の `models.providers.<id>` にあります。複数を
+保持しますが、OcHub は OpenClaw の MCP とスキルを管理しません。
+
+### プロバイダーとモデル
+
+1. 実際の上流プロトコルを選びます。
+
+   - `openai-completions`
+   - `openai-responses`
+   - `anthropic-messages`
+   - `google-generative-ai`
+   - `bedrock-converse-stream`
+
+2. Base URL と API キーを入力します。
+3. モデル ID、表示名、コンテキスト長、推論モデルかどうかを追加します。
+4. 必要なテナント／ルーティングヘッダーだけを追加します。
+5. 正しい ID の下に生成されることを確認して保存します。
+
+プロトコルは必須です。キーが正しくても選択が違うと 404、リクエストボディエラー、
+ストリーミング解析エラーになります。
+
+### デフォルトモデル、環境、ツール権限
+
+**高度なツール → OpenClaw の高度な設定**：
+
+| 領域 | 内容 | 用途 |
+| --- | --- | --- |
+| デフォルトモデル JSON | `agents.defaults.model` | `primary`、`fallbacks` など |
+| 環境 JSON | `env` | 実行時のキーと値 |
+| ツール設定 JSON | `tools` | `profile`、`allow`、`deny` |
+
+先に設定チェックを実行します。オブジェクト、配列、文字列の型を正しくし、保存後に表示される
+バックアップパスを記録します。
+
+<Aside type="caution" title="ツール権限は Agent の操作範囲を変えます">
+
+`tools.allow` と `tools.deny` の変更はローカル権限を拡大または縮小します。必要最小限だけを
+追加し、管理されたテストを行ってください。
+
+</Aside>
+
+## Hermes
+
+Hermes は既定で無効の場合があります。**設定 → アプリとプラグイン**で有効にします。
+
+### カスタムプロバイダー
+
+1. API モードを選びます。
+
+   | モード | 上流 |
+   | --- | --- |
+   | `chat_completions` | OpenAI 互換 Chat |
+   | `anthropic_messages` | Claude Messages |
+   | `codex_responses` | OpenAI Responses |
+   | `bedrock_converse` | AWS Bedrock Converse |
+
+2. Base URL と API キーを入力します。
+3. モデルを追加します。最初の ID が実行時と `/model` のデフォルトになります。
+4. 任意の表示名とコンテキスト長を追加します。
+5. 呼び出し間隔が必要なら `rate_limit_delay` を秒で設定します。
+6. `config.yaml` を確認して保存し、Hermes を再起動します。
+
+明示しない場合は Chat Completions として扱われるため、Anthropic、Responses、Bedrock は
+対応モードを必ず選びます。
+
+### モデルとメモリ
+
+**高度なツール → Hermes のモデルとメモリ**では：
+
+- `config.yaml` の `model` ノードを読み取り・保存。
+- MEMORY と USER メモリを編集。
+- それぞれを有効／無効化。
+- 文字数と状態を確認。
+
+Hermes Agent がメモリを書いている間は編集せず、表示されたバックアップパスを記録します。
+
+## 確認と診断
+
+1. 生成ファイルとパスを確認。
+2. 保存後に「追加済み」または「現在」を確認。
+3. 対象ツールを完全に再起動。
+4. 新しいプロバイダーとモデルを選択。
+5. 短いリクエストを送信。
+6. ツールエラー、OcHub 使用量、上流ログを確認。
+
+| 問題 | よくある原因 |
+| --- | --- |
+| プロバイダーがない | 保存だけで追加していない、またはディレクトリ違い |
+| 別項目を上書き | 共存アプリで Provider ID が重複 |
+| 401 | キー、環境変数、起動環境の不一致 |
+| 404 / ボディエラー | バックエンド、プロトコル、API モードの誤り |
+| モデルは見えるが失敗 | ID、コンテキスト、権限の不一致 |
+| 高度な保存に失敗 | JSON/YAML ノード型の誤り |
+
+コピー、削除、設定ドリフトは[プロバイダー管理](/ja/guides/providers)を参照してください。

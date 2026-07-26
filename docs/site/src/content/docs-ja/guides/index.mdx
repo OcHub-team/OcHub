@@ -1,0 +1,68 @@
+---
+title: 日常機能
+description: プロバイダー、アプリ固有設定、MCP、スキル、セッション、使用量、外観の基本操作。
+audience: human
+sidebar:
+  order: 20
+  group:
+    label: 日常機能
+    icon: ph:compass
+---
+
+最初の接続が成功したら、目的に合うガイドを選びます。多くの設定はすぐに反映されます。
+データ上書きや実設定の書き換えを伴う操作は、各ページで明示しています。
+
+<CardGrid>
+
+<Card title="プロバイダー管理" icon="ph:plugs-connected">
+
+アプリごとの直接接続を検出、編集、並べ替え、コピー、切り替えます。
+
+[ガイドを読む](/ja/guides/providers)
+
+</Card>
+
+<Card title="MCP とスキル" icon="ph:puzzle-piece">
+
+共有機能を一元保存し、対応アプリごとに有効化して同期します。
+
+[ガイドを読む](/ja/guides/mcp-skills)
+
+</Card>
+
+<Card title="セッションと使用量" icon="ph:chart-line-up">
+
+ローカル会話を閲覧し、トークン、キャッシュ、コスト、リクエスト詳細を確認します。
+
+[ガイドを読む](/ja/guides/sessions-usage)
+
+</Card>
+
+<Card title="設定とテーマ" icon="ph:palette">
+
+言語、起動動作、アプリ表示、ターミナル、テーマを調整します。
+
+[ガイドを読む](/ja/guides/settings-themes)
+
+</Card>
+
+</CardGrid>
+
+## アプリ別ガイド
+
+基本的なプロバイダー操作は共通ですが、認証、ファイル形式、高度な機能が異なります。
+
+| ツール | ガイド | 主な内容 |
+| --- | --- | --- |
+| Claude Code / Claude Desktop | [Claude を設定](/ja/guides/claude) | 認証変数、役割モデル、プラグイン、MCP |
+| Codex | [Codex を設定](/ja/guides/codex) | OAuth、Responses、推論、履歴 |
+| Grok Build | [その他のツール](/ja/guides/open-tools#grok-build) | プロファイル、API バックエンド、環境変数 |
+| OpenCode | [その他のツール](/ja/guides/open-tools#opencode) | AI SDK、複数プロバイダー、OMO |
+| OpenClaw | [その他のツール](/ja/guides/open-tools#openclaw) | API プロトコル、デフォルトモデル、ツール権限 |
+| Hermes | [その他のツール](/ja/guides/open-tools#hermes) | API モード、モデル、メモリ |
+
+cc-switch から既存データを移す場合は、ID 競合、バックアップ、段階的な確認を説明する
+[移行ガイド](/ja/guides/migration)から始めます。
+
+モデルルーティング、データベース復元、アプリ固有 JSON は
+[高度な機能](/ja/advanced)へ進んでください。

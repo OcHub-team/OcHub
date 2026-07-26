@@ -1,0 +1,106 @@
+---
+title: Troubleshooting
+description: Diagnose connection, configuration, MCP, session, and sync problems layer by layer.
+audience: human
+sidebar:
+  order: 40
+  group:
+    label: Troubleshooting
+    icon: ph:first-aid
+---
+
+Change one variable at a time. First decide whether OcHub wrote the wrong
+configuration, the target tool did not reload it, or the upstream rejected the
+request.
+
+## General sequence
+
+1. Record the complete status message shown by OcHub.
+2. Confirm the current app, provider, or relay station.
+3. Expand Files to be written and verify the path and important fields.
+4. Restart the target CLI and send the shortest possible request.
+5. For relay mode, confirm OcHub is running and inspect the Usage request log.
+6. Change model mapping, reasoning, or environment variables only after those
+   checks.
+
+## Save succeeded but the tool did not change
+
+- Confirm that you used **Switch** or **Add to tool**, not only Save.
+- Check the app's custom configuration directory.
+- Exit the running CLI; an existing process may cache configuration.
+- Look for an external-modification conflict or another manager writing the
+  file.
+- OpenCode, OpenClaw, and Hermes keep multiple providers. Claude, Claude
+  Desktop, Codex, and Grok Build emphasize a current provider, so their actions
+  differ.
+
+## The address is reachable but requests fail
+
+URL tests and connectivity checks may treat any HTTP response as reachable.
+Then check:
+
+- Whether the key belongs to that endpoint.
+- Whether the model exists on that interface.
+- Whether the upstream expects Anthropic, OpenAI Chat, or OpenAI Responses.
+- Whether the account has balance, quota, and model access.
+- Whether a default model or exception rewrote the request.
+- The exact upstream status code and error.
+
+## Relay station cannot connect
+
+- Confirm the card is enabled.
+- Confirm that the station was applied to the app instead of only saved.
+- Use connectivity checks to separate local-gateway and upstream failures.
+- Temporarily switch to a verified direct connection to prove the CLI still
+  works.
+
+If startup reports that the control API port is occupied, close the owning
+program and restart, or choose another port with `MS_PORT`. The UI and relay may
+still work, while integrations that require the control API do not.
+
+## MCP is missing from an app
+
+- Confirm the app toggle is enabled on the server card.
+- Select **Sync to apps** after changing toggles.
+- Verify that the server JSON is an object with the right `type`, `command`, or
+  `url`.
+- A stdio command must be on the `PATH` visible to the target tool.
+- Confirm the target app is enabled and its config directory is correct.
+- Restart the app after syncing.
+
+## Skill install or update fails
+
+- Check network access and the repository URL.
+- Use `owner/repo`, `owner/repo@branch`, or a GitHub URL.
+- Confirm the skills CLI is available.
+- A directory conflict means the destination exists; inspect it before
+  overwriting anything.
+- When a batch update partially fails, address entries one at a time.
+
+## Sessions or usage are empty
+
+- Sessions read only history actually written by supported CLIs.
+- Check the app config directory, session range, and app filter.
+- Refresh and wait for scanning to finish.
+- Reset Provider, model, and status filters in Usage.
+- Only relay requests consistently include gateway latency; session imports may
+  omit fields.
+
+## Sync or restore fails
+
+- Retest the saved WebDAV or S3 connection.
+- Verify Endpoint, Region, Bucket, remote directory, and profile.
+- A successful test does not save the form; select Save afterward.
+- Restore is canceled if OcHub cannot create a local safety backup.
+- Do not upload different snapshots from multiple devices simultaneously.
+
+## Still stuck
+
+Include the following in a report:
+
+- OcHub version, operating system, and install method.
+- Target app and connection mode.
+- The shortest reproducible sequence.
+- The full error text.
+- A redacted configuration preview with no API key, token, or personal session
+  content.
