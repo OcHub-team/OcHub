@@ -3,6 +3,7 @@
 //! Handles provider CRUD operations, switching, and configuration management.
 //! Ported from cc-switch `services/provider/mod.rs`.
 
+pub mod drift;
 mod endpoints;
 pub(crate) mod live;
 mod usage;
@@ -34,9 +35,12 @@ pub(crate) use live::sanitize_claude_settings_for_live;
 #[allow(unused_imports)]
 pub(crate) use live::{
     build_effective_settings_with_common_config, normalize_provider_common_config_for_storage,
-    provider_exists_in_live_config, strip_common_config_from_live_settings,
+    provider_exists_in_live_config, write_live_preserving_user_edits,
     write_live_with_common_config,
 };
+
+pub use drift::{DriftConflict, LiveDrift, LiveSnapshot};
+pub use live::DriftResolution;
 
 // Internal re-exports
 use live::{
@@ -72,6 +76,10 @@ pub struct ProviderService;
 #[serde(rename_all = "camelCase")]
 pub struct SwitchResult {
     pub warnings: Vec<String>,
+    /// What was changed in the live config outside OcHub, if anything. Present
+    /// so the caller can show it; the switch itself has already resolved it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift: Option<LiveDrift>,
 }
 
 impl ProviderService {
@@ -96,6 +104,72 @@ impl ProviderService {
         } else {
             provider_exists_in_live_config(app_type, provider_id)
         }
+    }
+
+    /// Store account material the tool refreshed on its own back onto the
+    /// provider being switched away from.
+    ///
+    /// Codex rewrites `auth.json` when its OAuth token is refreshed. That token
+    /// belongs to the account that was active, so unlike the rest of the file it
+    /// cannot be carried onto the next provider — it has to be captured here or
+    /// it is lost. Only a provider that actually owns the live `auth.json` may
+    /// claim it; a config-only provider is merely borrowing whichever account
+    /// happens to be logged in.
+    fn capture_outgoing_account_state(
+        state: &AppState,
+        app_type: &AppType,
+        outgoing: &Provider,
+    ) -> Result<(), AppError> {
+        if !matches!(app_type, AppType::Codex) {
+            return Ok(());
+        }
+
+        let Ok(live) = read_live_settings(*app_type) else {
+            return Ok(());
+        };
+        let Some(live_auth) = live.get("auth") else {
+            return Ok(());
+        };
+
+        let stored_auth = outgoing.settings_config.get("auth");
+        if stored_auth == Some(live_auth) {
+            return Ok(());
+        }
+
+        let owns_live_auth = crate::apps::codex::codex_provider_owns_live_auth(
+            outgoing.category.as_deref(),
+            stored_auth.unwrap_or(&Value::Null),
+            outgoing
+                .settings_config
+                .get("config")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            crate::settings::preserve_codex_official_auth_on_switch(),
+        );
+        if !owns_live_auth {
+            return Ok(());
+        }
+
+        let mut captured = live_auth.clone();
+
+        // The writer strips `OPENAI_API_KEY` out of a non-official provider's
+        // live `auth.json` and projects it into the config's bearer token, so
+        // taking the live object verbatim would delete the stored key.
+        if let (Some(captured), Some(stored_key)) = (
+            captured.as_object_mut(),
+            stored_auth.and_then(crate::apps::codex::extract_codex_auth_api_key),
+        ) {
+            captured
+                .entry("OPENAI_API_KEY".to_string())
+                .or_insert(Value::String(stored_key));
+        }
+
+        let mut updated = outgoing.clone();
+        let Some(settings) = updated.settings_config.as_object_mut() else {
+            return Ok(());
+        };
+        settings.insert("auth".to_string(), captured);
+        state.db.save_provider(app_type.as_str(), &updated)
     }
 
     fn provider_live_config_managed(provider: &Provider) -> Option<bool> {
@@ -331,7 +405,16 @@ impl ProviderService {
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
         if is_current {
-            write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
+            // Saving an edit here used to overwrite the file outright, which is
+            // how a hand-edited `settings.json` disappeared without the switch
+            // flow ever being involved.
+            let drift = write_live_preserving_user_edits(
+                state.db.as_ref(),
+                &app_type,
+                existing_provider.as_ref(),
+                &provider,
+            )?;
+            live::log_drift(&app_type, &provider, &drift);
             crate::services::mcp::McpService::sync_all_enabled(state)?;
         }
 
@@ -450,33 +533,52 @@ impl ProviderService {
         Ok(())
     }
 
-    /// Switch to a provider
+    /// What a switch would change on disk, without changing it.
+    ///
+    /// The UI asks this first so an external edit can be shown to the user
+    /// *before* their file is touched, rather than reported afterwards.
+    pub fn preview_switch(
+        state: &AppState,
+        app_type: AppType,
+        id: &str,
+    ) -> Result<LiveDrift, AppError> {
+        crate::plugin::registry::ensure_app_type_enabled(&app_type)?;
+
+        let providers = state.db.get_all_providers(app_type.as_str())?;
+        let Some(provider) = providers.get(id) else {
+            return Ok(LiveDrift::default());
+        };
+        if app_type.is_additive_mode() {
+            return Ok(LiveDrift::default());
+        }
+
+        let outgoing = crate::settings::get_effective_current_provider(&state.db, &app_type)?
+            .and_then(|current_id| providers.get(&current_id).cloned());
+
+        live::preview_live_drift(state.db.as_ref(), &app_type, outgoing.as_ref(), provider)
+    }
+
+    /// Switch to a provider, keeping any edit made outside OcHub.
     pub fn switch(state: &AppState, app_type: AppType, id: &str) -> Result<SwitchResult, AppError> {
+        Self::switch_with(state, app_type, id, DriftResolution::Preserve)
+    }
+
+    /// Switch to a provider, resolving an external edit as the caller decided.
+    pub fn switch_with(
+        state: &AppState,
+        app_type: AppType,
+        id: &str,
+        resolution: DriftResolution,
+    ) -> Result<SwitchResult, AppError> {
         crate::plugin::registry::ensure_app_type_enabled(&app_type)?;
 
         // Check if provider exists
         let providers = state.db.get_all_providers(app_type.as_str())?;
-        let _provider = providers
+        providers
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
 
-        // OMO providers are switched through their own exclusive path.
-        if matches!(app_type, AppType::OpenCode) && _provider.category.as_deref() == Some("omo") {
-            return Self::switch_normal(state, app_type, id, &providers);
-        }
-
-        // OMO Slim providers are switched through their own exclusive path.
-        if matches!(app_type, AppType::OpenCode)
-            && _provider.category.as_deref() == Some("omo-slim")
-        {
-            return Self::switch_normal(state, app_type, id, &providers);
-        }
-
-        if matches!(app_type, AppType::ClaudeDesktop) {
-            return Self::switch_normal(state, app_type, id, &providers);
-        }
-
-        Self::switch_normal(state, app_type, id, &providers)
+        Self::switch_normal(state, app_type, id, &providers, resolution)
     }
 
     /// Switch flow with a live-config write.
@@ -485,6 +587,7 @@ impl ProviderService {
         app_type: AppType,
         id: &str,
         providers: &indexmap::IndexMap<String, Provider>,
+        resolution: DriftResolution,
     ) -> Result<SwitchResult, AppError> {
         let provider = providers
             .get(id)
@@ -511,27 +614,23 @@ impl ProviderService {
 
         let mut result = SwitchResult::default();
 
-        // Backfill: Backfill current live config to current provider
         let current_id = crate::settings::get_effective_current_provider(&state.db, &app_type)?;
+        let outgoing = current_id
+            .as_deref()
+            .and_then(|current_id| providers.get(current_id));
 
-        if let Some(current_id) = current_id {
+        // The live file is no longer read back wholesale into the provider we
+        // are leaving — an edit made outside OcHub is a property of the file,
+        // not of that provider, and `write_live_preserving_user_edits` carries
+        // it forward instead. Account state is the exception: it belongs to the
+        // account that was active and cannot follow the switch.
+        if let (Some(current_id), Some(outgoing)) = (current_id.as_deref(), outgoing) {
             if current_id != id && !app_type.is_additive_mode() {
-                if let Ok(live_config) = read_live_settings(app_type) {
-                    if let Some(mut current_provider) = providers.get(&current_id).cloned() {
-                        current_provider.settings_config = strip_common_config_from_live_settings(
-                            state.db.as_ref(),
-                            &app_type,
-                            &current_provider,
-                            live_config,
-                        );
-                        if let Err(e) = state.db.save_provider(app_type.as_str(), &current_provider)
-                        {
-                            log::warn!("Backfill failed: {e}");
-                            result
-                                .warnings
-                                .push(format!("backfill_failed:{current_id}"));
-                        }
-                    }
+                if let Err(e) = Self::capture_outgoing_account_state(state, &app_type, outgoing) {
+                    log::warn!("Backfill failed: {e}");
+                    result
+                        .warnings
+                        .push(format!("backfill_failed:{current_id}"));
                 }
             }
         }
@@ -545,8 +644,18 @@ impl ProviderService {
             state.db.set_current_provider(app_type.as_str(), id)?;
         }
 
-        // Sync to live.
-        write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
+        // Sync to live, resolving any external edit the way the caller decided.
+        let drift = live::write_live_resolving_drift(
+            state.db.as_ref(),
+            &app_type,
+            outgoing,
+            provider,
+            resolution,
+        )?;
+        live::log_drift(&app_type, provider, &drift);
+        if !drift.is_empty() {
+            result.drift = Some(drift);
+        }
 
         // Hermes is additive: update top-level `model:` section to point at this provider.
         if matches!(app_type, AppType::Hermes) {

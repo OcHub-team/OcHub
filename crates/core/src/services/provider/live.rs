@@ -13,6 +13,7 @@ use crate::error::AppError;
 use crate::model::Provider;
 use crate::paths::{delete_file, get_claude_settings_path, read_json_file, write_json_file};
 
+use super::drift::{self, LiveDrift};
 use super::normalize_claude_models_in_value;
 
 pub(crate) fn sanitize_claude_settings_for_live(settings: &Value) -> Value {
@@ -505,156 +506,159 @@ pub(crate) fn write_live_with_common_config_ungated(
         return Ok(());
     }
 
-    write_live_snapshot(app_type, &effective_provider)
+    write_live_snapshot(app_type, &effective_provider)?;
+    // Re-baseline even on the paths that overwrite without asking, so the next
+    // comparison blames the user for the user's edits and nobody else's.
+    drift::record_snapshot(app_type, &effective_provider.id);
+    Ok(())
 }
 
-pub(crate) fn strip_common_config_from_live_settings(
-    db: &Database,
-    app_type: &AppType,
-    provider: &Provider,
-    live_settings: Value,
-) -> Value {
-    let snippet = match db.get_config_snippet(app_type.as_str()) {
-        Ok(snippet) => snippet,
-        Err(err) => {
-            log::warn!(
-                "Failed to load common config for {} while backfilling '{}': {err}",
-                app_type.as_str(),
-                provider.id
-            );
-            return restore_live_settings_for_provider_backfill(app_type, provider, live_settings);
-        }
-    };
-
-    let backfill_settings = if provider_uses_common_config(app_type, provider, snippet.as_deref()) {
-        match snippet.as_deref() {
-            Some(snippet_text) => {
-                match remove_common_config_from_settings(app_type, &live_settings, snippet_text) {
-                    Ok(settings) => settings,
-                    Err(err) => {
-                        log::warn!(
-                            "Failed to strip common config for {} provider '{}': {err}",
-                            app_type.as_str(),
-                            provider.id
-                        );
-                        live_settings
-                    }
-                }
-            }
-            None => live_settings,
-        }
-    } else {
-        live_settings
-    };
-
-    restore_live_settings_for_provider_backfill(app_type, provider, backfill_settings)
-}
-
-fn restore_live_settings_for_provider_backfill(
-    app_type: &AppType,
-    provider: &Provider,
-    live_settings: Value,
-) -> Value {
-    if matches!(app_type, AppType::GrokBuild) {
-        let mut settings = live_settings;
-        if let Err(error) =
-            crate::apps::grokbuild::strip_grok_mcp_servers_from_settings(&mut settings)
-        {
-            log::warn!(
-                "Failed to strip Grok Build MCP projection while backfilling '{}': {error}",
-                provider.id
-            );
-        }
-        return settings;
+/// Record an external edit in the log for the paths that have nowhere to show it
+/// yet. Conflicts are the half a user has to know about, so they are louder.
+pub(crate) fn log_drift(app_type: &AppType, provider: &Provider, report: &LiveDrift) {
+    if report.is_empty() {
+        return;
     }
 
-    if !matches!(app_type, AppType::Codex) {
-        return live_settings;
-    }
-
-    let mut settings = live_settings;
-    let provider_auth = provider
-        .settings_config
-        .get("auth")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-    let provider_config = provider
-        .settings_config
-        .get("config")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let provider_owns_live_auth = crate::apps::codex::codex_provider_owns_live_auth(
-        provider.category.as_deref(),
-        &provider_auth,
-        provider_config,
-        crate::settings::preserve_codex_official_auth_on_switch(),
-    );
-    let restore_provider_token =
-        crate::apps::codex::should_restore_codex_provider_token_for_backfill(
-            provider.category.as_deref(),
-            &provider.settings_config,
-        );
-    if let Err(err) = crate::apps::codex::restore_codex_settings_for_backfill(
-        &mut settings,
-        &provider.settings_config,
-        restore_provider_token,
-    ) {
+    if report.has_conflicts() {
         log::warn!(
-            "Failed to restore Codex settings while backfilling '{}': {err}",
+            "{} live config was edited outside OcHub; {} change(s) were overwritten by provider '{}': {}",
+            app_type.as_str(),
+            report.conflicts.len(),
+            provider.id,
+            report
+                .conflicts
+                .iter()
+                .map(|conflict| conflict.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if !report.preserved.is_empty() || !report.removed.is_empty() {
+        log::info!(
+            "{} live config: kept {} external edit(s), {} deletion(s) across provider '{}'",
+            app_type.as_str(),
+            report.preserved.len(),
+            report.removed.len(),
             provider.id
         );
     }
+}
 
-    // Config-only custom providers borrow whatever auth.json is currently live.
-    // Do not capture that unrelated account during switch-away backfill. A
-    // login/hybrid provider that explicitly owned auth.json is allowed to keep
-    // refreshed OAuth tokens from Live.
-    if provider.category.as_deref() != Some("official") && !provider_owns_live_auth {
-        let restored_provider_key = restore_provider_token
-            .then(|| {
-                settings
-                    .get("auth")
-                    .and_then(crate::apps::codex::extract_codex_auth_api_key)
-            })
-            .flatten();
-        let mut restored_auth = provider_auth;
-        if let (Some(auth), Some(provider_key)) =
-            (restored_auth.as_object_mut(), restored_provider_key)
-        {
-            auth.insert("OPENAI_API_KEY".to_string(), Value::String(provider_key));
-        }
-        if let Some(obj) = settings.as_object_mut() {
-            obj.insert("auth".to_string(), restored_auth);
-        }
+/// Compare the live file against what OcHub last wrote, and against what it is
+/// about to write.
+///
+/// Returns the merged configuration alongside the report. Splitting this from
+/// the write is what lets the UI show the user a diff *before* their file
+/// changes, rather than a summary of what already happened to it.
+fn resolve_live_write(
+    db: &Database,
+    app_type: &AppType,
+    outgoing: Option<&Provider>,
+    incoming: &Provider,
+) -> Result<(Value, Value, LiveDrift), AppError> {
+    let incoming_settings = build_effective_settings_with_common_config(db, app_type, incoming)?;
+
+    if !drift::tracks_live_drift(app_type) {
+        return Ok((
+            incoming_settings.clone(),
+            incoming_settings,
+            LiveDrift::default(),
+        ));
     }
 
-    // 统一会话开关注入的共享 `custom` 路由只属于 live 配置；切换回填时
-    // 必须剥掉，否则官方供应商的存储配置被污染，关闭开关后无法还原。
-    if provider.category.as_deref() == Some("official") {
-        if let Err(err) =
-            crate::apps::codex::strip_codex_unified_session_bucket_from_settings(&mut settings)
-        {
-            log::warn!(
-                "Failed to strip unified session bucket while backfilling '{}': {err}",
-                provider.id
-            );
+    // The baseline is what OcHub last wrote. Falling back to the outgoing
+    // provider's effective settings keeps the first switch after an upgrade
+    // honest: without it, every edit made before the snapshot existed would
+    // look like OcHub's own work and be overwritten without a word.
+    let base = match drift::load_snapshot(app_type) {
+        Some(snapshot) => Some(snapshot.settings),
+        None => outgoing
+            .map(|provider| build_effective_settings_with_common_config(db, app_type, provider))
+            .transpose()?,
+    };
+
+    let (merged, report) = match (base, read_live_settings(*app_type)) {
+        (Some(base), Ok(live)) => {
+            drift::merge_user_edits(app_type, &base, &live, &incoming_settings)
         }
+        // No baseline, or nothing readable on disk: there is no external edit to
+        // distinguish, so the new configuration is simply the file.
+        _ => (incoming_settings.clone(), LiveDrift::default()),
+    };
+
+    Ok((merged, incoming_settings, report))
+}
+
+/// What a live write should do with edits made outside OcHub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DriftResolution {
+    /// Carry the external edits onto the new configuration. The default: an
+    /// edit OcHub has no opinion about is the user's, not ours to drop.
+    #[default]
+    Preserve,
+    /// Write the stored configuration as-is, dropping the external edits.
+    Discard,
+}
+
+/// Report what a live write would change on disk, without writing anything.
+pub(crate) fn preview_live_drift(
+    db: &Database,
+    app_type: &AppType,
+    outgoing: Option<&Provider>,
+    incoming: &Provider,
+) -> Result<LiveDrift, AppError> {
+    crate::plugin::registry::ensure_app_type_enabled(app_type)?;
+    let (_, _, report) = resolve_live_write(db, app_type, outgoing, incoming)?;
+    Ok(report)
+}
+
+/// Write `incoming` to the live config, keeping edits made outside OcHub.
+///
+/// Anything changed on disk since OcHub last wrote is carried onto the new
+/// configuration unless `incoming` sets the same key, in which case `incoming`
+/// wins and the collision is reported — writing it is the action the user just
+/// asked for.
+pub(crate) fn write_live_preserving_user_edits(
+    db: &Database,
+    app_type: &AppType,
+    outgoing: Option<&Provider>,
+    incoming: &Provider,
+) -> Result<LiveDrift, AppError> {
+    write_live_resolving_drift(db, app_type, outgoing, incoming, DriftResolution::Preserve)
+}
+
+/// Write `incoming` to the live config, resolving any external edit as asked.
+///
+/// The report describes the edits that were found either way, so a caller that
+/// discarded them can still say what it dropped.
+pub(crate) fn write_live_resolving_drift(
+    db: &Database,
+    app_type: &AppType,
+    outgoing: Option<&Provider>,
+    incoming: &Provider,
+    resolution: DriftResolution,
+) -> Result<LiveDrift, AppError> {
+    crate::plugin::registry::ensure_app_type_enabled(app_type)?;
+
+    if !drift::tracks_live_drift(app_type) {
+        write_live_with_common_config_ungated(db, app_type, incoming)?;
+        return Ok(LiveDrift::default());
     }
 
-    // `modelCatalog` is an OcHub-private field whose SSOT is the DB. Live's
-    // `config.toml` only carries a lossy projection (`model_catalog_json` →
-    // generated catalog file) that external Codex.app config rewrites can drop,
-    // so `read_live_settings` may reconstruct it as
-    // absent. Never let a switch-away backfill from Live erase the stored
-    // mapping: prefer the DB provider's `modelCatalog`, falling back to whatever
-    // Live reconstructed only when the DB has none.
-    if let Some(stored_catalog) = provider.settings_config.get("modelCatalog") {
-        if let Some(obj) = settings.as_object_mut() {
-            obj.insert("modelCatalog".to_string(), stored_catalog.clone());
-        }
-    }
+    let (merged, stored, report) = resolve_live_write(db, app_type, outgoing, incoming)?;
 
-    settings
+    let mut effective_provider = incoming.clone();
+    effective_provider.settings_config = match resolution {
+        DriftResolution::Preserve => merged,
+        DriftResolution::Discard => stored,
+    };
+    write_live_snapshot(app_type, &effective_provider)?;
+    drift::record_snapshot(app_type, &incoming.id);
+
+    Ok(report)
 }
 
 pub(crate) fn normalize_provider_common_config_for_storage(
@@ -964,7 +968,13 @@ pub(crate) fn sync_current_provider_for_app_to_live(
 
         let providers = state.db.get_all_providers(app_type.as_str())?;
         if let Some(provider) = providers.get(&current_id) {
-            write_live_with_common_config(state.db.as_ref(), app_type, provider)?;
+            let report = write_live_preserving_user_edits(
+                state.db.as_ref(),
+                app_type,
+                Some(provider),
+                provider,
+            )?;
+            log_drift(app_type, provider, &report);
         }
     }
 
@@ -1601,126 +1611,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_switch_backfill_preserves_stored_model_catalog_when_live_lacks_it() {
-        // Reproduces the data-loss bug: switching away from a Codex provider
-        // backfills the outgoing provider from Live, but Live's config.toml had
-        // already lost its `model_catalog_json` projection after a Codex.app
-        // rewrite, so `read_live_settings` reconstructs no catalog.
-        // The stored mapping must survive the backfill.
-        let mut provider = Provider::with_id(
-            "deepseek".to_string(),
-            "DeepSeek".to_string(),
-            json!({
-                "auth": { "OPENAI_API_KEY": "sk-deepseek" },
-                "config": "model_provider = \"custom\"\nmodel = \"deepseek-v4-pro\"\n",
-                "modelCatalog": {
-                    "models": [
-                        { "model": "deepseek-v4-pro", "contextWindow": 1_000_000 }
-                    ]
-                }
-            }),
-            None,
-        );
-        provider.category = Some("cn_official".to_string());
-
-        // Live snapshot as captured during switch: no `modelCatalog` field.
-        let live_settings = json!({
-            "auth": { "OPENAI_API_KEY": "sk-deepseek" },
-            "config": "model_provider = \"custom\"\nmodel = \"deepseek-v4-pro\"\n"
-        });
-
-        let result =
-            restore_live_settings_for_provider_backfill(&AppType::Codex, &provider, live_settings);
-
-        assert_eq!(
-            result.get("modelCatalog"),
-            provider.settings_config.get("modelCatalog"),
-            "switch-away backfill must keep the DB-stored modelCatalog when Live has none"
-        );
-    }
-
-    #[test]
-    fn codex_switch_backfill_keeps_live_catalog_when_db_has_none() {
-        // When the DB provider has no stored catalog, a catalog reconstructed
-        // from Live (if any) should be left intact — the DB-preference overlay
-        // must not wipe it.
-        let mut provider = Provider::with_id(
-            "deepseek".to_string(),
-            "DeepSeek".to_string(),
-            json!({
-                "auth": { "OPENAI_API_KEY": "sk-deepseek" },
-                "config": "model_provider = \"custom\"\nmodel = \"deepseek-v4-pro\"\n"
-            }),
-            None,
-        );
-        provider.category = Some("cn_official".to_string());
-
-        let live_settings = json!({
-            "auth": { "OPENAI_API_KEY": "sk-deepseek" },
-            "config": "model_provider = \"custom\"\nmodel = \"deepseek-v4-pro\"\n",
-            "modelCatalog": { "models": [ { "model": "deepseek-v4-pro" } ] }
-        });
-
-        let result = restore_live_settings_for_provider_backfill(
-            &AppType::Codex,
-            &provider,
-            live_settings.clone(),
-        );
-
-        assert_eq!(
-            result.get("modelCatalog"),
-            live_settings.get("modelCatalog"),
-            "backfill must keep the Live-reconstructed catalog when the DB has none"
-        );
-    }
-
-    #[test]
-    fn codex_config_only_provider_does_not_capture_live_oauth() {
-        let mut provider = Provider::with_id(
-            "relay".to_string(),
-            "Relay".to_string(),
-            json!({
-                "auth": {
-                    "auth_mode": "chatgpt",
-                    "tokens": { "access_token": "stored-unused-account" }
-                },
-                "config": r#"model_provider = "relay"
-
-[model_providers.relay]
-name = "Relay"
-base_url = "https://relay.example/v1"
-wire_api = "responses"
-experimental_bearer_token = "sk-relay"
-"#
-            }),
-            None,
-        );
-        provider.category = Some("custom".to_string());
-        let live_settings = json!({
-            "auth": {
-                "auth_mode": "chatgpt",
-                "tokens": { "access_token": "different-live-account" }
-            },
-            "config": provider.settings_config["config"].clone()
-        });
-
-        let result =
-            restore_live_settings_for_provider_backfill(&AppType::Codex, &provider, live_settings);
-
-        assert_eq!(
-            result["auth"]["tokens"]["access_token"], "stored-unused-account",
-            "relay-only providers borrow live auth.json and must not capture it"
-        );
-        assert_eq!(
-            crate::apps::codex::extract_codex_experimental_bearer_token(
-                result["config"].as_str().unwrap()
-            )
-            .as_deref(),
-            Some("sk-relay")
-        );
-    }
-
-    #[test]
     fn automatic_default_import_allows_unmanaged_official_seed_only() {
         let db = Arc::new(Database::memory().expect("memory db"));
         let state = AppState::new(db);
@@ -1773,6 +1663,172 @@ experimental_bearer_token = "sk-relay"
         assert!(
             !should_auto_import_default_config(&state, &AppType::OpenCode)
                 .expect("additive discovery policy")
+        );
+    }
+
+    /// Scoped `OCHUB_TEST_HOME` for tests that touch real config paths.
+    struct TestHome {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl TestHome {
+        fn new() -> Self {
+            let guard = crate::test_support::env_lock();
+            let dir = tempfile::tempdir().expect("temp home");
+            std::env::set_var("OCHUB_TEST_HOME", dir.path());
+            crate::settings::reload_settings().expect("reload settings");
+            Self {
+                _guard: guard,
+                _dir: dir,
+            }
+        }
+    }
+
+    impl Drop for TestHome {
+        fn drop(&mut self) {
+            std::env::remove_var("OCHUB_TEST_HOME");
+            crate::settings::reload_settings().ok();
+        }
+    }
+
+    fn claude_provider(id: &str, base_url: &str) -> Provider {
+        Provider::with_id(
+            id.to_string(),
+            id.to_string(),
+            json!({ "env": { "ANTHROPIC_BASE_URL": base_url } }),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_hand_edit_survives_a_switch_without_being_absorbed_by_the_outgoing_provider() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+
+        for provider in [
+            claude_provider("alpha", "https://alpha.example"),
+            claude_provider("beta", "https://beta.example"),
+        ] {
+            state
+                .db
+                .save_provider("claude", &provider)
+                .expect("save provider");
+        }
+
+        // OcHub writes alpha, which establishes the baseline.
+        crate::services::provider::ProviderService::switch(&state, AppType::Claude, "alpha")
+            .expect("switch to alpha");
+
+        // The user edits settings.json directly, adding something OcHub has no
+        // opinion about.
+        let path = get_claude_settings_path();
+        let mut live: Value = read_json_file(&path).expect("read live");
+        live.as_object_mut()
+            .expect("live object")
+            .insert("hooks".to_string(), json!({ "PreToolUse": [] }));
+        write_json_file(&path, &live).expect("hand edit");
+
+        let result =
+            crate::services::provider::ProviderService::switch(&state, AppType::Claude, "beta")
+                .expect("switch to beta");
+
+        // The edit is carried onto beta's configuration ...
+        let after: Value = read_json_file(&path).expect("read live after switch");
+        assert_eq!(after["hooks"], json!({ "PreToolUse": [] }));
+        assert_eq!(
+            after["env"]["ANTHROPIC_BASE_URL"],
+            json!("https://beta.example")
+        );
+
+        // ... and is not absorbed into the provider being left behind.
+        let alpha = state
+            .db
+            .get_provider_by_id("alpha", "claude")
+            .expect("load alpha")
+            .expect("alpha exists");
+        assert!(
+            alpha.settings_config.get("hooks").is_none(),
+            "a file-level edit must not become a property of the outgoing provider"
+        );
+
+        let drift = result.drift.expect("switch reports the external edit");
+        assert_eq!(drift.preserved, vec!["hooks".to_string()]);
+        assert!(!drift.has_conflicts());
+    }
+
+    #[test]
+    fn saving_the_current_provider_keeps_an_external_edit_and_reports_a_collision() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+
+        let alpha = claude_provider("alpha", "https://alpha.example");
+        state
+            .db
+            .save_provider("claude", &alpha)
+            .expect("save provider");
+        crate::services::provider::ProviderService::switch(&state, AppType::Claude, "alpha")
+            .expect("switch to alpha");
+
+        // One edit OcHub does not own, one it does.
+        let path = get_claude_settings_path();
+        let mut live: Value = read_json_file(&path).expect("read live");
+        {
+            let live = live.as_object_mut().expect("live object");
+            live.insert("statusLine".to_string(), json!({ "type": "command" }));
+            live["env"]["ANTHROPIC_BASE_URL"] = json!("https://hand.example");
+        }
+        write_json_file(&path, &live).expect("hand edit");
+
+        // Saving an edit to the current provider used to overwrite the file.
+        let mut edited = alpha.clone();
+        edited.settings_config =
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://edited.example" } });
+        crate::services::provider::ProviderService::update(
+            &state,
+            AppType::Claude,
+            Some("alpha"),
+            edited,
+        )
+        .expect("update alpha");
+
+        let after: Value = read_json_file(&path).expect("read live after update");
+        assert_eq!(
+            after["statusLine"],
+            json!({ "type": "command" }),
+            "an untouched external edit must survive a provider save"
+        );
+        assert_eq!(
+            after["env"]["ANTHROPIC_BASE_URL"],
+            json!("https://edited.example"),
+            "the value the user just typed wins the collision"
+        );
+    }
+
+    #[test]
+    fn an_untouched_live_file_switches_without_reporting_drift() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+
+        for provider in [
+            claude_provider("alpha", "https://alpha.example"),
+            claude_provider("beta", "https://beta.example"),
+        ] {
+            state
+                .db
+                .save_provider("claude", &provider)
+                .expect("save provider");
+        }
+
+        crate::services::provider::ProviderService::switch(&state, AppType::Claude, "alpha")
+            .expect("switch to alpha");
+        let result =
+            crate::services::provider::ProviderService::switch(&state, AppType::Claude, "beta")
+                .expect("switch to beta");
+
+        assert!(
+            result.drift.is_none(),
+            "a file only OcHub has written must not look edited"
         );
     }
 }

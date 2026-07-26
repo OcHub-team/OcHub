@@ -16,7 +16,9 @@ use gpui::{
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
-use ochub_core::services::provider::{self, ProviderService};
+use ochub_core::services::provider::{
+    self, drift, DriftConflict, DriftResolution, LiveDrift, ProviderService,
+};
 use ochub_core::{AppState, AppType, Provider};
 
 use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
@@ -191,6 +193,9 @@ pub struct AppRoot {
     editor: Option<Entity<ProviderEditor>>,
     /// Provider pending deletion confirmation; when `Some`, a modal is shown.
     confirm_delete: Option<ProviderDeleteTarget>,
+    /// An external edit to the live config found while previewing a switch.
+    /// Nothing has been written yet: the file is the user's to rule on.
+    pending_drift: Option<PendingDrift>,
     /// One-time acknowledgement shown after the first successful launch.
     show_first_run_notice: bool,
     /// cc-switch data found on disk that the first-run notice is offering to
@@ -294,6 +299,16 @@ impl ProviderPageLoad {
 struct ProviderDeleteTarget {
     id: String,
     name: SharedString,
+}
+
+/// A switch held at the door because the live config was edited outside OcHub.
+#[derive(Clone)]
+struct PendingDrift {
+    provider_id: String,
+    provider_name: String,
+    /// The file the edits are in, abbreviated for display.
+    path: SharedString,
+    drift: LiveDrift,
 }
 
 enum ProviderGatewayConnectError {
@@ -609,7 +624,7 @@ fn move_items_between_slots<T: Clone>(
 
 impl AppRoot {
     fn save_active(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        if self.confirm_delete.is_some() {
+        if self.confirm_delete.is_some() || self.pending_drift.is_some() {
             window.play_system_bell();
             return;
         }
@@ -655,6 +670,11 @@ impl AppRoot {
             return;
         }
         if self.confirm_delete.take().is_some() {
+            cx.notify();
+            return;
+        }
+        // Escape leaves the file exactly as the user left it.
+        if self.pending_drift.take().is_some() {
             cx.notify();
             return;
         }
@@ -827,6 +847,7 @@ impl AppRoot {
             notifications,
             editor: None,
             confirm_delete: None,
+            pending_drift: None,
             show_first_run_notice,
             ccswitch_import: None,
             ccswitch_importing: false,
@@ -1239,10 +1260,52 @@ impl AppRoot {
         self.provider_action_in_flight = true;
         let app = self.app.clone();
         let app_type = self.selected_app;
+        let preview_id = id.clone();
+        cx.spawn(async move |this, cx| {
+            let preview = cx
+                .background_spawn(async move {
+                    ProviderService::preview_switch(&app, app_type, &preview_id)
+                })
+                .await;
+            this.update(cx, |this, cx| match preview {
+                // Something outside OcHub edited the file. Write nothing until
+                // the user has seen it and said what to do.
+                Ok(found) if !found.is_empty() => {
+                    this.provider_action_in_flight = false;
+                    this.pending_drift = Some(PendingDrift {
+                        provider_id: id,
+                        provider_name: name,
+                        path: SharedString::from(drift::live_config_label(&app_type)),
+                        drift: found,
+                    });
+                    cx.notify();
+                }
+                // No external edit, or the preview itself failed — the write
+                // recomputes this anyway and defaults to keeping the user's
+                // edits, so a failed preview must not block the switch.
+                _ => this.apply_switch(id, name, DriftResolution::Preserve, cx),
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn apply_switch(
+        &mut self,
+        id: String,
+        name: String,
+        resolution: DriftResolution,
+        cx: &mut Context<Self>,
+    ) {
+        self.provider_action_in_flight = true;
+        let app = self.app.clone();
+        let app_type = self.selected_app;
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    ProviderService::switch(&app, app_type, &id).map_err(|error| error.to_string())
+                    ProviderService::switch_with(&app, app_type, &id, resolution)
+                        .map_err(|error| error.to_string())
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -1270,6 +1333,188 @@ impl AppRoot {
         })
         .detach();
         cx.notify();
+    }
+
+    /// One line of a JSON value, short enough to read inside a dialog.
+    fn drift_value_preview(value: &serde_json::Value) -> String {
+        let text = match value {
+            // A deletion has no "before" value to show.
+            serde_json::Value::Null => return "—".to_string(),
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if flat.chars().count() > 68 {
+            format!("{}…", flat.chars().take(68).collect::<String>())
+        } else {
+            flat
+        }
+    }
+
+    /// `+N` for the entries a section does not have room for. Silently showing
+    /// the first few would read as "that's all of them".
+    fn drift_overflow(total: usize, shown: usize) -> Option<gpui::Div> {
+        (total > shown).then(|| {
+            div()
+                .text_color(theme::muted())
+                .text_xs()
+                .child(SharedString::from(format!("+{}", total - shown)))
+        })
+    }
+
+    /// A section that only needs to name the keys involved.
+    fn drift_path_section(tone: BadgeTone, heading: String, paths: &[String]) -> Option<gpui::Div> {
+        const SHOWN: usize = 6;
+        if paths.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(components::badge(tone, heading))
+                .children(paths.iter().take(SHOWN).map(|path| {
+                    div()
+                        .text_color(theme::subtext())
+                        .text_xs()
+                        .child(SharedString::from(path.clone()))
+                }))
+                .children(Self::drift_overflow(paths.len(), SHOWN)),
+        )
+    }
+
+    fn drift_conflict_row(label: SharedString, value: &serde_json::Value) -> gpui::Div {
+        div()
+            .flex()
+            .flex_row()
+            .gap_2()
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(72.))
+                    .text_color(theme::muted())
+                    .text_xs()
+                    .child(label),
+            )
+            .child(
+                div()
+                    .text_color(theme::subtext())
+                    .text_xs()
+                    .child(SharedString::from(Self::drift_value_preview(value))),
+            )
+    }
+
+    /// The half the user actually has to rule on: both sides changed the same
+    /// key, so one of them is about to lose.
+    fn drift_conflict_section(conflicts: &[DriftConflict]) -> Option<gpui::Div> {
+        const SHOWN: usize = 4;
+        if conflicts.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(components::badge(
+                    BadgeTone::Warning,
+                    tf!(k::SHELL_DRIFT_CONFLICT_HEADING, count = conflicts.len()),
+                ))
+                .children(conflicts.iter().take(SHOWN).map(|conflict| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_color(theme::text())
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(SharedString::from(conflict.path.clone())),
+                        )
+                        .child(Self::drift_conflict_row(
+                            t(k::SHELL_DRIFT_CONFLICT_YOURS),
+                            &conflict.live,
+                        ))
+                        .child(Self::drift_conflict_row(
+                            t(k::SHELL_DRIFT_CONFLICT_INCOMING),
+                            &conflict.incoming,
+                        ))
+                }))
+                .children(Self::drift_overflow(conflicts.len(), SHOWN)),
+        )
+    }
+
+    fn render_drift_modal(&self, pending: PendingDrift, cx: &mut Context<Self>) -> gpui::Div {
+        let PendingDrift {
+            provider_id,
+            provider_name,
+            path,
+            drift,
+        } = pending;
+        let body = SharedString::from(tf!(k::SHELL_DRIFT_BODY, path = path, name = provider_name));
+        let discard = (provider_id.clone(), provider_name.clone());
+        let preserve = (provider_id, provider_name);
+
+        components::modal_overlay(
+            components::modal_card()
+                .child(components::modal_header(t(k::SHELL_DRIFT_TITLE)))
+                .child(
+                    components::modal_body()
+                        .child(div().text_color(theme::subtext()).text_sm().child(body))
+                        // Conflicts first: everything below them is already
+                        // decided in the user's favour.
+                        .children(Self::drift_conflict_section(&drift.conflicts))
+                        .children(Self::drift_path_section(
+                            BadgeTone::Success,
+                            tf!(k::SHELL_DRIFT_KEPT_HEADING, count = drift.preserved.len()),
+                            &drift.preserved,
+                        ))
+                        .children(Self::drift_path_section(
+                            BadgeTone::Neutral,
+                            tf!(k::SHELL_DRIFT_REMOVED_HEADING, count = drift.removed.len()),
+                            &drift.removed,
+                        )),
+                )
+                .child(components::modal_footer(vec![
+                    components::button(
+                        "drift-cancel",
+                        t(k::SHELL_DRIFT_ACTION_CANCEL),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.pending_drift = None;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                    components::button(
+                        "drift-discard",
+                        t(k::SHELL_DRIFT_ACTION_DISCARD),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.pending_drift = None;
+                        let (id, name) = discard.clone();
+                        this.apply_switch(id, name, DriftResolution::Discard, cx);
+                    }))
+                    .into_any_element(),
+                    components::button(
+                        "drift-preserve",
+                        t(k::SHELL_DRIFT_ACTION_PRESERVE),
+                        ButtonTone::Primary,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.pending_drift = None;
+                        let (id, name) = preserve.clone();
+                        this.apply_switch(id, name, DriftResolution::Preserve, cx);
+                    }))
+                    .into_any_element(),
+                ])),
+        )
     }
 
     /// The enabled station route currently bound to the selected app, if any.
@@ -3444,6 +3689,9 @@ impl Render for AppRoot {
                         ])),
                 ))
             })
+            .when_some(self.pending_drift.clone(), |root, pending| {
+                root.child(self.render_drift_modal(pending, cx))
+            })
             .when(self.show_first_run_notice, |root| {
                 root.child(components::modal_overlay(
                     components::modal_card()
@@ -3473,6 +3721,39 @@ impl Render for AppRoot {
                         .child(components::modal_footer(self.first_run_actions(cx))),
                 ))
             })
+    }
+}
+
+#[cfg(test)]
+mod drift_dialog_tests {
+    use super::AppRoot;
+    use serde_json::json;
+
+    #[test]
+    fn a_string_value_is_shown_without_its_json_quotes() {
+        assert_eq!(
+            AppRoot::drift_value_preview(&json!("https://relay.example/v1")),
+            "https://relay.example/v1"
+        );
+    }
+
+    #[test]
+    fn a_deletion_reads_as_a_dash_rather_than_the_word_null() {
+        assert_eq!(AppRoot::drift_value_preview(&json!(null)), "—");
+    }
+
+    #[test]
+    fn a_structured_value_is_flattened_onto_one_line() {
+        let preview = AppRoot::drift_value_preview(&json!({ "matcher": "Bash" }));
+        assert!(!preview.contains('\n'));
+        assert!(preview.contains("matcher"));
+    }
+
+    #[test]
+    fn an_overlong_value_is_truncated_with_an_ellipsis() {
+        let preview = AppRoot::drift_value_preview(&json!("x".repeat(200)));
+        assert!(preview.ends_with('…'));
+        assert_eq!(preview.chars().count(), 69);
     }
 }
 
