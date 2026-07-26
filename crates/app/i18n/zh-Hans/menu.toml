@@ -10,6 +10,7 @@
 "menu.app.open_main_window" = "打开主窗口"
 "menu.app.quit" = "退出 OcHub"
 "menu.app.services" = "服务"
+"menu.app.settings" = "设置…"
 "menu.edit.copy" = "复制"
 "menu.edit.cut" = "剪切"
 "menu.edit.find" = "查找"

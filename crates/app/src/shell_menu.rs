@@ -1,12 +1,12 @@
-//! Native shell menus for macOS menu bar and Dock/Windows taskbar menus.
-//!
-//! GPUI exposes native application menus and dock/taskbar context menus, but not
-//! a Tauri-style status item/tray icon. This module ports the useful cc-switch
-//! tray command surface onto the native menu APIs that are available here.
+//! Native shell menus and the optional macOS/Windows status icon.
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use gpui::Global;
 use gpui::{actions, App, AppContext, Menu, MenuItem, OsAction, SharedString, SystemMenuType};
 use ochub_core::services::provider::ProviderService;
 use ochub_core::services::subscription::{
@@ -14,11 +14,20 @@ use ochub_core::services::subscription::{
     TIER_WEEKLY_LIMIT,
 };
 use ochub_core::{settings, AppState, AppType, Provider, UsageResult};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use tray_icon::menu::{
+    CheckMenuItem as TrayCheckMenuItem, Menu as TrayMenu, MenuEvent, MenuItem as TrayMenuItem,
+    PredefinedMenuItem as TrayPredefinedMenuItem, Submenu as TraySubmenu,
+};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use tray_icon::{Icon as TrayIconImage, TrayIcon, TrayIconBuilder};
+#[cfg(target_os = "windows")]
+use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
-use crate::app_ui::notify_open_roots;
+use crate::app_ui::{notify_open_roots, open_settings_in_roots};
 use crate::i18n::{k, raw, t};
 use crate::notifications::NotificationLevel;
-use crate::shortcuts::{CloseWindow, Save};
+use crate::shortcuts::{CloseWindow, OpenSettings, Save};
 use crate::text_input::{Copy, Cut, Find, FindNext, FindPrevious, Paste, Redo, SelectAll, Undo};
 use crate::tf;
 
@@ -28,6 +37,7 @@ static MENU_REFRESH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 struct ShellMenuSnapshot {
     quick_switch_enabled: bool,
+    tray_resident_enabled: bool,
     apps: Vec<AppProviderMenu>,
 }
 
@@ -39,7 +49,10 @@ struct AppProviderMenu {
 
 impl ShellMenuSnapshot {
     fn load(app: &Arc<AppState>) -> Self {
-        let quick_switch_enabled = settings::get_settings().show_in_tray;
+        let preferences = settings::get_settings();
+        let quick_switch_enabled = preferences.show_in_tray;
+        let tray_resident_enabled =
+            preferences.minimize_to_tray_on_close && preferences.tray_resident_mode;
         let apps = if quick_switch_enabled {
             enabled_app_types()
                 .into_iter()
@@ -67,6 +80,7 @@ impl ShellMenuSnapshot {
         };
         Self {
             quick_switch_enabled,
+            tray_resident_enabled,
             apps,
         }
     }
@@ -78,6 +92,32 @@ pub struct SwitchProviderFromMenu {
     app: String,
     provider_id: String,
 }
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Clone)]
+enum TrayCommand {
+    OpenMainWindow,
+    OpenSettings,
+    SwitchProvider(SwitchProviderFromMenu),
+    Quit,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+enum TrayEvent {
+    Menu(String),
+    #[cfg(target_os = "windows")]
+    Activate,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Default)]
+struct SystemTrayState {
+    icon: Option<TrayIcon>,
+    commands: HashMap<String, TrayCommand>,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl Global for SystemTrayState {}
 
 pub fn install(app: Arc<AppState>, cx: &mut App) {
     #[cfg(target_os = "macos")]
@@ -98,11 +138,107 @@ pub fn install(app: Arc<AppState>, cx: &mut App) {
     cx.on_action(|_: &OpenMainWindow, cx| {
         activate_first_window(cx);
     });
+    cx.on_action(|_: &OpenSettings, cx| {
+        cx.defer(|cx| {
+            activate_first_window(cx);
+            open_settings_in_roots(cx);
+        });
+    });
+    cx.on_action(|_: &CloseWindow, cx| {
+        cx.defer(crate::close_main_window);
+    });
     cx.on_action(|_: &QuitApp, cx| {
         cx.quit();
     });
 
+    install_system_tray(app.clone(), cx);
     refresh(&app, cx);
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn install_system_tray(app: Arc<AppState>, cx: &mut App) {
+    cx.set_global(SystemTrayState::default());
+
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let menu_sender = sender.clone();
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        let _ = menu_sender.send(TrayEvent::Menu(event.id.0));
+    }));
+
+    #[cfg(target_os = "windows")]
+    {
+        let tray_sender = sender;
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                let _ = tray_sender.send(TrayEvent::Activate);
+            }
+        }));
+    }
+    #[cfg(target_os = "macos")]
+    let _ = sender;
+
+    let app_for_events = app.clone();
+    cx.spawn(async move |cx| {
+        while let Some(event) = receiver.recv().await {
+            let app = app_for_events.clone();
+            cx.update(move |cx| handle_tray_event(app, event, cx));
+        }
+    })
+    .detach();
+
+    // Establish the recovery entry before the main window is opened. The full
+    // provider menu is loaded asynchronously by `refresh` immediately after
+    // this; this small first menu prevents a Dock flash on macOS.
+    let preferences = settings::get_settings();
+    if preferences.minimize_to_tray_on_close && preferences.tray_resident_mode {
+        let snapshot = ShellMenuSnapshot {
+            quick_switch_enabled: false,
+            tray_resident_enabled: true,
+            apps: Vec::new(),
+        };
+        apply_system_tray(&app, &snapshot, cx);
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn install_system_tray(_app: Arc<AppState>, _cx: &mut App) {}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn handle_tray_event(app: Arc<AppState>, event: TrayEvent, cx: &mut App) {
+    let command = match event {
+        #[cfg(target_os = "windows")]
+        TrayEvent::Activate => Some(TrayCommand::OpenMainWindow),
+        TrayEvent::Menu(id) => cx
+            .try_global::<SystemTrayState>()
+            .and_then(|state| state.commands.get(&id))
+            .cloned(),
+    };
+
+    match command {
+        Some(TrayCommand::OpenMainWindow) => activate_first_window(cx),
+        Some(TrayCommand::OpenSettings) => {
+            activate_first_window(cx);
+            open_settings_in_roots(cx);
+        }
+        Some(TrayCommand::SwitchProvider(action)) => {
+            switch_provider_from_menu(app, &action, cx);
+        }
+        Some(TrayCommand::Quit) => cx.quit(),
+        None => {}
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn tray_resident_active(cx: &App) -> bool {
+    cx.try_global::<SystemTrayState>()
+        .is_some_and(|state| state.icon.is_some())
 }
 
 pub fn refresh(app: &Arc<AppState>, cx: &mut App) {
@@ -130,6 +266,7 @@ fn apply_shell_menus(app: &Arc<AppState>, snapshot: ShellMenuSnapshot, cx: &mut 
     let mut menus = vec![
         Menu::new("OcHub").items([
             MenuItem::action(t(k::MENU_APP_OPEN_MAIN_WINDOW), OpenMainWindow),
+            MenuItem::action(t(k::MENU_APP_SETTINGS), OpenSettings),
             MenuItem::separator(),
             MenuItem::os_submenu(t(k::MENU_APP_SERVICES), SystemMenuType::Services),
             MenuItem::separator(),
@@ -167,6 +304,7 @@ fn apply_shell_menus(app: &Arc<AppState>, snapshot: ShellMenuSnapshot, cx: &mut 
     } else {
         let mut dock_items = vec![
             MenuItem::action(t(k::MENU_APP_OPEN_MAIN_WINDOW), OpenMainWindow),
+            MenuItem::action(t(k::MENU_APP_SETTINGS), OpenSettings),
             MenuItem::separator(),
         ];
         if quick_switch_enabled {
@@ -177,6 +315,211 @@ fn apply_shell_menus(app: &Arc<AppState>, snapshot: ShellMenuSnapshot, cx: &mut 
         dock_items
     };
     cx.set_dock_menu(dock_items);
+    apply_system_tray(app, &snapshot, cx);
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn apply_system_tray(app: &Arc<AppState>, snapshot: &ShellMenuSnapshot, cx: &mut App) {
+    if !snapshot.tray_resident_enabled {
+        let icon = {
+            let state = cx.global_mut::<SystemTrayState>();
+            state.commands.clear();
+            state.icon.take()
+        };
+        drop(icon);
+        #[cfg(target_os = "macos")]
+        set_macos_accessory_mode(false);
+        return;
+    }
+
+    let generation = MENU_REFRESH_GENERATION.load(Ordering::Acquire);
+    let (menu, commands) = match build_tray_menu(app, snapshot, generation) {
+        Ok(menu) => menu,
+        Err(error) => {
+            log::error!("failed to build the system tray menu: {error}");
+            return;
+        }
+    };
+
+    if let Some(icon) = cx.global::<SystemTrayState>().icon.as_ref().cloned() {
+        icon.set_menu(Some(Box::new(menu)));
+        cx.global_mut::<SystemTrayState>().commands = commands;
+        #[cfg(target_os = "macos")]
+        set_macos_accessory_mode(true);
+        return;
+    }
+
+    let icon = match load_tray_icon(cx).and_then(|image| {
+        TrayIconBuilder::new()
+            .with_id("ochub.system-tray")
+            .with_tooltip("OcHub")
+            .with_icon(image)
+            .with_icon_as_template(false)
+            .with_menu(Box::new(menu))
+            // macOS convention opens the menu from either button. On Windows
+            // a left click restores the window and a right click opens it.
+            .with_menu_on_left_click(cfg!(target_os = "macos"))
+            .build()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(icon) => icon,
+        Err(error) => {
+            log::error!("failed to create the system tray icon: {error}");
+            // Never remove the last visible recovery path when native tray
+            // integration is unavailable.
+            #[cfg(target_os = "macos")]
+            set_macos_accessory_mode(false);
+            return;
+        }
+    };
+
+    {
+        let state = cx.global_mut::<SystemTrayState>();
+        state.icon = Some(icon);
+        state.commands = commands;
+    }
+    #[cfg(target_os = "macos")]
+    set_macos_accessory_mode(true);
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn apply_system_tray(_app: &Arc<AppState>, snapshot: &ShellMenuSnapshot, _cx: &mut App) {
+    let _ = snapshot.tray_resident_enabled;
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn load_tray_icon(cx: &App) -> Result<TrayIconImage, String> {
+    let bytes = cx
+        .asset_source()
+        .load("app-icons/ochub-32.png")
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "app-icons/ochub-32.png is missing from packaged assets".to_string())?;
+    let rgba = image::load_from_memory(&bytes)
+        .map_err(|error| error.to_string())?
+        .into_rgba8();
+    let (width, height) = rgba.dimensions();
+    TrayIconImage::from_rgba(rgba.into_raw(), width, height).map_err(|error| error.to_string())
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn build_tray_menu(
+    app: &Arc<AppState>,
+    snapshot: &ShellMenuSnapshot,
+    generation: u64,
+) -> Result<(TrayMenu, HashMap<String, TrayCommand>), String> {
+    const OPEN_ID: &str = "ochub.tray.open";
+    const SETTINGS_ID: &str = "ochub.tray.settings";
+    const QUIT_ID: &str = "ochub.tray.quit";
+
+    let menu = TrayMenu::new();
+    let mut commands = HashMap::new();
+
+    let open = TrayMenuItem::with_id(OPEN_ID, t(k::MENU_APP_OPEN_MAIN_WINDOW), true, None);
+    menu.append(&open).map_err(|error| error.to_string())?;
+    commands.insert(OPEN_ID.to_string(), TrayCommand::OpenMainWindow);
+
+    let settings = TrayMenuItem::with_id(SETTINGS_ID, t(k::MENU_APP_SETTINGS), true, None);
+    menu.append(&settings).map_err(|error| error.to_string())?;
+    commands.insert(SETTINGS_ID.to_string(), TrayCommand::OpenSettings);
+
+    menu.append(&TrayPredefinedMenuItem::separator())
+        .map_err(|error| error.to_string())?;
+
+    if snapshot.quick_switch_enabled {
+        for (app_index, provider_menu) in snapshot.apps.iter().enumerate() {
+            let submenu = build_tray_provider_submenu(
+                app,
+                provider_menu,
+                app_index,
+                generation,
+                &mut commands,
+            )?;
+            menu.append(&submenu).map_err(|error| error.to_string())?;
+        }
+        menu.append(&TrayPredefinedMenuItem::separator())
+            .map_err(|error| error.to_string())?;
+    }
+
+    let quit = TrayMenuItem::with_id(QUIT_ID, t(k::MENU_APP_QUIT), true, None);
+    menu.append(&quit).map_err(|error| error.to_string())?;
+    commands.insert(QUIT_ID.to_string(), TrayCommand::Quit);
+
+    Ok((menu, commands))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn build_tray_provider_submenu(
+    app: &Arc<AppState>,
+    provider_menu: &AppProviderMenu,
+    app_index: usize,
+    generation: u64,
+    commands: &mut HashMap<String, TrayCommand>,
+) -> Result<TraySubmenu, String> {
+    let app_type = provider_menu.app_type;
+    let providers = match &provider_menu.providers {
+        Ok(providers) => providers,
+        Err(error) => {
+            let submenu = TraySubmenu::new(app_label(app_type), true);
+            let item = TrayMenuItem::new(
+                tf!(k::MENU_PROVIDER_LOAD_FAILED, error = error),
+                false,
+                None,
+            );
+            submenu.append(&item).map_err(|error| error.to_string())?;
+            return Ok(submenu);
+        }
+    };
+
+    if providers.is_empty() {
+        let submenu = TraySubmenu::new(app_label(app_type), true);
+        let item = TrayMenuItem::new(t(k::MENU_PROVIDER_EMPTY), false, None);
+        submenu.append(&item).map_err(|error| error.to_string())?;
+        return Ok(submenu);
+    }
+
+    let submenu = TraySubmenu::new(
+        provider_submenu_label(app, app_type, providers, &provider_menu.current),
+        true,
+    );
+    for (provider_index, (provider_id, provider)) in providers.iter().enumerate() {
+        let id = format!("ochub.tray.switch.{generation}.{app_index}.{provider_index}");
+        let item = TrayCheckMenuItem::with_id(
+            id.clone(),
+            provider_item_label(app_type, provider),
+            true,
+            provider_is_selected(app_type, &provider_menu.current, provider),
+            None,
+        );
+        submenu.append(&item).map_err(|error| error.to_string())?;
+        commands.insert(
+            id,
+            TrayCommand::SwitchProvider(SwitchProviderFromMenu {
+                app: app_type.as_str().to_string(),
+                provider_id: provider_id.clone(),
+            }),
+        );
+    }
+    Ok(submenu)
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_accessory_mode(accessory: bool) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+
+    let Some(main_thread) = MainThreadMarker::new() else {
+        log::error!("cannot change the Dock activation policy off the main thread");
+        return;
+    };
+    let application = NSApplication::sharedApplication(main_thread);
+    let policy = if accessory {
+        NSApplicationActivationPolicy::Accessory
+    } else {
+        NSApplicationActivationPolicy::Regular
+    };
+    if application.activationPolicy() != policy && !application.setActivationPolicy(policy) {
+        log::error!("macOS rejected the requested Dock activation policy");
+    }
 }
 
 fn provider_submenus(app: &Arc<AppState>, apps: &[AppProviderMenu]) -> Vec<MenuItem> {
@@ -231,10 +574,10 @@ fn provider_submenu(app: &Arc<AppState>, provider_menu: &AppProviderMenu) -> Men
 }
 
 fn windows_taskbar_items(apps: &[AppProviderMenu], quick_switch_enabled: bool) -> Vec<MenuItem> {
-    let mut items = vec![MenuItem::action(
-        t(k::MENU_APP_OPEN_MAIN_WINDOW),
-        OpenMainWindow,
-    )];
+    let mut items = vec![
+        MenuItem::action(t(k::MENU_APP_OPEN_MAIN_WINDOW), OpenMainWindow),
+        MenuItem::action(t(k::MENU_APP_SETTINGS), OpenSettings),
+    ];
     if quick_switch_enabled {
         items.extend(windows_provider_items(apps));
     }
@@ -615,6 +958,8 @@ pub(crate) fn activate_first_window(cx: &mut App) {
     cx.activate(true);
     if let Some(window) = cx.windows().into_iter().next() {
         let _ = window.update(cx, |_root, window, _cx| {
+            #[cfg(target_os = "windows")]
+            let _ = crate::set_windows_window_visible(window, true);
             window.activate_window();
         });
     }

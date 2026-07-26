@@ -45,7 +45,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use gpui::{
-    point, prelude::*, px, size, App, AssetSource, Bounds, SharedString, TitlebarOptions,
+    point, prelude::*, px, size, App, AssetSource, Bounds, SharedString, TitlebarOptions, Window,
     WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
@@ -346,6 +346,71 @@ pub(crate) fn apply_quit_mode(cx: &mut App) {
     });
 }
 
+/// Apply the platform-specific "closed, but still running" presentation.
+///
+/// macOS keeps a hidden application reachable through either the Dock or the
+/// optional status item. Windows only removes the taskbar button when the
+/// notification-area icon was created successfully; otherwise minimizing
+/// leaves a recovery path. Linux retains the existing minimize behaviour.
+fn keep_main_window_in_background(_window: &Window, _cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    _cx.hide();
+
+    #[cfg(target_os = "windows")]
+    {
+        if shell_menu::tray_resident_active(_cx) {
+            if !set_windows_window_visible(_window, false) {
+                _window.minimize_window();
+            }
+        } else {
+            _window.minimize_window();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    _window.minimize_window();
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    _window.minimize_window();
+}
+
+/// Close the root window exactly as the native close button would.
+///
+/// Keeping this at application scope makes Cmd/Ctrl-W work even when no GPUI
+/// element currently owns keyboard focus.
+pub(crate) fn close_main_window(cx: &mut App) {
+    let Some(handle) = cx.windows().into_iter().next() else {
+        return;
+    };
+    let _ = handle.update(cx, |_root, window, cx| {
+        shell_support::save_window_bounds(window.window_bounds().get_bounds());
+        if ochub_core::settings::get_settings().minimize_to_tray_on_close {
+            keep_main_window_in_background(window, cx);
+        } else {
+            window.remove_window();
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn set_windows_window_visible(window: &Window, visible: bool) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_RESTORE};
+
+    let Ok(handle) = window.window_handle() else {
+        return false;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return false;
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+    unsafe {
+        let _ = ShowWindow(hwnd, if visible { SW_RESTORE } else { SW_HIDE });
+    }
+    true
+}
+
 fn main() {
     if version_requested(std::env::args_os()) {
         println!("OcHub {}", env!("CARGO_PKG_VERSION"));
@@ -558,24 +623,8 @@ fn main() {
                         // continue running. The native close button must match
                         // the CloseWindow action; otherwise the last window is
                         // destroyed and a later activation has nothing to show.
-                        #[cfg(target_os = "macos")]
-                        {
-                            _cx.hide();
-                            false
-                        }
-                        #[cfg(any(target_os = "windows", target_os = "linux"))]
-                        {
-                            window.minimize_window();
-                            false
-                        }
-                        #[cfg(not(any(
-                            target_os = "macos",
-                            target_os = "windows",
-                            target_os = "linux"
-                        )))]
-                        {
-                            true
-                        }
+                        keep_main_window_in_background(window, _cx);
+                        false
                     });
                 })
                 .ok();

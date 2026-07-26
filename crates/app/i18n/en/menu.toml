@@ -9,6 +9,7 @@
 "menu.app.open_main_window" = "Open Main Window"
 "menu.app.quit" = "Quit OcHub"
 "menu.app.services" = "Services"
+"menu.app.settings" = "Settings…"
 "menu.edit.copy" = "Copy"
 "menu.edit.cut" = "Cut"
 "menu.edit.find" = "Find"

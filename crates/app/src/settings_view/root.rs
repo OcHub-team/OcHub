@@ -71,6 +71,7 @@ impl SettingsView {
                     self.render_row(RowId::StartupLogin, cx),
                     self.render_row(RowId::StartupHidden, cx),
                     self.render_row(RowId::WindowKeepRunning, cx),
+                    self.render_row(RowId::WindowTrayResident, cx),
                     self.render_row(RowId::WindowTray, cx),
                 ];
                 // The login-item failure belongs to the two rows above it, so
@@ -133,6 +134,7 @@ impl SettingsView {
             RowId::StartupLogin,
             RowId::StartupHidden,
             RowId::WindowKeepRunning,
+            RowId::WindowTrayResident,
             RowId::WindowTray,
             RowId::AppsOpen,
             RowId::DataDir,
@@ -220,6 +222,17 @@ impl SettingsView {
                 None,
                 |this, cx| this.toggle_keep_running(cx),
             ),
+            RowId::WindowTrayResident => {
+                let blocked = !self.settings.minimize_to_tray_on_close;
+                rows::switch(
+                    cx,
+                    row,
+                    self.settings.tray_resident_mode,
+                    blocked,
+                    blocked.then(|| t(k::SETTINGS_BASIC_TRAY_RESIDENT_REQUIRES_KEEP_RUNNING)),
+                    |this, cx| this.toggle_tray_resident(cx),
+                )
+            }
             RowId::WindowTray => rows::switch(
                 cx,
                 row,
@@ -462,11 +475,26 @@ impl SettingsView {
     fn toggle_keep_running(&mut self, cx: &mut Context<Self>) {
         let target = !self.settings.minimize_to_tray_on_close;
         self.write_then(
-            move |settings| settings.minimize_to_tray_on_close = target,
-            |_this, cx| {
+            move |settings| {
+                settings.minimize_to_tray_on_close = target;
+                if !target {
+                    settings.tray_resident_mode = false;
+                }
+            },
+            |this, cx| {
                 // This toggle changes when the process may exit.
                 crate::apply_quit_mode(cx);
+                shell_menu::refresh(&this.app, cx);
             },
+            cx,
+        );
+    }
+
+    fn toggle_tray_resident(&mut self, cx: &mut Context<Self>) {
+        let target = !self.settings.tray_resident_mode;
+        self.write_then(
+            move |settings| settings.tray_resident_mode = target,
+            |this, cx| shell_menu::refresh(&this.app, cx),
             cx,
         );
     }

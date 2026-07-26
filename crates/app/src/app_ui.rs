@@ -35,7 +35,7 @@ use crate::provider_editor::{EditorEvent, ProviderEditor};
 use crate::sessions_view::SessionsView;
 use crate::settings_view::SettingsView;
 use crate::shell_menu;
-use crate::shortcuts::{Cancel, CloseWindow, Save};
+use crate::shortcuts::{Cancel, Save};
 use crate::skills_view::SkillsView;
 use crate::tf;
 use crate::theme;
@@ -66,6 +66,16 @@ pub(crate) fn notify_open_roots(
         }
     }
     delivered
+}
+
+pub(crate) fn open_settings_in_roots(cx: &mut App) {
+    for window in cx.windows() {
+        if let Some(root) = window.downcast::<AppRoot>() {
+            let _ = root.update(cx, |root, _window, cx| {
+                root.select_section(Section::Settings, cx);
+            });
+        }
+    }
 }
 
 /// Which top-level section the main panel renders.
@@ -711,18 +721,6 @@ impl AppRoot {
                 .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
             _ => window.play_system_bell(),
         }
-    }
-
-    fn close_window(&mut self, _: &CloseWindow, _window: &mut Window, _cx: &mut Context<Self>) {
-        // OcHub owns background gateway state, so keep the single root window
-        // alive. macOS can restore a hidden app from Dock; Windows/Linux keep
-        // an explicit taskbar/dock entry by minimizing instead.
-        #[cfg(target_os = "macos")]
-        _cx.hide();
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        _window.minimize_window();
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        _window.minimize_window();
     }
 
     /// Poll for a new release in the background, at most once a day.
@@ -3655,7 +3653,6 @@ impl Render for AppRoot {
             .key_context("App")
             .on_action(cx.listener(Self::save_active))
             .on_action(cx.listener(Self::cancel_active))
-            .on_action(cx.listener(Self::close_window))
             .on_drag_move::<DraggedProvider>(cx.listener(Self::handle_provider_drag_move))
             .on_drop(cx.listener(Self::drop_provider_drag))
             .child(

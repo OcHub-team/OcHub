@@ -9,6 +9,7 @@
 "menu.app.open_main_window" = "メインウィンドウを開く"
 "menu.app.quit" = "OcHub を終了"
 "menu.app.services" = "サービス"
+"menu.app.settings" = "設定…"
 "menu.edit.copy" = "コピー"
 "menu.edit.cut" = "カット"
 "menu.edit.find" = "検索"

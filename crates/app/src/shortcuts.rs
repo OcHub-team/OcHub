@@ -6,7 +6,7 @@
 
 use gpui::{actions, App, KeyBinding};
 
-actions!(ochub_shortcuts, [Save, Cancel, CloseWindow]);
+actions!(ochub_shortcuts, [Save, Cancel, CloseWindow, OpenSettings]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("escape", Cancel, None)]);
@@ -15,12 +15,14 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-s", Save, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
     ]);
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     cx.bind_keys([
         KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("ctrl-w", CloseWindow, None),
+        KeyBinding::new("ctrl-,", OpenSettings, None),
     ]);
 }
 
@@ -49,6 +51,9 @@ mod tests {
         assert_eq!(primary(Platform::MacOs, "w"), "cmd-w");
         assert_eq!(primary(Platform::Windows, "w"), "ctrl-w");
         assert_eq!(primary(Platform::Linux, "w"), "ctrl-w");
+        assert_eq!(primary(Platform::MacOs, ","), "cmd-,");
+        assert_eq!(primary(Platform::Windows, ","), "ctrl-,");
+        assert_eq!(primary(Platform::Linux, ","), "ctrl-,");
     }
 
     #[test]
@@ -58,6 +63,7 @@ mod tests {
         for key in [
             "cmd-s",
             "cmd-w",
+            "cmd-,",
             "cmd-q",
             "cmd-f",
             "cmd-g",
@@ -66,6 +72,7 @@ mod tests {
             "cmd-shift-z",
             "ctrl-s",
             "ctrl-w",
+            "ctrl-,",
             "ctrl-q",
             "ctrl-f",
             "ctrl-g",

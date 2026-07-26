@@ -346,6 +346,12 @@ pub struct AppSettings {
     pub show_in_tray: bool,
     #[serde(default = "default_true")]
     pub minimize_to_tray_on_close: bool,
+    /// Keep a native status icon available while the main window is hidden.
+    ///
+    /// This is opt-in so existing desktop installs retain their Dock/taskbar
+    /// behaviour after upgrading.
+    #[serde(default)]
+    pub tray_resident_mode: bool,
     #[serde(default)]
     pub enable_claude_plugin_integration: bool,
     #[serde(default)]
@@ -464,6 +470,7 @@ impl Default for AppSettings {
         Self {
             show_in_tray: true,
             minimize_to_tray_on_close: true,
+            tray_resident_mode: false,
             enable_claude_plugin_integration: false,
             skip_claude_onboarding: false,
             launch_on_startup: false,
@@ -1097,6 +1104,18 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains(r#""themeFamily":"ochub""#));
         assert!(json.contains(r#""themeMode":"system""#));
+    }
+
+    #[test]
+    fn tray_resident_mode_is_opt_in_and_round_trips() {
+        let legacy: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.tray_resident_mode);
+
+        let enabled: AppSettings = serde_json::from_str(r#"{"trayResidentMode":true}"#).unwrap();
+        assert!(enabled.tray_resident_mode);
+        assert!(serde_json::to_string(&enabled)
+            .unwrap()
+            .contains(r#""trayResidentMode":true"#));
     }
 
     #[test]
