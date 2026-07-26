@@ -3,6 +3,7 @@ title: 架构
 description: OcHub 背后的 Rust 工作区——crate 划分、各自职责，以及平台相关细节。
 sidebar:
   order: 3
+  hidden: true
 ---
 
 OcHub 是一个围绕 GPUI 和 axum 构建的 Rust 工作区。
@@ -11,7 +12,7 @@ OcHub 是一个围绕 GPUI 和 axum 构建的 Rust 工作区。
 
 | Crate | 职责 |
 | --- | --- |
-| `ochub-core` | 领域模型、SQLite 存储、服务商切换、客户端配置写入、同步、MCP、技能、会话、用量与鉴权 |
+| `ochub-core` | 领域模型、SQLite 存储、供应商切换、客户端配置写入、同步、MCP、技能、会话、用量与鉴权 |
 | `ochub-server` | 回环控制 API 和进程内中转网关 |
 | `ochub-convert` | 受支持 API 方言之间的请求与响应转换 |
 | `ochub-app` | 承载 core 与 server 的 GPUI 原生桌面应用 |

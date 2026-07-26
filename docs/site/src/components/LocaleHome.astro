@@ -33,9 +33,18 @@ const cards = [
     blurb: t(locale, "installBlurb"),
   },
   {
-    href: localePath(locale, "build-from-source"),
-    title: t(locale, "buildTitle"),
-    blurb: t(locale, "buildBlurb"),
+    href: localePath(
+      locale,
+      locale.key === "zh" ? "getting-started" : "build-from-source",
+    ),
+    title: t(
+      locale,
+      locale.key === "zh" ? "quickStartTitle" : "buildTitle",
+    ),
+    blurb: t(
+      locale,
+      locale.key === "zh" ? "quickStartBlurb" : "buildBlurb",
+    ),
   },
 ];
 ---
