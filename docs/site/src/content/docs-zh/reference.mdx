@@ -1,0 +1,123 @@
+---
+title: 使用参考
+description: 支持应用、默认路径、连接模式和常用术语速查。
+audience: human
+sidebar:
+  order: 50
+  group:
+    label: 使用参考
+    icon: ph:book-open-text
+---
+
+## 支持的应用
+
+| 应用 | 供应商写入方式 | 主要配置能力 |
+| --- | --- | --- |
+| Claude Code | 当前供应商切换 | API、MCP、插件、会话 |
+| Claude Desktop | 当前供应商切换 | 官方与第三方配置 |
+| Codex | 当前供应商切换 | API、OAuth、模型目录、会话历史 |
+| Grok Build | 当前供应商切换 | API 与模型配置 |
+| OpenCode | 多供应商共存 | Provider、MCP、会话、OMO |
+| OpenClaw | 多供应商共存 | Provider、MCP、默认模型、工具与环境变量 |
+| Hermes | 多供应商共存 | Provider、MCP、模型与记忆 |
+
+“当前供应商切换”表示实时配置重点保存当前连接；“多供应商共存”表示多个供应商可同时写入，
+再由工具或 OcHub 选择当前项。
+
+## 默认路径
+
+| 内容 | 默认位置 |
+| --- | --- |
+| OcHub 数据 | `~/.ochub/` |
+| OcHub 数据库 | `~/.ochub/ochub.db` |
+| 用户应用插件 | `~/.ochub/apps/*.toml` |
+| cc-switch 迁移源 | `~/.cc-switch/` |
+| Claude Code | `~/.claude/`，MCP 通常为 `~/.claude.json` |
+| Codex | `~/.codex/` |
+| Grok Build | `~/.grok/` |
+| OpenCode | `~/.config/opencode/` |
+| OpenClaw | `~/.openclaw/` |
+| Hermes | `~/.hermes/` |
+| Claude Desktop（macOS） | `~/Library/Application Support/Claude/` 与 `Claude-3p/` |
+| Claude Desktop（Windows） | `%LOCALAPPDATA%\\Claude\\` 与 `Claude-3p\\` |
+
+应用设置中的自定义目录会覆盖表中默认路径。路径变化后建议重启 OcHub。
+
+## 连接状态
+
+| 状态 | 含义 |
+| --- | --- |
+| 当前 | 目标应用当前正在使用 |
+| 已添加 | 已存在于工具配置，但不是当前连接 |
+| 直接连接 | 工具直接请求供应商 |
+| 转发站模式 | 工具先请求 OcHub 本地网关 |
+| 已应用 | 某个转发站已经写入指定应用 |
+| 已停用 | 配置仍保留，但不能被应用或路由 |
+| 尚未检测 | 还没有执行连通检查 |
+
+## 转发站接口
+
+| 接口 | 常见客户端 |
+| --- | --- |
+| Anthropic Messages | Claude 兼容客户端 |
+| OpenAI Chat | OpenAI Chat Completions 兼容客户端 |
+| OpenAI Responses | 使用 Responses API 的客户端 |
+
+自动路由优先使用客户端原生接口，并在模型不可用或接口故障时尝试其他已启用接口。接口转换
+不能补足上游本身不支持的模型或能力。
+
+## MCP JSON 最小示例
+
+stdio：
+
+```json
+{
+  "type": "stdio",
+  "command": "my-mcp",
+  "args": ["--stdio"]
+}
+```
+
+SSE：
+
+```json
+{
+  "type": "sse",
+  "url": "https://example.com/sse"
+}
+```
+
+服务器配置必须是 JSON 对象。具体字段由 MCP 服务器和目标应用共同决定。
+
+## 常用术语
+
+<dl>
+  <dt>应用</dt>
+  <dd>由 OcHub 管理配置的 AI 工具，例如 Claude Code 或 Codex。</dd>
+
+  <dt>供应商</dt>
+  <dd>提供 API、官方登录或模型服务的一组连接配置。</dd>
+
+  <dt>直接连接</dt>
+  <dd>目标工具直接请求供应商，不经过 OcHub 网关。</dd>
+
+  <dt>转发站</dt>
+  <dd>OcHub 本地网关使用的上游配置，可处理接口转换、模型映射和故障转移。</dd>
+
+  <dt>配置漂移</dt>
+  <dd>OcHub 上次读取后，实时配置又被其他程序或用户修改。</dd>
+
+  <dt>计价模型</dt>
+  <dd>用量统计实际套用价格的模型，可以来自请求模型或响应模型。</dd>
+
+  <dt>配置档</dt>
+  <dd>远端同步目录中的逻辑名称，用于让多套 OcHub 数据彼此隔离。</dd>
+</dl>
+
+## 安全要点
+
+- 不在问题、截图或文档中公开 API Key、OAuth 令牌和个人会话。
+- 不把本地网关地址直接暴露到公网。
+- 只运行可信来源的 MCP 命令和技能。
+- 覆盖数据库、删除会话或删除供应商前先备份。
+- 不让 OcHub 与其他配置管理工具同时写入同一文件。
