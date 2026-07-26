@@ -12,15 +12,18 @@
 # injected afterwards: editing a bundle invalidates its signature, and the
 # release only signs once.
 #
-# Each layer in `icon.json` carries its own rounded-square plate rather than
-# letting the icon's `fill` draw one. That is not a style choice: actool
-# ignores `fill-specializations` outright — present, absent, or set to a
-# wholly different colour, the compiled car is byte-identical — so a
-# fill-drawn background cannot follow the appearance. `hidden-specializations`
-# *is* honoured, so the working arrangement is one complete plated layer per
-# appearance with the other hidden. Reintroducing `fill-specializations` would
-# compile clean and silently do nothing; the first build shipped that way and
-# dark mode rendered a white robot on a white plate.
+# The icon is deliberately a single appearance — the dark plate, matching what
+# shipped before it. A light/dark pair was built and dropped, because macOS
+# never showed the dark half: an icon's appearance is governed by the Icon &
+# Widget Style setting in System Settings, not by Dark Mode, so on a default
+# system both halves resolve to the same one and the second is dead weight.
+#
+# If that is ever revisited, two findings from the attempt are worth keeping.
+# `hidden-specializations` is honoured and validated — a wrong value type or
+# an unknown appearance name aborts the compile. `fill-specializations` is
+# not: present, absent, or set to a wholly different colour, the compiled car
+# is byte-identical, so the plate has to live in the layer artwork rather than
+# in `fill`. Getting that backwards renders a white robot on a white plate.
 #
 # Everything here fails loudly on purpose. An app icon that quietly falls back
 # is exactly the class of bug `packaging/README.md` records for signing -- the

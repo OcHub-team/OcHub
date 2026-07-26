@@ -1,18 +1,9 @@
 {
-  "fill" : { "solid" : "srgb:1.00000,1.00000,1.00000,1.00000" },
+  "fill" : { "solid" : "srgb:0.00784,0.00784,0.00784,1.00000" },
   "groups" : [
     {
       "layers" : [
-        {
-          "name" : "Icon Light",
-          "image-name" : "icon-light.svg",
-          "hidden-specializations" : [ { "appearance" : "dark", "value" : true } ]
-        },
-        {
-          "name" : "Icon Dark",
-          "image-name" : "icon-dark.svg",
-          "hidden-specializations" : [ { "appearance" : "light", "value" : true } ]
-        }
+        { "name" : "Icon", "image-name" : "icon-dark.svg" }
       ]
     }
   ],
