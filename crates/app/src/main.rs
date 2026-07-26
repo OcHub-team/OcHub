@@ -398,7 +398,7 @@ pub(crate) fn set_windows_window_visible(window: &Window, visible: bool) -> bool
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_RESTORE};
 
-    let Ok(handle) = window.window_handle() else {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return false;
     };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
