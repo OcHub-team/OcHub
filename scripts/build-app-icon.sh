@@ -12,6 +12,16 @@
 # injected afterwards: editing a bundle invalidates its signature, and the
 # release only signs once.
 #
+# Each layer in `icon.json` carries its own rounded-square plate rather than
+# letting the icon's `fill` draw one. That is not a style choice: actool
+# ignores `fill-specializations` outright — present, absent, or set to a
+# wholly different colour, the compiled car is byte-identical — so a
+# fill-drawn background cannot follow the appearance. `hidden-specializations`
+# *is* honoured, so the working arrangement is one complete plated layer per
+# appearance with the other hidden. Reintroducing `fill-specializations` would
+# compile clean and silently do nothing; the first build shipped that way and
+# dark mode rendered a white robot on a white plate.
+#
 # Everything here fails loudly on purpose. An app icon that quietly falls back
 # is exactly the class of bug `packaging/README.md` records for signing -- the
 # release goes green and the user is the one who finds out.
