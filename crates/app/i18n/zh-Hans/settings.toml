@@ -13,7 +13,6 @@
 "settings.about.title" = "关于"
 "settings.about.update.action" = "检查"
 "settings.about.update.current" = "当前 {version}"
-"settings.about.update.desc" = "查询 GitHub 最新发布版本，并和当前版本比较。"
 "settings.about.update.label" = "检查更新"
 "settings.about.update.up_to_date" = "已是最新 · {version}"
 "settings.about.update.upgradable" = "可更新到 {latest}（当前 {current}）"

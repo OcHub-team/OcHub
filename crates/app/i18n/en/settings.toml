@@ -9,7 +9,6 @@
 "settings.about.title" = "About"
 "settings.about.update.action" = "Check"
 "settings.about.update.current" = "On {version}"
-"settings.about.update.desc" = "Look up the latest GitHub release and compare it with the version you are running."
 "settings.about.update.label" = "Check for updates"
 "settings.about.update.up_to_date" = "Up to date · {version}"
 "settings.about.update.upgradable" = "{latest} available (you are on {current})"

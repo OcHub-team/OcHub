@@ -21,6 +21,7 @@ use ochub_core::services::provider::{
 };
 use ochub_core::{AppState, AppType, Provider};
 
+use crate::about_view::AboutView;
 use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::gallery_view::GalleryView;
@@ -71,6 +72,7 @@ pub(crate) fn notify_open_roots(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
     Providers,
+    About,
     Mcp,
     Skills,
     Usage,
@@ -99,6 +101,7 @@ impl Section {
             "settings" | "setting" => Self::Settings,
             "gateway" => Self::Gateway,
             "gallery" => Self::Gallery,
+            "about" => Self::About,
             _ => Self::Providers,
         }
     }
@@ -215,6 +218,7 @@ pub struct AppRoot {
     sessions_view: Entity<SessionsView>,
     tools_view: Entity<ToolsView>,
     theme_view: Entity<ThemeView>,
+    about_view: Entity<AboutView>,
     gallery_view: Entity<GalleryView>,
     /// Per-app settings panel (app-scoped toggles + config dir), shown over the
     /// provider list when `showing_app_settings` is set.
@@ -816,6 +820,7 @@ impl AppRoot {
         let sessions_view = cx.new(|cx| SessionsView::new(app.clone(), cx));
         let tools_view = cx.new(|cx| ToolsView::new(app.clone(), cx));
         let theme_view = cx.new(ThemeView::new);
+        let about_view = cx.new(AboutView::new);
         let gallery_view = cx.new(GalleryView::new);
         let show_first_run_notice = crate::shell_support::first_run_notice_pending();
         let initial_section = Section::from_env();
@@ -860,6 +865,7 @@ impl AppRoot {
             sessions_view,
             tools_view,
             theme_view,
+            about_view,
             gallery_view,
             app_settings_view,
             showing_app_settings: false,
@@ -977,6 +983,7 @@ impl AppRoot {
         Self::observe_toasts(&self.sessions_view, &self.notifications, cx);
         Self::observe_toasts(&self.tools_view, &self.notifications, cx);
         Self::observe_toasts(&self.theme_view, &self.notifications, cx);
+        Self::observe_toasts(&self.about_view, &self.notifications, cx);
         Self::observe_toasts(&self.app_settings_view, &self.notifications, cx);
 
         Self::forward_toast(&self.settings_view, &self.notifications, cx);
@@ -1000,6 +1007,7 @@ impl AppRoot {
             Section::Sessions => Self::forward_toast(&self.sessions_view, &self.notifications, cx),
             Section::Tools => Self::forward_toast(&self.tools_view, &self.notifications, cx),
             Section::Themes => Self::forward_toast(&self.theme_view, &self.notifications, cx),
+            Section::About => Self::forward_toast(&self.about_view, &self.notifications, cx),
             Section::Providers | Section::Gallery => {}
         }
     }
@@ -1099,6 +1107,7 @@ impl AppRoot {
             Section::Sessions => IconName::Clock,
             Section::Tools => IconName::Tools,
             Section::Themes => IconName::Palette,
+            Section::About => IconName::Diamond,
             Section::Settings => IconName::Settings,
             Section::Gateway => IconName::Cloud,
             Section::Providers => IconName::Cloud,
@@ -2655,6 +2664,13 @@ impl AppRoot {
                         appearance,
                         cx,
                     ))
+                    .child(self.render_nav_item(
+                        "nav-about",
+                        raw(k::SHELL_SIDEBAR_NAV_ABOUT),
+                        Section::About,
+                        appearance,
+                        cx,
+                    ))
                     .when(std::env::var_os("MS_GALLERY").is_some(), |col| {
                         col.child(self.render_nav_item(
                             "nav-gallery",
@@ -3535,6 +3551,7 @@ impl AppRoot {
             Section::Sessions => self.sessions_view.clone().into_any_element(),
             Section::Tools => self.tools_view.clone().into_any_element(),
             Section::Themes => self.theme_view.clone().into_any_element(),
+            Section::About => self.about_view.clone().into_any_element(),
             Section::Gallery => self.gallery_view.clone().into_any_element(),
             Section::Providers => {
                 if self.showing_app_settings {

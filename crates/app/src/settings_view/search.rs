@@ -34,9 +34,6 @@ pub(super) enum RowId {
     SyncTarget,
     SyncAuto,
     SyncOpen,
-    AboutAutoUpdate,
-    AboutUpdate,
-    AboutRelease,
 }
 
 pub(super) struct RowEntry {
@@ -196,27 +193,6 @@ pub(super) fn entry(row: RowId) -> &'static RowEntry {
                 "备份", "同期",
             ],
         },
-        RowId::AboutAutoUpdate => &RowEntry {
-            id: "about-auto-update",
-            group: k::SETTINGS_ABOUT_TITLE,
-            label: k::SETTINGS_ABOUT_AUTOUPDATE_LABEL,
-            desc: k::SETTINGS_ABOUT_AUTOUPDATE_DESC,
-            keywords: &["auto", "update", "自动", "更新", "自動"],
-        },
-        RowId::AboutUpdate => &RowEntry {
-            id: "about-update",
-            group: k::SETTINGS_ABOUT_TITLE,
-            label: k::SETTINGS_ABOUT_UPDATE_LABEL,
-            desc: k::SETTINGS_ABOUT_UPDATE_DESC,
-            keywords: &["update", "version", "更新", "版本", "バージョン"],
-        },
-        RowId::AboutRelease => &RowEntry {
-            id: "about-release",
-            group: k::SETTINGS_ABOUT_TITLE,
-            label: k::SETTINGS_ABOUT_RELEASE_LABEL,
-            desc: k::SETTINGS_ABOUT_RELEASE_DESC,
-            keywords: &["release", "github", "download", "发布", "下载", "リリース"],
-        },
     }
 }
 
@@ -319,9 +295,6 @@ mod tests {
         RowId::SyncTarget,
         RowId::SyncAuto,
         RowId::SyncOpen,
-        RowId::AboutAutoUpdate,
-        RowId::AboutUpdate,
-        RowId::AboutRelease,
     ];
 
     #[test]

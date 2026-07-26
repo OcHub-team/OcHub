@@ -9,7 +9,6 @@
 "settings.about.title" = "情報"
 "settings.about.update.action" = "確認"
 "settings.about.update.current" = "現在 {version}"
-"settings.about.update.desc" = "GitHub の最新リリースを取得し、現在のバージョンと比べます。"
 "settings.about.update.label" = "更新を確認"
 "settings.about.update.up_to_date" = "最新です · {version}"
 "settings.about.update.upgradable" = "{latest} に更新できます（現在 {current}）"

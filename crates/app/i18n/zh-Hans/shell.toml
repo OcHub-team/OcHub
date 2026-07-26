@@ -108,6 +108,7 @@
 "shell.sidebar.group.network" = "网络"
 "shell.sidebar.group.system" = "系统"
 "shell.sidebar.group.tools" = "工具"
+"shell.sidebar.nav.about" = "关于"
 "shell.sidebar.nav.gallery" = "组件画廊"
 "shell.sidebar.nav.gateway" = "转发站"
 "shell.sidebar.nav.mcp" = "MCP 服务器"

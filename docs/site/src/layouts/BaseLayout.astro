@@ -109,6 +109,34 @@ const llmsUrl = Astro.site
     />
 
     {/*
+      Appearance-aware favicon.
+
+      The mark is solid ink, so one file cannot serve both polarities: the
+      dark-ink version vanishes against a dark tab strip and vice versa.
+
+      These deliberately follow `prefers-color-scheme` rather than this
+      site's own theme toggle. The favicon is painted into browser chrome,
+      not into the page, and that chrome is themed by the OS — matching the
+      in-page toggle would be the mismatch, not the fix. (It is also not
+      reachable from the toggle: `<link>` selection is media-query only.)
+
+      NimbusHead emits its own unconditional `/favicon.ico` above, which
+      stays as the fallback for anything that ignores `media` here.
+    */}
+    <link
+      rel="icon"
+      type="image/png"
+      href="/favicon-light.png"
+      media="(prefers-color-scheme: light)"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      href="/favicon-dark.png"
+      media="(prefers-color-scheme: dark)"
+    />
+
+    {/*
       Translation alternates.
 
       `entryId` is deliberately NOT passed to NimbusHead above. It is the

@@ -5,6 +5,7 @@
 //! Initializes the `ochub-core` `AppState` (SQLite store + services), hosts the
 //! `ochub-server` axum control API in-process on loopback, and renders the GPUI UI.
 
+mod about_view;
 mod app_meta;
 mod app_settings_view;
 mod app_ui;

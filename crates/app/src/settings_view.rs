@@ -58,7 +58,6 @@ use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme;
 
-use root::UpdateState;
 use search::RowId;
 use sync::{SyncDraft, SyncTarget};
 
@@ -116,7 +115,6 @@ pub struct SettingsView {
     query: SharedString,
     /// At most one adaptive select row may have its dropdown open.
     open_select_row: Option<RowId>,
-    update: UpdateState,
     /// Per-app in-flight set, so only the row being toggled goes inert.
     toggling: HashSet<String>,
     /// `Some` only while `page == Page::Sync`.
@@ -142,8 +140,9 @@ pub struct SettingsView {
     ccswitch_busy: bool,
 }
 
-/// Root blocks when no search query is active.
-const ROOT_BLOCK_COUNT: usize = 6;
+/// Root blocks when no search query is active. 关于 is its own section
+/// now (see `crate::about_view`), so the root stops at the sync group.
+const ROOT_BLOCK_COUNT: usize = 5;
 /// Apps sub-page blocks: enabled apps, manifest errors, user plugins.
 const APPS_BLOCK_COUNT: usize = 3;
 
@@ -162,7 +161,6 @@ impl SettingsView {
             search,
             query: SharedString::default(),
             open_select_row: None,
-            update: UpdateState::default(),
             toggling: HashSet::new(),
             draft: None,
             sync_busy: false,
