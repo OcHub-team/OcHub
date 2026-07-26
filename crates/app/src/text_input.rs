@@ -1614,6 +1614,19 @@ impl Render for TextInput {
                 .overflow_hidden()
                 .h(px(380.))
                 .items_start()
+                // Stopping propagation (below) only outranks ancestors that
+                // registered their wheel handler before this editor painted.
+                // `gpui::list` registers its own *after* painting its items, so
+                // in the reverse-ordered bubble phase the list scrolls the page
+                // before this editor is ever asked — which is how a form field
+                // ends up dragging the whole page. Ancestors gate on
+                // `should_handle_scroll`, i.e. on the hit test, so take their
+                // hitboxes out of it while the pointer is inside this editor.
+                // Only once it really can scroll: a short snippet must still let
+                // the wheel move the page instead of dead-ending here.
+                .when(self.scroll_handle.max_offset().y > px(0.), |element| {
+                    element.occlude()
+                })
                 .child(
                     div()
                         .id(("text-input-scroll", cx.entity_id().as_u64()))
@@ -1621,10 +1634,10 @@ impl Render for TextInput {
                         .h_full()
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll_handle)
-                        // GPUI applies wheel deltas to every scrollable hitbox
-                        // under the pointer, so an editor nested in a scrolling
-                        // page would drag the page along. Once this editor can
-                        // scroll, the gesture belongs to it alone.
+                        // Ancestors that are plain scroll containers (painted
+                        // before their children) are still stopped the ordinary
+                        // way. Once this editor can scroll, the gesture belongs
+                        // to it alone.
                         .on_scroll_wheel(cx.listener(|this, _event, _window, cx| {
                             if this.scroll_handle.max_offset().y > px(0.) {
                                 cx.stop_propagation();

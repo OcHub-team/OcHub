@@ -1945,6 +1945,15 @@ impl Render for CodeEditor {
             .h(px(380.))
             .items_start()
             .overflow_hidden()
+            // Same wheel containment as the code-mode `TextInput`: a scrolling
+            // ancestor whose handler is registered after its children paint
+            // (`gpui::list`) outranks the nested `stop_propagation` below, so
+            // drop ancestor hitboxes out of the hit test their
+            // `should_handle_scroll` checks consult. Only while this editor can
+            // scroll, so a short buffer still lets the wheel move the page.
+            .when(self.scroll_handle.max_offset().y > px(0.), |editor| {
+                editor.occlude()
+            })
             .child(editor_scroll)
             .when_some(find_bar, |element, bar| element.child(bar))
     }
