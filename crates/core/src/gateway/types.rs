@@ -89,6 +89,11 @@ pub struct GatewayKey {
     /// behavior.
     #[serde(default)]
     pub route_id: Option<String>,
+    /// Per-application model behavior for this station binding. `None` keeps
+    /// the legacy route-level behavior; `Some(default)` explicitly means
+    /// pass every model through unchanged.
+    #[serde(default)]
+    pub model_policy: Option<GatewayAppModelPolicy>,
     pub created_at: i64,
     pub enabled: bool,
 }
@@ -132,6 +137,97 @@ impl GatewayModelRule {
     pub fn upstream_model_override(&self) -> Option<&str> {
         let model = self.upstream_model.trim();
         (!model.is_empty()).then_some(model)
+    }
+}
+
+/// Model choices and aliases owned by one `station × application` binding.
+///
+/// Station routes describe upstream capabilities. This policy describes what
+/// one client sees and how its requested model names are translated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAppModelPolicy {
+    /// Client-visible models written into applications that support a catalog.
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// Model selected in the target application after applying the station.
+    #[serde(default)]
+    pub preferred_model: Option<String>,
+    /// Upstream model used when no rule matches. `None` means pass through.
+    #[serde(default)]
+    pub fallback_model: Option<String>,
+    /// Per-client aliases, e.g. `claude-opus-5` → `grok-4.5`.
+    #[serde(default)]
+    pub model_rules: Vec<GatewayModelRule>,
+}
+
+impl GatewayAppModelPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        for (index, model) in self.models.iter().enumerate() {
+            if model.trim().is_empty() {
+                return Err("应用模型不能为空".to_string());
+            }
+            if self.models[..index].contains(model) {
+                return Err(format!("应用模型 {model} 重复出现"));
+            }
+        }
+        if self
+            .preferred_model
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
+            return Err("应用默认模型不能为空字符串".to_string());
+        }
+        if self
+            .fallback_model
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
+            return Err("未命中映射的模型不能为空字符串".to_string());
+        }
+        for (index, rule) in self.model_rules.iter().enumerate() {
+            if rule.model.trim().is_empty() {
+                return Err("应用模型映射必须填写客户端模型".to_string());
+            }
+            if self.model_rules[..index]
+                .iter()
+                .any(|previous| previous.model == rule.model)
+            {
+                return Err(format!("应用模型映射 {} 重复出现", rule.model));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn rule_for_model(&self, model: &str) -> Option<&GatewayModelRule> {
+        self.model_rules
+            .iter()
+            .find(|rule| rule.matches_model(model))
+    }
+
+    /// Models shown to the client: preferred first, then selected station
+    /// models, followed by exact client-side aliases.
+    pub fn client_models(&self) -> Vec<String> {
+        let mut models = Vec::new();
+        let mut push = |model: &str| {
+            let model = model.trim();
+            if !model.is_empty()
+                && !model.contains('*')
+                && !models.iter().any(|existing| existing == model)
+            {
+                models.push(model.to_string());
+            }
+        };
+        if let Some(model) = &self.preferred_model {
+            push(model);
+        }
+        for model in &self.models {
+            push(model);
+        }
+        for rule in &self.model_rules {
+            push(&rule.model);
+        }
+        models
     }
 }
 
@@ -503,5 +599,56 @@ mod tests {
         .unwrap();
         assert_eq!(rule.channel_id.as_deref(), Some("legacy-channel"));
         assert_eq!(rule.dialect, None);
+    }
+
+    #[test]
+    fn app_policy_builds_a_deduplicated_client_catalog() {
+        let policy = GatewayAppModelPolicy {
+            models: vec!["grok-4.5".into(), "gpt-5.6".into(), "grok-4.5".into()],
+            preferred_model: Some("gpt-5.6".into()),
+            fallback_model: None,
+            model_rules: vec![
+                GatewayModelRule {
+                    model: "claude-opus-5".into(),
+                    upstream_model: "grok-4.5".into(),
+                    channel_id: None,
+                    dialect: None,
+                },
+                GatewayModelRule {
+                    model: "claude-*".into(),
+                    upstream_model: String::new(),
+                    channel_id: None,
+                    dialect: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            policy.client_models(),
+            vec![
+                "gpt-5.6".to_string(),
+                "grok-4.5".to_string(),
+                "claude-opus-5".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_policy_rule_can_override_a_fixed_fallback_with_passthrough() {
+        let policy = GatewayAppModelPolicy {
+            fallback_model: Some("grok-4.5".into()),
+            model_rules: vec![GatewayModelRule {
+                model: "claude-opus-5".into(),
+                upstream_model: String::new(),
+                channel_id: None,
+                dialect: None,
+            }],
+            ..Default::default()
+        };
+
+        let matched = policy.rule_for_model("claude-opus-5").unwrap();
+        assert_eq!(matched.upstream_model_override(), None);
+        assert!(policy.rule_for_model("claude-sonnet-5").is_none());
+        assert_eq!(policy.fallback_model.as_deref(), Some("grok-4.5"));
     }
 }

@@ -303,6 +303,7 @@ impl Database {
                 name TEXT NOT NULL,
                 key TEXT NOT NULL UNIQUE,
                 route_id TEXT,
+                model_policy TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL
             )",
@@ -575,6 +576,20 @@ impl Database {
                             })?;
                         }
                         Self::set_user_version(conn, 8)?;
+                    }
+                    8 => {
+                        if Self::table_exists(conn, "gateway_keys")?
+                            && !Self::has_column(conn, "gateway_keys", "model_policy")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE gateway_keys ADD COLUMN model_policy TEXT",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!("为应用转发站绑定添加模型策略失败: {e}"))
+                            })?;
+                        }
+                        Self::set_user_version(conn, 9)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -2200,5 +2215,42 @@ mod schema_migration_tests {
             .unwrap();
         assert!(endpoint_id.is_none());
         assert!(website_url.is_none());
+    }
+
+    #[test]
+    fn migrates_v8_gateway_keys_to_per_app_model_policies() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_keys (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                key TEXT NOT NULL UNIQUE,
+                route_id TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL
+             );
+             INSERT INTO gateway_keys
+                (id, name, key, route_id, enabled, created_at)
+             VALUES
+                ('key-1', 'codex:station:relay', 'rd-existing', 'station:relay', 1, 10);
+             PRAGMA user_version = 8;",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "gateway_keys", "model_policy").unwrap());
+        let (secret, route_id, model_policy): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT key, route_id, model_policy
+                 FROM gateway_keys WHERE id = 'key-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(secret, "rd-existing");
+        assert_eq!(route_id.as_deref(), Some("station:relay"));
+        assert!(model_policy.is_none());
     }
 }

@@ -279,19 +279,23 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, key, route_id, enabled, created_at FROM gateway_keys
+                "SELECT id, name, key, route_id, model_policy, enabled, created_at FROM gateway_keys
                  ORDER BY created_at ASC, id ASC",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         let rows = stmt
             .query_map([], |row| {
+                let model_policy: Option<String> = row.get(4)?;
                 Ok(GatewayKey {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     key: row.get(2)?,
                     route_id: row.get(3)?,
-                    enabled: row.get(4)?,
-                    created_at: row.get(5)?,
+                    model_policy: model_policy
+                        .as_deref()
+                        .and_then(|policy| serde_json::from_str(policy).ok()),
+                    enabled: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -302,16 +306,21 @@ impl Database {
     pub fn upsert_gateway_key(&self, key: &GatewayKey) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "INSERT INTO gateway_keys (id, name, key, route_id, enabled, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO gateway_keys (
+                id, name, key, route_id, model_policy, enabled, created_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, key = excluded.key,
-                route_id = excluded.route_id, enabled = excluded.enabled",
+                route_id = excluded.route_id,
+                model_policy = excluded.model_policy,
+                enabled = excluded.enabled",
             params![
                 key.id,
                 key.name,
                 key.key,
                 key.route_id,
+                key.model_policy.as_ref().map(to_json_string).transpose()?,
                 key.enabled,
                 key.created_at
             ],
@@ -333,19 +342,23 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, key, route_id, enabled, created_at FROM gateway_keys
+                "SELECT id, name, key, route_id, model_policy, enabled, created_at FROM gateway_keys
                  WHERE key = ?1 AND enabled = 1",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         let mut rows = stmt
             .query_map(params![secret], |row| {
+                let model_policy: Option<String> = row.get(4)?;
                 Ok(GatewayKey {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     key: row.get(2)?,
                     route_id: row.get(3)?,
-                    enabled: row.get(4)?,
-                    created_at: row.get(5)?,
+                    model_policy: model_policy
+                        .as_deref()
+                        .and_then(|policy| serde_json::from_str(policy).ok()),
+                    enabled: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -361,8 +374,8 @@ impl Database {
 mod tests {
     use crate::db::Database;
     use crate::gateway::types::{
-        Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayModelRule,
-        GatewayReasoningConfig, GatewayRoute,
+        Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayConfig, GatewayKey,
+        GatewayModelRule, GatewayReasoningConfig, GatewayRoute,
     };
 
     fn channel(id: &str) -> GatewayChannel {
@@ -458,6 +471,17 @@ mod tests {
             name: "claude-code".into(),
             key: "rd-secret".into(),
             route_id: None,
+            model_policy: Some(GatewayAppModelPolicy {
+                models: vec!["grok-4.5".into()],
+                preferred_model: None,
+                fallback_model: None,
+                model_rules: vec![GatewayModelRule {
+                    model: "claude-opus-5".into(),
+                    upstream_model: "grok-4.5".into(),
+                    channel_id: None,
+                    dialect: Some(Dialect::Responses),
+                }],
+            }),
             enabled: true,
             created_at: 1,
         };
@@ -466,6 +490,7 @@ mod tests {
 
         let found = db.find_gateway_key("rd-secret").unwrap().unwrap();
         assert_eq!(found.name, "claude-code");
+        assert_eq!(found.model_policy, key.model_policy);
         assert!(db.find_gateway_key("wrong").unwrap().is_none());
 
         let mut disabled = key.clone();
@@ -511,6 +536,7 @@ mod tests {
             name: "claude".into(),
             key: "rd-route".into(),
             route_id: Some(route.id.clone()),
+            model_policy: None,
             enabled: true,
             created_at: 1,
         };

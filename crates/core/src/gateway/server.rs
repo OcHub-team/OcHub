@@ -327,14 +327,23 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
         None => None,
     };
     let mut models: Vec<String> = Vec::new();
-    let mapped_targets: std::collections::HashSet<&str> = route
-        .as_ref()
-        .into_iter()
-        .flat_map(|route| route.model_rules.iter())
+    let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
+    let effective_rules = match model_policy {
+        Some(policy) => policy.model_rules.as_slice(),
+        None => route
+            .as_ref()
+            .map(|route| route.model_rules.as_slice())
+            .unwrap_or_default(),
+    };
+    let mapped_targets: std::collections::HashSet<String> = effective_rules
+        .iter()
         .filter(|rule| !rule.model.contains('*'))
         .filter_map(|rule| rule.upstream_model_override())
+        .map(str::to_string)
         .collect();
-    if let Some(route) = &route {
+    if let Some(policy) = model_policy {
+        models = policy.client_models();
+    } else if let Some(route) = &route {
         for rule in &route.model_rules {
             let model = rule.model.trim();
             if !model.is_empty()
@@ -350,21 +359,25 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
             }
         }
     }
-    if let Ok(channels) = state.db.get_gateway_channels() {
-        for c in channels.iter().filter(|channel| {
-            channel.enabled
-                && route
-                    .as_ref()
-                    .is_none_or(|route| route.allows_channel(&channel.id))
-        }) {
-            for m in &c.models {
-                let model = m.trim();
-                if !model.is_empty()
-                    && !model.contains('*')
-                    && !mapped_targets.contains(model)
-                    && !models.iter().any(|existing| existing == model)
-                {
-                    models.push(model.to_string());
+    // A per-app policy is an explicit catalog selection. Only legacy keys
+    // inherit every model advertised by the station.
+    if model_policy.is_none() {
+        if let Ok(channels) = state.db.get_gateway_channels() {
+            for c in channels.iter().filter(|channel| {
+                channel.enabled
+                    && route
+                        .as_ref()
+                        .is_none_or(|route| route.allows_channel(&channel.id))
+            }) {
+                for m in &c.models {
+                    let model = m.trim();
+                    if !model.is_empty()
+                        && !model.contains('*')
+                        && !mapped_targets.contains(model)
+                        && !models.iter().any(|existing| existing == model)
+                    {
+                        models.push(model.to_string());
+                    }
                 }
             }
         }

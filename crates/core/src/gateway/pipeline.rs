@@ -23,8 +23,8 @@ use tokio::sync::RwLock;
 use crate::db::Database;
 use crate::gateway::router::candidates_for_model_ranked;
 use crate::gateway::types::{
-    ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayReasoningConfig,
-    GatewayReasoningMode, GatewayRoute,
+    ChannelHealth, Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayConfig, GatewayKey,
+    GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
 };
 use crate::usage_tracking::logger::UsageLogger;
 use crate::usage_tracking::parser::TokenUsage;
@@ -714,6 +714,33 @@ fn log_usage(
     }
 }
 
+fn request_model_rule<'a>(
+    policy: Option<&'a GatewayAppModelPolicy>,
+    route: Option<&'a GatewayRoute>,
+    model: &str,
+) -> Option<&'a GatewayModelRule> {
+    match policy {
+        Some(policy) => policy.rule_for_model(model),
+        None => route.and_then(|route| route.rule_for_model(model)),
+    }
+}
+
+fn request_model_override<'a>(
+    rule: Option<&'a GatewayModelRule>,
+    policy: Option<&'a GatewayAppModelPolicy>,
+    route: Option<&'a GatewayRoute>,
+) -> Option<&'a str> {
+    match rule {
+        // A matched rule with no target is an explicit pass-through and must
+        // suppress the unmatched fallback.
+        Some(rule) => rule.upstream_model_override(),
+        None => match policy {
+            Some(policy) => policy.fallback_model.as_deref(),
+            None => route.and_then(|route| route.default_model.as_deref()),
+        },
+    }
+}
+
 /// Run one inference request through the gateway.
 pub async fn run(
     state: GatewayState,
@@ -739,12 +766,26 @@ pub async fn run(
             }
         }
     };
+    let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
     let mut meta = request_meta(inlet, &body);
     if meta.model.is_empty() {
-        if let Some(default_model) = route
-            .as_ref()
-            .and_then(|route| route.default_model.as_deref())
-        {
+        let default_model = model_policy
+            .and_then(|policy| {
+                policy
+                    .preferred_model
+                    .as_deref()
+                    .or(policy.fallback_model.as_deref())
+            })
+            .or_else(|| {
+                if model_policy.is_none() {
+                    route
+                        .as_ref()
+                        .and_then(|route| route.default_model.as_deref())
+                } else {
+                    None
+                }
+            });
+        if let Some(default_model) = default_model {
             meta.model = default_model.to_string();
         }
     }
@@ -764,16 +805,8 @@ pub async fn run(
             }
         }
     };
-    let rule = route
-        .as_ref()
-        .and_then(|route| route.rule_for_model(&meta.model))
-        .cloned();
-    let route_model_override = match rule.as_ref() {
-        Some(rule) => rule.upstream_model_override(),
-        None => route
-            .as_ref()
-            .and_then(|route| route.default_model.as_deref()),
-    };
+    let rule = request_model_rule(model_policy, route.as_ref(), &meta.model).cloned();
+    let route_model_override = request_model_override(rule.as_ref(), model_policy, route.as_ref());
     let remote_compaction = is_remote_compaction_request(inlet, &body);
     let convertible: Vec<GatewayChannel> = channels
         .into_iter()
@@ -1065,6 +1098,33 @@ mod tests {
                 assert!(conversion_supported(inlet, channel));
             }
         }
+    }
+
+    #[test]
+    fn matched_passthrough_rule_suppresses_the_unmatched_fallback() {
+        let policy = GatewayAppModelPolicy {
+            fallback_model: Some("grok-4.5".into()),
+            model_rules: vec![GatewayModelRule {
+                model: "claude-opus-5".into(),
+                upstream_model: String::new(),
+                channel_id: None,
+                dialect: None,
+            }],
+            ..Default::default()
+        };
+
+        let matched = request_model_rule(Some(&policy), None, "claude-opus-5");
+        assert!(matched.is_some());
+        assert_eq!(
+            request_model_override(matched, Some(&policy), None),
+            None,
+            "a matched pass-through rule must not inherit the fallback"
+        );
+        let unmatched = request_model_rule(Some(&policy), None, "claude-sonnet-5");
+        assert_eq!(
+            request_model_override(unmatched, Some(&policy), None),
+            Some("grok-4.5")
+        );
     }
 
     #[test]
@@ -1558,7 +1618,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn route_isolates_upstream_and_maps_model_and_reasoning() {
+    async fn per_app_policy_overrides_station_mapping_and_keeps_reasoning() {
         let received = Arc::new(std::sync::Mutex::new(None::<Value>));
         let received_for_handler = received.clone();
         let app = axum::Router::new().route(
@@ -1571,7 +1631,7 @@ mod tests {
                         "id": "msg_route",
                         "type": "message",
                         "role": "assistant",
-                        "model": "claude-sonnet-4-6",
+                        "model": "grok-4.5",
                         "content": [{ "type": "text", "text": "routed" }],
                         "stop_reason": "end_turn",
                         "usage": { "input_tokens": 2, "output_tokens": 1 }
@@ -1594,7 +1654,7 @@ mod tests {
             path_override: None,
             // This deliberately matches only the mapped upstream model, not
             // the client-facing alias.
-            models: vec!["claude-sonnet-*".into()],
+            models: vec!["grok-*".into()],
             model_override: None,
             priority: 0,
             weight: 1,
@@ -1628,10 +1688,10 @@ mod tests {
             channel_ids: vec!["allowed".into(), "blocked".into()],
             default_model: None,
             model_rules: vec![crate::gateway::types::GatewayModelRule {
-                model: "sonnet".into(),
-                upstream_model: "claude-sonnet-4-6".into(),
-                channel_id: None,
-                dialect: Some(Dialect::Messages),
+                model: "claude-opus-5".into(),
+                upstream_model: "wrong-global-model".into(),
+                channel_id: Some("blocked".into()),
+                dialect: Some(Dialect::Chat),
             }],
             reasoning: GatewayReasoningConfig {
                 mode: GatewayReasoningMode::Auto,
@@ -1647,6 +1707,17 @@ mod tests {
             name: "claude".into(),
             key: "rd-route".into(),
             route_id: Some("route-test".into()),
+            model_policy: Some(crate::gateway::types::GatewayAppModelPolicy {
+                models: vec!["grok-4.5".into()],
+                preferred_model: None,
+                fallback_model: None,
+                model_rules: vec![crate::gateway::types::GatewayModelRule {
+                    model: "claude-opus-5".into(),
+                    upstream_model: "grok-4.5".into(),
+                    channel_id: None,
+                    dialect: Some(Dialect::Messages),
+                }],
+            }),
             enabled: true,
             created_at: 1,
         };
@@ -1658,7 +1729,7 @@ mod tests {
             signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
         };
         let request = json!({
-            "model": "sonnet",
+            "model": "claude-opus-5",
             "messages": [{ "role": "user", "content": "hi" }],
             "reasoning_effort": "low",
             "stream": false
@@ -1674,11 +1745,11 @@ mod tests {
             panic!("expected JSON response");
         };
         assert_eq!(status, 200, "{body}");
-        assert_eq!(body["model"], "sonnet");
+        assert_eq!(body["model"], "claude-opus-5");
         assert_eq!(body["choices"][0]["message"]["content"], "routed");
 
         let upstream = received.lock().unwrap().clone().unwrap();
-        assert_eq!(upstream["model"], "claude-sonnet-4-6");
+        assert_eq!(upstream["model"], "grok-4.5");
         assert_eq!(upstream["thinking"]["budget_tokens"], 7_777);
     }
 

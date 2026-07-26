@@ -14,7 +14,8 @@ use crate::app_state::AppState;
 use crate::app_type::AppType;
 use crate::error::AppError;
 use crate::gateway::types::{
-    Dialect, GatewayChannel, GatewayKey, GatewayReasoningConfig, GatewayRoute,
+    Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayKey, GatewayReasoningConfig,
+    GatewayRoute,
 };
 use crate::model::{ClaudeDesktopModelRoute, Provider, ProviderMeta};
 use crate::services::provider::ProviderService;
@@ -100,6 +101,7 @@ pub fn ensure_key(state: &AppState, label: &str) -> Result<GatewayKey, AppError>
         name: label.to_string(),
         key: crate::gateway::generate_key_secret(),
         route_id: None,
+        model_policy: None,
         enabled: true,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -127,6 +129,7 @@ pub fn ensure_key_for_route(
         name: label.to_string(),
         key: crate::gateway::generate_key_secret(),
         route_id: route_id.map(str::to_string),
+        model_policy: None,
         enabled: true,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -281,6 +284,54 @@ fn route_client_models(route: &GatewayRoute, channels: &[GatewayChannel]) -> Vec
     models
 }
 
+/// Exact model ids advertised by one station across all of its enabled
+/// channels. Wildcards remain routing constraints and are not useful in an
+/// application picker.
+pub fn station_models(route: &GatewayRoute, channels: &[GatewayChannel]) -> Vec<String> {
+    let mut models = Vec::new();
+    for channel in channels
+        .iter()
+        .filter(|channel| channel.enabled && route.allows_channel(&channel.id))
+    {
+        for model in &channel.models {
+            let model = model.trim();
+            if model.is_empty()
+                || model.contains('*')
+                || models.iter().any(|existing| existing == model)
+            {
+                continue;
+            }
+            models.push(model.to_string());
+        }
+    }
+    models.sort();
+    models
+}
+
+pub fn station_model_policy(
+    state: &AppState,
+    app_type: AppType,
+    route: &GatewayRoute,
+) -> Result<GatewayAppModelPolicy, AppError> {
+    let label = gateway_key_label(app_type, &route.id);
+    if let Some(policy) = state
+        .db
+        .get_gateway_keys()?
+        .into_iter()
+        .find(|key| key.name == label && key.enabled)
+        .and_then(|key| key.model_policy)
+    {
+        return Ok(policy);
+    }
+    let channels = state.db.get_gateway_channels()?;
+    Ok(GatewayAppModelPolicy {
+        models: station_models(route, &channels),
+        preferred_model: None,
+        fallback_model: route.default_model.clone(),
+        model_rules: route.model_rules.clone(),
+    })
+}
+
 #[cfg(test)]
 fn gateway_settings_for(
     app_type: AppType,
@@ -288,13 +339,17 @@ fn gateway_settings_for(
     key: &str,
     models: &[String],
 ) -> Result<serde_json::Value, AppError> {
+    let policy = GatewayAppModelPolicy {
+        models: models.to_vec(),
+        ..Default::default()
+    };
     gateway_settings_for_provider(
         app_type,
         GATEWAY_PROVIDER_ID,
         GATEWAY_PROVIDER_NAME,
         base_url,
         key,
-        models,
+        &policy,
     )
 }
 
@@ -304,17 +359,42 @@ fn gateway_settings_for_provider(
     provider_name: &str,
     base_url: &str,
     key: &str,
-    models: &[String],
+    policy: &GatewayAppModelPolicy,
 ) -> Result<serde_json::Value, AppError> {
+    let models = policy.client_models();
     match app_type {
-        AppType::Claude | AppType::ClaudeDesktop => Ok(json!({
-            "env": {
-                "ANTHROPIC_BASE_URL": base_url,
-                "ANTHROPIC_AUTH_TOKEN": key,
+        AppType::Claude | AppType::ClaudeDesktop => {
+            let mut env = serde_json::Map::from_iter([
+                ("ANTHROPIC_BASE_URL".to_string(), json!(base_url)),
+                ("ANTHROPIC_AUTH_TOKEN".to_string(), json!(key)),
+            ]);
+            if let Some(model) = policy.preferred_model.as_deref() {
+                env.insert("ANTHROPIC_MODEL".to_string(), json!(model));
             }
-        })),
+            for rule in policy
+                .model_rules
+                .iter()
+                .filter(|rule| !rule.model.contains('*'))
+            {
+                let lowercase = rule.model.to_ascii_lowercase();
+                let role = ["SONNET", "OPUS", "HAIKU", "FABLE"]
+                    .into_iter()
+                    .find(|role| lowercase.contains(&role.to_ascii_lowercase()));
+                if let Some(role) = role {
+                    env.insert(format!("ANTHROPIC_DEFAULT_{role}_MODEL"), json!(rule.model));
+                    env.insert(
+                        format!("ANTHROPIC_DEFAULT_{role}_MODEL_NAME"),
+                        json!(rule.model),
+                    );
+                }
+            }
+            Ok(json!({ "env": env }))
+        }
         AppType::Codex => {
             let mut document = toml_edit::DocumentMut::new();
+            if let Some(model) = policy.preferred_model.as_deref() {
+                document["model"] = toml_edit::value(model);
+            }
             document["model_provider"] = toml_edit::value(provider_id);
             document["disable_response_storage"] = toml_edit::value(true);
             document["model_providers"] = toml_edit::table();
@@ -445,16 +525,15 @@ pub fn apply_to_app(
             ))
         }
     };
-    apply_route_to_app(state, app_type, base_url, route)
+    let policy = station_model_policy(state, app_type, &route)?;
+    apply_route_to_app(state, app_type, base_url, route, Some(policy))
 }
 
-/// Apply one user-facing relay-station config to a supported CLI.
-pub fn apply_station_to_app(
+fn station_route_for_apply(
     state: &AppState,
     app_type: AppType,
-    base_url: &str,
     station_route_id: &str,
-) -> Result<ApplyResult, AppError> {
+) -> Result<GatewayRoute, AppError> {
     let route = state
         .db
         .get_gateway_route_by_id(station_route_id)?
@@ -487,7 +566,33 @@ pub fn apply_station_to_app(
             route.name
         )));
     }
-    apply_route_to_app(state, app_type, base_url, route)
+    Ok(route)
+}
+
+/// Apply one station using its saved per-application policy, or initialize a
+/// policy from the station's legacy route-level settings.
+pub fn apply_station_to_app(
+    state: &AppState,
+    app_type: AppType,
+    base_url: &str,
+    station_route_id: &str,
+) -> Result<ApplyResult, AppError> {
+    let route = station_route_for_apply(state, app_type, station_route_id)?;
+    let policy = station_model_policy(state, app_type, &route)?;
+    apply_route_to_app(state, app_type, base_url, route, Some(policy))
+}
+
+/// Apply one station and persist a model policy isolated to this application.
+pub fn apply_station_to_app_with_policy(
+    state: &AppState,
+    app_type: AppType,
+    base_url: &str,
+    station_route_id: &str,
+    policy: GatewayAppModelPolicy,
+) -> Result<ApplyResult, AppError> {
+    policy.validate().map_err(AppError::InvalidInput)?;
+    let route = station_route_for_apply(state, app_type, station_route_id)?;
+    apply_route_to_app(state, app_type, base_url, route, Some(policy))
 }
 
 fn apply_route_to_app(
@@ -495,20 +600,31 @@ fn apply_route_to_app(
     app_type: AppType,
     base_url: &str,
     route: GatewayRoute,
+    model_policy: Option<GatewayAppModelPolicy>,
 ) -> Result<ApplyResult, AppError> {
     let provider_id = gateway_provider_id(&route.id);
     let provider_name = format!("OcHub · {}", route.name);
     let key_label = gateway_key_label(app_type, &route.id);
-    let key = ensure_key_for_route(state, &key_label, Some(&route.id))?;
+    let mut key = ensure_key_for_route(state, &key_label, Some(&route.id))?;
+    if key.model_policy != model_policy {
+        key.model_policy = model_policy.clone();
+        state.db.upsert_gateway_key(&key)?;
+    }
     let channels = state.db.get_gateway_channels()?;
-    let client_models = route_client_models(&route, &channels);
+    let config_policy = model_policy.unwrap_or_else(|| GatewayAppModelPolicy {
+        models: route_client_models(&route, &channels),
+        preferred_model: None,
+        fallback_model: route.default_model.clone(),
+        model_rules: route.model_rules.clone(),
+    });
+    let client_models = config_policy.client_models();
     let settings = gateway_settings_for_provider(
         app_type,
         &provider_id,
         &provider_name,
         base_url,
         &key.key,
-        &client_models,
+        &config_policy,
     )?;
     let mut meta = ProviderMeta {
         gateway_route_id: Some(route.id.clone()),
@@ -678,6 +794,7 @@ fn normalize_upstream_origin(base_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::types::GatewayModelRule;
     use std::sync::Arc;
 
     #[test]
@@ -725,6 +842,90 @@ mod tests {
         assert!(opencode_bare.get("models").is_none());
         let hermes_bare = gateway_settings_for(AppType::Hermes, base, "rd-k", &[]).unwrap();
         assert!(hermes_bare.get("model").is_none());
+    }
+
+    #[test]
+    fn app_policy_sets_active_models_and_claude_aliases() {
+        let policy = GatewayAppModelPolicy {
+            models: vec!["grok-4.5".into(), "gpt-5.6".into()],
+            preferred_model: Some("gpt-5.6".into()),
+            fallback_model: None,
+            model_rules: vec![GatewayModelRule {
+                model: "claude-opus-5".into(),
+                upstream_model: "grok-4.5".into(),
+                channel_id: None,
+                dialect: None,
+            }],
+        };
+
+        let codex = gateway_settings_for_provider(
+            AppType::Codex,
+            "relay",
+            "Relay",
+            "http://127.0.0.1:4180",
+            "rd-k",
+            &policy,
+        )
+        .unwrap();
+        let codex_toml = codex["config"].as_str().unwrap();
+        assert!(codex_toml.contains("model = \"gpt-5.6\""));
+        assert_eq!(codex["modelCatalog"]["models"][0]["model"], "gpt-5.6");
+        assert!(codex["modelCatalog"]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["model"] == "claude-opus-5"));
+
+        let claude = gateway_settings_for_provider(
+            AppType::Claude,
+            "relay",
+            "Relay",
+            "http://127.0.0.1:4180",
+            "rd-k",
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(claude["env"]["ANTHROPIC_MODEL"], "gpt-5.6");
+        assert_eq!(
+            claude["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+            "claude-opus-5"
+        );
+        assert_eq!(
+            claude["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"],
+            "claude-opus-5"
+        );
+    }
+
+    #[test]
+    fn station_policy_is_isolated_by_application_key() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = station_fixture(&state, "shared", Dialect::Responses);
+        let claude_policy = GatewayAppModelPolicy {
+            models: vec!["grok-4.5".into()],
+            model_rules: vec![GatewayModelRule {
+                model: "claude-opus-5".into(),
+                upstream_model: "grok-4.5".into(),
+                channel_id: None,
+                dialect: None,
+            }],
+            ..Default::default()
+        };
+        let mut claude_key = ensure_key_for_route(
+            &state,
+            &gateway_key_label(AppType::Claude, &route.id),
+            Some(&route.id),
+        )
+        .unwrap();
+        claude_key.model_policy = Some(claude_policy.clone());
+        state.db.upsert_gateway_key(&claude_key).unwrap();
+
+        assert_eq!(
+            station_model_policy(&state, AppType::Claude, &route).unwrap(),
+            claude_policy
+        );
+        let codex_policy = station_model_policy(&state, AppType::Codex, &route).unwrap();
+        assert!(codex_policy.model_rules.is_empty());
+        assert_ne!(codex_policy, claude_policy);
     }
 
     #[test]

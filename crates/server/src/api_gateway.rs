@@ -186,6 +186,7 @@ async fn key_create(
         name: body.name.trim().to_string(),
         key: ochub_core::gateway::generate_key_secret(),
         route_id: None,
+        model_policy: None,
         enabled: true,
         created_at: chrono::Utc::now().timestamp(),
     };

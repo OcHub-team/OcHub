@@ -15,8 +15,8 @@ use gpui::{
 };
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
-    Dialect, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule, GatewayReasoningConfig,
-    GatewayReasoningMode, GatewayRoute,
+    Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule,
+    GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
 };
 use ochub_core::services::provider::ProviderService;
 use ochub_core::{AppState, AppType};
@@ -223,10 +223,38 @@ enum GatewayRow {
 }
 
 struct ModelRuleEditor {
-    id: u64,
     client_model: Entity<TextInput>,
     station_model: Entity<TextInput>,
     dialect: Option<Dialect>,
+}
+
+struct AppModelRuleEditor {
+    id: u64,
+    client_model: Entity<TextInput>,
+    upstream_model: Option<String>,
+    channel_id: Option<String>,
+    dialect: Option<Dialect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApplyModelPicker {
+    Models,
+    Preferred,
+    Fallback,
+    Rule(u64),
+}
+
+struct StationApplyEditor {
+    route_id: String,
+    station_name: String,
+    app_type: AppType,
+    available_models: Vec<String>,
+    selected_models: Vec<String>,
+    preferred_model: Option<String>,
+    fallback_model: Option<String>,
+    rules: Vec<AppModelRuleEditor>,
+    open_picker: Option<ApplyModelPicker>,
+    rules_error: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -258,10 +286,17 @@ struct EndpointEditor {
     existing_channels: HashMap<Dialect, GatewayChannel>,
     enabled_dialects: HashSet<Dialect>,
     base_url: Entity<TextInput>,
-    models: HashMap<Dialect, Entity<TextInput>>,
+    models: HashMap<Dialect, DialectModelsEditor>,
+    fetched_models: Vec<String>,
+    open_model_picker: Option<Dialect>,
     probe: ProbeState,
     model_fetch: ModelFetchState,
     test: EndpointTestState,
+}
+
+struct DialectModelsEditor {
+    selected: Vec<String>,
+    manual_input: Entity<TextInput>,
 }
 
 struct StationEditor {
@@ -295,6 +330,7 @@ pub struct GatewayView {
     active_station_apps: HashSet<(AppType, String)>,
     installed_station_apps: HashSet<(AppType, String)>,
     editor: Option<StationEditor>,
+    apply_editor: Option<StationApplyEditor>,
     next_rule_id: u64,
     show_imports: bool,
     applying: Option<(String, AppType)>,
@@ -327,56 +363,65 @@ impl GatewayView {
     /// heights invalidated because translations can wrap differently.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
         self.list_state.remeasure();
-        let Some(editor) = self.editor.as_mut() else {
-            cx.notify();
-            return;
-        };
+        let mut placeholders: Vec<(Entity<TextInput>, SharedString)> = Vec::new();
+        if let Some(editor) = self.editor.as_mut() {
+            // Which fields are flagged does not change — only the wording does.
+            if editor.name_error.is_some() {
+                editor.name_error = Some(t(k::GATEWAY_EDITOR_ERROR_NAME));
+            }
+            if editor.dialects_error.is_some() {
+                editor.dialects_error = Some(t(k::GATEWAY_EDITOR_ERROR_DIALECTS));
+            }
+            if editor.budget_error.is_some() {
+                editor.budget_error = Some(t(k::GATEWAY_EDITOR_ERROR_BUDGET));
+            }
+            if editor.rules_error.is_some() {
+                editor.rules_error = Some(t(k::GATEWAY_EDITOR_ERROR_RULES));
+            }
 
-        // Which fields are flagged does not change — only the wording does.
-        if editor.name_error.is_some() {
-            editor.name_error = Some(t(k::GATEWAY_EDITOR_ERROR_NAME));
+            placeholders.extend([
+                (editor.name.clone(), t(k::GATEWAY_EDITOR_NAME_PLACEHOLDER)),
+                (
+                    editor.website_url.clone(),
+                    t(k::GATEWAY_EDITOR_WEBSITE_PLACEHOLDER),
+                ),
+                (
+                    editor.api_key.clone(),
+                    t(k::GATEWAY_EDITOR_API_KEY_PLACEHOLDER),
+                ),
+                (
+                    editor.default_model.clone(),
+                    t(k::GATEWAY_EDITOR_DEFAULT_MODEL_PLACEHOLDER),
+                ),
+            ]);
+            for rule in &editor.rules {
+                placeholders.push((
+                    rule.client_model.clone(),
+                    t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_PLACEHOLDER),
+                ));
+                placeholders.push((
+                    rule.station_model.clone(),
+                    t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER),
+                ));
+            }
+            for endpoint in &editor.endpoints {
+                for models in endpoint.models.values() {
+                    placeholders.push((
+                        models.manual_input.clone(),
+                        t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER),
+                    ));
+                }
+            }
         }
-        if editor.dialects_error.is_some() {
-            editor.dialects_error = Some(t(k::GATEWAY_EDITOR_ERROR_DIALECTS));
-        }
-        if editor.budget_error.is_some() {
-            editor.budget_error = Some(t(k::GATEWAY_EDITOR_ERROR_BUDGET));
-        }
-        if editor.rules_error.is_some() {
-            editor.rules_error = Some(t(k::GATEWAY_EDITOR_ERROR_RULES));
-        }
-
-        // The base URL and the four budget inputs hint at a format
-        // (`https://api.example.com`, `4096`) rather than at prose, so they
-        // read the same in every language and are left alone.
-        let mut placeholders: Vec<(Entity<TextInput>, SharedString)> = vec![
-            (editor.name.clone(), t(k::GATEWAY_EDITOR_NAME_PLACEHOLDER)),
-            (
-                editor.website_url.clone(),
-                t(k::GATEWAY_EDITOR_WEBSITE_PLACEHOLDER),
-            ),
-            (
-                editor.api_key.clone(),
-                t(k::GATEWAY_EDITOR_API_KEY_PLACEHOLDER),
-            ),
-            (
-                editor.default_model.clone(),
-                t(k::GATEWAY_EDITOR_DEFAULT_MODEL_PLACEHOLDER),
-            ),
-        ];
-        for rule in &editor.rules {
-            placeholders.push((
-                rule.client_model.clone(),
-                t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_PLACEHOLDER),
-            ));
-            placeholders.push((
-                rule.station_model.clone(),
-                t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER),
-            ));
-        }
-        for endpoint in &editor.endpoints {
-            for models in endpoint.models.values() {
-                placeholders.push((models.clone(), t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER)));
+        if let Some(editor) = self.apply_editor.as_mut() {
+            if editor.rules_error.is_some() {
+                editor.rules_error = Some(t(k::GATEWAY_APPLY_ERROR_MAPPING));
+            }
+            for rule in &editor.rules {
+                placeholders.push((
+                    rule.client_model.clone(),
+                    t(k::GATEWAY_APPLY_MAPPING_CLIENT_PLACEHOLDER),
+                ));
             }
         }
         for (input, placeholder) in placeholders {
@@ -393,6 +438,7 @@ impl GatewayView {
             active_station_apps: HashSet::new(),
             installed_station_apps: HashSet::new(),
             editor: None,
+            apply_editor: None,
             next_rule_id: 1,
             show_imports: false,
             applying: None,
@@ -415,6 +461,8 @@ impl GatewayView {
     pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.confirm_delete.is_some() {
             window.play_system_bell();
+        } else if self.apply_editor.is_some() {
+            self.confirm_apply_station(cx);
         } else if self.editor.is_some() {
             self.save_editor(cx);
         } else {
@@ -424,9 +472,11 @@ impl GatewayView {
 
     pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let closed_editor = self.editor.take().is_some();
+        let closed_apply_editor = self.apply_editor.take().is_some();
         if self.delete_blocked.take().is_some()
             || self.confirm_delete.take().is_some()
             || closed_editor
+            || closed_apply_editor
         {
             if closed_editor {
                 self.rebuild_rows();
@@ -573,10 +623,7 @@ impl GatewayView {
             .collect();
         let mut rule_editors = Vec::new();
         for rule in rules {
-            let id = self.next_rule_id;
-            self.next_rule_id += 1;
             rule_editors.push(ModelRuleEditor {
-                id,
                 client_model: cx.new(|cx| {
                     text_input(
                         cx,
@@ -659,8 +706,7 @@ impl GatewayView {
                 cx,
             ));
         }
-        let show_advanced =
-            !default_model.is_empty() || reasoning != GatewayReasoningConfig::default();
+        let show_advanced = reasoning != GatewayReasoningConfig::default();
         self.editor = Some(StationEditor {
             route_id,
             created_at,
@@ -719,42 +765,6 @@ impl GatewayView {
         cx.notify();
     }
 
-    fn add_model_rule(&mut self, cx: &mut Context<Self>) {
-        let id = self.next_rule_id;
-        self.next_rule_id += 1;
-        if let Some(editor) = &mut self.editor {
-            editor.rules.push(ModelRuleEditor {
-                id,
-                client_model: cx.new(|cx| {
-                    TextInput::new(cx, t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_PLACEHOLDER))
-                }),
-                station_model: cx.new(|cx| {
-                    TextInput::new(cx, t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER))
-                }),
-                dialect: None,
-            });
-            cx.notify();
-        }
-    }
-
-    fn remove_model_rule(&mut self, id: u64, cx: &mut Context<Self>) {
-        if let Some(editor) = &mut self.editor {
-            editor.rules.retain(|rule| rule.id != id);
-            cx.notify();
-        }
-    }
-
-    fn set_rule_dialect(&mut self, id: u64, dialect: Option<Dialect>, cx: &mut Context<Self>) {
-        if let Some(rule) = self
-            .editor
-            .as_mut()
-            .and_then(|editor| editor.rules.iter_mut().find(|rule| rule.id == id))
-        {
-            rule.dialect = dialect;
-            cx.notify();
-        }
-    }
-
     fn add_endpoint(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = &mut self.editor else {
             return;
@@ -796,10 +806,152 @@ impl GatewayView {
         }) else {
             return;
         };
-        if !endpoint.enabled_dialects.remove(&dialect) {
+        if endpoint.enabled_dialects.remove(&dialect) {
+            if endpoint.open_model_picker == Some(dialect) {
+                endpoint.open_model_picker = None;
+            }
+        } else {
             endpoint.enabled_dialects.insert(dialect);
         }
         endpoint.probe = ProbeState::Idle;
+        cx.notify();
+    }
+
+    fn toggle_model_picker(&mut self, endpoint_id: &str, dialect: Dialect, cx: &mut Context<Self>) {
+        let Some(endpoint) = self.editor.as_mut().and_then(|editor| {
+            editor
+                .endpoints
+                .iter_mut()
+                .find(|endpoint| endpoint.id == endpoint_id)
+        }) else {
+            return;
+        };
+        endpoint.open_model_picker = if endpoint.open_model_picker == Some(dialect) {
+            None
+        } else {
+            Some(dialect)
+        };
+        cx.notify();
+    }
+
+    fn toggle_endpoint_model(
+        &mut self,
+        endpoint_id: &str,
+        dialect: Dialect,
+        model: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(models) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| {
+                editor
+                    .endpoints
+                    .iter_mut()
+                    .find(|endpoint| endpoint.id == endpoint_id)
+            })
+            .and_then(|endpoint| endpoint.models.get_mut(&dialect))
+        else {
+            return;
+        };
+        if let Some(index) = models
+            .selected
+            .iter()
+            .position(|selected| selected == model)
+        {
+            models.selected.remove(index);
+        } else {
+            models.selected.push(model.to_string());
+            models.selected.sort();
+        }
+        cx.notify();
+    }
+
+    fn add_manual_endpoint_models(
+        &mut self,
+        endpoint_id: &str,
+        dialect: Dialect,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self
+            .editor
+            .as_ref()
+            .and_then(|editor| {
+                editor
+                    .endpoints
+                    .iter()
+                    .find(|endpoint| endpoint.id == endpoint_id)
+            })
+            .and_then(|endpoint| endpoint.models.get(&dialect))
+            .map(|models| models.manual_input.clone())
+        else {
+            return;
+        };
+        let additions = parse_models(&input_value(&input, cx));
+        if additions.is_empty() {
+            return;
+        }
+        if let Some(models) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| {
+                editor
+                    .endpoints
+                    .iter_mut()
+                    .find(|endpoint| endpoint.id == endpoint_id)
+            })
+            .and_then(|endpoint| endpoint.models.get_mut(&dialect))
+        {
+            models.selected.extend(additions);
+            models.selected = normalized_models(std::mem::take(&mut models.selected));
+        }
+        input.update(cx, |input, cx| input.set_content(String::new(), cx));
+        cx.notify();
+    }
+
+    fn add_all_fetched_models(
+        &mut self,
+        endpoint_id: &str,
+        dialect: Dialect,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(endpoint) = self.editor.as_mut().and_then(|editor| {
+            editor
+                .endpoints
+                .iter_mut()
+                .find(|endpoint| endpoint.id == endpoint_id)
+        }) else {
+            return;
+        };
+        let fetched = endpoint.fetched_models.clone();
+        let Some(models) = endpoint.models.get_mut(&dialect) else {
+            return;
+        };
+        models.selected.extend(fetched);
+        models.selected = normalized_models(std::mem::take(&mut models.selected));
+        cx.notify();
+    }
+
+    fn clear_endpoint_models(
+        &mut self,
+        endpoint_id: &str,
+        dialect: Dialect,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(models) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| {
+                editor
+                    .endpoints
+                    .iter_mut()
+                    .find(|endpoint| endpoint.id == endpoint_id)
+            })
+            .and_then(|endpoint| endpoint.models.get_mut(&dialect))
+        else {
+            return;
+        };
+        models.selected.clear();
         cx.notify();
     }
 
@@ -947,7 +1099,7 @@ impl GatewayView {
                 channel.models = endpoint
                     .models
                     .get(&dialect)
-                    .map(|input| parse_models(&input_value(input, cx)))
+                    .map(|models| models.selected.clone())
                     .unwrap_or_default();
                 channel.priority = endpoint_index as i32 * 10;
                 channel.enabled = endpoint.enabled_dialects.contains(&dialect);
@@ -1182,7 +1334,7 @@ impl GatewayView {
         .detach();
     }
 
-    fn apply_station(&mut self, route_id: String, app_type: AppType, cx: &mut Context<Self>) {
+    fn open_apply_editor(&mut self, route_id: String, app_type: AppType, cx: &mut Context<Self>) {
         if self.applying.is_some() {
             return;
         }
@@ -1214,6 +1366,250 @@ impl GatewayView {
             );
             return;
         }
+
+        let policy = match apply::station_model_policy(&self.app, app_type, &station.route) {
+            Ok(policy) => policy,
+            Err(error) => {
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::GATEWAY_STATUS_APPLY_FAILED, error = error),
+                    cx,
+                );
+                return;
+            }
+        };
+        let mut available_models = apply::station_models(&station.route, &station.channels);
+        available_models.extend(policy.models.iter().cloned());
+        available_models.extend(policy.preferred_model.iter().cloned());
+        available_models.extend(policy.fallback_model.iter().cloned());
+        available_models.extend(
+            policy
+                .model_rules
+                .iter()
+                .filter_map(|rule| rule.upstream_model_override().map(str::to_string)),
+        );
+        let available_models = normalized_models(available_models);
+        let mut rules = Vec::new();
+        for rule in policy.model_rules {
+            let id = self.next_rule_id;
+            self.next_rule_id += 1;
+            rules.push(AppModelRuleEditor {
+                id,
+                client_model: cx.new(|cx| {
+                    text_input(
+                        cx,
+                        t(k::GATEWAY_APPLY_MAPPING_CLIENT_PLACEHOLDER),
+                        &rule.model,
+                    )
+                }),
+                upstream_model: rule.upstream_model_override().map(str::to_string),
+                channel_id: rule.channel_id,
+                dialect: rule.dialect,
+            });
+        }
+        self.apply_editor = Some(StationApplyEditor {
+            route_id,
+            station_name: station.route.name,
+            app_type,
+            available_models,
+            selected_models: normalized_models(policy.models),
+            preferred_model: policy.preferred_model,
+            fallback_model: policy.fallback_model,
+            rules,
+            open_picker: None,
+            rules_error: None,
+        });
+        cx.notify();
+    }
+
+    fn close_apply_editor(&mut self, cx: &mut Context<Self>) {
+        self.apply_editor = None;
+        cx.notify();
+    }
+
+    fn toggle_apply_models_picker(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.apply_editor.as_mut() {
+            editor.open_picker = if editor.open_picker == Some(ApplyModelPicker::Models) {
+                None
+            } else {
+                Some(ApplyModelPicker::Models)
+            };
+            cx.notify();
+        }
+    }
+
+    fn toggle_apply_catalog_model(&mut self, model: &str, cx: &mut Context<Self>) {
+        let Some(editor) = self.apply_editor.as_mut() else {
+            return;
+        };
+        if let Some(index) = editor
+            .selected_models
+            .iter()
+            .position(|selected| selected == model)
+        {
+            editor.selected_models.remove(index);
+            if editor.preferred_model.as_deref() == Some(model) {
+                editor.preferred_model = None;
+            }
+        } else {
+            editor.selected_models.push(model.to_string());
+            editor.selected_models.sort();
+        }
+        cx.notify();
+    }
+
+    fn select_all_apply_models(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.apply_editor.as_mut() {
+            editor.selected_models = editor.available_models.clone();
+            cx.notify();
+        }
+    }
+
+    fn clear_apply_models(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.apply_editor.as_mut() {
+            editor.selected_models.clear();
+            editor.preferred_model = None;
+            cx.notify();
+        }
+    }
+
+    fn handle_apply_model_select(
+        &mut self,
+        picker: ApplyModelPicker,
+        event: components::SelectDropdownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.apply_editor.as_mut() else {
+            return;
+        };
+        match event {
+            components::SelectDropdownEvent::Open(open) => {
+                editor.open_picker = open.then_some(picker);
+            }
+            components::SelectDropdownEvent::Select(index) => {
+                let model = index
+                    .checked_sub(1)
+                    .and_then(|index| editor.available_models.get(index))
+                    .cloned();
+                match picker {
+                    ApplyModelPicker::Models => {}
+                    ApplyModelPicker::Preferred => {
+                        editor.preferred_model = model.clone();
+                        if let Some(model) = model {
+                            if !editor.selected_models.contains(&model) {
+                                editor.selected_models.push(model);
+                                editor.selected_models.sort();
+                            }
+                        }
+                    }
+                    ApplyModelPicker::Fallback => editor.fallback_model = model,
+                    ApplyModelPicker::Rule(rule_id) => {
+                        if let Some(rule) = editor.rules.iter_mut().find(|rule| rule.id == rule_id)
+                        {
+                            rule.upstream_model = model;
+                        }
+                    }
+                }
+                editor.open_picker = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn add_apply_model_rule(&mut self, cx: &mut Context<Self>) {
+        let id = self.next_rule_id;
+        self.next_rule_id += 1;
+        if let Some(editor) = self.apply_editor.as_mut() {
+            editor.rules.push(AppModelRuleEditor {
+                id,
+                client_model: cx
+                    .new(|cx| TextInput::new(cx, t(k::GATEWAY_APPLY_MAPPING_CLIENT_PLACEHOLDER))),
+                upstream_model: None,
+                channel_id: None,
+                dialect: None,
+            });
+            editor.rules_error = None;
+            cx.notify();
+        }
+    }
+
+    fn remove_apply_model_rule(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(editor) = self.apply_editor.as_mut() {
+            editor.rules.retain(|rule| rule.id != id);
+            if editor.open_picker == Some(ApplyModelPicker::Rule(id)) {
+                editor.open_picker = None;
+            }
+            editor.rules_error = None;
+            cx.notify();
+        }
+    }
+
+    fn confirm_apply_station(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.apply_editor.as_ref() else {
+            return;
+        };
+        let route_id = editor.route_id.clone();
+        let app_type = editor.app_type;
+        let selected_models = editor.selected_models.clone();
+        let preferred_model = editor.preferred_model.clone();
+        let fallback_model = editor.fallback_model.clone();
+        let rule_editors = editor
+            .rules
+            .iter()
+            .map(|rule| {
+                (
+                    rule.client_model.clone(),
+                    rule.upstream_model.clone(),
+                    rule.channel_id.clone(),
+                    rule.dialect,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut seen_models = HashSet::new();
+        let mut model_rules = Vec::new();
+        for (client_model, upstream_model, channel_id, dialect) in rule_editors {
+            let model = input_value(&client_model, cx);
+            if model.is_empty() || !seen_models.insert(model.clone()) {
+                if let Some(editor) = self.apply_editor.as_mut() {
+                    editor.rules_error = Some(t(k::GATEWAY_APPLY_ERROR_MAPPING));
+                }
+                cx.notify();
+                return;
+            }
+            model_rules.push(GatewayModelRule {
+                model,
+                upstream_model: upstream_model.unwrap_or_default(),
+                channel_id,
+                dialect,
+            });
+        }
+        let policy = GatewayAppModelPolicy {
+            models: selected_models,
+            preferred_model,
+            fallback_model,
+            model_rules,
+        };
+        self.run_apply_station(route_id, app_type, policy, cx);
+    }
+
+    fn run_apply_station(
+        &mut self,
+        route_id: String,
+        app_type: AppType,
+        policy: GatewayAppModelPolicy,
+        cx: &mut Context<Self>,
+    ) {
+        if self.applying.is_some() {
+            return;
+        }
+        let Some(station) = self
+            .stations
+            .iter()
+            .find(|station| station.route.id == route_id)
+            .cloned()
+        else {
+            return;
+        };
         self.applying = Some((route_id.clone(), app_type));
         self.set_status(
             NotificationLevel::Info,
@@ -1256,11 +1652,12 @@ impl GatewayView {
                 let route_id_for_apply = route_id.clone();
                 let app_for_apply = app.clone();
                 cx.background_spawn(async move {
-                    apply::apply_station_to_app(
+                    apply::apply_station_to_app_with_policy(
                         &app_for_apply,
                         app_type,
                         &base_url,
                         &route_id_for_apply,
+                        policy,
                     )
                 })
                 .await
@@ -1271,6 +1668,7 @@ impl GatewayView {
                 this.applying = None;
                 match result {
                     Ok(applied) => {
+                        this.apply_editor = None;
                         this.set_status(
                             NotificationLevel::Success,
                             tf!(
@@ -1479,26 +1877,15 @@ impl GatewayView {
                 };
                 match result {
                     Ok(fetched) => {
-                        let target_dialects = if endpoint.enabled_dialects.is_empty() {
-                            Dialect::ALL.into_iter().collect::<HashSet<_>>()
-                        } else {
-                            endpoint.enabled_dialects.clone()
-                        };
-                        for dialect in target_dialects {
-                            if let Some(input) = endpoint.models.get(&dialect) {
-                                let mut merged = parse_models(&input.read(cx).content());
-                                for model in &fetched {
-                                    if !merged.contains(model) {
-                                        merged.push(model.clone());
-                                    }
-                                }
-                                merged.sort();
-                                input.update(cx, |input, cx| {
-                                    input.set_content(merged.join("\n"), cx)
-                                });
-                            }
-                        }
-                        endpoint.model_fetch = ModelFetchState::Fetched(fetched.len());
+                        let fetched = normalized_models(fetched);
+                        let fetched_count = fetched.len();
+                        let selected = endpoint
+                            .models
+                            .values()
+                            .flat_map(|models| models.selected.iter().cloned())
+                            .collect::<Vec<_>>();
+                        endpoint.fetched_models = merged_model_options(&fetched, &selected);
+                        endpoint.model_fetch = ModelFetchState::Fetched(fetched_count);
                     }
                     Err(error) => {
                         endpoint.model_fetch =
@@ -1928,6 +2315,460 @@ impl GatewayView {
             .into_any_element()
     }
 
+    fn render_apply_editor(
+        &self,
+        editor: &StationApplyEditor,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let model_summary: SharedString = if editor.selected_models.is_empty() {
+            t(k::GATEWAY_APPLY_MODELS_EMPTY)
+        } else {
+            tf!(
+                k::GATEWAY_APPLY_MODELS_SELECTED,
+                count = editor.selected_models.len()
+            )
+            .into()
+        };
+        let model_rows = editor
+            .available_models
+            .iter()
+            .map(|model| {
+                let selected = editor.selected_models.contains(model);
+                let model_for_click = model.clone();
+                div()
+                    .id(SharedString::from(format!("apply-model-option-{model}")))
+                    .role(gpui::Role::ListBoxOption)
+                    .aria_label(SharedString::from(model.clone()))
+                    .aria_selected(selected)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .min_h(px(34.))
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(if selected {
+                        theme::accent()
+                    } else {
+                        theme::subtext()
+                    })
+                    .when(selected, |row| row.bg(theme::accent_soft()))
+                    .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                    .child(
+                        div()
+                            .size(px(16.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(if selected {
+                                theme::accent()
+                            } else {
+                                theme::border_strong()
+                            })
+                            .when(selected, |mark| {
+                                mark.child(icon(IconName::Check, theme::accent(), 11.))
+                            }),
+                    )
+                    .child(div().min_w_0().flex_1().truncate().child(model.clone()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.toggle_apply_catalog_model(&model_for_click, cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let models_open = editor.open_picker == Some(ApplyModelPicker::Models);
+        let model_picker = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .w_full()
+            .child(
+                div()
+                    .id("apply-model-picker-trigger")
+                    .role(gpui::Role::Button)
+                    .aria_label(model_summary.clone())
+                    .aria_expanded(models_open)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .h(px(38.))
+                    .px_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(if models_open {
+                        theme::accent()
+                    } else {
+                        theme::border_strong()
+                    })
+                    .bg(theme::surface())
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(theme::text())
+                    .hover(|style| style.border_color(theme::accent()).bg(theme::panel()))
+                    .child(div().flex_1().min_w_0().truncate().child(model_summary))
+                    .child(components::badge(
+                        BadgeTone::Neutral,
+                        SharedString::from(tf!(
+                            k::GATEWAY_APPLY_MODELS_AVAILABLE,
+                            count = editor.available_models.len()
+                        )),
+                    ))
+                    .child(icon(IconName::ChevronDown, theme::muted(), 13.))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.toggle_apply_models_picker(cx);
+                    })),
+            )
+            .when(models_open, |picker| {
+                picker.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .w_full()
+                        .p_2()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme::border())
+                        .bg(theme::panel())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_color(theme::muted())
+                                        .text_xs()
+                                        .child(t(k::GATEWAY_APPLY_MODELS_PICKER_TITLE)),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_1()
+                                        .child(if editor.available_models.is_empty() {
+                                            components::disabled_button(
+                                                "apply-models-all",
+                                                t(k::GATEWAY_APPLY_MODELS_SELECT_ALL),
+                                                ButtonTone::Ghost,
+                                                ButtonSize::Sm,
+                                                true,
+                                            )
+                                        } else {
+                                            components::button(
+                                                "apply-models-all",
+                                                t(k::GATEWAY_APPLY_MODELS_SELECT_ALL),
+                                                ButtonTone::Ghost,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _event, _window, cx| {
+                                                    this.select_all_apply_models(cx);
+                                                }),
+                                            )
+                                        })
+                                        .child(
+                                            components::button(
+                                                "apply-models-clear",
+                                                t(k::GATEWAY_APPLY_MODELS_CLEAR),
+                                                ButtonTone::Ghost,
+                                                ButtonSize::Sm,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _event, _window, cx| {
+                                                    this.clear_apply_models(cx);
+                                                }),
+                                            ),
+                                        ),
+                                ),
+                        )
+                        .when(editor.available_models.is_empty(), |list| {
+                            list.child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child(t(k::GATEWAY_APPLY_NO_MODELS)),
+                            )
+                        })
+                        .when(!editor.available_models.is_empty(), |list| {
+                            list.child(
+                                div()
+                                    .id("apply-model-options")
+                                    .role(gpui::Role::List)
+                                    .max_h(px(210.))
+                                    .overflow_y_scroll()
+                                    .children(model_rows),
+                            )
+                        }),
+                )
+            });
+
+        let mut preferred_options = vec![raw(k::GATEWAY_APPLY_PREFERRED_NONE).to_string()];
+        preferred_options.extend(editor.available_models.iter().cloned());
+        let preferred_labels = preferred_options
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let preferred_index = editor
+            .preferred_model
+            .as_ref()
+            .and_then(|model| {
+                editor
+                    .available_models
+                    .iter()
+                    .position(|available| available == model)
+            })
+            .map(|index| index + 1)
+            .unwrap_or_default();
+        let on_preferred = cx.listener(
+            |this, event: &components::SelectDropdownEvent, _window, cx| {
+                this.handle_apply_model_select(ApplyModelPicker::Preferred, *event, cx);
+            },
+        );
+        let preferred = components::select_dropdown(
+            "apply-preferred-model",
+            &preferred_labels,
+            preferred_index,
+            editor.open_picker == Some(ApplyModelPicker::Preferred),
+            move |event, window, cx| on_preferred(&event, window, cx),
+        );
+
+        let mut target_options = vec![raw(k::GATEWAY_APPLY_FALLBACK_PASSTHROUGH).to_string()];
+        target_options.extend(editor.available_models.iter().cloned());
+        let target_labels = target_options
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let fallback_index = editor
+            .fallback_model
+            .as_ref()
+            .and_then(|model| {
+                editor
+                    .available_models
+                    .iter()
+                    .position(|available| available == model)
+            })
+            .map(|index| index + 1)
+            .unwrap_or_default();
+        let on_fallback = cx.listener(
+            |this, event: &components::SelectDropdownEvent, _window, cx| {
+                this.handle_apply_model_select(ApplyModelPicker::Fallback, *event, cx);
+            },
+        );
+        let fallback = components::select_dropdown(
+            "apply-fallback-model",
+            &target_labels,
+            fallback_index,
+            editor.open_picker == Some(ApplyModelPicker::Fallback),
+            move |event, window, cx| on_fallback(&event, window, cx),
+        );
+
+        let rule_rows = editor
+            .rules
+            .iter()
+            .map(|rule| {
+                let rule_id = rule.id;
+                let target_index = rule
+                    .upstream_model
+                    .as_ref()
+                    .and_then(|model| {
+                        editor
+                            .available_models
+                            .iter()
+                            .position(|available| available == model)
+                    })
+                    .map(|index| index + 1)
+                    .unwrap_or_default();
+                let on_target = cx.listener(
+                    move |this, event: &components::SelectDropdownEvent, _window, cx| {
+                        this.handle_apply_model_select(ApplyModelPicker::Rule(rule_id), *event, cx);
+                    },
+                );
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_end()
+                    .gap_2()
+                    .w_full()
+                    .p_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme::border())
+                    .bg(theme::inset())
+                    .child(div().flex_1().min_w(px(230.)).child(components::field(
+                        t(k::GATEWAY_APPLY_MAPPING_CLIENT_LABEL),
+                        true,
+                        None,
+                        rule.client_model.clone(),
+                    )))
+                    .child(div().flex_1().min_w(px(230.)).child(components::field(
+                        t(k::GATEWAY_APPLY_MAPPING_TARGET_LABEL),
+                        false,
+                        None,
+                        components::select_dropdown(
+                            SharedString::from(format!("apply-rule-target-{rule_id}")),
+                            &target_labels,
+                            target_index,
+                            editor.open_picker == Some(ApplyModelPicker::Rule(rule_id)),
+                            move |event, window, cx| on_target(&event, window, cx),
+                        ),
+                    )))
+                    .child(
+                        components::icon_button_tone(
+                            SharedString::from(format!("apply-rule-delete-{rule_id}")),
+                            t(k::GATEWAY_APPLY_ACTION_REMOVE_MAPPING),
+                            IconName::Trash,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.remove_apply_model_rule(rule_id, cx);
+                            },
+                        )),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+
+        let applying = self.applying.is_some();
+        components::modal_overlay(
+            components::modal_card()
+                .w(px(720.))
+                .max_h(px(720.))
+                .child(components::modal_header(SharedString::from(tf!(
+                    k::GATEWAY_APPLY_TITLE,
+                    app = crate::app_meta::label(editor.app_type),
+                    station = editor.station_name,
+                ))))
+                .child(
+                    components::modal_body()
+                        .id("station-apply-body")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .gap_5()
+                        .child(
+                            div()
+                                .text_color(theme::subtext())
+                                .text_sm()
+                                .child(t(k::GATEWAY_APPLY_DESCRIPTION)),
+                        )
+                        .child(components::field(
+                            t(k::GATEWAY_APPLY_MODELS_LABEL),
+                            false,
+                            Some(t(k::GATEWAY_APPLY_MODELS_HELP)),
+                            model_picker,
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap_3()
+                                .w_full()
+                                .child(div().flex_1().min_w(px(260.)).child(components::field(
+                                    t(k::GATEWAY_APPLY_PREFERRED_LABEL),
+                                    false,
+                                    Some(t(k::GATEWAY_APPLY_PREFERRED_HELP)),
+                                    preferred,
+                                )))
+                                .child(div().flex_1().min_w(px(260.)).child(components::field(
+                                    t(k::GATEWAY_APPLY_FALLBACK_LABEL),
+                                    false,
+                                    Some(t(k::GATEWAY_APPLY_FALLBACK_HELP)),
+                                    fallback,
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(section_title(
+                                    t(k::GATEWAY_APPLY_MAPPING_TITLE),
+                                    t(k::GATEWAY_APPLY_MAPPING_DESCRIPTION),
+                                ))
+                                .child(
+                                    components::button(
+                                        "apply-rule-add",
+                                        t(k::GATEWAY_APPLY_ACTION_ADD_MAPPING),
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.add_apply_model_rule(cx);
+                                        },
+                                    )),
+                                ),
+                        )
+                        .children(rule_rows)
+                        .when(editor.rules.is_empty(), |body| {
+                            body.child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .text_xs()
+                                    .child(t(k::GATEWAY_APPLY_MAPPING_EMPTY)),
+                            )
+                        })
+                        .when_some(editor.rules_error.clone(), |body, error| {
+                            body.child(div().text_color(theme::red()).text_xs().child(error))
+                        }),
+                )
+                .child(components::modal_footer(vec![
+                    components::button(
+                        "station-apply-cancel",
+                        t(k::GATEWAY_APPLY_ACTION_CANCEL),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.close_apply_editor(cx);
+                    }))
+                    .into_any_element(),
+                    if applying {
+                        components::disabled_button(
+                            "station-apply-confirm",
+                            t(k::GATEWAY_STATUS_APPLYING_SHORT),
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                            true,
+                        )
+                        .into_any_element()
+                    } else {
+                        components::button(
+                            "station-apply-confirm",
+                            t(k::GATEWAY_APPLY_ACTION_APPLY),
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.confirm_apply_station(cx);
+                        }))
+                        .into_any_element()
+                    },
+                ])),
+        )
+        .into_any_element()
+    }
+
     fn render_station(&self, station: &RelayStation, cx: &mut Context<Self>) -> gpui::AnyElement {
         let enabled = station.is_enabled();
         let route_id = station.route.id.clone();
@@ -1951,18 +2792,10 @@ impl GatewayView {
             })
             .collect::<HashSet<_>>()
             .len();
-        let mut model_summary = if station.route.model_rules.is_empty() {
-            raw(k::GATEWAY_CARD_ROUTING_AUTO).to_string()
-        } else {
-            tf!(
-                k::GATEWAY_CARD_ROUTING_EXCEPTIONS,
-                count = station.route.model_rules.len(),
-            )
-        };
-        if let Some(model) = station.route.default_model.as_deref() {
-            model_summary.push_str(" · ");
-            model_summary.push_str(&tf!(k::GATEWAY_CARD_MODEL_DEFAULT, model = model));
-        }
+        let mut model_summary = tf!(
+            k::GATEWAY_CARD_MODELS,
+            count = apply::station_models(&station.route, &station.channels).len(),
+        );
         match station.route.reasoning.mode {
             GatewayReasoningMode::Auto => {}
             GatewayReasoningMode::Passthrough => {
@@ -2032,7 +2865,7 @@ impl GatewayView {
                     let route_id = route_id.clone();
                     button
                         .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.apply_station(route_id.clone(), app_type, cx);
+                            this.open_apply_editor(route_id.clone(), app_type, cx);
                         }))
                         .into_any_element()
                 }
@@ -2214,6 +3047,310 @@ impl GatewayView {
             .into_any_element()
     }
 
+    fn render_endpoint_model_picker(
+        &self,
+        endpoint: &EndpointEditor,
+        dialect: Dialect,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(models) = endpoint.models.get(&dialect) else {
+            return div().into_any_element();
+        };
+        let open = endpoint.open_model_picker == Some(dialect);
+        let options = merged_model_options(&endpoint.fetched_models, &models.selected);
+        let selected_count = models.selected.len();
+        let summary: SharedString = if selected_count == 0 {
+            t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_UNRESTRICTED)
+        } else {
+            tf!(
+                k::GATEWAY_EDITOR_ENDPOINT_MODELS_SELECTED,
+                count = selected_count
+            )
+            .into()
+        };
+        let endpoint_id_for_toggle = endpoint.id.clone();
+        let trigger = div()
+            .id(SharedString::from(format!(
+                "station-model-picker-{}-{}",
+                endpoint.id,
+                dialect.as_str()
+            )))
+            .role(gpui::Role::Button)
+            .aria_label(summary.clone())
+            .aria_expanded(open)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .h(px(38.))
+            .px_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(if open {
+                theme::accent()
+            } else {
+                theme::border_strong()
+            })
+            .bg(theme::surface())
+            .cursor_pointer()
+            .text_sm()
+            .text_color(theme::text())
+            .hover(|style| style.border_color(theme::accent()).bg(theme::panel()))
+            .child(div().flex_1().min_w_0().truncate().child(summary))
+            .when(!endpoint.fetched_models.is_empty(), |row| {
+                row.child(components::badge(
+                    BadgeTone::Neutral,
+                    SharedString::from(tf!(
+                        k::GATEWAY_EDITOR_ENDPOINT_MODELS_AVAILABLE,
+                        count = endpoint.fetched_models.len()
+                    )),
+                ))
+            })
+            .child(icon(IconName::ChevronDown, theme::muted(), 13.))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.toggle_model_picker(&endpoint_id_for_toggle, dialect, cx);
+            }));
+
+        let endpoint_id_for_all = endpoint.id.clone();
+        let endpoint_id_for_clear = endpoint.id.clone();
+        let mut picker = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::panel())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_color(theme::subtext())
+                            .text_xs()
+                            .child(t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_PICKER_TITLE)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_1()
+                            .child(if endpoint.fetched_models.is_empty() {
+                                components::disabled_button(
+                                    SharedString::from(format!(
+                                        "station-models-all-{}-{}",
+                                        endpoint.id,
+                                        dialect.as_str()
+                                    )),
+                                    t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_ADD_ALL),
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                    true,
+                                )
+                            } else {
+                                components::button(
+                                    SharedString::from(format!(
+                                        "station-models-all-{}-{}",
+                                        endpoint.id,
+                                        dialect.as_str()
+                                    )),
+                                    t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_ADD_ALL),
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.add_all_fetched_models(
+                                            &endpoint_id_for_all,
+                                            dialect,
+                                            cx,
+                                        );
+                                    },
+                                ))
+                            })
+                            .child(if selected_count == 0 {
+                                components::disabled_button(
+                                    SharedString::from(format!(
+                                        "station-models-clear-{}-{}",
+                                        endpoint.id,
+                                        dialect.as_str()
+                                    )),
+                                    t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_CLEAR),
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                    true,
+                                )
+                            } else {
+                                components::button(
+                                    SharedString::from(format!(
+                                        "station-models-clear-{}-{}",
+                                        endpoint.id,
+                                        dialect.as_str()
+                                    )),
+                                    t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_CLEAR),
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.clear_endpoint_models(
+                                            &endpoint_id_for_clear,
+                                            dialect,
+                                            cx,
+                                        );
+                                    },
+                                ))
+                            }),
+                    ),
+            );
+
+        if options.is_empty() {
+            picker = picker.child(
+                div()
+                    .px_3()
+                    .py_3()
+                    .rounded_md()
+                    .bg(theme::inset())
+                    .text_color(theme::muted())
+                    .text_xs()
+                    .child(t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_PICKER_EMPTY)),
+            );
+        } else {
+            let mut option_list = div()
+                .id(SharedString::from(format!(
+                    "station-model-options-{}-{}",
+                    endpoint.id,
+                    dialect.as_str()
+                )))
+                .flex()
+                .flex_col()
+                .max_h(px(224.))
+                .overflow_y_scroll()
+                .rounded_md()
+                .border_1()
+                .border_color(theme::border())
+                .bg(theme::surface());
+            for (option_index, model) in options.into_iter().enumerate() {
+                let selected = models.selected.contains(&model);
+                let endpoint_id = endpoint.id.clone();
+                let model_for_click = model.clone();
+                let check = div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(16.))
+                    .flex_none()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(if selected {
+                        theme::accent()
+                    } else {
+                        theme::border_strong()
+                    })
+                    .bg(if selected {
+                        theme::accent_soft()
+                    } else {
+                        theme::surface()
+                    })
+                    .when(selected, |box_| {
+                        box_.child(icon(IconName::Check, theme::accent(), 11.))
+                    });
+                option_list = option_list.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "station-model-option-{}-{}-{option_index}",
+                            endpoint.id,
+                            dialect.as_str()
+                        )))
+                        .role(gpui::Role::Button)
+                        .aria_label(SharedString::from(model.clone()))
+                        .aria_selected(selected)
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .min_h(px(34.))
+                        .px_3()
+                        .py_1()
+                        .cursor_pointer()
+                        .text_sm()
+                        .text_color(if selected {
+                            theme::text()
+                        } else {
+                            theme::subtext()
+                        })
+                        .bg(if selected {
+                            theme::accent_soft().alpha(0.45)
+                        } else {
+                            theme::surface()
+                        })
+                        .hover(|style| style.bg(theme::surface_hover()))
+                        .child(check)
+                        .child(div().min_w_0().flex_1().truncate().child(model))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.toggle_endpoint_model(&endpoint_id, dialect, &model_for_click, cx);
+                        })),
+                );
+            }
+            picker = picker.child(option_list);
+        }
+
+        let endpoint_id_for_manual = endpoint.id.clone();
+        picker = picker.child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(220.))
+                        .child(models.manual_input.clone()),
+                )
+                .child(
+                    components::button(
+                        SharedString::from(format!(
+                            "station-models-manual-add-{}-{}",
+                            endpoint.id,
+                            dialect.as_str()
+                        )),
+                        t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_ADD),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.add_manual_endpoint_models(&endpoint_id_for_manual, dialect, cx);
+                    })),
+                ),
+        );
+
+        components::field(
+            SharedString::from(tf!(
+                k::GATEWAY_EDITOR_ENDPOINT_MODELS_LABEL,
+                protocol = dialect_label(dialect)
+            )),
+            false,
+            Some(t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_HELP)),
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(trigger)
+                .when(open, |control| control.child(picker)),
+        )
+        .into_any_element()
+    }
+
     fn render_endpoint_editor(
         &self,
         endpoint: &EndpointEditor,
@@ -2282,20 +3419,7 @@ impl GatewayView {
         let model_fields: Vec<gpui::AnyElement> = Dialect::ALL
             .into_iter()
             .filter(|dialect| endpoint.enabled_dialects.contains(dialect))
-            .filter_map(|dialect| {
-                endpoint.models.get(&dialect).map(|input| {
-                    components::field(
-                        SharedString::from(tf!(
-                            k::GATEWAY_EDITOR_ENDPOINT_MODELS_LABEL,
-                            protocol = dialect_label(dialect)
-                        )),
-                        false,
-                        Some(t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_HELP)),
-                        input.clone(),
-                    )
-                    .into_any_element()
-                })
-            })
+            .map(|dialect| self.render_endpoint_model_picker(endpoint, dialect, cx))
             .collect();
 
         let probe_help: SharedString = match endpoint.probe {
@@ -2504,92 +3628,6 @@ impl GatewayView {
             }
             cx.notify();
         });
-        let rule_rows: Vec<gpui::AnyElement> = editor
-            .rules
-            .iter()
-            .map(|rule| {
-                let rule_id = rule.id;
-                let dialect_index = match rule.dialect {
-                    None => 0,
-                    Some(Dialect::Messages) => 1,
-                    Some(Dialect::Responses) => 2,
-                    Some(Dialect::Chat) => 3,
-                };
-                let on_rule_dialect_select =
-                    cx.listener(move |this, index: &usize, _window, cx| {
-                        let dialect = match index {
-                            1 => Some(Dialect::Messages),
-                            2 => Some(Dialect::Responses),
-                            3 => Some(Dialect::Chat),
-                            _ => None,
-                        };
-                        this.set_rule_dialect(rule_id, dialect, cx);
-                    });
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .w_full()
-                    .p_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::inset())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .items_end()
-                            .gap_2()
-                            .w_full()
-                            .child(div().flex_1().min_w(px(220.)).child(components::field(
-                                t(k::GATEWAY_EDITOR_RULE_CLIENT_MODEL_LABEL),
-                                false,
-                                None,
-                                rule.client_model.clone(),
-                            )))
-                            .child(div().flex_1().min_w(px(220.)).child(components::field(
-                                t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_LABEL),
-                                false,
-                                Some(t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_HELP)),
-                                rule.station_model.clone(),
-                            )))
-                            .child(
-                                components::icon_button_tone(
-                                    SharedString::from(format!("station-rule-delete-{rule_id}")),
-                                    t(k::GATEWAY_EDITOR_RULE_DELETE),
-                                    IconName::Trash,
-                                    ButtonTone::Ghost,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        this.remove_model_rule(rule_id, cx);
-                                    },
-                                )),
-                            ),
-                    )
-                    .child(components::field(
-                        t(k::GATEWAY_EDITOR_RULE_DIALECT_LABEL),
-                        false,
-                        None,
-                        components::segmented(
-                            SharedString::from(format!("station-rule-dialect-{rule_id}")),
-                            &[
-                                raw(k::GATEWAY_EDITOR_RULE_DIALECT_AUTO),
-                                "Anthropic Messages",
-                                "OpenAI Responses",
-                                "OpenAI Chat",
-                            ],
-                            dialect_index,
-                            move |index, window, cx| on_rule_dialect_select(&index, window, cx),
-                        ),
-                    ))
-                    .into_any_element()
-            })
-            .collect();
-
         let endpoint_rows: Vec<gpui::AnyElement> = editor
             .endpoints
             .iter()
@@ -2684,7 +3722,7 @@ impl GatewayView {
                     .child(div().flex_1().min_w(px(240.)).child(components::field(
                         t(k::GATEWAY_EDITOR_WEBSITE_LABEL),
                         false,
-                        Some(t(k::GATEWAY_EDITOR_WEBSITE_HELP)),
+                        None,
                         editor.website_url.clone(),
                     )))
                     .child(
@@ -2779,51 +3817,6 @@ impl GatewayView {
                             ),
                     ),
             )
-            .child(section_title(
-                t(k::GATEWAY_EDITOR_MODELS_TITLE),
-                t(k::GATEWAY_EDITOR_MODELS_DESCRIPTION),
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_color(theme::subtext())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t(k::GATEWAY_EDITOR_RULES_TITLE)),
-                    )
-                    .child(
-                        components::button(
-                            "station-add-rule",
-                            t(k::GATEWAY_EDITOR_RULES_ADD),
-                            ButtonTone::Neutral,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                this.add_model_rule(cx);
-                            },
-                        )),
-                    ),
-            )
-            .children(rule_rows)
-            .when_some(editor.rules_error.clone(), |panel, error| {
-                panel.child(div().text_color(theme::red()).text_xs().child(error))
-            })
-            .when(editor.rules.is_empty(), |panel| {
-                panel.child(
-                    div()
-                        .text_color(theme::muted())
-                        .text_xs()
-                        .child(t(k::GATEWAY_EDITOR_RULES_EMPTY)),
-                )
-            })
             .child(
                 components::disclosure(
                     "station-advanced",
@@ -2837,12 +3830,6 @@ impl GatewayView {
             )
             .when(editor.show_advanced, |panel| {
                 panel
-                    .child(components::field(
-                        t(k::GATEWAY_EDITOR_DEFAULT_MODEL_LABEL),
-                        false,
-                        Some(t(k::GATEWAY_EDITOR_DEFAULT_MODEL_HELP)),
-                        editor.default_model.clone(),
-                    ))
                     .child(section_title(
                         t(k::GATEWAY_EDITOR_REASONING_TITLE),
                         t(k::GATEWAY_EDITOR_REASONING_DESCRIPTION),
@@ -3071,6 +4058,9 @@ impl Render for GatewayView {
                 ),
                 &self.list_state,
             ))
+            .when_some(self.apply_editor.as_ref(), |root, editor| {
+                root.child(self.render_apply_editor(editor, cx))
+            })
             .when_some(self.delete_blocked.clone(), |root, (name, apps)| {
                 let labels = apps
                     .iter()
@@ -3215,17 +4205,27 @@ fn endpoint_editor(
     enabled_dialects: HashSet<Dialect>,
     cx: &mut Context<GatewayView>,
 ) -> EndpointEditor {
+    let known_models = normalized_models(
+        existing_channels
+            .values()
+            .flat_map(|channel| channel.models.iter().cloned())
+            .collect(),
+    );
     let models = Dialect::ALL
         .into_iter()
         .map(|dialect| {
-            let value = existing_channels
+            let selected = existing_channels
                 .get(&dialect)
-                .map(|channel| channel.models.join("\n"))
+                .map(|channel| normalized_models(channel.models.clone()))
                 .unwrap_or_default();
-            let input = cx.new(|cx| {
-                text_input(cx, t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER), &value).code(true)
-            });
-            (dialect, input)
+            (
+                dialect,
+                DialectModelsEditor {
+                    selected,
+                    manual_input: cx
+                        .new(|cx| TextInput::new(cx, t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER))),
+                },
+            )
         })
         .collect();
     EndpointEditor {
@@ -3234,10 +4234,28 @@ fn endpoint_editor(
         enabled_dialects,
         base_url: cx.new(|cx| text_input(cx, "https://api.example.com", &base_url)),
         models,
+        fetched_models: known_models,
+        open_model_picker: None,
         probe: ProbeState::Idle,
         model_fetch: ModelFetchState::Idle,
         test: EndpointTestState::Idle,
     }
+}
+
+fn normalized_models(models: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for model in models {
+        let model = model.trim();
+        if !model.is_empty() && !normalized.iter().any(|existing| existing == model) {
+            normalized.push(model.to_string());
+        }
+    }
+    normalized.sort();
+    normalized
+}
+
+fn merged_model_options(fetched: &[String], selected: &[String]) -> Vec<String> {
+    normalized_models(fetched.iter().chain(selected).cloned().collect::<Vec<_>>())
 }
 
 fn parse_models(raw: &str) -> Vec<String> {
@@ -3281,13 +4299,37 @@ crate::notifications::impl_status_toasts_leveled!(GatewayView);
 
 #[cfg(test)]
 mod tests {
-    use super::parse_models;
+    use super::{merged_model_options, normalized_models, parse_models};
 
     #[test]
     fn manual_model_list_accepts_lines_and_commas_without_duplicates() {
         assert_eq!(
             parse_models(" model-b\nmodel-a, model-b\n\n"),
             vec!["model-b".to_string(), "model-a".to_string()]
+        );
+    }
+
+    #[test]
+    fn fetched_models_are_trimmed_deduplicated_and_sorted() {
+        assert_eq!(
+            normalized_models(vec![
+                " model-b ".to_string(),
+                "model-a".to_string(),
+                "model-b".to_string(),
+                String::new(),
+            ]),
+            vec!["model-a".to_string(), "model-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn picker_keeps_saved_models_that_are_missing_from_latest_fetch() {
+        assert_eq!(
+            merged_model_options(
+                &["model-b".to_string()],
+                &["custom-model".to_string(), "model-b".to_string()],
+            ),
+            vec!["custom-model".to_string(), "model-b".to_string()]
         );
     }
 }
