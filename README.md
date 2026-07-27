@@ -1,171 +1,136 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/ochub-wordmark-light.png">
-    <img src="docs/assets/ochub-wordmark-dark.png" alt="OcHub" width="680">
+    <img src="docs/assets/ochub-wordmark-dark.png" alt="OcHub" width="620">
   </picture>
 </p>
 
 <p align="center">
-  A native desktop control center for AI coding tools.
-  Switch providers, manage shared capabilities, and run a local relay from one place.
+  <strong>One native control center for your AI coding tools.</strong>
+</p>
+
+<p align="center">
+  Connect providers, switch models, share MCP servers and skills,<br>
+  and route every supported client through one local gateway.
+</p>
+
+<p align="center">
+  <a href="https://github.com/OcHub-team/OcHub/releases/latest"><strong>Download OcHub</strong></a>
+  ·
+  <a href="#why-ochub">Why OcHub</a>
+  ·
+  <a href="#install">Install</a>
+  ·
+  <a href="#build-from-source">Build from source</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/OcHub-team/OcHub/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/OcHub-team/OcHub/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/OcHub-team/OcHub/actions/workflows/release.yml"><img alt="Release" src="https://github.com/OcHub-team/OcHub/actions/workflows/release.yml/badge.svg"></a>
   <a href="https://github.com/OcHub-team/OcHub/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/OcHub-team/OcHub?display_name=tag&sort=semver"></a>
   <a href="LICENSE"><img alt="GPL-3.0-or-later" src="https://img.shields.io/github/license/OcHub-team/OcHub"></a>
   <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-31b8b5">
 </p>
 
-<p align="center">
-  <a href="https://github.com/OcHub-team/OcHub/releases/latest">Download</a>
-  ·
-  <a href="#what-ochub-does">Features</a>
-  ·
-  <a href="#build-from-source">Build from source</a>
-  ·
-  <a href="packaging/README.md">Release guide</a>
-</p>
+---
 
+## Why OcHub
+
+AI coding tools are powerful, but each one keeps its providers, MCP servers,
+skills, sessions, and usage data in a different place. Changing an API endpoint
+or sharing the same setup across several clients quickly turns into repeated
+config-file editing.
+
+OcHub brings that work into one fast, native desktop app. Use it as a simple
+provider switcher, or place its local relay between your tools and upstream
+APIs for centralized routing, compatibility conversion, failover, and usage
+tracking.
+
+OcHub currently manages **Claude Code, Claude Desktop, Codex, Grok Build,
+OpenCode, OpenClaw, and Hermes**.
+
+## Everything in one place
+
+| | Capability | What it gives you |
+| --- | --- | --- |
+| 🔌 | **Provider management** | Discover, import, edit, test, and switch direct API connections without hand-editing client configs |
+| ↗️ | **Local relay** | Give multiple clients one local endpoint, then control upstreams and routing centrally |
+| 🔀 | **Smart routing** | Map model names and reasoning levels, retry compatible interfaces, switch to backup stations, and monitor health |
+| 🧩 | **MCP & skills** | Keep reusable MCP servers and skills together, then distribute them to the tools that need them |
+| 📊 | **Sessions & usage** | Browse local CLI sessions and understand tokens, cache, latency, requests, and estimated cost |
+| 🔄 | **Sync & backup** | Protect your setup with snapshots and keep OcHub data in sync through supported remote storage |
+
+## Two ways to connect
+
+### Direct connection
+
+Choose a tool, add an API provider, test it, and switch. OcHub writes the
+client's native configuration, so the tool keeps working normally after OcHub
+is closed.
+
+**Best for:** a straightforward endpoint change, a tool's official login, or a
+small setup with independent providers.
+
+### Relay station
+
+Point supported clients at OcHub's loopback gateway. The relay can translate
+between supported API dialects and apply model aliases, reasoning mappings,
+interface retries, health checks, and failover before a request reaches its
+upstream.
+
+**Best for:** sharing an upstream across tools, normalizing model names,
+converting API formats, tracking usage centrally, or building a resilient
+multi-provider setup.
+
+## Built for the desktop
+
+- **Native UI** powered by GPUI — no browser shell or webview
+- **Local-first storage** in `~/.ochub/`
+- **Cross-platform releases** for macOS, Windows, and Linux
+- **In-app updates** for DMG, Windows installer, and AppImage installations
+- **Open source** under GPL-3.0-or-later
+
+> [!IMPORTANT]
 > OcHub is under active pre-release development. Back up important tool
-> configuration before trying an early build.
+> configuration before trying an early build. OcHub only changes the live
+> configuration of applications you explicitly manage.
 
-## What OcHub does
+## Install
 
-OcHub manages **Claude Code, Claude Desktop, Codex, OpenCode, OpenClaw, and
-Hermes** without requiring a browser shell or webview.
+### Homebrew
 
-| Area | Capabilities |
-| --- | --- |
-| Providers | Discover, import, edit, switch, and test direct API providers |
-| Relay station | Route supported clients through a local gateway with model aliases, reasoning mapping, failover, health checks, and usage accounting |
-| Shared tools | Manage MCP servers and reusable skills across supported clients |
-| Operations | Browse sessions, inspect usage, configure sync, and manage app behavior |
-| Migration | One-time, read-only import from a cc-switch database or config file |
-
-OcHub owns `~/.ochub/` and never writes back to `~/.cc-switch/`. It does update
-the live configuration directories of tools you explicitly manage, so quit
-cc-switch before switching providers in OcHub.
-
-### Importing from cc-switch
-
-On its first launch OcHub looks for an existing cc-switch install and offers to
-bring it over, showing what it found before anything is copied. Both storage
-generations are read: the `cc-switch.db` database used from v3.x on, and the
-older `config.json`. The database is preferred when both are present, because it
-also carries usage history, backup endpoints and pricing.
-
-Nothing is imported unless you accept, and the import only ever reads
-`~/.cc-switch/`, so cc-switch keeps working afterwards. If you skip the prompt —
-or you had already started OcHub before installing cc-switch — the same import
-stays available under **Settings → Data and backups → Import from cc-switch**.
-Running it against an install that already has providers takes a database
-snapshot first, and records that share an ID are replaced by cc-switch's copy.
-
-## Downloads
-
-Every version tag is built on the matching native GitHub-hosted runner.
-
-### Homebrew (macOS)
-
-Homebrew automatically selects the Apple Silicon or Intel build:
+Homebrew automatically selects the correct Apple Silicon or Intel build:
 
 ```sh
 brew install --cask ochub-team/tap/ochub
 ```
 
-Upgrade or uninstall OcHub with:
-
-```sh
-brew upgrade --cask ochub-team/tap/ochub
-brew uninstall --cask ochub
-```
-
-The Cask is maintained in the
-[`OcHub-team/homebrew-tap`](https://github.com/OcHub-team/homebrew-tap)
-repository and downloads the same DMG published with each GitHub Release.
-
-### Direct downloads
-
-| Platform | Release files |
-| --- | --- |
-| macOS Apple Silicon | ARM64 `.dmg` |
-| macOS Intel | x64 `.dmg` |
-| Windows 10/11 x64 | NSIS installer and portable `.zip` |
-| Linux x64 | AppImage and Debian `.deb` |
-
-### Updating
-
-OcHub checks for a new release shortly after launch and once a day after that,
-and can install one from **Settings → About → Check for updates** without
-leaving the app. Turn the check off with the toggle in the same group.
-
-Downloaded packages are verified against a signing key compiled into the
-binary, and a version that is not newer than the running one is refused, so the
-update channel cannot be used to push unsigned code or to roll an install
-backwards.
-
-Two install methods stay check-only, because self-updating them would fight the
-system that owns them:
-
-| Install | In-app update |
-| --- | --- |
-| macOS `.dmg`, Windows installer, Linux AppImage | Yes |
-| Debian package | No — use `apt`, so dpkg's records stay accurate |
-| Windows portable ZIP | No — there is no installer to re-run |
-
-Those two report the reason in the settings row and link to the release page.
-
-The release also includes `SHA256SUMS` and a GitHub artifact attestation. Verify
-a downloaded file with:
-
-```sh
-sha256sum -c SHA256SUMS --ignore-missing
-gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
-```
-
-### macOS: approving the app on first launch
-
-OcHub is not yet notarized by Apple, so macOS asks you to approve it once:
-
-1. Open OcHub. macOS says it cannot verify the developer.
-2. Go to **System Settings › Privacy & Security**, scroll to Security, and
-   click **Open Anyway**.
-
-Control-clicking the app no longer works for this on macOS 15 and later — the
-System Settings route is the only one. To skip the prompt entirely, install
+OcHub is not yet notarized by Apple. If macOS blocks the first launch, open
+**System Settings → Privacy & Security** and choose **Open Anyway**, or install
 without the quarantine flag:
 
 ```sh
 brew install --cask --no-quarantine ochub-team/tap/ochub
 ```
 
-Updates installed from inside OcHub are never quarantined, so this is a
-one-time step rather than something you repeat on every release.
+### Direct download
 
-Windows SmartScreen may warn for the same reason. See the
-[release guide](packaging/README.md) for Developer ID notarization and
-Authenticode signing.
+Download the latest release for your platform from the
+**[GitHub Releases page](https://github.com/OcHub-team/OcHub/releases/latest)**.
 
-## Architecture
-
-OcHub is a Rust workspace built around GPUI and axum.
-
-| Crate | Role |
+| Platform | Available packages |
 | --- | --- |
-| `ochub-core` | Domain model, SQLite storage, provider switching, client config writers, sync, MCP, skills, sessions, usage, and auth |
-| `ochub-server` | Loopback control API and in-process relay gateway |
-| `ochub-convert` | Request and response conversion between supported API dialects |
-| `ochub-app` | Native GPUI desktop application hosting the core and server |
+| macOS | Apple Silicon and Intel `.dmg` |
+| Windows 10/11 x64 | NSIS installer and portable `.zip` |
+| Linux x64 | AppImage and Debian `.deb` |
 
-GPUI is pinned to a tested Zed commit. Linux builds enable both Wayland and X11;
-macOS builds compile Metal shaders at runtime.
+Releases include `SHA256SUMS` and a GitHub artifact attestation. Packaging,
+signature verification, and release details live in the
+[release guide](packaging/README.md).
 
 ## Build from source
 
-The repository pins Rust **1.97.1** in `rust-toolchain.toml`. Rustup selects it
-automatically:
+OcHub is a Rust workspace built with GPUI and axum. The repository pins its
+Rust toolchain, so rustup will select the correct version automatically.
 
 ```sh
 git clone https://github.com/OcHub-team/OcHub.git
@@ -173,45 +138,42 @@ cd OcHub
 cargo run -p ochub-app
 ```
 
-Platform prerequisites:
+Platform requirements:
 
-- **macOS:** Xcode or the Xcode Command Line Tools.
-- **Windows:** Visual Studio 2022 Build Tools with the Windows SDK.
-- **Debian/Ubuntu:** run `./scripts/ci/install-linux-deps.sh`.
+- **macOS:** Xcode or Xcode Command Line Tools
+- **Windows:** Visual Studio 2022 Build Tools with the Windows SDK
+- **Debian/Ubuntu:** `./scripts/ci/install-linux-deps.sh`
 
-Useful development commands:
+Common development commands:
 
 ```sh
 just check
 just test
 just ci
-just qa-app       # macOS: fixed /tmp/OCHUB-QA.app acceptance bundle
+just qa-app       # macOS: builds /tmp/OCHUB-QA.app for acceptance testing
 ```
 
-To build installers locally, install the same pinned packager used by CI:
+The workspace is split into these main components:
 
-```sh
-cargo install cargo-packager --version 0.11.8 --locked
-just package-macos
-# or, on Linux:
-just package-linux
-```
+| Crate | Responsibility |
+| --- | --- |
+| `ochub-core` | Domain model, SQLite storage, client config, sync, MCP, skills, sessions, usage, and auth |
+| `ochub-server` | Loopback control API and local relay gateway |
+| `ochub-convert` | Request and response conversion between supported API dialects |
+| `ochub-app` | Native GPUI desktop application |
+| `ochcli` | Headless command-line interface |
 
-## Automated releases
+## From cc-switch
 
-The `Release` workflow accepts only a tag that exactly matches the Cargo
-workspace version. For example, workspace version `0.1.0` must be released as
-`v0.1.0`. It builds both macOS architectures plus Windows and Linux in parallel,
-checks the expected package set, creates checksums and provenance, and then
-publishes one GitHub Release, then asks the Homebrew tap to update the Cask
-version and both macOS checksums. The tap also checks the latest release daily
-as a fallback.
+OcHub is a from-scratch GPUI + axum project inspired by
+[`cc-switch`](https://github.com/farion1231/cc-switch). If you already use
+cc-switch, OcHub can perform a one-time, read-only import from its database or
+legacy config file. It never writes back to `~/.cc-switch/`.
 
-Detailed signing secret names and local packaging commands are documented in
-[`packaging/README.md`](packaging/README.md).
+Quit cc-switch before switching providers in OcHub because both applications
+may update the same live tool configuration directories.
 
 ## License
 
-OcHub is licensed under the [GNU General Public License v3.0 or later](LICENSE).
-This is a from-scratch GPUI + axum rewrite inspired by
-[`cc-switch`](https://github.com/farion1231/cc-switch).
+OcHub is licensed under the
+[GNU General Public License v3.0 or later](LICENSE).
