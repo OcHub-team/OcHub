@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use gpui::{
     div, prelude::*, px, ClipboardItem, Context, Entity, EventEmitter, FontWeight, ListAlignment,
-    ListOffset, ListState, SharedString, Window,
+    ListOffset, ListState, ScrollHandle, SharedString, Window,
 };
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
@@ -297,6 +297,7 @@ struct EndpointEditor {
 struct DialectModelsEditor {
     selected: Vec<String>,
     manual_input: Entity<TextInput>,
+    scroll_handle: ScrollHandle,
 }
 
 struct StationEditor {
@@ -3224,6 +3225,12 @@ impl GatewayView {
                     .child(t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_PICKER_EMPTY)),
             );
         } else {
+            // Seven 34px rows exceed the 224px viewport. Determine this from
+            // the data rather than from `ScrollHandle::max_offset()`, which is
+            // unavailable until after the first layout and would let the
+            // virtualized page consume the first gesture after opening.
+            let options_scrollable = options.len() > 6;
+            let contained_scroll = models.scroll_handle.clone();
             let mut option_list = div()
                 .id(SharedString::from(format!(
                     "station-model-options-{}-{}",
@@ -3234,6 +3241,8 @@ impl GatewayView {
                 .flex_col()
                 .max_h(px(224.))
                 .overflow_y_scroll()
+                .track_scroll(&models.scroll_handle)
+                .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(contained_scroll))
                 .rounded_md()
                 .border_1()
                 .border_color(theme::border())
@@ -3300,7 +3309,17 @@ impl GatewayView {
                         })),
                 );
             }
-            picker = picker.child(option_list);
+            picker = picker.child(
+                div()
+                    .relative()
+                    // The station editor lives inside a virtualized page list.
+                    // That ancestor registers its wheel hitbox after its
+                    // children, so propagation alone cannot keep a nested
+                    // gesture local. This wrapper is painted before the inner
+                    // scroller and removes the ancestor from wheel hit testing.
+                    .when(options_scrollable, |container| container.occlude())
+                    .child(option_list),
+            );
         }
 
         let endpoint_id_for_manual = endpoint.id.clone();
@@ -4224,6 +4243,7 @@ fn endpoint_editor(
                     selected,
                     manual_input: cx
                         .new(|cx| TextInput::new(cx, t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER))),
+                    scroll_handle: ScrollHandle::new(),
                 },
             )
         })
