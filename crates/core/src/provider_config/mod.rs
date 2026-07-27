@@ -376,3 +376,111 @@ pub fn set_str(values: &mut FormValues, id: &str, value: impl Into<String>) {
 pub fn set_bool(values: &mut FormValues, id: &str, value: bool) {
     values.insert(id.to_string(), Value::Bool(value));
 }
+
+// ---- Relay-station sourced channels -----------------------------------------
+
+/// Whether the provider editor can offer "relay station" as a source when
+/// creating a channel for this app. The station supplies endpoint + key via
+/// the local gateway; the form only asks for model(s).
+pub fn station_source_supported(app: AppType) -> bool {
+    matches!(app, AppType::Claude | AppType::Codex)
+}
+
+/// Schema field ids the station manages (endpoint, credentials, wire-level
+/// options). The editor hides these when the source is a relay station and
+/// [`inject_station_endpoint`] overwrites them, so stale values from a
+/// previous direct-connection incarnation can never leak into the generated
+/// config.
+pub fn station_managed_fields(app: AppType) -> &'static [&'static str] {
+    match app {
+        AppType::Claude => &[
+            "base_url",
+            "auth_field",
+            "api_key",
+            "api_format",
+            "custom_user_agent",
+            "is_full_url",
+        ],
+        AppType::Codex => &[
+            "provider_id",
+            "name",
+            "remote_compaction",
+            "base_url",
+            "auth_mode",
+            "api_key",
+            "wire_api",
+            "disable_response_storage",
+            "query_params",
+            "http_headers",
+        ],
+        _ => &[],
+    }
+}
+
+/// Overwrite the station-managed fields of `values` so the codec encodes a
+/// config that points at the local gateway. `base_url` is the running gateway
+/// origin (no path); `key` is the gateway-issued client key; `provider_id` and
+/// `display_name` seed Codex's `[model_providers.<id>]` table.
+pub fn inject_station_endpoint(
+    values: &mut FormValues,
+    app: AppType,
+    base_url: &str,
+    key: &str,
+    provider_id: &str,
+    display_name: &str,
+) {
+    let origin = base_url.trim().trim_end_matches('/');
+    match app {
+        AppType::Claude => {
+            set_str(values, "base_url", origin);
+            set_str(values, "auth_field", "ANTHROPIC_AUTH_TOKEN");
+            set_str(values, "api_key", key);
+            // Station channels always speak native Anthropic Messages to the
+            // gateway; conversion for foreign upstreams happens gateway-side.
+            set_str(values, "api_format", "anthropic");
+            set_str(values, "custom_user_agent", "");
+            set_bool(values, "is_full_url", false);
+        }
+        AppType::Codex => {
+            set_str(
+                values,
+                "provider_id",
+                sanitize_toml_provider_id(provider_id),
+            );
+            set_str(values, "name", display_name.trim());
+            set_bool(values, "remote_compaction", false);
+            set_str(values, "base_url", format!("{origin}/v1"));
+            set_str(values, "auth_mode", "api_key");
+            set_str(values, "api_key", key);
+            set_str(values, "wire_api", "responses");
+            // The gateway does not implement the Responses store.
+            set_bool(values, "disable_response_storage", true);
+            set_str(values, "_legacy_env_key", "");
+            values.insert("query_params".into(), Value::Object(Default::default()));
+            values.insert("http_headers".into(), Value::Object(Default::default()));
+        }
+        _ => {}
+    }
+}
+
+/// Make an arbitrary provider id safe as a Codex TOML table key
+/// (`[model_providers.<id>]`): lowercase alphanumerics plus `-`/`_`.
+fn sanitize_toml_provider_id(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    let mut last_dash = false;
+    for ch in id.trim().chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "station".to_string()
+    } else {
+        out
+    }
+}

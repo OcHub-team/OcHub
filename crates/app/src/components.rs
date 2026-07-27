@@ -1864,9 +1864,9 @@ mod tests {
     #[test]
     fn long_or_numerous_selects_use_a_dropdown() {
         assert!(select_prefers_dropdown(&[
-            "仅 API 转发站",
+            "仅 API 中转",
             "仅 ChatGPT 账号登录",
-            "ChatGPT 登录 + API 转发站",
+            "ChatGPT 登录 + API 中转",
         ]));
         assert!(select_prefers_dropdown(&[
             "自动", "Terminal", "iTerm2", "Ghostty", "Warp",

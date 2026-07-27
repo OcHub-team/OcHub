@@ -976,9 +976,9 @@ fn route_for_key(db: &Database, key: Option<&GatewayKey>) -> Result<Option<Gatew
     };
     match db.get_gateway_route_by_id(route_id) {
         Ok(Some(route)) if route.enabled => Ok(Some(route)),
-        Ok(Some(_)) => Err("当前绑定的转发站已停用".to_string()),
-        Ok(None) => Err("当前绑定的转发站不存在".to_string()),
-        Err(err) => Err(format!("读取转发站绑定失败: {err}")),
+        Ok(Some(_)) => Err("当前绑定的中转已停用".to_string()),
+        Ok(None) => Err("当前绑定的中转不存在".to_string()),
+        Err(err) => Err(format!("读取中转绑定失败: {err}")),
     }
 }
 

@@ -59,6 +59,7 @@
 "shell.first_run.title" = "OcHub へようこそ"
 "shell.gateway.config_read_failed" = "中継の設定を読み込めませんでした"
 "shell.gateway.cta.desc" = "一度適用すれば、ここで中継を切り替えられます。"
+"shell.gateway.cta.pick" = "中継を選ぶと、このアプリのリクエストがそこを経由します。"
 "shell.gateway.cta.title" = "中継モード"
 "shell.gateway.needs_station.message" = "「中継」ページで設定を選び、現在の CLI に適用してください。"
 "shell.gateway.needs_station.title" = "先に中継を適用してください"

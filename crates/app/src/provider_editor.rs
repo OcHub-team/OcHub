@@ -13,9 +13,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, prelude::*, px, relative, uniform_list, Context, Entity, FontWeight, HighlightStyle,
-    ListAlignment, ListState, MouseButton, Pixels, SharedString, StyledText, Task, Window,
+    anchored, deferred, div, point, prelude::*, px, relative, uniform_list, Anchor, Context,
+    Entity, FontWeight, HighlightStyle, ListAlignment, ListState, MouseButton, Pixels,
+    SharedString, StyledText, Task, Window,
 };
+use ochub_core::gateway::apply;
 use ochub_core::provider_config::{
     self, bool_val, str_val, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues,
     GridCellKind, Language, Severity,
@@ -31,7 +33,7 @@ use crate::components::{BadgeTone, ButtonSize, ButtonTone};
 use crate::fold::{fold_regions, FoldRegion};
 use crate::highlight::{self, Lang};
 use crate::i18n::{k, raw, t};
-use crate::icons::IconName;
+use crate::icons::{icon, IconName};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -129,6 +131,43 @@ struct ProviderSaveOutcome {
     result: Result<(), ProviderSaveFailure>,
 }
 
+/// Where a channel gets its endpoint from: typed in by hand, or supplied by a
+/// configured relay station through the local gateway.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderSource {
+    Direct,
+    Station,
+}
+
+/// Gateway coordinates for the selected station, resolved in the background
+/// so the live preview can show the exact endpoint + key that a save would
+/// embed. Keyed by route id so a station change invalidates it.
+#[derive(Clone)]
+struct StationGatewayInfo {
+    route_id: String,
+    origin: String,
+    key: String,
+}
+
+/// Which model-suggestion popover is open. Suggestions only exist in station
+/// mode, where the station declares the exact upstream models it serves.
+#[derive(Clone, PartialEq)]
+enum ModelSuggestionTarget {
+    /// A schema text field (currently always `model`).
+    Field(String),
+    /// The `model` cell of one grid row: (grid field id, row id).
+    GridCell(String, usize),
+}
+
+impl ModelSuggestionTarget {
+    fn element_id(&self) -> String {
+        match self {
+            Self::Field(id) => format!("model-suggest-field-{id}"),
+            Self::GridCell(field, row) => format!("model-suggest-grid-{field}-{row}"),
+        }
+    }
+}
+
 pub struct ProviderEditor {
     app: Arc<AppState>,
     app_type: AppType,
@@ -186,6 +225,19 @@ pub struct ProviderEditor {
     saving: bool,
     error: Option<SharedString>,
     status: Option<SharedString>,
+    /// Channel source; `Station` hides endpoint/credential fields and embeds
+    /// the local gateway's coordinates instead.
+    source: ProviderSource,
+    /// Stations compatible with this app, loaded from core in the background.
+    station_options: Vec<apply::StationChannelOption>,
+    station_options_loaded: bool,
+    /// Selected station route id while `source == Station`.
+    selected_station: Option<String>,
+    station_dropdown_open: bool,
+    /// Gateway origin + shared key for the selected station (preview only;
+    /// the save path re-resolves both against the running gateway).
+    station_gateway: Option<StationGatewayInfo>,
+    open_model_suggestion: Option<ModelSuggestionTarget>,
     /// Severity of whichever toast `take_toast` will hand over next. Always
     /// set alongside `error`/`status` so the host never has to guess it from
     /// the wording.
@@ -243,7 +295,10 @@ impl ProviderEditor {
             self.close_convert(cx);
         } else if self.raw_edit.is_some() {
             self.close_raw_edit(cx);
-        } else if self.open_select_field.take().is_some() {
+        } else if self.open_select_field.take().is_some()
+            || self.open_model_suggestion.take().is_some()
+            || std::mem::take(&mut self.station_dropdown_open)
+        {
             cx.notify();
         } else {
             cx.emit(EditorEvent::Cancelled);
@@ -258,6 +313,7 @@ impl ProviderEditor {
         let mut this = Self::base(app, app_type, codec, schema, values, None, None, cx);
         Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
+        this.load_station_options(cx);
         this.start_preview_build(cx);
         this
     }
@@ -272,6 +328,11 @@ impl ProviderEditor {
             .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
         let schema = codec.schema();
         let values = codec.decode(&provider.settings_config, provider.meta.as_ref());
+        let station_route = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.gateway_route_id.clone())
+            .filter(|_| provider_config::station_source_supported(app_type));
         let mut this = Self::base(
             app,
             app_type,
@@ -282,9 +343,14 @@ impl ProviderEditor {
             Some(provider.clone()),
             cx,
         );
+        if let Some(route_id) = station_route {
+            this.source = ProviderSource::Station;
+            this.selected_station = Some(route_id);
+        }
         this.set_identity(provider, cx);
         Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
+        this.load_station_options(cx);
         this.start_preview_build(cx);
         this
     }
@@ -362,6 +428,13 @@ impl ProviderEditor {
             error: None,
             status: None,
             status_level: None,
+            source: ProviderSource::Direct,
+            station_options: Vec::new(),
+            station_options_loaded: false,
+            selected_station: None,
+            station_dropdown_open: false,
+            station_gateway: None,
+            open_model_suggestion: None,
             form_list_state: ListState::new(form_item_count, ListAlignment::Top, px(720.)),
             form_stack_grid: false,
             form_official_login: false,
@@ -423,6 +496,210 @@ impl ProviderEditor {
         self.notes.update(cx, |i, cx| {
             i.set_content(provider.notes.clone().unwrap_or_default(), cx)
         });
+    }
+
+    // ---- relay-station source -------------------------------------------------
+
+    /// Load the stations this app could draw from. Only runs for apps whose
+    /// codec supports the station source; everyone else never sees the toggle.
+    fn load_station_options(&mut self, cx: &mut Context<Self>) {
+        if !provider_config::station_source_supported(self.app_type) {
+            return;
+        }
+        let app = self.app.clone();
+        let app_type = self.app_type;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { apply::station_channel_options(&app, app_type) })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(options) => this.station_options = options,
+                    Err(error) => {
+                        log::warn!("failed to load relay stations: {error}");
+                    }
+                }
+                this.station_options_loaded = true;
+                this.refresh_station_gateway(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Resolve the gateway origin + shared station key for the picker preview.
+    /// The save path re-does this against the *running* gateway; here the
+    /// configured port is close enough and starting the service just to paint
+    /// a preview would be wrong.
+    fn refresh_station_gateway(&mut self, cx: &mut Context<Self>) {
+        let Some(route_id) = self.selected_station.clone() else {
+            self.station_gateway = None;
+            return;
+        };
+        if self
+            .station_gateway
+            .as_ref()
+            .is_some_and(|info| info.route_id == route_id)
+        {
+            return;
+        }
+        let app = self.app.clone();
+        let app_type = self.app_type;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let config = app.db.get_gateway_config()?;
+                    let origin = format!("http://127.0.0.1:{}", config.port);
+                    let key = apply::ensure_key_for_route(
+                        &app,
+                        &apply::gateway_key_label(app_type, &route_id),
+                        Some(&route_id),
+                    )?;
+                    Ok::<_, ochub_core::error::AppError>((route_id, origin, key.key))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let Ok((route_id, origin, key)) = result else {
+                    return;
+                };
+                // A station change raced us; that selection has its own task.
+                if this.selected_station.as_deref() != Some(route_id.as_str()) {
+                    return;
+                }
+                this.station_gateway = Some(StationGatewayInfo {
+                    route_id,
+                    origin,
+                    key,
+                });
+                this.invalidate_preview(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn set_source(&mut self, source: ProviderSource, cx: &mut Context<Self>) {
+        if self.source == source {
+            return;
+        }
+        self.source = source;
+        self.open_model_suggestion = None;
+        self.station_dropdown_open = false;
+        if source == ProviderSource::Station {
+            self.refresh_station_gateway(cx);
+        }
+        self.form_list_state.remeasure();
+        self.invalidate_preview(cx);
+    }
+
+    fn select_station(&mut self, route_id: String, cx: &mut Context<Self>) {
+        if self.selected_station.as_deref() == Some(route_id.as_str()) {
+            self.station_dropdown_open = false;
+            cx.notify();
+            return;
+        }
+        self.selected_station = Some(route_id.clone());
+        self.station_dropdown_open = false;
+        self.station_gateway = None;
+        // Seed the channel name from the station when the user has not typed
+        // one yet; a name they wrote is never overwritten.
+        if self.name.read(cx).content().trim().is_empty() {
+            if let Some(option) = self
+                .station_options
+                .iter()
+                .find(|option| option.route_id == route_id)
+            {
+                let name = option.name.clone();
+                self.name
+                    .update(cx, |input, cx| input.set_content(name, cx));
+            }
+        }
+        self.refresh_station_gateway(cx);
+        self.form_list_state.remeasure();
+        self.invalidate_preview(cx);
+    }
+
+    /// Models the selected station declares, for suggestion popovers.
+    fn station_models(&self) -> &[String] {
+        self.selected_station
+            .as_deref()
+            .and_then(|route_id| {
+                self.station_options
+                    .iter()
+                    .find(|option| option.route_id == route_id)
+            })
+            .map(|option| option.models.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// The text currently sitting in the input a suggestion popover hangs off.
+    /// The popover filters against it live, so a half-typed name narrows the
+    /// station catalog instead of making the user scroll it.
+    fn model_query(&self, target: &ModelSuggestionTarget, cx: &Context<Self>) -> String {
+        let input = match target {
+            ModelSuggestionTarget::Field(id) => self.text_inputs.get(id),
+            ModelSuggestionTarget::GridCell(field, row) => self
+                .grid_rows
+                .get(field)
+                .and_then(|rows| rows.iter().find(|r| r.id == *row))
+                .and_then(|row| row.cells.get("model")),
+        };
+        input
+            .map(|input| input.read(cx).content().trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Open the popover for `target` (or close whatever is open when `None`).
+    /// The popover floats, so this never changes form layout — no remeasure.
+    fn set_model_suggestion(
+        &mut self,
+        target: Option<ModelSuggestionTarget>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.open_model_suggestion == target {
+            return;
+        }
+        self.open_model_suggestion = target;
+        cx.notify();
+    }
+
+    fn apply_model_suggestion(
+        &mut self,
+        target: ModelSuggestionTarget,
+        model: String,
+        cx: &mut Context<Self>,
+    ) {
+        let input = match &target {
+            ModelSuggestionTarget::Field(id) => self.text_inputs.get(id).cloned(),
+            ModelSuggestionTarget::GridCell(field, row) => self
+                .grid_rows
+                .get(field)
+                .and_then(|rows| rows.iter().find(|r| r.id == *row))
+                .and_then(|row| row.cells.get("model"))
+                .cloned(),
+        };
+        if let Some(input) = input {
+            input.update(cx, |input, cx| input.set_content(model, cx));
+        }
+        self.open_model_suggestion = None;
+        self.form_list_state.remeasure();
+        self.invalidate_preview(cx);
+    }
+
+    /// The id Codex's `[model_providers.<id>]` table will use, for preview
+    /// injection. Edit mode pins the stored provider id so re-saves never
+    /// orphan the table the create wrote.
+    fn station_channel_id(&self, cx: &Context<Self>) -> String {
+        if let Some(original_id) = &self.original_id {
+            return original_id.clone();
+        }
+        let typed = self.provider_id.read(cx).content().trim().to_string();
+        if typed.is_empty() {
+            "station".to_string()
+        } else {
+            typed
+        }
     }
 
     /// Build text/kv/grid input entities from the current `values`.
@@ -523,6 +800,11 @@ impl ProviderEditor {
 
     fn observe_preview_input(input: &Entity<TextInput>, cx: &mut Context<Self>) {
         cx.subscribe(input, |this, _input, _: &TextInputEvent, cx| {
+            // An open model popover filters against the live input text, so a
+            // keystroke has to repaint the form, not just the input itself.
+            if this.open_model_suggestion.is_some() {
+                cx.notify();
+            }
             this.schedule_preview_refresh(cx);
         })
         .detach();
@@ -750,6 +1032,25 @@ impl ProviderEditor {
             }
             self.values.insert(id.clone(), Value::Array(arr));
         }
+        // Station mode: the hidden endpoint fields always track the selected
+        // station, so the preview (and any validation derived from it) shows
+        // the same gateway coordinates a save would embed. Until the gateway
+        // info arrives the stale decoded values stay — a transient state the
+        // arrival's `invalidate_preview` corrects.
+        if self.source == ProviderSource::Station {
+            if let Some(info) = &self.station_gateway {
+                let channel_id = self.station_channel_id(cx);
+                let channel_name = self.name.read(cx).content().trim().to_string();
+                provider_config::inject_station_endpoint(
+                    &mut self.values,
+                    self.app_type,
+                    &info.origin,
+                    &info.key,
+                    &channel_id,
+                    &channel_name,
+                );
+            }
+        }
     }
 
     fn is_editing(&self) -> bool {
@@ -889,8 +1190,22 @@ impl ProviderEditor {
         Vec::new()
     }
 
+    /// The common-config snippet when the user changed it this session. Both
+    /// save paths persist it ahead of the provider write.
+    fn common_snippet_update(&self, cx: &Context<Self>) -> Option<String> {
+        if !self.common_config_supported {
+            return None;
+        }
+        let snippet = self.common_snippet.read(cx).content().to_string();
+        (snippet != self.original_snippet).then_some(snippet)
+    }
+
     fn do_save(&mut self, cx: &mut Context<Self>) {
         if self.saving {
+            return;
+        }
+        if self.source == ProviderSource::Station {
+            self.do_save_station(cx);
             return;
         }
         let name = self.name.read(cx).content().trim().to_string();
@@ -919,13 +1234,8 @@ impl ProviderEditor {
             .codec
             .encode(&self.values, &self.working_base, prior_meta.as_ref());
 
-        let snippet_update = if self.common_config_supported {
-            let snippet = self.common_snippet.read(cx).content().to_string();
-            let changed_snippet = if snippet != self.original_snippet {
-                Some(snippet)
-            } else {
-                None
-            };
+        let snippet_update = self.common_snippet_update(cx);
+        if self.common_config_supported {
             if self.common_config_enabled {
                 encoded
                     .meta
@@ -934,10 +1244,7 @@ impl ProviderEditor {
             } else if let Some(meta) = encoded.meta.as_mut() {
                 meta.common_config_enabled = None;
             }
-            changed_snippet
-        } else {
-            None
-        };
+        }
 
         let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
         let notes = nonempty(self.notes.read(cx).content().trim().to_string());
@@ -998,6 +1305,162 @@ impl ProviderEditor {
                         None => ProviderService::add(&app, app_type, provider, true).map(|_| ()),
                     }
                     .map_err(|error| ProviderSaveFailure::Provider(error.to_string()));
+                    ProviderSaveOutcome {
+                        saved_snippet,
+                        result,
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.saving = false;
+                if let Some(snippet) = outcome.saved_snippet {
+                    this.original_snippet = snippet;
+                }
+                match outcome.result {
+                    Ok(()) => cx.emit(EditorEvent::Saved),
+                    Err(ProviderSaveFailure::CommonConfig(error)) => {
+                        this.set_error(tf!(
+                            k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
+                            error = error
+                        ));
+                        cx.notify();
+                    }
+                    Err(ProviderSaveFailure::Provider(error)) => {
+                        this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Save path for `source == Station`: endpoint + credential come from the
+    /// running local gateway (never from form fields), so the provider is
+    /// built in core once the gateway origin is known. The form only
+    /// contributes identity fields and model choices.
+    fn do_save_station(&mut self, cx: &mut Context<Self>) {
+        let name = self.name.read(cx).content().trim().to_string();
+        if name.is_empty() {
+            self.set_error(t(k::PROVIDER_EDITOR_IDENTITY_NAME_REQUIRED));
+            cx.notify();
+            return;
+        }
+        let Some(route_id) = self.selected_station.clone() else {
+            self.set_error(t(k::PROVIDER_EDITOR_STATION_REQUIRED));
+            cx.notify();
+            return;
+        };
+        self.pull_values(cx);
+        let values = self.values.clone();
+        let category = nonempty(self.category.read(cx).content().trim().to_string());
+        let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
+        let notes = nonempty(self.notes.read(cx).content().trim().to_string());
+        let original_id = self.original_id.clone();
+        let channel_id = original_id.clone().unwrap_or_else(|| {
+            let typed = self.provider_id.read(cx).content().trim().to_string();
+            if typed.is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                typed
+            }
+        });
+        let identity = apply::StationChannelIdentity {
+            id: channel_id,
+            name,
+            website_url,
+            category,
+            notes,
+        };
+        let snippet_update = self.common_snippet_update(cx);
+        let common_config_supported = self.common_config_supported;
+        let common_config_enabled = self.common_config_enabled;
+        let working_base = self.working_base.clone();
+        let original_provider = self.original_provider.clone();
+        let prior_meta = original_provider.as_ref().and_then(|p| p.meta.clone());
+
+        self.saving = true;
+        self.error = None;
+        let app = self.app.clone();
+        let app_type = self.app_type;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_spawn(async move {
+                    let mut saved_snippet = None;
+                    if let Some(snippet) = snippet_update {
+                        if let Err(error) = ConfigService::set_common_config_snippet(
+                            &app,
+                            app_type.as_str(),
+                            snippet.clone(),
+                        ) {
+                            return ProviderSaveOutcome {
+                                saved_snippet,
+                                result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
+                            };
+                        }
+                        saved_snippet = Some(snippet);
+                    }
+
+                    let result = (|| {
+                        // The channel points at the local gateway, so saving
+                        // implies the gateway should run — same contract as
+                        // applying a station from the gateway page.
+                        let mut config = app
+                            .db
+                            .get_gateway_config()
+                            .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
+                        if !config.enabled {
+                            config.enabled = true;
+                            app.db.set_gateway_config(&config).map_err(|error| {
+                                ProviderSaveFailure::Provider(error.to_string())
+                            })?;
+                        }
+                        let status = futures::executor::block_on(app.gateway.start())
+                            .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
+                        let mut provider = apply::build_station_channel(
+                            &app,
+                            app_type,
+                            &route_id,
+                            &values,
+                            identity,
+                            &status.base_url,
+                            &working_base,
+                            prior_meta.as_ref(),
+                        )
+                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
+                        // Editing must not strip fields the form doesn't own.
+                        if let Some(original) = original_provider {
+                            provider.created_at = original.created_at;
+                            provider.sort_index = original.sort_index;
+                            provider.icon = original.icon;
+                            provider.icon_color = original.icon_color;
+                        }
+                        if common_config_supported {
+                            if common_config_enabled {
+                                provider
+                                    .meta
+                                    .get_or_insert_with(ProviderMeta::default)
+                                    .common_config_enabled = Some(true);
+                            } else if let Some(meta) = provider.meta.as_mut() {
+                                meta.common_config_enabled = None;
+                            }
+                        }
+                        match original_id {
+                            Some(original_id) => ProviderService::update(
+                                &app,
+                                app_type,
+                                Some(&original_id),
+                                provider,
+                            )
+                            .map(|_| ()),
+                            None => {
+                                ProviderService::add(&app, app_type, provider, true).map(|_| ())
+                            }
+                        }
+                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))
+                    })();
                     ProviderSaveOutcome {
                         saved_snippet,
                         result,
@@ -1318,10 +1781,12 @@ impl ProviderEditor {
     // ---- rendering ----------------------------------------------------------
 
     fn uses_official_login(&self, cx: &Context<Self>) -> bool {
-        matches!(
-            self.app_type,
-            AppType::Claude | AppType::ClaudeDesktop | AppType::Codex
-        ) && self.category.read(cx).content().trim() == "official"
+        self.source == ProviderSource::Direct
+            && matches!(
+                self.app_type,
+                AppType::Claude | AppType::ClaudeDesktop | AppType::Codex
+            )
+            && self.category.read(cx).content().trim() == "official"
     }
 
     fn render_official_auth_section(&self) -> gpui::AnyElement {
@@ -1369,11 +1834,22 @@ impl ProviderEditor {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let body = match &field.kind {
-            FieldKind::Text { .. } | FieldKind::Secret { .. } => self
-                .text_inputs
-                .get(&field.id)
-                .map(|i| i.clone().into_any_element())
-                .unwrap_or_else(|| div().into_any_element()),
+            FieldKind::Text { .. } | FieldKind::Secret { .. } => {
+                let input = self
+                    .text_inputs
+                    .get(&field.id)
+                    .map(|i| i.clone().into_any_element())
+                    .unwrap_or_else(|| div().into_any_element());
+                if self.source == ProviderSource::Station && field.id == "model" {
+                    self.with_model_suggestions(
+                        ModelSuggestionTarget::Field(field.id.clone()),
+                        input,
+                        cx,
+                    )
+                } else {
+                    input
+                }
+            }
             FieldKind::Select { options } => {
                 let current = str_val(&self.values, &field.id).to_string();
                 let selected = options.iter().position(|o| o.value == current).unwrap_or(0);
@@ -1468,6 +1944,181 @@ impl ProviderEditor {
         .into_any_element()
     }
 
+    /// Wrap a model text input with a popover listing the selected station's
+    /// declared models. Typing stays free-form; the popover only fills the
+    /// input, so names outside the station catalog remain possible.
+    ///
+    /// The list floats above the form (deferred + anchored) rather than sitting
+    /// in the column: opening it must not reflow the fields below it, and its
+    /// own scrolling must not drag the form along with it.
+    ///
+    /// The wrapper stays a plain block div on purpose. Taffy only tracks the
+    /// static position of an absolutely positioned child in block layout; in a
+    /// flex container it falls back to the container's alignment, which would
+    /// pin the popover to the top edge — on top of the input.
+    fn with_model_suggestions(
+        &self,
+        target: ModelSuggestionTarget,
+        input: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let open = self.open_model_suggestion.as_ref() == Some(&target);
+        let toggle_target = target.clone();
+        let focus_target = target.clone();
+        let mut column = div().relative().w_full().min_w_0();
+        column = column.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .w_full()
+                .min_w_0()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        // Clicking into the field opens the list so typing
+                        // narrows it right away. The popover's dismiss handler
+                        // runs first (capture phase), so this re-opens rather
+                        // than fighting it.
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, _window, cx| {
+                                this.set_model_suggestion(Some(focus_target.clone()), cx);
+                            }),
+                        )
+                        .child(input),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(target.element_id()))
+                        .role(gpui::Role::Button)
+                        .aria_label(t(k::PROVIDER_EDITOR_MODEL_SUGGESTIONS))
+                        .aria_expanded(open)
+                        .flex_none()
+                        .size(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .text_color(if open {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        })
+                        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                        .child(icon(
+                            IconName::ChevronDown,
+                            if open {
+                                theme::accent()
+                            } else {
+                                theme::muted()
+                            },
+                            12.,
+                        ))
+                        // Mouse-down, not click: the popover dismisses itself on
+                        // a capture-phase mouse-down, so a mouse-up toggle would
+                        // only ever see the closed state and re-open.
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, _window, cx| {
+                                this.set_model_suggestion(
+                                    (!open).then(|| toggle_target.clone()),
+                                    cx,
+                                );
+                            }),
+                        ),
+                ),
+        );
+        if open {
+            let catalog = self.station_models();
+            let query = self.model_query(&target, cx).to_lowercase();
+            let models: Vec<&String> = catalog
+                .iter()
+                .filter(|model| query.is_empty() || model.to_lowercase().contains(query.as_str()))
+                .collect();
+            let empty_key = if catalog.is_empty() {
+                k::PROVIDER_EDITOR_MODEL_SUGGESTIONS_EMPTY
+            } else {
+                k::PROVIDER_EDITOR_MODEL_SUGGESTIONS_NO_MATCH
+            };
+            let mut list = div()
+                .id(SharedString::from(format!("{}-list", target.element_id())))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .w_full()
+                .min_w(px(220.))
+                .max_h(px(240.))
+                .overflow_y_scroll()
+                .p_1()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme::border())
+                .bg(theme::overlay())
+                .shadow(theme::shadow_popover())
+                .occlude();
+            if models.is_empty() {
+                list = list.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(t(empty_key)),
+                );
+            }
+            for model in models {
+                let pick = model.clone();
+                let pick_target = target.clone();
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "{}-option-{}",
+                            target.element_id(),
+                            model
+                        )))
+                        .role(gpui::Role::ListBoxOption)
+                        .aria_label(SharedString::from(model.clone()))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .w_full()
+                        .min_h(px(28.))
+                        .px_2()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .text_sm()
+                        .text_color(theme::subtext())
+                        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                        .child(div().min_w_0().flex_1().truncate().child(model.clone()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.apply_model_suggestion(pick_target.clone(), pick.clone(), cx);
+                        })),
+                );
+            }
+            let dismiss_target = target.clone();
+            let list = list.on_mouse_down_out(cx.listener(move |this, _event, _window, cx| {
+                if this.open_model_suggestion.as_ref() == Some(&dismiss_target) {
+                    this.set_model_suggestion(None, cx);
+                }
+            }));
+            column = column.child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::TopLeft)
+                        .offset(point(px(0.), px(4.)))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(list),
+                )
+                .priority(30),
+            );
+        }
+        column.into_any_element()
+    }
+
     fn render_kv(&self, field_id: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let mut col = div().flex().flex_col().gap_2().w_full().min_w_0();
         if let Some(rows) = self.kv_rows.get(field_id) {
@@ -1548,6 +2199,17 @@ impl ProviderEditor {
                                     .get(&column.key)
                                     .map(|input| input.clone().into_any_element())
                                     .unwrap_or_else(|| div().into_any_element());
+                                let cell = if self.source == ProviderSource::Station
+                                    && column.key == "model"
+                                {
+                                    self.with_model_suggestions(
+                                        ModelSuggestionTarget::GridCell(field_id.to_string(), rid),
+                                        cell,
+                                        cx,
+                                    )
+                                } else {
+                                    cell
+                                };
                                 card = card.child(
                                     div()
                                         .flex()
@@ -1677,6 +2339,16 @@ impl ProviderEditor {
                                 .get(&c.key)
                                 .map(|i| i.clone().into_any_element())
                                 .unwrap_or_else(|| div().into_any_element());
+                            let cell = if self.source == ProviderSource::Station && c.key == "model"
+                            {
+                                self.with_model_suggestions(
+                                    ModelSuggestionTarget::GridCell(field_id.to_string(), rid),
+                                    cell,
+                                    cx,
+                                )
+                            } else {
+                                cell
+                            };
                             let slot = if first_text {
                                 first_text = false;
                                 div().w(px(96.)).flex_none().overflow_hidden()
@@ -2466,12 +3138,23 @@ impl ProviderEditor {
         )
     }
 
-    fn render_identity(&self) -> impl IntoElement {
+    fn render_identity(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
             .gap_4()
             .w_full()
+            .when(
+                provider_config::station_source_supported(self.app_type),
+                |column| {
+                    column.child(components::field(
+                        t(k::PROVIDER_EDITOR_SOURCE_LABEL),
+                        false,
+                        Some(t(k::PROVIDER_EDITOR_SOURCE_HELP)),
+                        self.render_source_selector(cx),
+                    ))
+                },
+            )
             .child(components::field(
                 t(k::PROVIDER_EDITOR_IDENTITY_NAME_LABEL),
                 true,
@@ -2506,10 +3189,132 @@ impl ProviderEditor {
             ))
     }
 
+    /// Direct-connection vs. relay-station toggle, plus the station picker
+    /// when the station source is active.
+    fn render_source_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let labels = [
+            t(k::PROVIDER_EDITOR_SOURCE_DIRECT),
+            t(k::PROVIDER_EDITOR_SOURCE_STATION),
+        ];
+        let label_refs: Vec<&str> = labels.iter().map(SharedString::as_ref).collect();
+        let selected = match self.source {
+            ProviderSource::Direct => 0,
+            ProviderSource::Station => 1,
+        };
+        let on_select = cx.listener(|this, index: &usize, _window, cx| {
+            this.set_source(
+                if *index == 1 {
+                    ProviderSource::Station
+                } else {
+                    ProviderSource::Direct
+                },
+                cx,
+            );
+        });
+        let mut column =
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .w_full()
+                .min_w_0()
+                .child(components::segmented(
+                    "provider-source",
+                    &label_refs,
+                    selected,
+                    move |index, window, cx| on_select(&index, window, cx),
+                ));
+        if self.source == ProviderSource::Station {
+            column = column.child(self.render_station_picker(cx));
+        }
+        column.into_any_element()
+    }
+
+    fn render_station_picker(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.station_options.is_empty() {
+            let message = if self.station_options_loaded {
+                t(k::PROVIDER_EDITOR_STATION_EMPTY)
+            } else {
+                SharedString::new_static("…")
+            };
+            return div()
+                .text_sm()
+                .text_color(theme::muted())
+                .child(message)
+                .into_any_element();
+        }
+        let labels: Vec<String> = self
+            .station_options
+            .iter()
+            .map(|option| {
+                tf!(
+                    k::PROVIDER_EDITOR_STATION_OPTION,
+                    name = option.name,
+                    count = option.models.len()
+                )
+            })
+            .collect();
+        let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let selected = self
+            .selected_station
+            .as_deref()
+            .and_then(|route_id| {
+                self.station_options
+                    .iter()
+                    .position(|option| option.route_id == route_id)
+            })
+            .unwrap_or(usize::MAX);
+        let route_ids: Vec<String> = self
+            .station_options
+            .iter()
+            .map(|option| option.route_id.clone())
+            .collect();
+        let open = self.station_dropdown_open;
+        let on_event = cx.listener(
+            move |this, event: &components::SelectDropdownEvent, _window, cx| match *event {
+                components::SelectDropdownEvent::Open(open) => {
+                    this.station_dropdown_open = open;
+                    this.form_list_state.remeasure();
+                    cx.notify();
+                }
+                components::SelectDropdownEvent::Select(index) => {
+                    if let Some(route_id) = route_ids.get(index).cloned() {
+                        this.select_station(route_id, cx);
+                    }
+                }
+            },
+        );
+        let mut column =
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .w_full()
+                .min_w_0()
+                .child(components::select_dropdown(
+                    "provider-station",
+                    &label_refs,
+                    selected,
+                    open,
+                    move |event, window, cx| on_event(&event, window, cx),
+                ));
+        // Editing a channel whose station was deleted: say so instead of
+        // showing a blank dropdown selection.
+        if selected == usize::MAX && self.selected_station.is_some() {
+            column = column.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::red())
+                    .child(t(k::PROVIDER_EDITOR_STATION_MISSING)),
+            );
+        }
+        column.into_any_element()
+    }
+
     fn render_form_intro(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let presets = self.codec.presets();
         let mut intro = div().flex().flex_col().gap_5().w_full().min_w_0();
-        if !presets.is_empty() {
+        if !presets.is_empty() && self.source == ProviderSource::Direct {
             let names: Vec<&str> = presets.iter().map(|preset| preset.name.as_str()).collect();
             let on_select = cx.listener(|this, index: &usize, _window, cx| {
                 this.apply_preset(*index, cx);
@@ -2526,7 +3331,7 @@ impl ProviderEditor {
                 ),
             ));
         }
-        intro.child(self.render_identity()).into_any_element()
+        intro.child(self.render_identity(cx)).into_any_element()
     }
 
     fn render_form_section(
@@ -2543,6 +3348,24 @@ impl ProviderEditor {
             return self.render_official_auth_section();
         }
 
+        // In station mode the station supplies endpoint/credentials, so the
+        // managed fields leave the form entirely; sections they fully occupy
+        // collapse away.
+        let station_mode = self.source == ProviderSource::Station;
+        let fields: Vec<&FormField> = section
+            .fields
+            .iter()
+            .filter(|field| field.is_visible(&self.values))
+            .filter(|field| {
+                !(station_mode
+                    && provider_config::station_managed_fields(self.app_type)
+                        .contains(&field.id.as_str()))
+            })
+            .collect();
+        if fields.is_empty() {
+            return gpui::Empty.into_any_element();
+        }
+
         let caption = if section.advanced {
             raw(k::PROVIDER_EDITOR_FORM_ADVANCED_CAPTION)
         } else {
@@ -2554,16 +3377,16 @@ impl ProviderEditor {
             .gap_3()
             .w_full()
             .child(layout::section_header(section.title.clone(), caption));
-        for field in &section.fields {
-            if field.is_visible(&self.values) {
-                column = column.child(self.render_field(field, stack_grid, cx));
-            }
+        for field in fields {
+            column = column.child(self.render_field(field, stack_grid, cx));
         }
         column.into_any_element()
     }
 
     fn render_form_tools(&self, official_login: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if official_login {
+        // Fetch-models/speedtest/balance all interrogate the typed-in
+        // endpoint, which station channels simply don't have.
+        if official_login || self.source == ProviderSource::Station {
             return gpui::Empty.into_any_element();
         }
         div()

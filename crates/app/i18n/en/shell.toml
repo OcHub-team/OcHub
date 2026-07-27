@@ -59,6 +59,7 @@
 "shell.first_run.title" = "Welcome to OcHub"
 "shell.gateway.config_read_failed" = "Couldn't read the relay settings"
 "shell.gateway.cta.desc" = "Apply one once, and you can switch between relays right here."
+"shell.gateway.cta.pick" = "Pick a relay to route this app through."
 "shell.gateway.cta.title" = "Relay mode"
 "shell.gateway.needs_station.message" = "Open the Relay page, pick a config, and apply it to the current CLI."
 "shell.gateway.needs_station.title" = "Apply a relay first"

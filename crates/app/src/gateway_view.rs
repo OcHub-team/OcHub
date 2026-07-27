@@ -15,8 +15,8 @@ use gpui::{
 };
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
-    Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule,
-    GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
+    Dialect, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule, GatewayReasoningConfig,
+    GatewayReasoningMode, GatewayRoute,
 };
 use ochub_core::services::provider::ProviderService;
 use ochub_core::{AppState, AppType};
@@ -52,12 +52,6 @@ impl RelayStation {
 
     fn is_enabled(&self) -> bool {
         self.route.enabled && self.channels.iter().any(|channel| channel.enabled)
-    }
-
-    fn supports_app(&self, app_type: AppType) -> bool {
-        self.channels
-            .iter()
-            .any(|channel| channel.enabled && apply::dialect_compatible(channel.dialect, app_type))
     }
 }
 
@@ -134,10 +128,13 @@ impl GatewayPageLoad {
         for app_type in apply::supported_apps() {
             let current = ProviderService::current(app, *app_type).ok();
             if let Ok(providers) = ProviderService::list(app, *app_type) {
-                for provider in providers
-                    .values()
-                    .filter(|provider| provider.is_local_gateway())
-                {
+                for provider in providers.values().filter(|provider| {
+                    provider.is_local_gateway()
+                        || provider
+                            .meta
+                            .as_ref()
+                            .is_some_and(|meta| meta.gateway_route_id.is_some())
+                }) {
                     if app_type.is_additive_mode()
                         && provider
                             .meta
@@ -184,6 +181,12 @@ impl GatewayPageLoad {
                 for provider in providers.into_values().filter(|provider| {
                     provider.id != apply::GATEWAY_PROVIDER_ID
                         && provider.category.as_deref() != Some("gateway")
+                        // Station channels point at the local gateway itself;
+                        // importing one as an upstream would loop requests.
+                        && provider
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| meta.gateway_route_id.is_none())
                 }) {
                     let channel_id = format!("imported-{}-{}", app_type.as_str(), provider.id);
                     if imported_ids.contains(&channel_id) {
@@ -226,35 +229,6 @@ struct ModelRuleEditor {
     client_model: Entity<TextInput>,
     station_model: Entity<TextInput>,
     dialect: Option<Dialect>,
-}
-
-struct AppModelRuleEditor {
-    id: u64,
-    client_model: Entity<TextInput>,
-    upstream_model: Option<String>,
-    channel_id: Option<String>,
-    dialect: Option<Dialect>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ApplyModelPicker {
-    Models,
-    Preferred,
-    Fallback,
-    Rule(u64),
-}
-
-struct StationApplyEditor {
-    route_id: String,
-    station_name: String,
-    app_type: AppType,
-    available_models: Vec<String>,
-    selected_models: Vec<String>,
-    preferred_model: Option<String>,
-    fallback_model: Option<String>,
-    rules: Vec<AppModelRuleEditor>,
-    open_picker: Option<ApplyModelPicker>,
-    rules_error: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -331,10 +305,7 @@ pub struct GatewayView {
     active_station_apps: HashSet<(AppType, String)>,
     installed_station_apps: HashSet<(AppType, String)>,
     editor: Option<StationEditor>,
-    apply_editor: Option<StationApplyEditor>,
-    next_rule_id: u64,
     show_imports: bool,
-    applying: Option<(String, AppType)>,
     mutation_in_flight: bool,
     confirm_delete: Option<(String, String)>,
     /// Deleting was refused: (station name, apps still using it).
@@ -414,17 +385,6 @@ impl GatewayView {
                 }
             }
         }
-        if let Some(editor) = self.apply_editor.as_mut() {
-            if editor.rules_error.is_some() {
-                editor.rules_error = Some(t(k::GATEWAY_APPLY_ERROR_MAPPING));
-            }
-            for rule in &editor.rules {
-                placeholders.push((
-                    rule.client_model.clone(),
-                    t(k::GATEWAY_APPLY_MAPPING_CLIENT_PLACEHOLDER),
-                ));
-            }
-        }
         for (input, placeholder) in placeholders {
             input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         }
@@ -439,10 +399,7 @@ impl GatewayView {
             active_station_apps: HashSet::new(),
             installed_station_apps: HashSet::new(),
             editor: None,
-            apply_editor: None,
-            next_rule_id: 1,
             show_imports: false,
-            applying: None,
             mutation_in_flight: false,
             confirm_delete: None,
             delete_blocked: None,
@@ -462,8 +419,6 @@ impl GatewayView {
     pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.confirm_delete.is_some() {
             window.play_system_bell();
-        } else if self.apply_editor.is_some() {
-            self.confirm_apply_station(cx);
         } else if self.editor.is_some() {
             self.save_editor(cx);
         } else {
@@ -473,11 +428,9 @@ impl GatewayView {
 
     pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let closed_editor = self.editor.take().is_some();
-        let closed_apply_editor = self.apply_editor.take().is_some();
         if self.delete_blocked.take().is_some()
             || self.confirm_delete.take().is_some()
             || closed_editor
-            || closed_apply_editor
         {
             if closed_editor {
                 self.rebuild_rows();
@@ -1335,367 +1288,6 @@ impl GatewayView {
         .detach();
     }
 
-    fn open_apply_editor(&mut self, route_id: String, app_type: AppType, cx: &mut Context<Self>) {
-        if self.applying.is_some() {
-            return;
-        }
-        let Some(station) = self
-            .stations
-            .iter()
-            .find(|station| station.route.id == route_id)
-            .cloned()
-        else {
-            return;
-        };
-        if !station.is_enabled() {
-            self.set_status(
-                NotificationLevel::Warning,
-                t(k::GATEWAY_STATUS_DISABLED_BLOCKED),
-                cx,
-            );
-            return;
-        }
-        if !station.supports_app(app_type) {
-            self.set_status(
-                NotificationLevel::Warning,
-                tf!(
-                    k::GATEWAY_STATUS_DIALECT_UNSUPPORTED,
-                    app = crate::app_meta::label(app_type),
-                    name = station.route.name,
-                ),
-                cx,
-            );
-            return;
-        }
-
-        let policy = match apply::station_model_policy(&self.app, app_type, &station.route) {
-            Ok(policy) => policy,
-            Err(error) => {
-                self.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::GATEWAY_STATUS_APPLY_FAILED, error = error),
-                    cx,
-                );
-                return;
-            }
-        };
-        let mut available_models = apply::station_models(&station.route, &station.channels);
-        available_models.extend(policy.models.iter().cloned());
-        available_models.extend(policy.preferred_model.iter().cloned());
-        available_models.extend(policy.fallback_model.iter().cloned());
-        available_models.extend(
-            policy
-                .model_rules
-                .iter()
-                .filter_map(|rule| rule.upstream_model_override().map(str::to_string)),
-        );
-        let available_models = normalized_models(available_models);
-        let mut rules = Vec::new();
-        for rule in policy.model_rules {
-            let id = self.next_rule_id;
-            self.next_rule_id += 1;
-            rules.push(AppModelRuleEditor {
-                id,
-                client_model: cx.new(|cx| {
-                    text_input(
-                        cx,
-                        t(k::GATEWAY_APPLY_MAPPING_CLIENT_PLACEHOLDER),
-                        &rule.model,
-                    )
-                }),
-                upstream_model: rule.upstream_model_override().map(str::to_string),
-                channel_id: rule.channel_id,
-                dialect: rule.dialect,
-            });
-        }
-        self.apply_editor = Some(StationApplyEditor {
-            route_id,
-            station_name: station.route.name,
-            app_type,
-            available_models,
-            selected_models: normalized_models(policy.models),
-            preferred_model: policy.preferred_model,
-            fallback_model: policy.fallback_model,
-            rules,
-            open_picker: None,
-            rules_error: None,
-        });
-        cx.notify();
-    }
-
-    fn close_apply_editor(&mut self, cx: &mut Context<Self>) {
-        self.apply_editor = None;
-        cx.notify();
-    }
-
-    fn toggle_apply_models_picker(&mut self, cx: &mut Context<Self>) {
-        if let Some(editor) = self.apply_editor.as_mut() {
-            editor.open_picker = if editor.open_picker == Some(ApplyModelPicker::Models) {
-                None
-            } else {
-                Some(ApplyModelPicker::Models)
-            };
-            cx.notify();
-        }
-    }
-
-    fn toggle_apply_catalog_model(&mut self, model: &str, cx: &mut Context<Self>) {
-        let Some(editor) = self.apply_editor.as_mut() else {
-            return;
-        };
-        if let Some(index) = editor
-            .selected_models
-            .iter()
-            .position(|selected| selected == model)
-        {
-            editor.selected_models.remove(index);
-            if editor.preferred_model.as_deref() == Some(model) {
-                editor.preferred_model = None;
-            }
-        } else {
-            editor.selected_models.push(model.to_string());
-            editor.selected_models.sort();
-        }
-        cx.notify();
-    }
-
-    fn select_all_apply_models(&mut self, cx: &mut Context<Self>) {
-        if let Some(editor) = self.apply_editor.as_mut() {
-            editor.selected_models = editor.available_models.clone();
-            cx.notify();
-        }
-    }
-
-    fn clear_apply_models(&mut self, cx: &mut Context<Self>) {
-        if let Some(editor) = self.apply_editor.as_mut() {
-            editor.selected_models.clear();
-            editor.preferred_model = None;
-            cx.notify();
-        }
-    }
-
-    fn handle_apply_model_select(
-        &mut self,
-        picker: ApplyModelPicker,
-        event: components::SelectDropdownEvent,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(editor) = self.apply_editor.as_mut() else {
-            return;
-        };
-        match event {
-            components::SelectDropdownEvent::Open(open) => {
-                editor.open_picker = open.then_some(picker);
-            }
-            components::SelectDropdownEvent::Select(index) => {
-                let model = index
-                    .checked_sub(1)
-                    .and_then(|index| editor.available_models.get(index))
-                    .cloned();
-                match picker {
-                    ApplyModelPicker::Models => {}
-                    ApplyModelPicker::Preferred => {
-                        editor.preferred_model = model.clone();
-                        if let Some(model) = model {
-                            if !editor.selected_models.contains(&model) {
-                                editor.selected_models.push(model);
-                                editor.selected_models.sort();
-                            }
-                        }
-                    }
-                    ApplyModelPicker::Fallback => editor.fallback_model = model,
-                    ApplyModelPicker::Rule(rule_id) => {
-                        if let Some(rule) = editor.rules.iter_mut().find(|rule| rule.id == rule_id)
-                        {
-                            rule.upstream_model = model;
-                        }
-                    }
-                }
-                editor.open_picker = None;
-            }
-        }
-        cx.notify();
-    }
-
-    fn add_apply_model_rule(&mut self, cx: &mut Context<Self>) {
-        let id = self.next_rule_id;
-        self.next_rule_id += 1;
-        if let Some(editor) = self.apply_editor.as_mut() {
-            editor.rules.push(AppModelRuleEditor {
-                id,
-                client_model: cx
-                    .new(|cx| TextInput::new(cx, t(k::GATEWAY_APPLY_MAPPING_CLIENT_PLACEHOLDER))),
-                upstream_model: None,
-                channel_id: None,
-                dialect: None,
-            });
-            editor.rules_error = None;
-            cx.notify();
-        }
-    }
-
-    fn remove_apply_model_rule(&mut self, id: u64, cx: &mut Context<Self>) {
-        if let Some(editor) = self.apply_editor.as_mut() {
-            editor.rules.retain(|rule| rule.id != id);
-            if editor.open_picker == Some(ApplyModelPicker::Rule(id)) {
-                editor.open_picker = None;
-            }
-            editor.rules_error = None;
-            cx.notify();
-        }
-    }
-
-    fn confirm_apply_station(&mut self, cx: &mut Context<Self>) {
-        let Some(editor) = self.apply_editor.as_ref() else {
-            return;
-        };
-        let route_id = editor.route_id.clone();
-        let app_type = editor.app_type;
-        let selected_models = editor.selected_models.clone();
-        let preferred_model = editor.preferred_model.clone();
-        let fallback_model = editor.fallback_model.clone();
-        let rule_editors = editor
-            .rules
-            .iter()
-            .map(|rule| {
-                (
-                    rule.client_model.clone(),
-                    rule.upstream_model.clone(),
-                    rule.channel_id.clone(),
-                    rule.dialect,
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut seen_models = HashSet::new();
-        let mut model_rules = Vec::new();
-        for (client_model, upstream_model, channel_id, dialect) in rule_editors {
-            let model = input_value(&client_model, cx);
-            if model.is_empty() || !seen_models.insert(model.clone()) {
-                if let Some(editor) = self.apply_editor.as_mut() {
-                    editor.rules_error = Some(t(k::GATEWAY_APPLY_ERROR_MAPPING));
-                }
-                cx.notify();
-                return;
-            }
-            model_rules.push(GatewayModelRule {
-                model,
-                upstream_model: upstream_model.unwrap_or_default(),
-                channel_id,
-                dialect,
-            });
-        }
-        let policy = GatewayAppModelPolicy {
-            models: selected_models,
-            preferred_model,
-            fallback_model,
-            model_rules,
-        };
-        self.run_apply_station(route_id, app_type, policy, cx);
-    }
-
-    fn run_apply_station(
-        &mut self,
-        route_id: String,
-        app_type: AppType,
-        policy: GatewayAppModelPolicy,
-        cx: &mut Context<Self>,
-    ) {
-        if self.applying.is_some() {
-            return;
-        }
-        let Some(station) = self
-            .stations
-            .iter()
-            .find(|station| station.route.id == route_id)
-            .cloned()
-        else {
-            return;
-        };
-        self.applying = Some((route_id.clone(), app_type));
-        self.set_status(
-            NotificationLevel::Info,
-            tf!(
-                k::GATEWAY_STATUS_APPLYING,
-                name = station.route.name,
-                app = crate::app_meta::label(app_type),
-            ),
-            cx,
-        );
-
-        let app = self.app.clone();
-        let route = station.route;
-        cx.spawn(async move |this, cx| {
-            let prepare_app = app.clone();
-            let prepare = cx
-                .background_spawn(async move {
-                    prepare_app
-                        .db
-                        .upsert_gateway_route(&route)
-                        .and_then(|_| {
-                            let mut config = prepare_app.db.get_gateway_config()?;
-                            if !config.enabled {
-                                config.enabled = true;
-                                prepare_app.db.set_gateway_config(&config)?;
-                            }
-                            Ok(())
-                        })
-                        .map_err(|error| error.to_string())
-                })
-                .await;
-            let result = async {
-                prepare.map_err(|error| (true, error))?;
-                let status = app
-                    .gateway
-                    .start()
-                    .await
-                    .map_err(|error| (false, error.to_string()))?;
-                let base_url = status.base_url;
-                let route_id_for_apply = route_id.clone();
-                let app_for_apply = app.clone();
-                cx.background_spawn(async move {
-                    apply::apply_station_to_app_with_policy(
-                        &app_for_apply,
-                        app_type,
-                        &base_url,
-                        &route_id_for_apply,
-                        policy,
-                    )
-                })
-                .await
-                .map_err(|error| (false, error.to_string()))
-            }
-            .await;
-            this.update(cx, |this, cx| {
-                this.applying = None;
-                match result {
-                    Ok(applied) => {
-                        this.apply_editor = None;
-                        this.set_status(
-                            NotificationLevel::Success,
-                            tf!(
-                                k::GATEWAY_STATUS_APPLIED,
-                                name = applied.route_name,
-                                app = crate::app_meta::label(app_type),
-                            ),
-                            cx,
-                        );
-                        this.reload(cx);
-                    }
-                    Err((preparing, error)) => {
-                        let key = if preparing {
-                            k::GATEWAY_STATUS_PREPARE_FAILED
-                        } else {
-                            k::GATEWAY_STATUS_APPLY_FAILED
-                        };
-                        this.set_status(NotificationLevel::Error, tf!(key, error = error), cx);
-                    }
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     fn toggle_connection_panel(&mut self, cx: &mut Context<Self>) {
         self.show_connection = !self.show_connection;
         self.rebuild_rows();
@@ -2316,460 +1908,6 @@ impl GatewayView {
             .into_any_element()
     }
 
-    fn render_apply_editor(
-        &self,
-        editor: &StationApplyEditor,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let model_summary: SharedString = if editor.selected_models.is_empty() {
-            t(k::GATEWAY_APPLY_MODELS_EMPTY)
-        } else {
-            tf!(
-                k::GATEWAY_APPLY_MODELS_SELECTED,
-                count = editor.selected_models.len()
-            )
-            .into()
-        };
-        let model_rows = editor
-            .available_models
-            .iter()
-            .map(|model| {
-                let selected = editor.selected_models.contains(model);
-                let model_for_click = model.clone();
-                div()
-                    .id(SharedString::from(format!("apply-model-option-{model}")))
-                    .role(gpui::Role::ListBoxOption)
-                    .aria_label(SharedString::from(model.clone()))
-                    .aria_selected(selected)
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .min_h(px(34.))
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(if selected {
-                        theme::accent()
-                    } else {
-                        theme::subtext()
-                    })
-                    .when(selected, |row| row.bg(theme::accent_soft()))
-                    .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-                    .child(
-                        div()
-                            .size(px(16.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(if selected {
-                                theme::accent()
-                            } else {
-                                theme::border_strong()
-                            })
-                            .when(selected, |mark| {
-                                mark.child(icon(IconName::Check, theme::accent(), 11.))
-                            }),
-                    )
-                    .child(div().min_w_0().flex_1().truncate().child(model.clone()))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.toggle_apply_catalog_model(&model_for_click, cx);
-                    }))
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
-        let models_open = editor.open_picker == Some(ApplyModelPicker::Models);
-        let model_picker = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .w_full()
-            .child(
-                div()
-                    .id("apply-model-picker-trigger")
-                    .role(gpui::Role::Button)
-                    .aria_label(model_summary.clone())
-                    .aria_expanded(models_open)
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .h(px(38.))
-                    .px_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(if models_open {
-                        theme::accent()
-                    } else {
-                        theme::border_strong()
-                    })
-                    .bg(theme::surface())
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(theme::text())
-                    .hover(|style| style.border_color(theme::accent()).bg(theme::panel()))
-                    .child(div().flex_1().min_w_0().truncate().child(model_summary))
-                    .child(components::badge(
-                        BadgeTone::Neutral,
-                        SharedString::from(tf!(
-                            k::GATEWAY_APPLY_MODELS_AVAILABLE,
-                            count = editor.available_models.len()
-                        )),
-                    ))
-                    .child(icon(IconName::ChevronDown, theme::muted(), 13.))
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.toggle_apply_models_picker(cx);
-                    })),
-            )
-            .when(models_open, |picker| {
-                picker.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .w_full()
-                        .p_2()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme::border())
-                        .bg(theme::panel())
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_color(theme::muted())
-                                        .text_xs()
-                                        .child(t(k::GATEWAY_APPLY_MODELS_PICKER_TITLE)),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .gap_1()
-                                        .child(if editor.available_models.is_empty() {
-                                            components::disabled_button(
-                                                "apply-models-all",
-                                                t(k::GATEWAY_APPLY_MODELS_SELECT_ALL),
-                                                ButtonTone::Ghost,
-                                                ButtonSize::Sm,
-                                                true,
-                                            )
-                                        } else {
-                                            components::button(
-                                                "apply-models-all",
-                                                t(k::GATEWAY_APPLY_MODELS_SELECT_ALL),
-                                                ButtonTone::Ghost,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.select_all_apply_models(cx);
-                                                }),
-                                            )
-                                        })
-                                        .child(
-                                            components::button(
-                                                "apply-models-clear",
-                                                t(k::GATEWAY_APPLY_MODELS_CLEAR),
-                                                ButtonTone::Ghost,
-                                                ButtonSize::Sm,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _event, _window, cx| {
-                                                    this.clear_apply_models(cx);
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        )
-                        .when(editor.available_models.is_empty(), |list| {
-                            list.child(
-                                div()
-                                    .px_3()
-                                    .py_2()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(t(k::GATEWAY_APPLY_NO_MODELS)),
-                            )
-                        })
-                        .when(!editor.available_models.is_empty(), |list| {
-                            list.child(
-                                div()
-                                    .id("apply-model-options")
-                                    .role(gpui::Role::List)
-                                    .max_h(px(210.))
-                                    .overflow_y_scroll()
-                                    .children(model_rows),
-                            )
-                        }),
-                )
-            });
-
-        let mut preferred_options = vec![raw(k::GATEWAY_APPLY_PREFERRED_NONE).to_string()];
-        preferred_options.extend(editor.available_models.iter().cloned());
-        let preferred_labels = preferred_options
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        let preferred_index = editor
-            .preferred_model
-            .as_ref()
-            .and_then(|model| {
-                editor
-                    .available_models
-                    .iter()
-                    .position(|available| available == model)
-            })
-            .map(|index| index + 1)
-            .unwrap_or_default();
-        let on_preferred = cx.listener(
-            |this, event: &components::SelectDropdownEvent, _window, cx| {
-                this.handle_apply_model_select(ApplyModelPicker::Preferred, *event, cx);
-            },
-        );
-        let preferred = components::select_dropdown(
-            "apply-preferred-model",
-            &preferred_labels,
-            preferred_index,
-            editor.open_picker == Some(ApplyModelPicker::Preferred),
-            move |event, window, cx| on_preferred(&event, window, cx),
-        );
-
-        let mut target_options = vec![raw(k::GATEWAY_APPLY_FALLBACK_PASSTHROUGH).to_string()];
-        target_options.extend(editor.available_models.iter().cloned());
-        let target_labels = target_options
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        let fallback_index = editor
-            .fallback_model
-            .as_ref()
-            .and_then(|model| {
-                editor
-                    .available_models
-                    .iter()
-                    .position(|available| available == model)
-            })
-            .map(|index| index + 1)
-            .unwrap_or_default();
-        let on_fallback = cx.listener(
-            |this, event: &components::SelectDropdownEvent, _window, cx| {
-                this.handle_apply_model_select(ApplyModelPicker::Fallback, *event, cx);
-            },
-        );
-        let fallback = components::select_dropdown(
-            "apply-fallback-model",
-            &target_labels,
-            fallback_index,
-            editor.open_picker == Some(ApplyModelPicker::Fallback),
-            move |event, window, cx| on_fallback(&event, window, cx),
-        );
-
-        let rule_rows = editor
-            .rules
-            .iter()
-            .map(|rule| {
-                let rule_id = rule.id;
-                let target_index = rule
-                    .upstream_model
-                    .as_ref()
-                    .and_then(|model| {
-                        editor
-                            .available_models
-                            .iter()
-                            .position(|available| available == model)
-                    })
-                    .map(|index| index + 1)
-                    .unwrap_or_default();
-                let on_target = cx.listener(
-                    move |this, event: &components::SelectDropdownEvent, _window, cx| {
-                        this.handle_apply_model_select(ApplyModelPicker::Rule(rule_id), *event, cx);
-                    },
-                );
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_end()
-                    .gap_2()
-                    .w_full()
-                    .p_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::inset())
-                    .child(div().flex_1().min_w(px(230.)).child(components::field(
-                        t(k::GATEWAY_APPLY_MAPPING_CLIENT_LABEL),
-                        true,
-                        None,
-                        rule.client_model.clone(),
-                    )))
-                    .child(div().flex_1().min_w(px(230.)).child(components::field(
-                        t(k::GATEWAY_APPLY_MAPPING_TARGET_LABEL),
-                        false,
-                        None,
-                        components::select_dropdown(
-                            SharedString::from(format!("apply-rule-target-{rule_id}")),
-                            &target_labels,
-                            target_index,
-                            editor.open_picker == Some(ApplyModelPicker::Rule(rule_id)),
-                            move |event, window, cx| on_target(&event, window, cx),
-                        ),
-                    )))
-                    .child(
-                        components::icon_button_tone(
-                            SharedString::from(format!("apply-rule-delete-{rule_id}")),
-                            t(k::GATEWAY_APPLY_ACTION_REMOVE_MAPPING),
-                            IconName::Trash,
-                            ButtonTone::Ghost,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.remove_apply_model_rule(rule_id, cx);
-                            },
-                        )),
-                    )
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
-
-        let applying = self.applying.is_some();
-        components::modal_overlay(
-            components::modal_card()
-                .w(px(720.))
-                .max_h(px(720.))
-                .child(components::modal_header(SharedString::from(tf!(
-                    k::GATEWAY_APPLY_TITLE,
-                    app = crate::app_meta::label(editor.app_type),
-                    station = editor.station_name,
-                ))))
-                .child(
-                    components::modal_body()
-                        .id("station-apply-body")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .gap_5()
-                        .child(
-                            div()
-                                .text_color(theme::subtext())
-                                .text_sm()
-                                .child(t(k::GATEWAY_APPLY_DESCRIPTION)),
-                        )
-                        .child(components::field(
-                            t(k::GATEWAY_APPLY_MODELS_LABEL),
-                            false,
-                            Some(t(k::GATEWAY_APPLY_MODELS_HELP)),
-                            model_picker,
-                        ))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .flex_wrap()
-                                .gap_3()
-                                .w_full()
-                                .child(div().flex_1().min_w(px(260.)).child(components::field(
-                                    t(k::GATEWAY_APPLY_PREFERRED_LABEL),
-                                    false,
-                                    Some(t(k::GATEWAY_APPLY_PREFERRED_HELP)),
-                                    preferred,
-                                )))
-                                .child(div().flex_1().min_w(px(260.)).child(components::field(
-                                    t(k::GATEWAY_APPLY_FALLBACK_LABEL),
-                                    false,
-                                    Some(t(k::GATEWAY_APPLY_FALLBACK_HELP)),
-                                    fallback,
-                                ))),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .flex_wrap()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .child(section_title(
-                                    t(k::GATEWAY_APPLY_MAPPING_TITLE),
-                                    t(k::GATEWAY_APPLY_MAPPING_DESCRIPTION),
-                                ))
-                                .child(
-                                    components::button(
-                                        "apply-rule-add",
-                                        t(k::GATEWAY_APPLY_ACTION_ADD_MAPPING),
-                                        ButtonTone::Neutral,
-                                        ButtonSize::Sm,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _event, _window, cx| {
-                                            this.add_apply_model_rule(cx);
-                                        },
-                                    )),
-                                ),
-                        )
-                        .children(rule_rows)
-                        .when(editor.rules.is_empty(), |body| {
-                            body.child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(t(k::GATEWAY_APPLY_MAPPING_EMPTY)),
-                            )
-                        })
-                        .when_some(editor.rules_error.clone(), |body, error| {
-                            body.child(div().text_color(theme::red()).text_xs().child(error))
-                        }),
-                )
-                .child(components::modal_footer(vec![
-                    components::button(
-                        "station-apply-cancel",
-                        t(k::GATEWAY_APPLY_ACTION_CANCEL),
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.close_apply_editor(cx);
-                    }))
-                    .into_any_element(),
-                    if applying {
-                        components::disabled_button(
-                            "station-apply-confirm",
-                            t(k::GATEWAY_STATUS_APPLYING_SHORT),
-                            ButtonTone::Primary,
-                            ButtonSize::Sm,
-                            true,
-                        )
-                        .into_any_element()
-                    } else {
-                        components::button(
-                            "station-apply-confirm",
-                            t(k::GATEWAY_APPLY_ACTION_APPLY),
-                            ButtonTone::Primary,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.confirm_apply_station(cx);
-                        }))
-                        .into_any_element()
-                    },
-                ])),
-        )
-        .into_any_element()
-    }
-
     fn render_station(&self, station: &RelayStation, cx: &mut Context<Self>) -> gpui::AnyElement {
         let enabled = station.is_enabled();
         let route_id = station.route.id.clone();
@@ -2825,53 +1963,6 @@ impl GatewayView {
             .channels
             .iter()
             .any(|channel| channel.imported_from.is_some());
-
-        let app_buttons: Vec<gpui::AnyElement> = apply::supported_apps()
-            .iter()
-            .copied()
-            .filter(|app| self.enabled_apps.contains(app))
-            .map(|app_type| {
-                let active = self
-                    .active_station_apps
-                    .contains(&(app_type, station.route.id.clone()));
-                let busy = self.applying.is_some();
-                let compatible = station.supports_app(app_type);
-                let button = components::button(
-                    SharedString::from(format!(
-                        "station-apply-{}-{}",
-                        station.route.id,
-                        app_type.as_str()
-                    )),
-                    if active {
-                        SharedString::from(tf!(
-                            k::GATEWAY_CARD_SYNC,
-                            app = crate::app_meta::label(app_type)
-                        ))
-                    } else {
-                        crate::app_meta::label(app_type)
-                    },
-                    if active {
-                        ButtonTone::Neutral
-                    } else {
-                        ButtonTone::Primary
-                    },
-                    ButtonSize::Sm,
-                );
-                if busy || !enabled || !compatible {
-                    button
-                        .cursor_not_allowed()
-                        .opacity(components::DISABLED_OPACITY)
-                        .into_any_element()
-                } else {
-                    let route_id = route_id.clone();
-                    button
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.open_apply_editor(route_id.clone(), app_type, cx);
-                        }))
-                        .into_any_element()
-                }
-            })
-            .collect();
 
         let editing = self
             .editor
@@ -3027,23 +2118,6 @@ impl GatewayView {
                                 )),
                             ),
                     ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .pt_1()
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .mr_1()
-                            .child(t(k::GATEWAY_CARD_APPLY_TO)),
-                    )
-                    .children(app_buttons),
             )
             .into_any_element()
     }
@@ -4077,9 +3151,6 @@ impl Render for GatewayView {
                 ),
                 &self.list_state,
             ))
-            .when_some(self.apply_editor.as_ref(), |root, editor| {
-                root.child(self.render_apply_editor(editor, cx))
-            })
             .when_some(self.delete_blocked.clone(), |root, (name, apps)| {
                 let labels = apps
                     .iter()

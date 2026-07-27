@@ -561,7 +561,7 @@ impl Database {
                                 [],
                             )
                             .map_err(|e| {
-                                AppError::Database(format!("为转发站渠道添加端点分组失败: {e}"))
+                                AppError::Database(format!("为中转渠道添加端点分组失败: {e}"))
                             })?;
                         }
                         if Self::table_exists(conn, "gateway_routes")?
@@ -572,7 +572,7 @@ impl Database {
                                 [],
                             )
                             .map_err(|e| {
-                                AppError::Database(format!("为转发站添加官网地址失败: {e}"))
+                                AppError::Database(format!("为中转添加官网地址失败: {e}"))
                             })?;
                         }
                         Self::set_user_version(conn, 8)?;
@@ -586,7 +586,7 @@ impl Database {
                                 [],
                             )
                             .map_err(|e| {
-                                AppError::Database(format!("为应用转发站绑定添加模型策略失败: {e}"))
+                                AppError::Database(format!("为应用中转绑定添加模型策略失败: {e}"))
                             })?;
                         }
                         Self::set_user_version(conn, 9)?;

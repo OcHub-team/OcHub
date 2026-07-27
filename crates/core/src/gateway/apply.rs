@@ -18,12 +18,13 @@ use crate::gateway::types::{
     GatewayRoute,
 };
 use crate::model::{ClaudeDesktopModelRoute, Provider, ProviderMeta};
+use crate::provider_config::{self, FormValues, Severity};
 use crate::services::provider::ProviderService;
 
 /// Fixed provider id for gateway entries (per app list).
 pub const GATEWAY_PROVIDER_ID: &str = "local-gateway";
 #[cfg(test)]
-const GATEWAY_PROVIDER_NAME: &str = "OcHub 转发站模式";
+const GATEWAY_PROVIDER_NAME: &str = "OcHub 中转模式";
 pub const STATION_ROUTE_PREFIX: &str = "station:";
 
 /// Stable provider id for one relay station. Hex encoding makes arbitrary
@@ -213,9 +214,9 @@ pub fn activate_route_for_app(
     let route = state
         .db
         .get_gateway_route_by_id(route_id)?
-        .ok_or_else(|| AppError::InvalidInput("找不到转发站配置".to_string()))?;
+        .ok_or_else(|| AppError::InvalidInput("找不到中转配置".to_string()))?;
     if !route.enabled {
-        return Err(AppError::InvalidInput("该转发站配置已停用".to_string()));
+        return Err(AppError::InvalidInput("该中转配置已停用".to_string()));
     }
     if route
         .app_type
@@ -223,7 +224,7 @@ pub fn activate_route_for_app(
         .is_some_and(|bound| bound != app_type.as_str())
     {
         return Err(AppError::InvalidInput(
-            "该转发站配置不适用于当前应用".to_string(),
+            "该中转配置不适用于当前应用".to_string(),
         ));
     }
     ensure_key_for_route(state, app_type.as_str(), Some(route_id))
@@ -500,9 +501,7 @@ pub fn apply_to_app(
         .iter()
         .any(|channel| channel.enabled)
     {
-        return Err(AppError::InvalidInput(
-            "请先添加并启用一个转发站".to_string(),
-        ));
+        return Err(AppError::InvalidInput("请先添加并启用一个中转".to_string()));
     }
     let mut station_routes: Vec<GatewayRoute> = state
         .db
@@ -511,17 +510,13 @@ pub fn apply_to_app(
         .filter(|route| route.enabled && route.id.starts_with(STATION_ROUTE_PREFIX))
         .collect();
     let route = match station_routes.len() {
-        0 => {
-            return Err(AppError::InvalidInput(
-                "请先添加并启用一个转发站".to_string(),
-            ))
-        }
+        0 => return Err(AppError::InvalidInput("请先添加并启用一个中转".to_string())),
         1 => station_routes.remove(0),
         // Refuse to pick one implicitly: which station wins would depend on DB
         // ordering, and a silent wrong pick is worse than asking the user.
         _ => {
             return Err(AppError::InvalidInput(
-                "存在多个已启用的转发站，请在转发站页面选择要应用的一个".to_string(),
+                "存在多个已启用的中转，请在中转页面选择要应用的一个".to_string(),
             ))
         }
     };
@@ -537,14 +532,12 @@ fn station_route_for_apply(
     let route = state
         .db
         .get_gateway_route_by_id(station_route_id)?
-        .ok_or_else(|| AppError::InvalidInput("找不到转发站配置".to_string()))?;
+        .ok_or_else(|| AppError::InvalidInput("找不到中转配置".to_string()))?;
     if !route.enabled {
-        return Err(AppError::InvalidInput("该转发站配置已停用".to_string()));
+        return Err(AppError::InvalidInput("该中转配置已停用".to_string()));
     }
     if !route.id.starts_with(STATION_ROUTE_PREFIX) {
-        return Err(AppError::InvalidInput(
-            "选择的配置不是转发站配置".to_string(),
-        ));
+        return Err(AppError::InvalidInput("选择的配置不是中转配置".to_string()));
     }
     let channels = state.db.get_gateway_channels()?;
     let enabled_channels: Vec<&GatewayChannel> = channels
@@ -552,16 +545,14 @@ fn station_route_for_apply(
         .filter(|channel| channel.enabled && route.channel_ids.contains(&channel.id))
         .collect();
     if enabled_channels.is_empty() {
-        return Err(AppError::InvalidInput(
-            "转发站没有可用的服务地址".to_string(),
-        ));
+        return Err(AppError::InvalidInput("中转没有可用的服务地址".to_string()));
     }
     if !enabled_channels
         .iter()
         .any(|channel| dialect_compatible(channel.dialect, app_type))
     {
         return Err(AppError::InvalidInput(format!(
-            "无法应用到 {}：「{}」是 OpenAI Chat 格式的转发站，暂不支持该应用",
+            "无法应用到 {}：「{}」是 OpenAI Chat 格式的中转，暂不支持该应用",
             app_label(app_type),
             route.name
         )));
@@ -593,6 +584,243 @@ pub fn apply_station_to_app_with_policy(
     policy.validate().map_err(AppError::InvalidInput)?;
     let route = station_route_for_apply(state, app_type, station_route_id)?;
     apply_route_to_app(state, app_type, base_url, route, Some(policy))
+}
+
+// ---- Station-sourced channels (provider editor "relay station" source) -------
+
+/// One relay station the provider editor can offer as a channel source.
+#[derive(Debug, Clone, Serialize)]
+pub struct StationChannelOption {
+    pub route_id: String,
+    pub name: String,
+    /// Exact upstream model ids the station declares, for model pickers.
+    pub models: Vec<String>,
+}
+
+/// Relay stations able to serve `app_type`, for the channel editor's station
+/// picker. Disabled, empty, or dialect-incompatible stations are skipped —
+/// they would fail at save time anyway, so offering them is just noise.
+pub fn station_channel_options(
+    state: &AppState,
+    app_type: AppType,
+) -> Result<Vec<StationChannelOption>, AppError> {
+    let channels = state.db.get_gateway_channels()?;
+    let mut options = Vec::new();
+    for route in state.db.get_gateway_routes()? {
+        if !route.enabled || !route.id.starts_with(STATION_ROUTE_PREFIX) {
+            continue;
+        }
+        let enabled_channels: Vec<&GatewayChannel> = channels
+            .iter()
+            .filter(|channel| channel.enabled && route.channel_ids.contains(&channel.id))
+            .collect();
+        if enabled_channels.is_empty()
+            || !enabled_channels
+                .iter()
+                .any(|channel| dialect_compatible(channel.dialect, app_type))
+        {
+            continue;
+        }
+        options.push(StationChannelOption {
+            route_id: route.id.clone(),
+            name: route.name.clone(),
+            models: station_models(&route, &channels),
+        });
+    }
+    options.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.route_id.cmp(&b.route_id))
+    });
+    Ok(options)
+}
+
+/// Identity fields for a station-sourced channel, straight from the editor.
+#[derive(Debug, Clone)]
+pub struct StationChannelIdentity {
+    pub id: String,
+    pub name: String,
+    pub website_url: Option<String>,
+    pub category: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// Build (without persisting) a provider that talks to the local gateway and
+/// is routed into `station_route_id`. `values` carries the user's model
+/// fields; every station-managed field is overwritten with the gateway
+/// endpoint + shared station key, so a station channel never stores upstream
+/// credentials of its own. `prior`/`prior_meta` keep unknown keys alive across
+/// edits, exactly like a manual channel save.
+#[allow(clippy::too_many_arguments)]
+pub fn build_station_channel(
+    state: &AppState,
+    app_type: AppType,
+    station_route_id: &str,
+    values: &FormValues,
+    identity: StationChannelIdentity,
+    base_url: &str,
+    prior: &serde_json::Value,
+    prior_meta: Option<&ProviderMeta>,
+) -> Result<Provider, AppError> {
+    let route = station_route_for_apply(state, app_type, station_route_id)?;
+    let key = ensure_key_for_route(
+        state,
+        &gateway_key_label(app_type, &route.id),
+        Some(&route.id),
+    )?;
+    let codec = provider_config::config_for(app_type).ok_or_else(|| {
+        AppError::InvalidInput(format!("{} 暂不支持中转站渠道", app_label(app_type)))
+    })?;
+    let mut merged = values.clone();
+    provider_config::inject_station_endpoint(
+        &mut merged,
+        app_type,
+        base_url,
+        &key.key,
+        &identity.id,
+        &identity.name,
+    );
+    validate_station_channel_models(app_type, &merged)?;
+    if let Some(issue) = codec
+        .validate_for_category(&merged, identity.category.as_deref())
+        .into_iter()
+        .find(|issue| issue.severity == Severity::Error)
+    {
+        return Err(AppError::InvalidInput(issue.message));
+    }
+    let encoded = codec.encode(&merged, prior, prior_meta);
+    let mut settings = encoded.settings_config;
+    if app_type == AppType::Codex {
+        inject_codex_model_catalog(
+            state,
+            &route,
+            &mut settings,
+            provider_config::str_val(&merged, "model"),
+        )?;
+    }
+    let mut meta = encoded.meta.unwrap_or_default();
+    meta.gateway_route_id = Some(route.id.clone());
+    Ok(Provider {
+        id: identity.id,
+        name: identity.name,
+        settings_config: settings,
+        website_url: identity.website_url,
+        category: identity.category,
+        created_at: Some(chrono::Utc::now().timestamp()),
+        sort_index: None,
+        notes: identity.notes,
+        meta: Some(meta),
+        icon: None,
+        icon_color: None,
+    })
+}
+
+/// Re-embed the current gateway origin + shared key into a station channel's
+/// stored settings (e.g. after the listen port changed), returning the
+/// updated `(settings_config, meta)` for the caller to persist.
+pub fn refresh_station_channel_settings(
+    state: &AppState,
+    app_type: AppType,
+    provider: &Provider,
+    base_url: &str,
+) -> Result<(serde_json::Value, Option<ProviderMeta>), AppError> {
+    let route_id = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.gateway_route_id.as_deref())
+        .ok_or_else(|| AppError::InvalidInput("该渠道不关联中转站".to_string()))?;
+    let route = station_route_for_apply(state, app_type, route_id)?;
+    let key = ensure_key_for_route(
+        state,
+        &gateway_key_label(app_type, &route.id),
+        Some(&route.id),
+    )?;
+    let codec = provider_config::config_for(app_type).ok_or_else(|| {
+        AppError::InvalidInput(format!("{} 暂不支持中转站渠道", app_label(app_type)))
+    })?;
+    let mut values = codec.decode(&provider.settings_config, provider.meta.as_ref());
+    provider_config::inject_station_endpoint(
+        &mut values,
+        app_type,
+        base_url,
+        &key.key,
+        &provider.id,
+        &provider.name,
+    );
+    let encoded = codec.encode(&values, &provider.settings_config, provider.meta.as_ref());
+    let mut settings = encoded.settings_config;
+    if app_type == AppType::Codex {
+        inject_codex_model_catalog(
+            state,
+            &route,
+            &mut settings,
+            provider_config::str_val(&values, "model"),
+        )?;
+    }
+    let mut meta = encoded.meta.unwrap_or_default();
+    meta.gateway_route_id = Some(route.id.clone());
+    Ok((settings, Some(meta)))
+}
+
+/// A station channel must pin at least one model: Codex needs its single
+/// `model`, Claude needs the default model or one role filled in.
+fn validate_station_channel_models(app_type: AppType, values: &FormValues) -> Result<(), AppError> {
+    match app_type {
+        AppType::Codex => {
+            if provider_config::str_val(values, "model").trim().is_empty() {
+                return Err(AppError::InvalidInput("请选择要使用的模型。".to_string()));
+            }
+        }
+        AppType::Claude => {
+            let default_model = provider_config::str_val(values, "model").trim();
+            let any_role = values
+                .get("roles")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row.get("model")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|model| !model.trim().is_empty())
+                    })
+                });
+            if default_model.is_empty() && !any_role {
+                return Err(AppError::InvalidInput(
+                    "请至少为默认模型或一个角色选择模型。".to_string(),
+                ));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Codex learns its model picker from `modelCatalog`; the codec only preserves
+/// that key, so station channels populate it with the station's declared
+/// models plus the one the user actually picked.
+fn inject_codex_model_catalog(
+    state: &AppState,
+    route: &GatewayRoute,
+    settings: &mut serde_json::Value,
+    picked_model: &str,
+) -> Result<(), AppError> {
+    let channels = state.db.get_gateway_channels()?;
+    let mut catalog = station_models(route, &channels);
+    let picked = picked_model.trim();
+    if !picked.is_empty() && !catalog.iter().any(|model| model == picked) {
+        catalog.push(picked.to_string());
+    }
+    if catalog.is_empty() {
+        return Ok(());
+    }
+    catalog.sort();
+    catalog.dedup();
+    settings["modelCatalog"] = json!({
+        "models": catalog.iter().map(|model| json!({
+            "model": model,
+            "displayName": model,
+        })).collect::<Vec<_>>()
+    });
+    Ok(())
 }
 
 fn apply_route_to_app(
@@ -655,7 +883,7 @@ fn apply_route_to_app(
         category: Some("gateway".to_string()),
         created_at: Some(chrono::Utc::now().timestamp()),
         sort_index: None,
-        notes: Some("由 OcHub 转发站模式自动管理".to_string()),
+        notes: Some("由 OcHub 中转模式自动管理".to_string()),
         meta: Some(meta),
         icon: None,
         icon_color: None,
@@ -729,7 +957,16 @@ pub fn import_provider_as_channel(
         .ok_or_else(|| AppError::InvalidInput("找不到要导入的连接".to_string()))?;
     if provider.id == GATEWAY_PROVIDER_ID || provider.category.as_deref() == Some("gateway") {
         return Err(AppError::InvalidInput(
-            "转发站模式不能再次导入为转发站".to_string(),
+            "中转模式不能再次导入为中转".to_string(),
+        ));
+    }
+    if provider
+        .meta
+        .as_ref()
+        .is_some_and(|meta| meta.gateway_route_id.is_some())
+    {
+        return Err(AppError::InvalidInput(
+            "中转站渠道指向本地网关，不能导入为上游".to_string(),
         ));
     }
 
@@ -1118,7 +1355,7 @@ mod tests {
 
         let err = apply_to_app(&state, AppType::Claude, "http://127.0.0.1:4180").unwrap_err();
 
-        assert!(err.to_string().contains("多个已启用的转发站"));
+        assert!(err.to_string().contains("多个已启用的中转"));
     }
 
     #[test]
@@ -1129,7 +1366,7 @@ mod tests {
         let err = apply_station_to_app(&state, AppType::Claude, "http://127.0.0.1:4180", &route.id)
             .unwrap_err();
 
-        assert!(err.to_string().contains("不是转发站配置"));
+        assert!(err.to_string().contains("不是中转配置"));
     }
 
     #[test]
@@ -1161,5 +1398,226 @@ mod tests {
             .find(|key| key.name == "generic-client")
             .unwrap();
         assert_eq!(key.route_id.as_deref(), Some("route-generic-client"));
+    }
+
+    fn modeled_station_fixture(state: &AppState, id: &str, dialect: Dialect) -> GatewayRoute {
+        let route = station_fixture(state, id, dialect);
+        let mut channel = state
+            .db
+            .get_gateway_channels()
+            .unwrap()
+            .into_iter()
+            .find(|channel| channel.id == id)
+            .unwrap();
+        channel.models = vec!["claude-sonnet-4-6".into(), "gpt-5.5".into()];
+        state.db.upsert_gateway_channel(&channel).unwrap();
+        route
+    }
+
+    fn identity(id: &str) -> StationChannelIdentity {
+        StationChannelIdentity {
+            id: id.into(),
+            name: format!("渠道 {id}"),
+            website_url: None,
+            category: None,
+            notes: None,
+        }
+    }
+
+    #[test]
+    fn station_channel_options_expose_station_models() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Messages);
+
+        let options = station_channel_options(&state, AppType::Claude).unwrap();
+
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].route_id, route.id);
+        assert_eq!(
+            options[0].models,
+            vec!["claude-sonnet-4-6".to_string(), "gpt-5.5".to_string()]
+        );
+    }
+
+    #[test]
+    fn station_channel_options_skip_disabled_stations() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let mut route = modeled_station_fixture(&state, "alpha", Dialect::Messages);
+        route.enabled = false;
+        state.db.upsert_gateway_route(&route).unwrap();
+
+        assert!(station_channel_options(&state, AppType::Claude)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn build_station_channel_claude_points_at_gateway_with_role_models() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Messages);
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "model", "claude-sonnet-4-6");
+        values.insert(
+            "roles".into(),
+            json!([
+                {"role": "sonnet", "model": "claude-sonnet-4-6", "name": "Sonnet", "one_m": false},
+                {"role": "opus", "model": "gpt-5.5", "name": "", "one_m": false},
+                {"role": "haiku", "model": "", "name": "", "one_m": false},
+                {"role": "fable", "model": "", "name": "", "one_m": false},
+            ]),
+        );
+
+        let provider = build_station_channel(
+            &state,
+            AppType::Claude,
+            &route.id,
+            &values,
+            identity("claude-main"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let env = &provider.settings_config["env"];
+        assert_eq!(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:4180");
+        let key = env["ANTHROPIC_AUTH_TOKEN"].as_str().unwrap();
+        assert!(key.starts_with("rd-"), "expected a gateway key, got {key}");
+        assert!(env.get("ANTHROPIC_API_KEY").is_none());
+        assert_eq!(env["ANTHROPIC_MODEL"], "claude-sonnet-4-6");
+        assert_eq!(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], "claude-sonnet-4-6");
+        assert_eq!(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "gpt-5.5");
+        assert!(env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL").is_none());
+        assert_eq!(
+            provider.meta.as_ref().unwrap().gateway_route_id.as_deref(),
+            Some(route.id.as_str())
+        );
+        // The shared per-(app, station) key exists and is bound to the route.
+        let stored = state
+            .db
+            .get_gateway_keys()
+            .unwrap()
+            .into_iter()
+            .find(|k| k.name == gateway_key_label(AppType::Claude, &route.id))
+            .unwrap();
+        assert_eq!(stored.route_id.as_deref(), Some(route.id.as_str()));
+        assert_eq!(stored.key, key);
+        // A normal channel: not flagged as the auto-managed gateway entry.
+        assert!(!provider.is_local_gateway());
+    }
+
+    #[test]
+    fn build_station_channel_codex_writes_toml_and_model_catalog() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "model", "gpt-5.5");
+        provider_config::set_str(&mut values, "reasoning_effort", "high");
+
+        let provider = build_station_channel(
+            &state,
+            AppType::Codex,
+            &route.id,
+            &values,
+            identity("Codex 主力"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let toml = provider.settings_config["config"].as_str().unwrap();
+        assert!(toml.contains("model = \"gpt-5.5\""));
+        assert!(toml.contains("model_reasoning_effort = \"high\""));
+        assert!(toml.contains("model_provider = \"codex\""));
+        assert!(toml.contains("base_url = \"http://127.0.0.1:4180/v1\""));
+        assert!(toml.contains("wire_api = \"responses\""));
+        assert!(toml.contains("experimental_bearer_token = \"rd-"));
+        assert!(toml.contains("disable_response_storage = true"));
+        let catalog = provider.settings_config["modelCatalog"]["models"]
+            .as_array()
+            .unwrap();
+        assert!(catalog.iter().any(|m| m["model"] == "gpt-5.5"));
+        assert!(catalog.iter().any(|m| m["model"] == "claude-sonnet-4-6"));
+        assert_eq!(
+            provider.meta.as_ref().unwrap().gateway_route_id.as_deref(),
+            Some(route.id.as_str())
+        );
+    }
+
+    #[test]
+    fn build_station_channel_requires_a_model() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
+
+        let err = build_station_channel(
+            &state,
+            AppType::Codex,
+            &route.id,
+            &FormValues::new(),
+            identity("codex-x"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("模型"));
+    }
+
+    #[test]
+    fn build_station_channel_rejects_unknown_station() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+
+        let err = build_station_channel(
+            &state,
+            AppType::Claude,
+            "station:missing",
+            &FormValues::new(),
+            identity("claude-x"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("找不到中转配置"));
+    }
+
+    #[test]
+    fn refresh_station_channel_settings_rewrites_origin_and_keeps_models() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Messages);
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "model", "claude-sonnet-4-6");
+        let provider = build_station_channel(
+            &state,
+            AppType::Claude,
+            &route.id,
+            &values,
+            identity("claude-main"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let (settings, meta) = refresh_station_channel_settings(
+            &state,
+            AppType::Claude,
+            &provider,
+            "http://127.0.0.1:5000",
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings["env"]["ANTHROPIC_BASE_URL"],
+            "http://127.0.0.1:5000"
+        );
+        assert_eq!(settings["env"]["ANTHROPIC_MODEL"], "claude-sonnet-4-6");
+        assert_eq!(
+            meta.unwrap().gateway_route_id.as_deref(),
+            Some(route.id.as_str())
+        );
     }
 }

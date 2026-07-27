@@ -1260,6 +1260,18 @@ impl AppRoot {
             self.connect_local_gateway(id, cx);
             return;
         }
+        // Station-sourced channels re-embed the live gateway origin + key
+        // before switching, so a changed listen port never strands them.
+        if self
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .and_then(|provider| provider.meta.as_ref())
+            .is_some_and(|meta| meta.gateway_route_id.is_some())
+        {
+            self.switch_station_channel(id, cx);
+            return;
+        }
         if self.provider_action_in_flight {
             return;
         }
@@ -1332,6 +1344,101 @@ impl AppRoot {
                             Self::warnings_summary(&result.warnings),
                             cx,
                         );
+                    }
+                    Err(error) => {
+                        this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error, cx);
+                    }
+                }
+                this.reload(cx);
+                shell_menu::refresh(&this.app, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Switch to a station-sourced channel: refresh its stored endpoint/key
+    /// from the running gateway, then switch. Mirrors `connect_local_gateway`
+    /// (gateway implied-running, no drift prompt — the refresh regenerates
+    /// the managed part of the config anyway).
+    fn switch_station_channel(&mut self, provider_id: String, cx: &mut Context<Self>) {
+        if self.provider_action_in_flight {
+            return;
+        }
+        let name = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .map(|provider| provider.name.clone())
+            .unwrap_or_else(|| provider_id.clone());
+        self.provider_action_in_flight = true;
+        self.notify_info(t(k::SHELL_GATEWAY_SWITCHING), cx);
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let prepare_app = app.clone();
+            let prepare = cx
+                .background_spawn(async move {
+                    let mut config = prepare_app
+                        .db
+                        .get_gateway_config()
+                        .map_err(|error| error.to_string())?;
+                    if !config.enabled {
+                        config.enabled = true;
+                        prepare_app
+                            .db
+                            .set_gateway_config(&config)
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok::<(), String>(())
+                })
+                .await;
+            let result = async {
+                prepare?;
+                let status = app
+                    .gateway
+                    .start()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let app_for_write = app.clone();
+                let base_url = status.base_url;
+                let provider_id_for_write = provider_id.clone();
+                cx.background_spawn(async move {
+                    let provider = app_for_write
+                        .db
+                        .get_provider_by_id(&provider_id_for_write, app_type.as_str())
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| "provider disappeared before switch".to_string())?;
+                    let (settings, meta) = apply::refresh_station_channel_settings(
+                        &app_for_write,
+                        app_type,
+                        &provider,
+                        &base_url,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    let mut updated = provider;
+                    updated.settings_config = settings;
+                    updated.meta = meta;
+                    ProviderService::update(
+                        &app_for_write,
+                        app_type,
+                        Some(&provider_id_for_write),
+                        updated,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    ProviderService::switch(&app_for_write, app_type, &provider_id_for_write)
+                        .map_err(|error| error.to_string())
+                })
+                .await
+            }
+            .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(_) => {
+                        this.notify_success(tf!(k::SHELL_PROVIDER_SWITCHED, name = name), cx);
                     }
                     Err(error) => {
                         this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error, cx);
@@ -1565,6 +1672,23 @@ impl AppRoot {
         text
     }
 
+    /// Stations this app could be switched onto: enabled, station-shaped, and
+    /// either unbound or bound to this app.
+    fn eligible_station_routes(&self) -> Vec<&GatewayRoute> {
+        let app = self.selected_app;
+        self.gateway_routes
+            .iter()
+            .filter(|route| {
+                route.enabled
+                    && route.id.starts_with(apply::STATION_ROUTE_PREFIX)
+                    && route
+                        .app_type
+                        .as_deref()
+                        .is_none_or(|bound| bound == app.as_str())
+            })
+            .collect()
+    }
+
     fn connect_local_gateway(&mut self, provider_id: String, cx: &mut Context<Self>) {
         if self.provider_action_in_flight {
             return;
@@ -1584,6 +1708,17 @@ impl AppRoot {
             self.select_section(Section::Gateway, cx);
             return;
         };
+        self.connect_station_route(station_route_id, cx);
+    }
+
+    /// Put this app into relay mode on one station: start the gateway, then
+    /// write the app's config to point at it. This is what creates the managed
+    /// gateway provider the first time, so it is also the entry point offered
+    /// when the app has no relay entry yet.
+    fn connect_station_route(&mut self, station_route_id: String, cx: &mut Context<Self>) {
+        if self.provider_action_in_flight {
+            return;
+        }
         self.provider_action_in_flight = true;
         self.notify_info(t(k::SHELL_GATEWAY_SWITCHING), cx);
         let app = self.app.clone();
@@ -1820,6 +1955,20 @@ impl AppRoot {
             .map(|provider| {
                 let base_url = if provider.is_local_gateway() {
                     SharedString::default()
+                } else if let Some(route_id) = provider
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.gateway_route_id.as_deref())
+                {
+                    // Station-sourced channel: the raw loopback URL means
+                    // nothing to the user — name the station instead.
+                    self.gateway_routes
+                        .iter()
+                        .find(|route| route.id == route_id)
+                        .map(|route| {
+                            SharedString::from(tf!(k::SHELL_GATEWAY_VIA_STATION, name = route.name))
+                        })
+                        .unwrap_or_else(|| SharedString::new_static("—"))
                 } else {
                     let base_url = base_urls.get(&provider.id).cloned().unwrap_or_default();
                     if base_url.is_empty() {
@@ -3194,8 +3343,22 @@ impl AppRoot {
         card
     }
 
+    /// Shown when the app has no relay entry yet. Stations are applied from
+    /// here — the relay page only builds them — so this doubles as the picker
+    /// whenever there is something to pick.
     fn render_gateway_cta(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        components::panel()
+        let stations: Vec<(String, SharedString)> = self
+            .eligible_station_routes()
+            .into_iter()
+            .map(|route| (route.id.clone(), SharedString::from(route.name.clone())))
+            .collect();
+        let has_stations = !stations.is_empty();
+        let lead = if has_stations {
+            t(k::SHELL_GATEWAY_CTA_PICK)
+        } else {
+            t(k::SHELL_GATEWAY_CTA_DESC)
+        };
+        let header = div()
             .flex()
             .flex_row()
             .flex_wrap()
@@ -3203,8 +3366,6 @@ impl AppRoot {
             .justify_between()
             .gap_3()
             .w_full()
-            .px_4()
-            .py_3()
             .child(
                 div()
                     .flex()
@@ -3234,25 +3395,73 @@ impl AppRoot {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(t(k::SHELL_GATEWAY_CTA_TITLE)),
                             )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(t(k::SHELL_GATEWAY_CTA_DESC)),
-                            ),
+                            .child(div().text_color(theme::muted()).text_xs().child(lead)),
                     ),
             )
             .child(
                 components::button(
                     "setup-local-gateway",
-                    t(k::SHELL_ACTION_SETUP_RELAY),
-                    ButtonTone::Primary,
+                    if has_stations {
+                        t(k::SHELL_ACTION_MANAGE_RELAY)
+                    } else {
+                        t(k::SHELL_ACTION_SETUP_RELAY)
+                    },
+                    if has_stations {
+                        ButtonTone::Ghost
+                    } else {
+                        ButtonTone::Primary
+                    },
                     ButtonSize::Sm,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.select_section(Section::Gateway, cx);
                 })),
-            )
+            );
+
+        components::panel()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w_full()
+            .px_4()
+            .py_3()
+            .child(header)
+            .children(stations.into_iter().map(|(route_id, name)| {
+                let switch = components::button(
+                    SharedString::from(format!("cta-station-{route_id}")),
+                    t(k::SHELL_ACTION_SWITCH),
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .aria_label(SharedString::from(tf!(
+                    k::SHELL_ACTION_SWITCH_ARIA,
+                    name = name
+                )))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.connect_station_route(route_id.clone(), cx);
+                }));
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(theme::surface())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_color(theme::text())
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name),
+                    )
+                    .child(switch)
+            }))
     }
 
     fn render_gateway_route_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
