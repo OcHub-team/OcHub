@@ -6,6 +6,10 @@
 </p>
 
 <p align="center">
+  English · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <strong>One native control center for your AI coding tools.</strong>
 </p>
 
