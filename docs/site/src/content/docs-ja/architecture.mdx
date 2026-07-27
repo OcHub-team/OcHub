@@ -5,16 +5,16 @@ sidebar:
   order: 3
 ---
 
-OcHub は GPUI と axum を中心に構築された Rust ワークスペースです。
+OcHub は GPUI とローカルリレーゲートウェイを中心に構築された Rust ワークスペースです。
 
 ## クレート構成
 
 | クレート | 役割 |
 | --- | --- |
 | `ochub-core` | ドメインモデル、SQLite ストレージ、プロバイダー切り替え、クライアント設定の書き込み、同期、MCP、スキル、セッション、使用量、認証 |
-| `ochub-server` | ループバック制御 API とプロセス内リレーゲートウェイ |
 | `ochub-convert` | 対応 API 方言間のリクエスト・レスポンス変換 |
-| `ochub-app` | core と server をホストする GPUI ネイティブデスクトップアプリケーション |
+| `ochub-app` | core とリレーゲートウェイをホストする GPUI ネイティブデスクトップアプリケーション |
+| `ochcli` | ヘッドレス CLI とローカル daemon IPC |
 
 ## プラットフォーム固有の事情
 

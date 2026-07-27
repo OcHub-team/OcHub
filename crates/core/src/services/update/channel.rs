@@ -44,7 +44,7 @@ impl InstallChannel {
         )
     }
 
-    /// A stable identifier for the UI and the control API.
+    /// A stable identifier for user interfaces and serialized output.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MacOsAppBundle => "macos-app",

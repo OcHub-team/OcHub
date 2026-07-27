@@ -23,10 +23,6 @@ run-release:
 qa-app:
     ./scripts/package-qa-app.sh
 
-# 启动 headless 控制服务器（不需要 Xcode/Metal）
-server:
-    cargo run -p ochub-server
-
 # 快速类型检查（全 workspace）
 check:
     cargo check --workspace

@@ -12,13 +12,13 @@
 
 ## 1. 摘要
 
-OcHub 可以在不依赖 GUI 的情况下提供完整的业务配置和运维能力。现有项目已经具备 SQLite 数据层、各应用配置 Codec、Provider/MCP/Skill/Usage/Backup 服务、协议转换网关和本地控制 API，CLI 不需要重新实现这些能力。
+OcHub 可以在不依赖 GUI 的情况下提供完整的业务配置和运维能力。现有项目已经具备 SQLite 数据层、各应用配置 Codec、Provider/MCP/Skill/Usage/Backup 服务和协议转换网关，CLI 不需要重新实现这些能力。
 
 本设计选择以下产品和架构方向：
 
 1. 新增面向用户的 `ochcli` 命令行程序。
-2. 将仍位于 GPUI View 或 HTTP Handler 中的业务流程提取为统一的 Application/Use-case Facade。
-3. GUI、CLI、HTTP API 和 daemon 只负责输入输出适配，共享同一套用例、校验、事务和错误模型。
+2. 将仍位于 GPUI View 中的业务流程提取为统一的 Application/Use-case Facade。
+3. GUI、CLI 和 daemon 只负责输入输出适配，共享同一套用例、校验、事务和错误模型。
 4. 短命令默认优先连接当前 OcHub owner；没有 owner 时可直接加载 core 执行。
 5. Relay Gateway、自动同步、定时备份等常驻能力由 daemon 承担。
 6. 任意时刻只允许一个 owner 修改数据库和外部工具配置文件，避免 GUI、CLI、daemon 竞争写入。
@@ -34,10 +34,9 @@ CLI 的目标是覆盖全部业务能力，不是复制 GUI 的窗口、拖拽�
 | Crate | 当前职责 | CLI 设计中的职责 |
 |---|---|---|
 | `ochub-core` | 领域模型、SQLite、配置读写、业务服务、Gateway | 增加 Application Facade、Mutation Planner、Runtime Coordinator |
-| `ochub-server` | 本地 HTTP 控制 API、独立 headless server | 调用 Facade；保留兼容 API；承载 daemon runtime |
 | `ochub-convert` | Messages、Chat、Responses 协议转换 | 保持独立，由 Gateway 使用 |
 | `ochub-app` | GPUI 桌面界面、系统托盘、主题和桌面交互 | 改为 Facade 的 UI Adapter，不再持有独占业务流程 |
-| `ochcli` | 尚不存在 | 新增；命令解析、交互提示、格式化、IPC Client |
+| `ochcli` | 命令行与本地 daemon IPC | 命令解析、交互提示、格式化、IPC Client |
 
 ### 2.2 当前数据与配置
 
@@ -80,17 +79,13 @@ Switch 模式的活动配置聚焦一个当前 Provider；Additive 模式允许�
 
 ### 2.4 已发现的架构缺口
 
-现有 HTTP API 覆盖面较高，但不能直接视为完整 CLI Backend：
-
 1. Provider 漂移预览与 `preserve/discard/abort` 决策仍由 GUI 流程主导。
 2. Provider 跨应用复制和转换仍包含 View 层逻辑。
-3. 主题持久化、cc-switch 手动迁移、部分定价目录操作没有完整控制 API。
-4. 用户 Manifest 已使用 `AppId`，但 Provider、GUI 和多数 HTTP Handler 仍依赖封闭的 `AppType`。
+3. 主题持久化、cc-switch 手动迁移、部分定价目录操作仍需统一 Facade。
+4. 用户 Manifest 已使用 `AppId`，但 Provider 和 GUI 仍依赖封闭的 `AppType`。
 5. SQLite WAL 不能保护数据库之外的 Claude/Codex 等配置文件。
-6. 当前 control API 使用 loopback、permissive CORS，且没有专用控制鉴权。
-7. 独立 server 在全新数据库上会自动导入 cc-switch；普通 CLI 命令不应有这种隐式副作用。
-8. Deep Link 和部分兼容代码仍有历史应用分支，需要在 CLI Schema 稳定前清理。
-9. 数据库中的历史 profile 兼容数据尚未形成完整产品能力，本设计不将其包装成可用功能。
+6. Deep Link 和部分兼容代码仍有历史应用分支，需要在 CLI Schema 稳定前清理。
+7. 数据库中的历史 profile 兼容数据尚未形成完整产品能力，本设计不将其包装成可用功能。
 
 ## 3. 目标、非目标与原则
 
@@ -180,7 +175,6 @@ GUI 已运行时，用户在终端切换 Provider。CLI 自动连接 GUI 所属�
 | `ochcli` | 用户命令入口 | 通常短生命周期 |
 | `ochubd` | 本地 runtime owner、Gateway 和后台任务 | 常驻，可作为用户级服务 |
 | `ochub` | 现有 GPUI 应用 | 常驻，可成为 runtime owner |
-| `ochub-server` | 现有兼容入口 | 兼容期保留，内部逐步复用 daemon runtime |
 
 初期允许 `ochcli daemon run` 前台启动与 `ochubd` 相同的 runtime，方便开发、容器和进程管理器使用。正式安装包提供 `ochubd`。
 
@@ -222,10 +216,10 @@ GUI 已运行时，用户在终端切换 Provider。CLI 自动连接 GUI 所属�
 ```text
 ┌────────────────────── Adapters ──────────────────────┐
 │                                                      │
-│  GPUI App       ochcli       Control API       IPC │
-│      │              │               │             │  │
-└──────┼──────────────┼───────────────┼─────────────┼──┘
-       └──────────────┴───────────────┴─────────────┘
+│  GPUI App             ochcli             IPC │
+│      │                   │                 │  │
+└──────┼───────────────────┼─────────────────┼──┘
+       └───────────────────┴─────────────────┘
                               │
                   Application / Use-case Facade
                               │
@@ -493,9 +487,8 @@ IPC 使用版本化 JSON Lines Frame：
 - 主版本不兼容时拒绝执行；次版本能力通过 capability negotiation 判断。
 - IPC 消息、日志和 tracing 字段默认脱敏。
 
-现有 HTTP Control API 在兼容期继续存在，但 CLI 不以无鉴权 HTTP 作为首选控制通道。
-
-兼容入口继续默认监听 `127.0.0.1:8787`，兼容期沿用现有 `MS_PORT` 覆盖方式；新 IPC 与 Gateway 的 `127.0.0.1:4180` 数据面是三个不同职责的 endpoint，不得复用端口或混用鉴权。新配置不再增加 `MS_*` 命名，后续使用 `OCHUB_*` 并保留兼容别名。
+OcHub 不提供 TCP HTTP 控制面。IPC 与 Gateway 的 `127.0.0.1:4180`
+数据面职责不同，不得复用 endpoint 或混用鉴权。
 
 ## 8. 变更计划、事务与恢复
 
@@ -1231,7 +1224,6 @@ ochcli migrate ccswitch import
 - OcHub 永不写入 `~/.cc-switch`。
 - 重复导入沿用稳定 ID 和既有覆盖语义，并在计划中展示。
 - 新 CLI/daemon 第一次启动不自动导入。
-- 现有 `ochub-server` 的自动导入行为在兼容窗口中保留并给出 deprecation warning，之后由显式开关控制。
 
 ### 10.13 应用高级命令
 
@@ -1480,8 +1472,6 @@ import:ccswitch
 - IPC Endpoint 目录权限为当前用户专用。
 - Unix Socket 验证 peer UID；Named Pipe 限制当前用户 SID。
 - TCP fallback 使用随机 bearer token，token 文件权限为 0600。
-- Control API 不默认监听非 loopback。
-- permissive CORS 不用于新的 privileged IPC。
 - `owner.json` 不包含 token、Key 或 OAuth 信息。
 
 ### 13.2 文件与路径
@@ -1900,7 +1890,6 @@ CLI 达到“业务全功能”需要满足：
 |---|---|---|
 | CLI 直接复刻 GUI 逻辑 | 长期行为分叉 | 先做 Facade，再开放 mutation |
 | GUI/CLI 同时写配置 | 配置丢失或损坏 | owner + mutation lock + journal |
-| HTTP control 面无鉴权 | 本机恶意网页调用 | IPC 优先；Control API 收紧 CORS/鉴权 |
 | 动态 App 仍被 AppType 限制 | 插件名义支持、实际不可用 | AppId/Capability 作为公共协议 |
 | 自动迁移产生惊讶 | 首次命令修改用户数据 | 新 CLI 显式 migrate |
 | Secret 经 argv/JSON 泄露 | 高安全风险 | stdin/env/file、默认脱敏 |

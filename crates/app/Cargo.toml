@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 ochub-core = { workspace = true }
-ochub-server = { workspace = true }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
 zed-text = { workspace = true }

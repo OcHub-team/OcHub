@@ -53,8 +53,7 @@ pub fn init() -> io::Result<()> {
     Ok(())
 }
 
-/// A handle to the shared runtime, for callers that need to own the blocking
-/// (the control API server thread parks on it for the life of the process).
+/// A handle to the shared runtime for background application services.
 ///
 /// # Panics
 /// If [`init`] has not run. That is a programming error in startup ordering,

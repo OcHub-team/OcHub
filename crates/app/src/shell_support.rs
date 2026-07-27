@@ -211,8 +211,7 @@ pub fn save_window_bounds(bounds: Bounds<Pixels>) {
 
 // ---------------------------------------------------------------------------
 // Single-instance guard — an OS-backed exclusive file lock plus a dedicated
-// loopback activation channel. The lock is independent from the control API,
-// so an unrelated process occupying that port can never masquerade as OcHub.
+// loopback activation channel.
 // ---------------------------------------------------------------------------
 
 fn lock_file_path() -> PathBuf {
@@ -227,7 +226,6 @@ const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(800);
 struct InstanceRecord {
     protocol_version: u8,
     pid: u32,
-    control_port: u16,
     activation_port: u16,
     token: String,
 }
@@ -248,7 +246,6 @@ pub struct ActivationServer {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExistingInstance {
     pub pid: Option<u32>,
-    pub control_port: Option<u16>,
     pub activation_requested: bool,
 }
 
@@ -353,10 +350,7 @@ fn request_native_activation(_pid: u32) -> bool {
     false
 }
 
-fn acquire_single_instance_at(
-    path: PathBuf,
-    control_port: u16,
-) -> std::io::Result<InstanceAcquire> {
+fn acquire_single_instance_at(path: PathBuf) -> std::io::Result<InstanceAcquire> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -376,7 +370,6 @@ fn acquire_single_instance_at(
             let record = InstanceRecord {
                 protocol_version: INSTANCE_PROTOCOL_VERSION,
                 pid: std::process::id(),
-                control_port,
                 activation_port,
                 token: token.clone(),
             };
@@ -396,7 +389,6 @@ fn acquire_single_instance_at(
             });
             Ok(InstanceAcquire::AlreadyRunning(ExistingInstance {
                 pid: record.as_ref().map(|record| record.pid),
-                control_port: record.as_ref().map(|record| record.control_port),
                 activation_requested,
             }))
         }
@@ -405,10 +397,9 @@ fn acquire_single_instance_at(
 }
 
 /// Try to acquire the process-wide OcHub instance lock. A live owner is
-/// contacted through its dedicated activation channel; control API health is
-/// deliberately not involved because that port may belong to another app.
-pub fn acquire_single_instance(control_port: u16) -> std::io::Result<InstanceAcquire> {
-    acquire_single_instance_at(lock_file_path(), control_port)
+/// contacted through its dedicated activation channel.
+pub fn acquire_single_instance() -> std::io::Result<InstanceAcquire> {
+    acquire_single_instance_at(lock_file_path())
 }
 
 // ---------------------------------------------------------------------------
@@ -442,14 +433,13 @@ mod instance_lock_tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("ochub.lock");
         let (_lock, activation_server) =
-            acquired(acquire_single_instance_at(path.clone(), 8787).expect("first instance"));
+            acquired(acquire_single_instance_at(path.clone()).expect("first instance"));
         let mut activation_rx = activation_server.start().expect("activation server");
 
-        let second = acquire_single_instance_at(path, 9999).expect("second instance probe");
+        let second = acquire_single_instance_at(path).expect("second instance probe");
         let InstanceAcquire::AlreadyRunning(existing) = second else {
             panic!("second instance must not acquire the lock");
         };
-        assert_eq!(existing.control_port, Some(8787));
         assert_eq!(existing.pid, Some(std::process::id()));
         assert!(existing.activation_requested);
         assert_eq!(activation_rx.blocking_recv(), Some(()));
@@ -460,28 +450,15 @@ mod instance_lock_tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("ochub.lock");
         let (lock, activation_server) =
-            acquired(acquire_single_instance_at(path.clone(), 8787).expect("first instance"));
+            acquired(acquire_single_instance_at(path.clone()).expect("first instance"));
         drop(activation_server);
         drop(lock);
 
         let (_next_lock, _next_activation_server) =
-            acquired(acquire_single_instance_at(path.clone(), 9191).expect("next instance"));
+            acquired(acquire_single_instance_at(path.clone()).expect("next instance"));
         let record: InstanceRecord =
             serde_json::from_str(&fs::read_to_string(path).expect("read replacement metadata"))
                 .expect("parse replacement metadata");
-        assert_eq!(record.control_port, 9191);
         assert_eq!(record.protocol_version, INSTANCE_PROTOCOL_VERSION);
-    }
-
-    #[test]
-    fn unrelated_control_port_owner_does_not_claim_the_instance_lock() {
-        let blocker = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-            .expect("bind unrelated listener");
-        let occupied_port = blocker.local_addr().expect("unrelated address").port();
-        let temp = tempfile::tempdir().expect("temp dir");
-
-        let result = acquire_single_instance_at(temp.path().join("ochub.lock"), occupied_port)
-            .expect("instance lock must not depend on the control port");
-        assert!(matches!(result, InstanceAcquire::Acquired { .. }));
     }
 }

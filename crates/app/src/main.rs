@@ -2,8 +2,8 @@
 
 //! OcHub desktop application (GPUI).
 //!
-//! Initializes the `ochub-core` `AppState` (SQLite store + services), hosts the
-//! `ochub-server` axum control API in-process on loopback, and renders the GPUI UI.
+//! Initializes the `ochub-core` `AppState` (SQLite store + services) and renders
+//! the GPUI UI.
 
 mod about_view;
 mod app_meta;
@@ -38,8 +38,6 @@ mod usage_view;
 
 use std::borrow::Cow;
 use std::fs;
-use std::io;
-use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -52,7 +50,7 @@ use gpui_platform::application;
 use ochub_core::db::Database;
 use ochub_core::AppState;
 
-use app_ui::{AppRoot, StartupNotice};
+use app_ui::AppRoot;
 use i18n::{k, raw};
 
 struct Assets {
@@ -179,111 +177,12 @@ mod asset_path_tests {
     }
 }
 
-fn control_api_port() -> u16 {
-    parse_control_api_port(std::env::var("MS_PORT").ok().as_deref())
-}
-
-fn parse_control_api_port(value: Option<&str>) -> u16 {
-    value
-        .and_then(|port| port.trim().parse().ok())
-        .filter(|port| *port != 0)
-        .unwrap_or(8787)
-}
-
-/// Reserve the control API port, reporting a degradation rather than a message.
-///
-/// This runs before the UI, so it cannot produce translated text: the notice
-/// names the condition and carries the port and OS error, and the banner
-/// renders it once a locale exists.
-fn bind_control_api(port: u16) -> std::result::Result<TcpListener, StartupNotice> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = TcpListener::bind(addr).map_err(|err| {
-        if err.kind() == io::ErrorKind::AddrInUse {
-            StartupNotice::ControlApiPortInUse { port }
-        } else {
-            StartupNotice::ControlApiBindFailed {
-                port,
-                error: err.to_string(),
-            }
-        }
-    })?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|err| StartupNotice::ControlApiListenerFailed {
-            port,
-            error: err.to_string(),
-        })?;
-    Ok(listener)
-}
-
-/// Spawn gateway autostart and, when available, the already-bound control API
-/// listener on one dedicated tokio runtime. Binding happens synchronously in
-/// [`bind_control_api`], so the UI never mistakes a failed listener for ready.
-fn spawn_app_services(app: Arc<AppState>, control_listener: Option<TcpListener>) -> io::Result<()> {
-    // Parks on the shared runtime rather than building a private one, so the
-    // UI and the server drive their futures on the same reactor.
-    let handle = core_async::handle().clone();
-    std::thread::Builder::new()
-        .name("ochub-server".into())
-        .spawn(move || {
-            handle.block_on(async move {
-                ochub_core::services::pricing_catalog::start_background_pricing_sync(
-                    app.db.clone(),
-                );
-                app.gateway.maybe_autostart().await;
-                if let Some(listener) = control_listener {
-                    if let Err(err) = ochub_server::serve_with_app_on_listener(app, listener).await
-                    {
-                        log::error!("control API server error: {err}");
-                    }
-                }
-            });
-        })
-        .map(|_| ())
-}
-
-#[cfg(test)]
-mod control_api_startup_tests {
-    use super::*;
-
-    #[test]
-    fn invalid_or_ephemeral_configured_ports_fall_back_to_default() {
-        assert_eq!(parse_control_api_port(None), 8787);
-        assert_eq!(parse_control_api_port(Some("")), 8787);
-        assert_eq!(parse_control_api_port(Some("invalid")), 8787);
-        assert_eq!(parse_control_api_port(Some("0")), 8787);
-        assert_eq!(parse_control_api_port(Some(" 9191 ")), 9191);
-    }
-
-    #[test]
-    fn occupied_port_returns_a_degraded_mode_notice() {
-        let blocker = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-            .expect("bind blocking listener");
-        let port = blocker.local_addr().expect("blocking address").port();
-
-        let notice = bind_control_api(port).expect_err("port conflict must be reported");
-        assert_eq!(notice, StartupNotice::ControlApiPortInUse { port });
-        // The notice is deliberately not a sentence, so assert on the one thing
-        // the rendered text must still carry. The port reads the same in every
-        // locale, so this holds whichever one happens to be installed.
-        let message = notice.message();
-        assert!(message.contains(&port.to_string()), "{message}");
-    }
-
-    #[test]
-    fn available_port_is_reserved_before_the_ui_starts() {
-        let probe =
-            TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).expect("bind port probe");
-        let port = probe.local_addr().expect("probe address").port();
-        drop(probe);
-
-        let listener = bind_control_api(port).expect("reserve available port");
-        assert_eq!(
-            listener.local_addr().expect("listener address").port(),
-            port
-        );
-        assert!(TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).is_err());
-    }
+/// Spawn long-running application services on the shared Tokio runtime.
+fn spawn_app_services(app: Arc<AppState>) {
+    core_async::handle().spawn(async move {
+        ochub_core::services::pricing_catalog::start_background_pricing_sync(app.db.clone());
+        app.gateway.maybe_autostart().await;
+    });
 }
 
 /// Whether this process was started by its login item rather than by the user.
@@ -434,8 +333,7 @@ fn main() {
         return;
     }
 
-    let port = control_api_port();
-    let (_instance_lock, mut activation_rx) = match shell_support::acquire_single_instance(port) {
+    let (_instance_lock, mut activation_rx) = match shell_support::acquire_single_instance() {
         Ok(shell_support::InstanceAcquire::Acquired {
             lock,
             activation_server,
@@ -451,10 +349,6 @@ fn main() {
         }
         Ok(shell_support::InstanceAcquire::AlreadyRunning(existing)) => {
             let unknown = || raw(k::STARTUP_INSTANCE_UNKNOWN).to_string();
-            let port = existing
-                .control_port
-                .map(|port| port.to_string())
-                .unwrap_or_else(unknown);
             let pid = existing
                 .pid
                 .map(|pid| pid.to_string())
@@ -464,13 +358,9 @@ fn main() {
             println!(
                 "{}",
                 if existing.activation_requested {
-                    tf!(k::STARTUP_INSTANCE_ACTIVATED, pid = pid, port = port)
+                    tf!(k::STARTUP_INSTANCE_ACTIVATED, pid = pid)
                 } else {
-                    tf!(
-                        k::STARTUP_INSTANCE_ACTIVATION_FAILED,
-                        pid = pid,
-                        port = port
-                    )
+                    tf!(k::STARTUP_INSTANCE_ACTIVATION_FAILED, pid = pid)
                 }
             );
             return;
@@ -478,14 +368,6 @@ fn main() {
         Err(err) => {
             log::error!("failed to acquire single-instance lock: {err}");
             return;
-        }
-    };
-
-    let (control_listener, mut startup_notice) = match bind_control_api(port) {
-        Ok(listener) => (Some(listener), None),
-        Err(notice) => {
-            log::warn!("{}: {}", notice.title(), notice.message());
-            (None, Some(notice))
         }
     };
 
@@ -519,12 +401,7 @@ fn main() {
     let app_state = Arc::new(AppState::new(db));
     app_state.bootstrap();
 
-    if let Err(err) = spawn_app_services(app_state.clone(), control_listener) {
-        log::error!("failed to start application services: {err}");
-        startup_notice = Some(StartupNotice::ServicesUnavailable {
-            error: err.to_string(),
-        });
-    }
+    spawn_app_services(app_state.clone());
 
     application()
         .with_assets(Assets { base: asset_root })
@@ -581,7 +458,6 @@ fn main() {
                 },
                 {
                     let app_state = app_state.clone();
-                    let startup_notice = startup_notice.clone();
                     move |window, cx| {
                         window
                             .observe_window_appearance(|window, cx| {
@@ -599,7 +475,7 @@ fn main() {
                                 cx.refresh_windows();
                             })
                             .detach();
-                        cx.new(|cx| AppRoot::new(app_state.clone(), startup_notice.clone(), cx))
+                        cx.new(|cx| AppRoot::new(app_state.clone(), cx))
                     }
                 },
             );

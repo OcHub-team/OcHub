@@ -154,7 +154,6 @@ just qa-app       # macOS：构建用于验收测试的 /tmp/OCHUB-QA.app
 | Crate | 职责 |
 | --- | --- |
 | `ochub-core` | 领域模型、SQLite 存储、客户端配置、同步、MCP、Skills、会话、用量和认证 |
-| `ochub-server` | 回环控制 API 和本地中继网关 |
 | `ochub-convert` | 在受支持的 API 协议之间转换请求与响应 |
 | `ochub-app` | 原生 GPUI 桌面应用 |
 | `ochcli` | 无界面的命令行工具 |

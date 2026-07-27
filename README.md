@@ -165,7 +165,6 @@ The workspace is split into these main components:
 | Crate | Responsibility |
 | --- | --- |
 | `ochub-core` | Domain model, SQLite storage, client config, sync, MCP, skills, sessions, usage, and auth |
-| `ochub-server` | Loopback control API and local relay gateway |
 | `ochub-convert` | Request and response conversion between supported API dialects |
 | `ochub-app` | Native GPUI desktop application |
 | `ochcli` | Headless command-line interface |

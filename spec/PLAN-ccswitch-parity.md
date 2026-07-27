@@ -159,8 +159,6 @@ destruction; DatabaseUpgrade recovery UI; byte-exact header casing.
 Machine sits behind mitmproxy — every network-touching cargo/git command needs:
 `CARGO_HTTP_CAINFO=$HOME/.mitmproxy/mitmproxy-ca-cert.pem GIT_SSL_CAINFO=$HOME/.mitmproxy/mitmproxy-ca-cert.pem CARGO_NET_GIT_FETCH_WITH_CLI=true`
 
-- Baseline (2026-07-04): `cargo check -p ochub-core -p ochub-server` green.
-- Gate each workstream on `cargo check`; final gate `cargo test -p ochub-core
-  -p ochub-server` vs the recorded baseline, plus `cargo check -p ochub-app`
-  if the Linux GPUI probe succeeds (in flight).
+- Gate each workstream on `cargo check`; final gate `cargo test -p ochub-core`
+  plus `cargo check -p ochub-app` if the Linux GPUI probe succeeds.
 - No commits without explicit ask; work lands as uncommitted diff on `main`.

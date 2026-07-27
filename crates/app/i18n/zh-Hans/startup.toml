@@ -1,25 +1,8 @@
 # Simplified Chinese — startup notices (the reference catalog).
 #
-# The `startup.*` area covers everything said before a window exists:
-# `crates/app/src/main.rs` detects the condition and `crates/app/src/app_ui.rs`
-# renders the banner. Keys are `<area>.<group>.<element>`; sort them
-# alphabetically.
-#
-# Nothing here may be rendered when the notice is constructed. `StartupNotice`
-# carries the condition plus its runtime values, and the banner resolves it per
-# frame, so a notice raised before the locale was installed still follows a
-# later language change.
-#
-# `startup.instance.*` is the exception: those go to the terminal of whoever
-# launched a second copy, so they resolve against the persisted `language`
-# setting — there is no window, and the process exits immediately after.
+# These strings go to the terminal of whoever launched a second copy, so they
+# resolve against the persisted `language` setting before the process exits.
 
-"startup.control_api.bind_failed" = "无法监听 127.0.0.1:{port}：{error}。OcHub 界面与中转仍可使用，但依赖控制 API 的外部集成暂不可用。"
-"startup.control_api.listener_failed" = "无法配置 127.0.0.1:{port} 的监听器：{error}。OcHub 界面与中转仍可使用，但依赖控制 API 的外部集成暂不可用。"
-"startup.control_api.port_in_use" = "端口 {port} 已被其他进程占用。OcHub 界面与中转仍可使用；依赖控制 API 的外部集成暂不可用。请关闭占用程序后重启 OcHub，或使用 MS_PORT 指定其他端口。"
-"startup.control_api.title" = "控制 API 未启动"
-"startup.instance.activated" = "OcHub 已在运行（PID {pid}，控制 API 端口 {port}），已请求显示现有窗口。"
-"startup.instance.activation_failed" = "OcHub 已在运行（PID {pid}，控制 API 端口 {port}），但无法请求显示现有窗口。"
+"startup.instance.activated" = "OcHub 已在运行（PID {pid}），已请求显示现有窗口。"
+"startup.instance.activation_failed" = "OcHub 已在运行（PID {pid}），但无法请求显示现有窗口。"
 "startup.instance.unknown" = "未知"
-"startup.services.failed" = "无法启动 OcHub 后台服务线程：{error}。界面仍可浏览，但控制 API 与中转自动启动均不可用；请重启 OcHub。"
-"startup.services.title" = "后台服务未启动"

@@ -166,8 +166,8 @@ impl Database {
         // The cc-switch import deliberately does *not* run here. It rewrites
         // providers, MCP servers and pricing wholesale, so the GPUI app asks
         // first (see the first-run modal in `app_ui.rs`) and calls
-        // `import_from_ccswitch_source` on confirmation. Headless callers with
-        // nobody to ask opt in explicitly via `auto_import_from_ccswitch`.
+        // `import_from_ccswitch_source` on confirmation. Headless callers can
+        // expose the same explicit choice before importing legacy data.
 
         // Startup cleanup: roll up old usage logs and reclaim space.
         if let Err(e) = db.rollup_and_prune(30) {
@@ -208,27 +208,6 @@ impl Database {
     /// one — i.e. whether this is the user's first launch.
     pub fn created_fresh(&self) -> bool {
         self.created_fresh
-    }
-
-    /// Import cc-switch data on a brand-new database, for callers with no UI to
-    /// ask through. Never overwrites an established install, and a failure is
-    /// logged rather than propagated: an import that does not happen is not a
-    /// reason to refuse to start.
-    pub fn auto_import_from_ccswitch(&self) {
-        if !self.created_fresh {
-            return;
-        }
-        match self.import_from_ccswitch() {
-            Ok(Some(report)) => log::info!(
-                "imported cc-switch data from {} (source version v{}): {} rows across {} tables",
-                report.source_path,
-                report.source_schema_version,
-                report.total_rows(),
-                report.tables.len()
-            ),
-            Ok(None) => {}
-            Err(e) => log::warn!("cc-switch import failed, starting with a fresh database: {e}"),
-        }
     }
 
     pub(crate) fn get_auto_vacuum_mode(conn: &Connection) -> Result<i32, AppError> {

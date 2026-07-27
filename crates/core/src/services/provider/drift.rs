@@ -292,8 +292,7 @@ fn merge_objects(
 // Snapshot store
 // ---------------------------------------------------------------------------
 
-/// Serializes read-modify-write of the store file. The GPUI app and the axum
-/// server share one `AppState` and can both trigger live writes.
+/// Serializes read-modify-write of the store file across in-process callers.
 fn store_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

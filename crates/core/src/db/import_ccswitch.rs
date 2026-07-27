@@ -1,7 +1,6 @@
 //! cc-switch → OcHub 一次性数据导入。
 //!
-//! 由用户在首启弹窗里确认后运行（无界面的 `ochub-server` 则在全新数据库上
-//! 自动运行）。cc-switch 有两代存储，两代都能作为来源：
+//! 由用户在首启弹窗里确认后运行。cc-switch 有两代存储，两代都能作为来源：
 //!
 //! | 来源 | 路径 | 说明 |
 //! | --- | --- | --- |
@@ -172,17 +171,6 @@ const IMPORT_SIDE_FILES: &[&str] = &[
 ];
 
 impl Database {
-    /// 检测并导入，没有可用来源时返回 `Ok(None)`。
-    ///
-    /// 无界面的 `ochub-server` 用这个：没人可问，就在全新数据库上照旧自动
-    /// 导入。GPUI 应用走 [`Self::import_from_ccswitch_source`]，先让用户确认。
-    pub fn import_from_ccswitch(&self) -> Result<Option<ImportReport>, AppError> {
-        let Some(source) = detect_source() else {
-            return Ok(None);
-        };
-        self.import_from_ccswitch_source(&source).map(Some)
-    }
-
     /// 从一份已检测到的 cc-switch 数据一次性导入。
     ///
     /// 所有插入使用 INSERT OR REPLACE，因此对种子数据（官方 provider、内置

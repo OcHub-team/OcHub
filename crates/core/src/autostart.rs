@@ -1,9 +1,7 @@
 //! Login-item registration ("launch at startup").
 //!
-//! This lives in core because two front ends drive the same OS state: the
-//! desktop settings toggle and the control API's `/auto-launch` endpoints. They
-//! used to carry independent copies of the setup, and both copies had the same
-//! macOS bug (see [`launch_target`]).
+//! This lives in core so the desktop settings UI and command-line application
+//! share the same OS-specific implementation.
 //!
 //! Deliberately synchronous: every backend is a file write or a registry write,
 //! and callers need the result before they can report success.

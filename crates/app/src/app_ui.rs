@@ -117,63 +117,6 @@ impl Section {
     }
 }
 
-/// A degradation detected during startup, before any window exists.
-///
-/// Deliberately *not* a rendered sentence. These are constructed before
-/// `i18n::install` has run, and the user can change language afterwards, so a
-/// notice stores only the condition and the runtime values that belong in the
-/// text — the port, the OS error. [`AppRoot::render_startup_notice`] turns that
-/// into prose on every frame, which is what makes the banner follow the
-/// current locale.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StartupNotice {
-    /// The control API port is held by another process.
-    ControlApiPortInUse { port: u16 },
-    /// Binding the control API port failed for any other reason.
-    ControlApiBindFailed { port: u16, error: String },
-    /// The port was bound, but the listener could not be configured.
-    ControlApiListenerFailed { port: u16, error: String },
-    /// The background service thread could not be spawned, so neither the
-    /// control API nor gateway autostart is running.
-    ServicesUnavailable { error: String },
-}
-
-impl StartupNotice {
-    /// The heading, in the current locale.
-    pub fn title(&self) -> SharedString {
-        match self {
-            Self::ControlApiPortInUse { .. }
-            | Self::ControlApiBindFailed { .. }
-            | Self::ControlApiListenerFailed { .. } => t(k::STARTUP_CONTROL_API_TITLE),
-            Self::ServicesUnavailable { .. } => t(k::STARTUP_SERVICES_TITLE),
-        }
-    }
-
-    /// What degraded and what still works, in the current locale.
-    pub fn message(&self) -> String {
-        match self {
-            Self::ControlApiPortInUse { port } => {
-                tf!(k::STARTUP_CONTROL_API_PORT_IN_USE, port = port)
-            }
-            Self::ControlApiBindFailed { port, error } => {
-                tf!(
-                    k::STARTUP_CONTROL_API_BIND_FAILED,
-                    port = port,
-                    error = error
-                )
-            }
-            Self::ControlApiListenerFailed { port, error } => {
-                tf!(
-                    k::STARTUP_CONTROL_API_LISTENER_FAILED,
-                    port = port,
-                    error = error
-                )
-            }
-            Self::ServicesUnavailable { error } => tf!(k::STARTUP_SERVICES_FAILED, error = error),
-        }
-    }
-}
-
 pub struct AppRoot {
     app: Arc<AppState>,
     selected_app: AppType,
@@ -217,9 +160,6 @@ pub struct AppRoot {
     ccswitch_import: Option<DetectedSource>,
     /// Set while the import runs, so the modal cannot be answered twice.
     ccswitch_importing: bool,
-    /// Persistent startup degradation notice, such as a control API port
-    /// conflict. Unlike a toast, this remains visible while the condition lasts.
-    startup_notice: Option<StartupNotice>,
     settings_view: Entity<SettingsView>,
     gateway_view: Entity<GatewayView>,
     mcp_view: Entity<McpView>,
@@ -804,11 +744,7 @@ impl AppRoot {
         .detach();
     }
 
-    pub fn new(
-        app: Arc<AppState>,
-        startup_notice: Option<StartupNotice>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
         let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
         let mcp_view = cx.new(|cx| McpView::new(app.clone(), cx));
@@ -854,7 +790,6 @@ impl AppRoot {
             show_first_run_notice,
             ccswitch_import: None,
             ccswitch_importing: false,
-            startup_notice,
             settings_view,
             gateway_view,
             mcp_view,
@@ -3790,59 +3725,6 @@ impl AppRoot {
             }
         }
     }
-
-    /// Resolve a startup notice against the current locale.
-    ///
-    /// This runs per frame, so the banner is translated *now* rather than when
-    /// the condition was detected — which for these notices is before the UI,
-    /// and the locale, exist at all.
-    fn render_startup_notice(notice: &StartupNotice) -> impl IntoElement {
-        div()
-            .id("startup-degradation-notice")
-            .flex()
-            .flex_row()
-            .items_start()
-            .gap_3()
-            .px_5()
-            .py_3()
-            .flex_none()
-            .border_b_1()
-            .border_color(theme::yellow().alpha(0.32))
-            .bg(theme::yellow_soft())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w(px(24.))
-                    .h(px(24.))
-                    .flex_none()
-                    .rounded_md()
-                    .bg(theme::yellow().alpha(0.12))
-                    .child(icon(IconName::Diamond, theme::yellow(), 15.)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(notice.title()),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::subtext())
-                            .text_xs()
-                            .child(SharedString::from(notice.message())),
-                    ),
-            )
-    }
 }
 
 impl Render for AppRoot {
@@ -3865,9 +3747,6 @@ impl Render for AppRoot {
             .flex_1()
             .min_w_0()
             .min_h(px(0.))
-            .when_some(self.startup_notice.as_ref(), |content, notice| {
-                content.child(Self::render_startup_notice(notice))
-            })
             .child(self.render_content(cx));
         div()
             .id("app-root")

@@ -5,8 +5,9 @@ reference and read-only import source, not OcHub's runtime source of truth.
 
 ## Crates
 - `ochub-core` (`crates/core`): domain + config + SQLite store + services. No Tauri/GPUI.
-- `ochub-server` (`crates/server`): axum control API + local relay gateway. Depends on `ochub-core`.
-- `ochub-app` (`crates/app`): GPUI UI. Depends on `ochub-core` (+ hosts `ochub-server`).
+- `ochub-convert` (`crates/convert`): request/response conversion for the gateway.
+- `ochub-app` (`crates/app`): GPUI UI. Depends on `ochub-core`.
+- `ochcli` (`crates/cli`): command-line adapter and local daemon IPC.
 
 ## Central state — `AppState` (from `store.rs`)
 ```rust
@@ -19,7 +20,8 @@ pub struct AppState {
 }
 impl AppState { pub fn new(db: Arc<Database>) -> Self }
 ```
-`ochub-server::ServerState` and the GPUI app both hold an `Arc<AppState>`.
+The GPUI app owns an `Arc<AppState>`; the CLI opens the transport-agnostic
+`Application` facade directly or through its local daemon IPC.
 
 ## Provider switching contract (from `commands/provider.rs` → `ProviderService`)
 `ProviderService` lives in `services/provider/mod.rs` (2822 lines) + `live.rs` (1799).
