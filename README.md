@@ -163,17 +163,11 @@ The workspace is split into these main components:
 | `ochub-app` | Native GPUI desktop application |
 | `ochcli` | Headless command-line interface |
 
-## From cc-switch
-
-OcHub is a from-scratch GPUI + axum project inspired by
-[`cc-switch`](https://github.com/farion1231/cc-switch). If you already use
-cc-switch, OcHub can perform a one-time, read-only import from its database or
-legacy config file. It never writes back to `~/.cc-switch/`.
-
-Quit cc-switch before switching providers in OcHub because both applications
-may update the same live tool configuration directories.
-
 ## License
 
 OcHub is licensed under the
 [GNU General Public License v3.0 or later](LICENSE).
+
+OcHub draws inspiration from
+[`cc-switch`](https://github.com/farion1231/cc-switch) and
+[`new-api`](https://github.com/QuantumNous/new-api).
