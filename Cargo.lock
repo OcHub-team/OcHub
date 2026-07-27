@@ -4690,7 +4690,7 @@ dependencies = [
 
 [[package]]
 name = "ochcli"
-version = "0.2.8"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4711,7 +4711,7 @@ dependencies = [
 
 [[package]]
 name = "ochub-app"
-version = "0.2.8"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4741,7 +4741,7 @@ dependencies = [
 
 [[package]]
 name = "ochub-convert"
-version = "0.2.8"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4751,7 +4751,7 @@ dependencies = [
 
 [[package]]
 name = "ochub-core"
-version = "0.2.8"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "auto-launch",
@@ -4796,7 +4796,7 @@ dependencies = [
 
 [[package]]
 name = "ochub-server"
-version = "0.2.8"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arboard",
