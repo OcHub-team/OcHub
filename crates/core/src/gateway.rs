@@ -24,7 +24,7 @@ pub mod server;
 pub mod service;
 pub mod types;
 
-pub use service::GatewayService;
+pub use service::{GatewayService, GatewayStatus};
 pub use types::{
     ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayEndpointTestResult, GatewayKey,
     GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,

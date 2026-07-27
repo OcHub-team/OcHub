@@ -12,6 +12,7 @@ pub mod app_id;
 pub mod app_state;
 pub mod app_store;
 pub mod app_type;
+pub mod application;
 pub mod apps;
 pub mod autostart;
 pub mod db;
@@ -26,11 +27,13 @@ pub mod model;
 pub mod paths;
 pub mod plugin;
 pub mod provider_config;
+pub mod runtime;
 pub mod services;
 pub mod session_manager;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod theme;
 pub mod usage_script;
 pub mod usage_tracking;
 

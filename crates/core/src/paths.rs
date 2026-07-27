@@ -80,6 +80,12 @@ pub fn get_claude_settings_path() -> PathBuf {
 
 /// App config directory (`~/.ochub`, or the store override).
 pub fn get_app_config_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("OCHUB_DATA_DIR") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
     if let Some(custom) = crate::app_store::get_app_config_dir_override() {
         return custom;
     }
@@ -275,6 +281,18 @@ pub fn get_claude_config_status() -> ConfigStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_data_dir_has_precedence_over_store_and_home() {
+        let _guard = crate::test_support::env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        std::env::set_var("OCHUB_TEST_HOME", temp.path());
+        std::env::set_var("OCHUB_DATA_DIR", &data);
+        assert_eq!(get_app_config_dir(), data);
+        std::env::remove_var("OCHUB_DATA_DIR");
+        std::env::remove_var("OCHUB_TEST_HOME");
+    }
 
     #[test]
     fn derive_mcp_path_preserves_folder_name() {

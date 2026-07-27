@@ -23,7 +23,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 $Version = ($Metadata.packages | Where-Object name -eq "ochub-app").version
 
-cargo build --release --locked --target $Target -p ochub-app
+cargo build --release --locked --target $Target -p ochub-app -p ochcli
 if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed"
 }
@@ -33,6 +33,13 @@ $BinaryPath = Join-Path $BinaryDir "ochub.exe"
 & $BinaryPath --version
 if ($LASTEXITCODE -ne 0) {
     throw "release binary smoke test failed"
+}
+
+$CliBinaryPath = Join-Path $BinaryDir "ochcli.exe"
+$DaemonBinaryPath = Join-Path $BinaryDir "ochubd.exe"
+& $CliBinaryPath version
+if ($LASTEXITCODE -ne 0) {
+    throw "CLI release binary smoke test failed"
 }
 
 $CertificateBase64 = $env:WINDOWS_CERTIFICATE_BASE64
@@ -149,5 +156,25 @@ try {
 } finally {
     if (Test-Path $PortableRoot) {
         Remove-Item -LiteralPath $PortableRoot -Recurse -Force
+    }
+}
+
+$CliRoot = Join-Path ([IO.Path]::GetTempPath()) "ochcli-$PID"
+$CliZip = Join-Path $OutPath "OcHub_${Version}_windows_x64_cli.zip"
+try {
+    New-Item -ItemType Directory -Path $CliRoot | Out-Null
+    Copy-Item -LiteralPath $CliBinaryPath -Destination $CliRoot
+    Copy-Item -LiteralPath $DaemonBinaryPath -Destination $CliRoot
+    Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination $CliRoot
+    Copy-Item `
+        -LiteralPath (Join-Path $RepoRoot "docs/CLI-INSTALL.md") `
+        -Destination (Join-Path $CliRoot "README.md")
+    if (Test-Path $CliZip) {
+        Remove-Item -LiteralPath $CliZip -Force
+    }
+    Compress-Archive -Path (Join-Path $CliRoot "*") -DestinationPath $CliZip
+} finally {
+    if (Test-Path $CliRoot) {
+        Remove-Item -LiteralPath $CliRoot -Recurse -Force
     }
 }

@@ -172,6 +172,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.app.tar.gz
+            dist/*_cli.tar.gz
             dist/*.sig
           if-no-files-found: error
           retention-days: 1
@@ -184,6 +185,7 @@ jobs:
           path: |
             dist/*-setup.exe
             dist/*_portable.zip
+            dist/*_cli.zip
             dist/*.sig
           if-no-files-found: error
           retention-days: 1
@@ -196,6 +198,7 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.deb
+            dist/*_cli.tar.gz
             dist/*.sig
           if-no-files-found: error
           retention-days: 1
@@ -228,6 +231,8 @@ jobs:
           test "$(find dist -maxdepth 1 -type f -name '*_portable.zip' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -type f -name '*.AppImage' | wc -l)" -eq 1
           test "$(find dist -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*_cli.tar.gz' | wc -l)" -eq 3
+          test "$(find dist -maxdepth 1 -type f -name '*_cli.zip' | wc -l)" -eq 1
           # Updater payloads: one .app.tar.gz per macOS arch.
           test "$(find dist -maxdepth 1 -type f -name '*.app.tar.gz' | wc -l)" -eq 2
           (

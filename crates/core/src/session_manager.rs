@@ -44,7 +44,7 @@ pub struct SessionMessage {
     pub ts: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteSessionRequest {
     pub provider_id: String,

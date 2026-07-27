@@ -18,6 +18,7 @@ use crate::gateway::types::{ChannelHealth, Dialect, GatewayConfig, GatewayEndpoi
 
 /// Externally visible gateway status.
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStatus {
     pub running: bool,
     pub port: u16,

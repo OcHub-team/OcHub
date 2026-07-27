@@ -169,6 +169,52 @@ impl Database {
         })
     }
 
+    /// Page through the installed LiteLLM catalog. This is a local-only read;
+    /// callers must invoke [`refresh_pricing_catalog`] explicitly to access
+    /// the network.
+    pub fn list_pricing_catalog(
+        &self,
+        query: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<PricingCatalogEntry>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let pattern = format!("%{}%", query.unwrap_or_default().trim());
+        let limit = limit.clamp(1, 1_000);
+        let mut statement = conn
+            .prepare(
+                "SELECT model_key, provider, mode,
+                        input_cost_per_million, output_cost_per_million,
+                        cache_read_cost_per_million, cache_creation_cost_per_million,
+                        special_pricing_fields, source_url
+                 FROM litellm_pricing_catalog
+                 WHERE model_key LIKE ?1 COLLATE NOCASE
+                    OR provider LIKE ?1 COLLATE NOCASE
+                 ORDER BY model_key ASC
+                 LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(|error| AppError::Database(format!("读取 LiteLLM 价格目录失败: {error}")))?;
+        let rows = statement
+            .query_map(params![pattern, limit, offset], |row| {
+                let special: String = row.get(7)?;
+                Ok(PricingCatalogEntry {
+                    model_key: row.get(0)?,
+                    provider: row.get(1)?,
+                    mode: row.get(2)?,
+                    input_cost_per_million: row.get(3)?,
+                    output_cost_per_million: row.get(4)?,
+                    cache_read_cost_per_million: row.get(5)?,
+                    cache_creation_cost_per_million: row.get(6)?,
+                    special_pricing_fields: serde_json::from_str(&special).unwrap_or_default(),
+                    source_url: row.get(8)?,
+                })
+            })
+            .map_err(|error| AppError::Database(format!("读取 LiteLLM 价格目录失败: {error}")))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| AppError::Database(format!("读取 LiteLLM 价格目录失败: {error}")))
+    }
+
     fn replace_pricing_catalog(
         &self,
         snapshot: &PricingCatalogSnapshot,

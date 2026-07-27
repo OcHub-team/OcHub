@@ -37,6 +37,7 @@ pub use hermes::{import_from_hermes, remove_server_from_hermes, sync_single_serv
 pub use opencode::{
     import_from_opencode, remove_server_from_opencode, sync_single_server_to_opencode,
 };
+pub use validation::{extract_server_spec, validate_server_spec};
 
 // Re-export the live MCP-config helpers (cc-switch top-level `claude_mcp.rs`).
 pub use claude_mcp::{

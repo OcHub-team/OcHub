@@ -15,8 +15,9 @@ version="$(
         jq -r '.packages[] | select(.name == "ochub-app") | .version'
 )"
 
-cargo build --release --locked --target "${target}" -p ochub-app
+cargo build --release --locked --target "${target}" -p ochub-app -p ochcli
 "target/${target}/release/ochub" --version
+"target/${target}/release/ochcli" version
 
 # Compile the app icon catalog before packaging. It ships as a bundle resource
 # rather than being copied in afterwards: `cargo packager` signs the bundle it
@@ -55,6 +56,29 @@ archive_app_bundle() {
     # The .app itself is not a release asset; leaving it behind would be
     # uploaded alongside the tarball it duplicates.
     rm -rf "${app_path}"
+}
+
+archive_cli_bundle() {
+    local arch
+    case "${target}" in
+    aarch64-*) arch="aarch64" ;;
+    x86_64-*) arch="x86_64" ;;
+    *)
+        printf 'unsupported target for CLI archive: %s\n' "${target}" >&2
+        exit 1
+        ;;
+    esac
+
+    local staging
+    staging="$(mktemp -d)"
+    mkdir -p "${staging}/ochcli"
+    cp "target/${target}/release/ochcli" "${staging}/ochcli/"
+    cp "target/${target}/release/ochubd" "${staging}/ochcli/"
+    cp "${repo_root}/LICENSE" "${staging}/ochcli/"
+    cp "${repo_root}/docs/CLI-INSTALL.md" "${staging}/ochcli/README.md"
+    tar -czf "${out_dir}/OcHub_${version}_macos_${arch}_cli.tar.gz" \
+        -C "${staging}" ochcli
+    rm -rf "${staging}"
 }
 
 # Fail the release rather than ship a bundle that only *looks* signed.
@@ -190,12 +214,11 @@ config_json="$(
                 { src: $icon_catalog, target: "Assets.car" },
                 { src: $license, target: "LICENSE" }
             ],
-            macos: {
+            macos: ({
                 minimumSystemVersion: "11.0",
-                signingIdentity: $identity,
                 entitlements: $entitlements,
                 infoPlistPath: $info_plist
-            },
+            } + if $identity == "" then {} else { signingIdentity: $identity } end),
             dmg: {
                 windowSize: { width: 660, height: 420 },
                 appPosition: { x: 180, y: 210 },
@@ -233,3 +256,4 @@ if [[ "${notarize}" == true ]]; then
 fi
 
 archive_app_bundle
+archive_cli_bundle

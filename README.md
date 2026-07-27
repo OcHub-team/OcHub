@@ -123,13 +123,16 @@ Download the latest release for your platform from the
 
 | Platform | Available packages |
 | --- | --- |
-| macOS | Apple Silicon and Intel `.dmg` |
-| Windows 10/11 x64 | NSIS installer and portable `.zip` |
-| Linux x64 | AppImage and Debian `.deb` |
+| macOS | Apple Silicon and Intel `.dmg`; headless CLI `.tar.gz` |
+| Windows 10/11 x64 | NSIS installer, portable GUI `.zip`, and headless CLI `.zip` |
+| Linux x64 | AppImage, Debian `.deb`, and headless CLI `.tar.gz` |
 
 Releases include `SHA256SUMS` and a GitHub artifact attestation. Packaging,
 signature verification, and release details live in the
 [release guide](packaging/README.md).
+
+The headless archives contain `ochcli` and `ochubd`. See the included README
+or run `ochcli --help` to configure and operate OcHub without the desktop GUI.
 
 ## Build from source
 

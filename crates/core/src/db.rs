@@ -99,6 +99,11 @@ fn register_db_change_hook(conn: &Connection) {
 }
 
 impl Database {
+    /// Current public OcHub database schema version.
+    pub const fn schema_version() -> i32 {
+        SCHEMA_VERSION
+    }
+
     /// 初始化数据库连接并创建表
     ///
     /// 数据库文件位于 `~/.ochub/ochub.db`。全新数据库若检测到旧的
