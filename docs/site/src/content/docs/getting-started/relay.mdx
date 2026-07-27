@@ -1,6 +1,6 @@
 ---
 title: Configure a relay station
-description: Create a local relay upstream, apply it to a CLI, and verify that requests pass through OcHub.
+description: Create a local relay upstream, switch a CLI onto it, and verify that requests pass through OcHub.
 audience: human
 sidebar:
   order: 2
@@ -33,14 +33,15 @@ tracking.
    check. Reachability does not prove that authentication or a real model
    request will succeed.
 
-6. **Apply it to a tool.** Under **Apply to** on the card, select the target app.
-   Its live configuration will then point to the local gateway.
+6. **Switch a tool onto it.** Open the target app page (Codex, Claude Code, …)
+   and select **Switch** on the station under **Relay mode**. Its live
+   configuration will then point to the local gateway.
 
 </Steps>
 
 ## Switch relay stations
 
-After applying a station once, return to the corresponding app page:
+Stations are switched from the app page as well:
 
 1. In the Relay mode section, choose an enabled station.
 2. Switching now updates only the local route instead of repeatedly rewriting

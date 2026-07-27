@@ -15,9 +15,9 @@ Codex 同时使用 `config.toml` 和 `auth.json`。前者保存模型与 Provide
 
 | 模式 | 账号状态 | 模型请求凭据 | 适用场景 |
 | --- | --- | --- | --- |
-| 仅 API 转发站 | 不要求 ChatGPT 登录 | 转发站 API Key | 完全使用第三方 Responses 上游 |
+| 仅 API 中转 | 不要求 ChatGPT 登录 | 中转 API Key | 完全使用第三方 Responses 上游 |
 | 仅 ChatGPT 账号登录 | 使用 `auth.json` | 官方登录态 | 使用 Codex 官方账号与端点 |
-| ChatGPT 登录 + API 转发站 | 保留 `auth.json` | 转发站 API Key | 需要账号能力，同时把模型请求发往第三方 |
+| ChatGPT 登录 + API 中转 | 保留 `auth.json` | 中转 API Key | 需要账号能力，同时把模型请求发往第三方 |
 
 组合模式中，账号仍由 `auth.json` 管理；模型请求使用当前 Provider 的
 `experimental_bearer_token`。因此看到 `auth.json` 仍然存在是预期行为。
@@ -41,11 +41,11 @@ API Key。第三方上游要求密钥时，仍要在供应商中填写。
 
 4. **填写 Base URL。** 第三方模式通常以 `/v1` 结尾，Codex 会继续拼接 `/responses`。以供应商给出的 Responses 地址为准。
 
-5. **选择鉴权方式并填写 Key。** “仅 API 转发站”和组合模式都会使用转发站 API Key；仅账号登录不会使用该字段。
+5. **选择鉴权方式并填写 Key。** “仅 API 中转”和组合模式都会使用中转 API Key；仅账号登录不会使用该字段。
 
 6. **填写模型。** 使用上游真实支持的模型 ID。需要时再选择 `minimal`、`low`、`medium`、`high` 或 `xhigh` 推理强度。
 
-7. **保持 `wire_api = responses`。** 当前 Codex 不再支持 `chat`；只有 Chat Completions 的上游应通过 OcHub 转发站做接口转换。
+7. **保持 `wire_api = responses`。** 当前 Codex 不再支持 `chat`；只有 Chat Completions 的上游应通过 OcHub 中转做接口转换。
 
 8. **检查预览并切换。** 确认 `config.toml` 中的 Provider ID、Base URL、模型和鉴权模式正确，再保存并切换。
 
@@ -53,9 +53,9 @@ API Key。第三方上游要求密钥时，仍要在供应商中填写。
 
 </Steps>
 
-## 什么时候使用转发站
+## 什么时候使用中转
 
-以下情况优先使用[转发站模式](/zh/getting-started/relay)，不要勉强写成 Codex 直接连接：
+以下情况优先使用[中转模式](/zh/getting-started/relay)，不要勉强写成 Codex 直接连接：
 
 - 上游只支持 OpenAI Chat Completions，不支持 Responses。
 - 需要把 Codex 模型别名改写成上游模型名。
@@ -138,9 +138,9 @@ Codex 支持 OcHub 的 MCP 和技能分发。
 
 | 现象 | 原因方向 | 处理 |
 | --- | --- | --- |
-| 提示 `chat` 已移除 | `wire_api` 或上游只支持 Chat | 改用 Responses，或通过转发站转换 |
+| 提示 `chat` 已移除 | `wire_api` 或上游只支持 Chat | 改用 Responses，或通过中转转换 |
 | Base URL 请求 404 | `/v1` 层级不对 | 核对最终应为 `/v1/responses` |
-| 官方账号仍在但第三方请求 401 | OAuth 不等于第三方 Key | 检查鉴权模式与转发站 API Key |
+| 官方账号仍在但第三方请求 401 | OAuth 不等于第三方 Key | 检查鉴权模式与中转 API Key |
 | 远程压缩失败 | 上游不完整支持 Responses | 关闭远程压缩或改用 Responses 上游 |
 | 切换后模型没变 | 旧 Codex 进程仍在运行 | 退出后重开会话并查看 `config.toml` 预览 |
 | 会话数量异常 | 历史目录或统一历史设置改变 | 核对自定义目录并检查历史备份 |
