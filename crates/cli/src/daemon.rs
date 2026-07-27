@@ -730,6 +730,7 @@ fn checked_command(program: &str, args: &[&str]) -> Result<(), CliError> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn command_stdout(program: &str, args: &[&str]) -> Result<String, CliError> {
     let output = ProcessCommand::new(program).args(args).output()?;
     if !output.status.success() {
