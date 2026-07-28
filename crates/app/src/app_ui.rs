@@ -674,7 +674,14 @@ impl AppRoot {
     /// gate reopened. `skipped_update_version` is the newest release any earlier
     /// check announced, and comparing it against the running build is what
     /// retires the badge once that version is installed.
-    fn seeded_badge(announced: Option<String>) -> Option<SharedString> {
+    ///
+    /// `auto_update_check` is honoured here rather than only at the poll: with
+    /// the switch off there is nothing to seed *from* that the user asked for,
+    /// and a version announced while it was still on must not outlive it.
+    fn seeded_badge(auto_update_check: bool, announced: Option<String>) -> Option<SharedString> {
+        if !auto_update_check {
+            return None;
+        }
         announced
             .filter(|version| ochub_core::services::update::is_newer_than_current(version))
             .map(SharedString::from)
@@ -705,12 +712,26 @@ impl AppRoot {
     /// update lights the badge, and a check that comes back up to date (the
     /// state right after installing) clears it. A page that has not checked
     /// reports `None` and must not clear what the background poll found.
+    ///
+    /// The 自动检查更新 switch lives on that same page, so every notification is
+    /// also the moment to re-read it. Turning it off is a request to stop being
+    /// told about releases, and the dot is a telling — it goes immediately,
+    /// without waiting for a restart, and comes back if the switch does. The
+    /// About row itself still reports whatever a manual check found; only the
+    /// mark that follows the user around the sidebar is withdrawn.
     fn observe_about_update_checks(&self, cx: &mut Context<Self>) {
         cx.observe(&self.about_view, |this, about, cx| {
-            let Some(info) = about.read(cx).last_update_check() else {
+            let settings = ochub_core::settings::get_settings();
+            if !settings.auto_update_check {
+                this.set_available_update(None, cx);
                 return;
+            }
+            let badge = match about.read(cx).last_update_check() {
+                Some(info) => Self::badge_version(&info),
+                // Nothing checked here: fall back to the seed, so re-enabling
+                // the switch restores a dot this observer had cleared.
+                None => Self::seeded_badge(true, settings.skipped_update_version),
             };
-            let badge = Self::badge_version(&info);
             this.set_available_update(badge, cx);
         })
         .detach();
@@ -863,9 +884,10 @@ impl AppRoot {
             provider_list_state: ListState::new(0, ListAlignment::Top, px(512.)),
             provider_drag_state: None,
             sidebar_scroll_handle: ScrollHandle::new(),
-            available_update: Self::seeded_badge(
-                ochub_core::settings::get_settings().skipped_update_version,
-            ),
+            available_update: {
+                let settings = ochub_core::settings::get_settings();
+                Self::seeded_badge(settings.auto_update_check, settings.skipped_update_version)
+            },
         };
         cx.subscribe(
             &this.app_settings_view,
@@ -4025,15 +4047,23 @@ mod update_badge_tests {
         // The daily gate means most launches check nothing; the badge has to
         // survive a restart on the strength of what was already announced.
         assert_eq!(
-            AppRoot::seeded_badge(Some("99.0.0".to_string())).as_deref(),
+            AppRoot::seeded_badge(true, Some("99.0.0".to_string())).as_deref(),
             Some("99.0.0")
         );
     }
 
     #[test]
     fn an_announcement_already_installed_is_not_badged() {
-        assert!(AppRoot::seeded_badge(Some("0.0.1".to_string())).is_none());
-        assert!(AppRoot::seeded_badge(None).is_none());
+        assert!(AppRoot::seeded_badge(true, Some("0.0.1".to_string())).is_none());
+        assert!(AppRoot::seeded_badge(true, None).is_none());
+    }
+
+    #[test]
+    fn turning_off_the_automatic_check_retires_the_badge() {
+        // The switch is a request to stop being told about releases. An
+        // announcement made while it was on must not keep marking 关于 after it
+        // is off, on this launch or any later one.
+        assert!(AppRoot::seeded_badge(false, Some("99.0.0".to_string())).is_none());
     }
 
     #[test]
