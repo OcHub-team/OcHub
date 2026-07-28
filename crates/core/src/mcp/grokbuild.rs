@@ -1,6 +1,6 @@
 //! Grok Build MCP synchronization and import.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::db::legacy_json::{McpApps, McpServer, MultiAppConfig};
 use crate::error::AppError;

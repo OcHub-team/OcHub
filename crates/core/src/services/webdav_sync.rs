@@ -12,17 +12,16 @@ use serde_json::Value;
 
 use crate::error::AppError;
 use crate::services::webdav::{
-    auth_from_credentials, build_remote_url, ensure_remote_directories, get_bytes, head_etag,
-    path_segments, put_bytes, test_connection, WebDavAuth,
+    WebDavAuth, auth_from_credentials, build_remote_url, ensure_remote_directories, get_bytes,
+    head_etag, path_segments, put_bytes, test_connection,
 };
-use crate::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncStatus};
+use crate::settings::{WebDavSyncSettings, WebDavSyncStatus, update_webdav_sync_status};
 
 use super::sync_protocol::{
-    apply_snapshot, build_local_snapshot, effective_db_compat_version, localized,
-    persist_sync_success_best_effort, sha256_hex, validate_artifact_size_limit,
-    validate_manifest_compat, verify_artifact, ArtifactMeta, RemoteLayout, SyncManifest,
-    DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION,
-    REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    ArtifactMeta, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION,
+    REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP, RemoteLayout, SyncManifest, apply_snapshot,
+    build_local_snapshot, effective_db_compat_version, localized, persist_sync_success_best_effort,
+    sha256_hex, validate_artifact_size_limit, validate_manifest_compat, verify_artifact,
 };
 
 pub(crate) mod archive;

@@ -6,14 +6,14 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::{
-    set_str, str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection,
-    FormValues, GridColumn, Language, PreviewFile, SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
+    GridColumn, Language, PreviewFile, SelectOption, set_str, str_val,
 };
-use crate::model::{ClaudeDesktopModelRoute, ProviderMeta};
 use crate::AppType;
+use crate::model::{ClaudeDesktopModelRoute, ProviderMeta};
 
 const AUTH_TOKEN: &str = "token";
 const AUTH_API_KEY: &str = "api_key";

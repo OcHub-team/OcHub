@@ -8,8 +8,8 @@ use crate::app_type::AppType;
 use crate::db::Database;
 use crate::managed_auth::codex_oauth_auth::CodexOAuthManager;
 use crate::managed_auth::copilot_auth::CopilotAuthManager;
-use crate::services::provider::ProviderService;
 use crate::services::UsageCache;
+use crate::services::provider::ProviderService;
 
 /// Global application state shared across the switching layer and writers.
 pub struct AppState {

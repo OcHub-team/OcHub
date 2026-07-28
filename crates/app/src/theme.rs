@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 
-use anyhow::{anyhow, Context as _, Result};
-use gpui::{px, rgb, BoxShadow, Hsla, Rgba, Window, WindowAppearance, WindowBackgroundAppearance};
+use anyhow::{Context as _, Result, anyhow};
+use gpui::{BoxShadow, Hsla, Rgba, Window, WindowAppearance, WindowBackgroundAppearance, px, rgb};
 use ochub_core::settings::ThemeMode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tempfile::NamedTempFile;
 
-use crate::i18n::{k, raw, Key};
+use crate::i18n::{Key, k, raw};
 use crate::tf;
 
 pub const THEME_SCHEMA_VERSION: u32 = 1;
@@ -838,10 +838,10 @@ fn scan_registry() -> ThemeRegistry {
 }
 
 pub fn load_registry() -> Arc<ThemeRegistry> {
-    if let Ok(cache) = REGISTRY_CACHE.read() {
-        if let Some(registry) = cache.as_ref() {
-            return registry.clone();
-        }
+    if let Ok(cache) = REGISTRY_CACHE.read()
+        && let Some(registry) = cache.as_ref()
+    {
+        return registry.clone();
     }
     reload_registry()
 }

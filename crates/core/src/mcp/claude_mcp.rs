@@ -121,11 +121,11 @@ fn ensure_mcp_override_migrated() {
         return;
     }
 
-    if let Some(parent) = new_path.parent() {
-        if let Err(err) = fs::create_dir_all(parent) {
-            log::warn!("创建 MCP 目录失败: {err}");
-            return;
-        }
+    if let Some(parent) = new_path.parent()
+        && let Err(err) = fs::create_dir_all(parent)
+    {
+        log::warn!("创建 MCP 目录失败: {err}");
+        return;
     }
 
     match fs::copy(&legacy_path, &new_path) {

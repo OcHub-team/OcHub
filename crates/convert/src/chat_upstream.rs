@@ -9,7 +9,7 @@
 //! `thinking` blocks are dropped on the request side and streamed reasoning comes
 //! back as unsigned thinking blocks (never replayable upstream).
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::usage::chat_usage_to_messages;
 use crate::util::short_id;
@@ -248,10 +248,10 @@ pub fn request_to_chat(body: &Value, opts: &ChatRequestOptions) -> Result<Value,
                                 }
                             }
                             _ => {
-                                if let Some(t) = block.get("text").and_then(Value::as_str) {
-                                    if !t.is_empty() {
-                                        parts.push(json!({ "type": "text", "text": t }));
-                                    }
+                                if let Some(t) = block.get("text").and_then(Value::as_str)
+                                    && !t.is_empty()
+                                {
+                                    parts.push(json!({ "type": "text", "text": t }));
                                 }
                             }
                         }
@@ -285,10 +285,10 @@ pub fn request_to_chat(body: &Value, opts: &ChatRequestOptions) -> Result<Value,
     if let Some(t) = obj.get("temperature").and_then(Value::as_f64) {
         out.insert("temperature".into(), json!(t));
     }
-    if let Some(stops) = obj.get("stop_sequences").and_then(Value::as_array) {
-        if !stops.is_empty() {
-            out.insert("stop".into(), json!(stops));
-        }
+    if let Some(stops) = obj.get("stop_sequences").and_then(Value::as_array)
+        && !stops.is_empty()
+    {
+        out.insert("stop".into(), json!(stops));
     }
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
@@ -895,11 +895,11 @@ mod tests {
         let mut stop = None;
         for data in &events {
             for out in conv.push_event(None, data) {
-                if let Output::Event(e) = &out {
-                    if e.event.as_deref() == Some("message_delta") {
-                        let v: Value = serde_json::from_str(&e.data).unwrap();
-                        stop = v["delta"]["stop_reason"].as_str().map(str::to_string);
-                    }
+                if let Output::Event(e) = &out
+                    && e.event.as_deref() == Some("message_delta")
+                {
+                    let v: Value = serde_json::from_str(&e.data).unwrap();
+                    stop = v["delta"]["stop_reason"].as_str().map(str::to_string);
                 }
             }
         }

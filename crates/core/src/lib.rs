@@ -43,27 +43,26 @@ pub use app_state::AppState;
 pub use app_type::AppType;
 pub use db::Database;
 pub use deeplink::{
-    import_mcp_from_deeplink, import_provider_from_deeplink, import_skill_from_deeplink,
-    parse_deeplink_url, DeepLinkImportRequest, McpImportError, McpImportResult,
+    DeepLinkImportRequest, McpImportError, McpImportResult, import_mcp_from_deeplink,
+    import_provider_from_deeplink, import_skill_from_deeplink, parse_deeplink_url,
 };
 pub use error::{AppError, Result};
 pub use model::{
-    parse_custom_user_agent, AuthBinding, AuthBindingSource, ClaudeDesktopModelRoute,
-    CodexChatReasoningConfig, Provider, ProviderManager, ProviderMeta, UsageData, UsageResult,
-    UsageScript,
+    AuthBinding, AuthBindingSource, ClaudeDesktopModelRoute, CodexChatReasoningConfig, Provider,
+    ProviderManager, ProviderMeta, UsageData, UsageResult, UsageScript, parse_custom_user_agent,
 };
 pub use services::{
+    BackupInfo, CodexHistoryProviderBucketMigrationOutcome, CodexOfficialHistoryRestoreOutcome,
+    CodexProviderTemplateBucketMigrationOutcome, ConfigService, DailyStats, EndpointLatency,
+    EnvConflict, FetchedModel, LogFilters, McpService, ModelStats, PaginatedLogs,
+    ProviderLimitStatus, ProviderService, ProviderStats, RequestLogDetail, SkillService,
+    SpeedtestService, SwitchResult, UsageCache, UsageSummary, UsageSummaryByApp,
     build_models_url_candidates, check_env_conflicts, delete_env_vars, fetch_models,
     has_codex_official_history_unify_backup,
     maybe_migrate_codex_official_history_to_unified_bucket,
     maybe_migrate_codex_provider_template_bucket,
     maybe_migrate_codex_third_party_history_provider_bucket,
-    restore_codex_official_history_from_backups, restore_env_backup, BackupInfo,
-    CodexHistoryProviderBucketMigrationOutcome, CodexOfficialHistoryRestoreOutcome,
-    CodexProviderTemplateBucketMigrationOutcome, ConfigService, DailyStats, EndpointLatency,
-    EnvConflict, FetchedModel, LogFilters, McpService, ModelStats, PaginatedLogs,
-    ProviderLimitStatus, ProviderService, ProviderStats, RequestLogDetail, SkillService,
-    SpeedtestService, SwitchResult, UsageCache, UsageSummary, UsageSummaryByApp,
+    restore_codex_official_history_from_backups, restore_env_backup,
 };
 
 // Authentication / managed-account subsystem (GitHub Copilot OAuth device flow,

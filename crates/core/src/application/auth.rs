@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::application::{Application, ApplicationError, ApplicationResult};
 use crate::model::{AuthBinding, AuthBindingSource};

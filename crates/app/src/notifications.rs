@@ -7,11 +7,11 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    canvas, div, fill, point, prelude::*, px, size, App, Bounds, ClipboardItem, Context,
-    FontWeight, IntoElement, RenderOnce, Rgba, SharedString, Window,
+    App, Bounds, ClipboardItem, Context, FontWeight, IntoElement, RenderOnce, Rgba, SharedString,
+    Window, canvas, div, fill, point, prelude::*, px, size,
 };
 
-use crate::icons::{icon, IconName};
+use crate::icons::{IconName, icon};
 use crate::theme;
 
 const MAX_VISIBLE: usize = 3;
@@ -353,24 +353,26 @@ impl NotificationHost {
             return;
         }
         self.progress_task_running = true;
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(PROGRESS_TICK).await;
-            let keep_running = this
-                .update(cx, |this, cx| {
-                    let keep_running = this
-                        .visible
-                        .iter()
-                        .any(|notification| notification.countdown_started_at.is_some());
-                    if keep_running {
-                        cx.notify();
-                    } else {
-                        this.progress_task_running = false;
-                    }
-                    keep_running
-                })
-                .unwrap_or(false);
-            if !keep_running {
-                break;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(PROGRESS_TICK).await;
+                let keep_running = this
+                    .update(cx, |this, cx| {
+                        let keep_running = this
+                            .visible
+                            .iter()
+                            .any(|notification| notification.countdown_started_at.is_some());
+                        if keep_running {
+                            cx.notify();
+                        } else {
+                            this.progress_task_running = false;
+                        }
+                        keep_running
+                    })
+                    .unwrap_or(false);
+                if !keep_running {
+                    break;
+                }
             }
         })
         .detach();
@@ -453,7 +455,7 @@ impl NotificationHost {
         &self,
         notification: Notification,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let id = notification.id;
         let (bg, accent, fg, icon_name) = notification.level.colors();
         let element_id = SharedString::from(format!("notification-{id}"));
@@ -611,7 +613,7 @@ impl NotificationHost {
         notification: &Notification,
         layer: usize,
         layer_count: usize,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let (bg, accent, _, _) = notification.level.colors();
         let inset = (layer_count - layer) as f32 * STACK_LAYER_INSET;
         let top = layer as f32 * STACK_LAYER_OFFSET;
@@ -632,7 +634,7 @@ impl NotificationHost {
         &self,
         notifications: Vec<Notification>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let layer_count = notifications.len().saturating_sub(1);
         let mut stack = div()
             .id("notification-stack-collapsed")
@@ -717,8 +719,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        auto_dismiss_timeout, remaining_fraction, NotificationLevel, DEFAULT_TIMEOUT,
-        ERROR_TIMEOUT, MAX_VISIBLE,
+        DEFAULT_TIMEOUT, ERROR_TIMEOUT, MAX_VISIBLE, NotificationLevel, auto_dismiss_timeout,
+        remaining_fraction,
     };
 
     #[test]

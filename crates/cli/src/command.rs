@@ -153,7 +153,7 @@ fn parse_duration(raw: &str) -> Result<Duration, String> {
         _ => {
             return Err(format!(
                 "unsupported duration unit in {raw}; use ms, s, m, or h"
-            ))
+            ));
         }
     };
     Ok(Duration::from_secs_f64(seconds))
@@ -1853,14 +1853,16 @@ mod tests {
         assert!(
             Cli::try_parse_from(["ochcli", "--trace-id", "contains space", "version"]).is_err()
         );
-        assert!(Cli::try_parse_from([
-            "ochcli",
-            "--lang",
-            "zh-CN",
-            "--trace-id",
-            "ci/run-1",
-            "version"
-        ])
-        .is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "ochcli",
+                "--lang",
+                "zh-CN",
+                "--trace-id",
+                "ci/run-1",
+                "version"
+            ])
+            .is_ok()
+        );
     }
 }

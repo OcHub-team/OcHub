@@ -14,7 +14,7 @@ use serde::Serialize;
 use super::hooks::HookRegistry;
 use super::manifest::AppManifest;
 use super::plugin_manifest::{ManifestPlugin, ManifestSource};
-use super::{all_plugins, register_plugin, unregister_plugin, AppPlugin};
+use super::{AppPlugin, all_plugins, register_plugin, unregister_plugin};
 
 /// The directory user manifest plugins live in (`~/.ochub/apps`).
 pub fn user_plugins_dir() -> PathBuf {

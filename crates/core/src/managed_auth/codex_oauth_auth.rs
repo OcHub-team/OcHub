@@ -15,7 +15,7 @@
 //! - Provider 通过 meta.authBinding 关联账号（auth_provider = "codex_oauth"）
 //! - 通过 JWT id_token 提取 chatgpt_account_id 作为账号唯一标识
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -508,10 +508,10 @@ impl CodexOAuthManager {
         // 先检查缓存
         {
             let tokens = self.access_tokens.read().await;
-            if let Some(cached) = tokens.get(account_id) {
-                if !cached.is_expiring_soon() {
-                    return Ok(cached.token.clone());
-                }
+            if let Some(cached) = tokens.get(account_id)
+                && !cached.is_expiring_soon()
+            {
+                return Ok(cached.token.clone());
             }
         }
 
@@ -523,10 +523,10 @@ impl CodexOAuthManager {
         // double-check
         {
             let tokens = self.access_tokens.read().await;
-            if let Some(cached) = tokens.get(account_id) {
-                if !cached.is_expiring_soon() {
-                    return Ok(cached.token.clone());
-                }
+            if let Some(cached) = tokens.get(account_id)
+                && !cached.is_expiring_soon()
+            {
+                return Ok(cached.token.clone());
             }
         }
 
@@ -541,15 +541,15 @@ impl CodexOAuthManager {
         let new_tokens = self.refresh_with_token(&refresh_token).await?;
 
         // 如果服务端返回了新的 refresh_token，更新存储
-        if let Some(new_refresh) = new_tokens.refresh_token.clone() {
-            if new_refresh != refresh_token {
-                let mut accounts = self.accounts.write().await;
-                if let Some(account) = accounts.get_mut(account_id) {
-                    account.refresh_token = new_refresh;
-                }
-                drop(accounts);
-                self.save_to_disk().await?;
+        if let Some(new_refresh) = new_tokens.refresh_token.clone()
+            && new_refresh != refresh_token
+        {
+            let mut accounts = self.accounts.write().await;
+            if let Some(account) = accounts.get_mut(account_id) {
+                account.refresh_token = new_refresh;
             }
+            drop(accounts);
+            self.save_to_disk().await?;
         }
 
         let access_token = new_tokens.access_token.clone();
@@ -762,10 +762,10 @@ impl CodexOAuthManager {
         let stored = self.default_account_id.read().await.clone();
         let accounts = self.accounts.read().await;
 
-        if let Some(id) = stored {
-            if accounts.contains_key(&id) {
-                return Some(id);
-            }
+        if let Some(id) = stored
+            && accounts.contains_key(&id)
+        {
+            return Some(id);
         }
 
         Self::fallback_default_account_id(&accounts)
@@ -857,10 +857,10 @@ impl CodexOAuthManager {
         }
         if let Ok(mut default) = self.default_account_id.try_write() {
             *default = store.default_account_id;
-            if default.is_none() {
-                if let Ok(accounts) = self.accounts.try_read() {
-                    *default = Self::fallback_default_account_id(&accounts);
-                }
+            if default.is_none()
+                && let Ok(accounts) = self.accounts.try_read()
+            {
+                *default = Self::fallback_default_account_id(&accounts);
             }
         }
 
@@ -936,37 +936,37 @@ fn extract_identity_from_tokens(tokens: &OAuthTokenResponse) -> (Option<String>,
     let mut account_id: Option<String> = None;
     let mut email: Option<String> = None;
 
-    if let Some(id_token) = tokens.id_token.as_deref() {
-        if let Some(claims) = parse_jwt_claims(id_token) {
-            account_id = claims
-                .chatgpt_account_id
-                .clone()
-                .or_else(|| {
-                    claims
-                        .openai_auth
-                        .as_ref()
-                        .and_then(|a| a.chatgpt_account_id.clone())
-                })
-                .or_else(|| claims.organizations.first().and_then(|o| o.id.clone()));
-            email = claims.email.clone();
-        }
+    if let Some(id_token) = tokens.id_token.as_deref()
+        && let Some(claims) = parse_jwt_claims(id_token)
+    {
+        account_id = claims
+            .chatgpt_account_id
+            .clone()
+            .or_else(|| {
+                claims
+                    .openai_auth
+                    .as_ref()
+                    .and_then(|a| a.chatgpt_account_id.clone())
+            })
+            .or_else(|| claims.organizations.first().and_then(|o| o.id.clone()));
+        email = claims.email.clone();
     }
 
-    if account_id.is_none() {
-        if let Some(claims) = parse_jwt_claims(&tokens.access_token) {
-            account_id = claims
-                .chatgpt_account_id
-                .clone()
-                .or_else(|| {
-                    claims
-                        .openai_auth
-                        .as_ref()
-                        .and_then(|a| a.chatgpt_account_id.clone())
-                })
-                .or_else(|| claims.organizations.first().and_then(|o| o.id.clone()));
-            if email.is_none() {
-                email = claims.email.clone();
-            }
+    if account_id.is_none()
+        && let Some(claims) = parse_jwt_claims(&tokens.access_token)
+    {
+        account_id = claims
+            .chatgpt_account_id
+            .clone()
+            .or_else(|| {
+                claims
+                    .openai_auth
+                    .as_ref()
+                    .and_then(|a| a.chatgpt_account_id.clone())
+            })
+            .or_else(|| claims.organizations.first().and_then(|o| o.id.clone()));
+        if email.is_none() {
+            email = claims.email.clone();
         }
     }
 

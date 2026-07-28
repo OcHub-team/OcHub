@@ -9,12 +9,12 @@ use crate::settings::{effective_backup_retain_count, get_openclaw_override_dir};
 use chrono::Local;
 use indexmap::IndexMap;
 use json_five::rt::parser::{
-    from_str as rt_from_str, JSONKeyValuePair as RtJSONKeyValuePair,
-    JSONObjectContext as RtJSONObjectContext, JSONText as RtJSONText, JSONValue as RtJSONValue,
-    KeyValuePairContext as RtKeyValuePairContext,
+    JSONKeyValuePair as RtJSONKeyValuePair, JSONObjectContext as RtJSONObjectContext,
+    JSONText as RtJSONText, JSONValue as RtJSONValue, KeyValuePairContext as RtKeyValuePairContext,
+    from_str as rt_from_str,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -563,14 +563,13 @@ fn scan_openclaw_health_from_value(config: &Value) -> Vec<OpenClawHealthWarning>
         .get("tools")
         .and_then(|tools| tools.get("profile"))
         .and_then(Value::as_str)
+        && !OPENCLAW_TOOLS_PROFILES.contains(&profile)
     {
-        if !OPENCLAW_TOOLS_PROFILES.contains(&profile) {
-            warnings.push(warning(
-                "invalid_tools_profile",
-                format!("tools.profile uses unsupported value '{profile}'."),
-                Some("tools.profile"),
-            ));
-        }
+        warnings.push(warning(
+            "invalid_tools_profile",
+            format!("tools.profile uses unsupported value '{profile}'."),
+            Some("tools.profile"),
+        ));
     }
 
     if config
@@ -586,24 +585,24 @@ fn scan_openclaw_health_from_value(config: &Value) -> Vec<OpenClawHealthWarning>
         ));
     }
 
-    if let Some(value) = config.get("env").and_then(|env| env.get("vars")) {
-        if !value.is_object() {
-            warnings.push(warning(
-                "stringified_env_vars",
-                "env.vars should be an object. The current value looks stringified or malformed.",
-                Some("env.vars"),
-            ));
-        }
+    if let Some(value) = config.get("env").and_then(|env| env.get("vars"))
+        && !value.is_object()
+    {
+        warnings.push(warning(
+            "stringified_env_vars",
+            "env.vars should be an object. The current value looks stringified or malformed.",
+            Some("env.vars"),
+        ));
     }
 
-    if let Some(value) = config.get("env").and_then(|env| env.get("shellEnv")) {
-        if !value.is_object() {
-            warnings.push(warning(
-                "stringified_env_shell_env",
-                "env.shellEnv should be an object. The current value looks stringified or malformed.",
-                Some("env.shellEnv"),
-            ));
-        }
+    if let Some(value) = config.get("env").and_then(|env| env.get("shellEnv"))
+        && !value.is_object()
+    {
+        warnings.push(warning(
+            "stringified_env_shell_env",
+            "env.shellEnv should be an object. The current value looks stringified or malformed.",
+            Some("env.shellEnv"),
+        ));
     }
 
     warnings
@@ -914,16 +913,16 @@ mod tests {
         fs::write(&config_path, source).unwrap();
         let old_test_home = std::env::var_os("OCHUB_TEST_HOME");
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("OCHUB_TEST_HOME", temp.path());
-        std::env::set_var("HOME", temp.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", temp.path());
+        crate::test_support::set_var("HOME", temp.path());
         let result = test(&config_path);
         match old_test_home {
-            Some(value) => std::env::set_var("OCHUB_TEST_HOME", value),
-            None => std::env::remove_var("OCHUB_TEST_HOME"),
+            Some(value) => crate::test_support::set_var("OCHUB_TEST_HOME", value),
+            None => crate::test_support::remove_var("OCHUB_TEST_HOME"),
         }
         match old_home {
-            Some(value) => std::env::set_var("HOME", value),
-            None => std::env::remove_var("HOME"),
+            Some(value) => crate::test_support::set_var("HOME", value),
+            None => crate::test_support::remove_var("HOME"),
         }
         result
     }

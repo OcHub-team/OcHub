@@ -5,13 +5,13 @@
 //! worker is spawned on the ambient tokio runtime instead of
 //! `tauri::async_runtime`.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::error::AppError;
 use crate::services::webdav_sync as webdav_sync_service;
@@ -194,9 +194,9 @@ async fn run_worker_loop(db: Arc<crate::db::Database>, mut rx: Receiver<String>)
 #[cfg(test)]
 mod tests {
     use super::{
-        auto_sync_wait_duration, enqueue_change_signal, is_auto_sync_suppressed,
-        should_run_auto_sync, should_trigger_for_table, AutoSyncSuppressionGuard,
-        MAX_AUTO_SYNC_WAIT_MS,
+        AutoSyncSuppressionGuard, MAX_AUTO_SYNC_WAIT_MS, auto_sync_wait_duration,
+        enqueue_change_signal, is_auto_sync_suppressed, should_run_auto_sync,
+        should_trigger_for_table,
     };
     use crate::settings::WebDavSyncSettings;
     use std::time::{Duration, Instant};

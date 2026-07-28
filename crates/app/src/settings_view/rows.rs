@@ -7,14 +7,14 @@
 //! readout (the resolved data directory, the update state) rather than static
 //! copy; search still matches against the static key.
 
-use gpui::{div, prelude::*, AnyElement, Context, SharedString, Window};
+use gpui::{AnyElement, Context, SharedString, Window, div, prelude::*};
 
 use crate::components::ButtonTone;
 use crate::i18n::t;
 use crate::layout;
 
-use super::search::{entry, RowId};
 use super::SettingsView;
+use super::search::{RowId, entry};
 
 /// A switch that flips a boolean and writes immediately.
 pub(super) fn switch(

@@ -18,7 +18,7 @@ use crate::managed_auth::copilot_auth::{
     GitHubDeviceCodeResponse,
 };
 use crate::services::model_fetch::FetchedModel;
-use crate::services::subscription::{query_codex_quota, CredentialStatus, SubscriptionQuota};
+use crate::services::subscription::{CredentialStatus, SubscriptionQuota, query_codex_quota};
 
 const AUTH_PROVIDER_GITHUB_COPILOT: &str = "github_copilot";
 const AUTH_PROVIDER_CODEX_OAUTH: &str = "codex_oauth";

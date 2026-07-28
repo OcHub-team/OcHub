@@ -16,7 +16,7 @@
 //! - Hermes has extra fields: `enabled`, `timeout`, `connect_timeout`, `tools`, `sampling`
 //! - These Hermes-specific fields are preserved on merge-on-write and stripped on import
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::apps::hermes as hermes_config;
@@ -74,26 +74,28 @@ fn convert_to_hermes_format(spec: &Value) -> Result<Value, AppError> {
             if let Some(command) = obj.get("command") {
                 result.insert("command".into(), command.clone());
             }
-            if let Some(args) = obj.get("args") {
-                if args.is_array() && !args.as_array().map(|a| a.is_empty()).unwrap_or(true) {
-                    result.insert("args".into(), args.clone());
-                }
+            if let Some(args) = obj.get("args")
+                && args.is_array()
+                && !args.as_array().map(|a| a.is_empty()).unwrap_or(true)
+            {
+                result.insert("args".into(), args.clone());
             }
-            if let Some(env) = obj.get("env") {
-                if env.is_object() && !env.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-                    result.insert("env".into(), env.clone());
-                }
+            if let Some(env) = obj.get("env")
+                && env.is_object()
+                && !env.as_object().map(|o| o.is_empty()).unwrap_or(true)
+            {
+                result.insert("env".into(), env.clone());
             }
         }
         "sse" | "http" => {
             if let Some(url) = obj.get("url") {
                 result.insert("url".into(), url.clone());
             }
-            if let Some(headers) = obj.get("headers") {
-                if headers.is_object() && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true)
-                {
-                    result.insert("headers".into(), headers.clone());
-                }
+            if let Some(headers) = obj.get("headers")
+                && headers.is_object()
+                && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true)
+            {
+                result.insert("headers".into(), headers.clone());
             }
         }
         _ => {
@@ -130,15 +132,17 @@ fn convert_from_hermes_format(id: &str, spec: &Value) -> Result<Value, AppError>
         if let Some(command) = obj.get("command") {
             result.insert("command".into(), command.clone());
         }
-        if let Some(args) = obj.get("args") {
-            if args.is_array() && !args.as_array().map(|a| a.is_empty()).unwrap_or(true) {
-                result.insert("args".into(), args.clone());
-            }
+        if let Some(args) = obj.get("args")
+            && args.is_array()
+            && !args.as_array().map(|a| a.is_empty()).unwrap_or(true)
+        {
+            result.insert("args".into(), args.clone());
         }
-        if let Some(env) = obj.get("env") {
-            if env.is_object() && !env.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-                result.insert("env".into(), env.clone());
-            }
+        if let Some(env) = obj.get("env")
+            && env.is_object()
+            && !env.as_object().map(|o| o.is_empty()).unwrap_or(true)
+        {
+            result.insert("env".into(), env.clone());
         }
     } else if obj.contains_key("url") {
         // HTTP/SSE type
@@ -147,10 +151,11 @@ fn convert_from_hermes_format(id: &str, spec: &Value) -> Result<Value, AppError>
         if let Some(url) = obj.get("url") {
             result.insert("url".into(), url.clone());
         }
-        if let Some(headers) = obj.get("headers") {
-            if headers.is_object() && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-                result.insert("headers".into(), headers.clone());
-            }
+        if let Some(headers) = obj.get("headers")
+            && headers.is_object()
+            && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true)
+        {
+            result.insert("headers".into(), headers.clone());
         }
     } else {
         return Err(AppError::McpValidation(format!(

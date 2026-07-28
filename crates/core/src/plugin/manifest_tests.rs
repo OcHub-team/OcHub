@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::provider_config::{set_str, str_val, AppConfig};
+use crate::provider_config::{AppConfig, set_str, str_val};
 
 use super::hooks::HookRegistry;
 use super::manifest::AppManifest;
@@ -65,11 +65,13 @@ pub(crate) mod gemini_suite {
         assert_eq!(str_val(&values, "base_url"), "");
         assert_eq!(str_val(&values, "api_key"), "");
         assert_eq!(str_val(&values, "model"), "");
-        assert!(values
-            .get("extra_env")
-            .and_then(Value::as_object)
-            .unwrap()
-            .is_empty());
+        assert!(
+            values
+                .get("extra_env")
+                .and_then(Value::as_object)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     pub(crate) fn decode_empty_object_is_oauth(codec: &dyn AppConfig) {
@@ -186,9 +188,11 @@ pub(crate) mod gemini_suite {
             "{}",
             env_file.content
         );
-        assert!(env_file
-            .content
-            .contains("GOOGLE_GEMINI_BASE_URL=https://gemini.example.com"));
+        assert!(
+            env_file
+                .content
+                .contains("GOOGLE_GEMINI_BASE_URL=https://gemini.example.com")
+        );
         assert!(env_file.content.contains("GEMINI_MODEL=gemini-2.5-pro"));
 
         let settings_file = files
@@ -459,10 +463,12 @@ map = {{ file = "cfg", pointer = "/auth/token", omit_empty = true, trim = true }
     // omit_empty drops an empty value entirely.
     let empty = crate::provider_config::FormValues::new();
     let encoded_empty = codec.encode(&empty, &Value::Null, None);
-    assert!(encoded_empty.settings_config["config"]
-        .as_object()
-        .unwrap()
-        .is_empty());
+    assert!(
+        encoded_empty.settings_config["config"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -612,20 +618,20 @@ store_key = "config"
     fn missing_dir_is_empty() {
         let _guard = crate::test_support::env_lock();
         let home = tempfile::tempdir().unwrap();
-        std::env::set_var("OCHUB_TEST_HOME", home.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", home.path());
 
         let loaded = super::super::loader::load_user_manifests(Arc::new(HookRegistry::new()));
         assert!(loaded.plugins.is_empty());
         assert!(loaded.errors.is_empty());
 
-        std::env::remove_var("OCHUB_TEST_HOME");
+        crate::test_support::remove_var("OCHUB_TEST_HOME");
     }
 
     #[test]
     fn bad_toml_becomes_error_not_panic() {
         let _guard = crate::test_support::env_lock();
         let home = tempfile::tempdir().unwrap();
-        std::env::set_var("OCHUB_TEST_HOME", home.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", home.path());
         let dir = super::super::loader::user_plugins_dir();
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("broken.toml"), "this is not = valid = toml").unwrap();
@@ -635,14 +641,14 @@ store_key = "config"
         assert_eq!(loaded.errors.len(), 1);
         assert!(loaded.errors[0].path.contains("broken.toml"));
 
-        std::env::remove_var("OCHUB_TEST_HOME");
+        crate::test_support::remove_var("OCHUB_TEST_HOME");
     }
 
     #[test]
     fn valid_manifest_registers_and_lists() {
         let _guard = crate::test_support::env_lock();
         let home = tempfile::tempdir().unwrap();
-        std::env::set_var("OCHUB_TEST_HOME", home.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", home.path());
         let dir = super::super::loader::user_plugins_dir();
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("mine.toml"), user_manifest("loadtest-one")).unwrap();
@@ -655,14 +661,14 @@ store_key = "config"
 
         // cleanup
         super::super::unregister_plugin(&id).unwrap();
-        std::env::remove_var("OCHUB_TEST_HOME");
+        crate::test_support::remove_var("OCHUB_TEST_HOME");
     }
 
     #[test]
     fn builtin_id_collision_rejected() {
         let _guard = crate::test_support::env_lock();
         let home = tempfile::tempdir().unwrap();
-        std::env::set_var("OCHUB_TEST_HOME", home.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", home.path());
         let dir = super::super::loader::user_plugins_dir();
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("clash.toml"), user_manifest("claude")).unwrap();
@@ -671,14 +677,14 @@ store_key = "config"
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].path.contains("clash.toml"));
 
-        std::env::remove_var("OCHUB_TEST_HOME");
+        crate::test_support::remove_var("OCHUB_TEST_HOME");
     }
 
     #[test]
     fn duplicate_user_ids_second_errors() {
         let _guard = crate::test_support::env_lock();
         let home = tempfile::tempdir().unwrap();
-        std::env::set_var("OCHUB_TEST_HOME", home.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", home.path());
         let dir = super::super::loader::user_plugins_dir();
         fs::create_dir_all(&dir).unwrap();
         // sorted by filename: a.toml registers, b.toml collides.
@@ -691,6 +697,6 @@ store_key = "config"
 
         let id = crate::app_id::AppId::parse("loadtest-dup").unwrap();
         super::super::unregister_plugin(&id).unwrap();
-        std::env::remove_var("OCHUB_TEST_HOME");
+        crate::test_support::remove_var("OCHUB_TEST_HOME");
     }
 }

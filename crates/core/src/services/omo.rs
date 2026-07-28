@@ -256,10 +256,10 @@ impl OmoService {
         if let Some(agents) = obj.get("agents") {
             settings.insert("agents".to_string(), agents.clone());
         }
-        if v.has_categories {
-            if let Some(categories) = obj.get("categories") {
-                settings.insert("categories".to_string(), categories.clone());
-            }
+        if v.has_categories
+            && let Some(categories) = obj.get("categories")
+        {
+            settings.insert("categories".to_string(), categories.clone());
         }
 
         let other = Self::extract_other_fields_with_keys(&obj, &["agents", "categories"]);
@@ -380,11 +380,11 @@ impl OmoService {
                     Some('*') => {
                         chars.next();
                         while let Some(nc) = chars.next() {
-                            if nc == '*' {
-                                if let Some(&'/') = chars.peek() {
-                                    chars.next();
-                                    break;
-                                }
+                            if nc == '*'
+                                && let Some(&'/') = chars.peek()
+                            {
+                                chars.next();
+                                break;
                             }
                         }
                     }

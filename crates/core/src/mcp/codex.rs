@@ -7,7 +7,7 @@
 //! - 同步到 ~/.codex/config.toml
 //! - JSON 到 TOML 的转换逻辑
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::db::legacy_json::{McpApps, McpConfig, McpServer, MultiAppConfig};
@@ -106,10 +106,10 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, AppError>
                             spec.insert("args".into(), serde_json::Value::Array(arr));
                         }
                     }
-                    if let Some(cwd) = entry_tbl.get("cwd").and_then(|v| v.as_str()) {
-                        if !cwd.trim().is_empty() {
-                            spec.insert("cwd".into(), json!(cwd));
-                        }
+                    if let Some(cwd) = entry_tbl.get("cwd").and_then(|v| v.as_str())
+                        && !cwd.trim().is_empty()
+                    {
+                        spec.insert("cwd".into(), json!(cwd));
                     }
                     if let Some(env_tbl) = entry_tbl.get("env").and_then(|v| v.as_table()) {
                         let mut env_json = serde_json::Map::new();
@@ -255,21 +255,19 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, AppError>
     };
 
     // 1) 处理 mcp.servers
-    if let Some(mcp_val) = root.get("mcp") {
-        if let Some(mcp_tbl) = mcp_val.as_table() {
-            if let Some(servers_val) = mcp_tbl.get("servers") {
-                if let Some(servers_tbl) = servers_val.as_table() {
-                    changed_total += import_servers_tbl(servers_tbl);
-                }
-            }
-        }
+    if let Some(mcp_val) = root.get("mcp")
+        && let Some(mcp_tbl) = mcp_val.as_table()
+        && let Some(servers_val) = mcp_tbl.get("servers")
+        && let Some(servers_tbl) = servers_val.as_table()
+    {
+        changed_total += import_servers_tbl(servers_tbl);
     }
 
     // 2) 处理 mcp_servers
-    if let Some(servers_val) = root.get("mcp_servers") {
-        if let Some(servers_tbl) = servers_val.as_table() {
-            changed_total += import_servers_tbl(servers_tbl);
-        }
+    if let Some(servers_val) = root.get("mcp_servers")
+        && let Some(servers_tbl) = servers_val.as_table()
+    {
+        changed_total += import_servers_tbl(servers_tbl);
     }
 
     Ok(changed_total)
@@ -305,13 +303,12 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), AppError> {
     };
 
     // 4) 清理可能存在的错误格式 [mcp.servers]
-    if let Some(mcp_item) = doc.get_mut("mcp") {
-        if let Some(tbl) = mcp_item.as_table_like_mut() {
-            if tbl.contains_key("servers") {
-                log::warn!("检测到错误的 MCP 格式 [mcp.servers]，正在清理并迁移到 [mcp_servers]");
-                tbl.remove("servers");
-            }
-        }
+    if let Some(mcp_item) = doc.get_mut("mcp")
+        && let Some(tbl) = mcp_item.as_table_like_mut()
+        && tbl.contains_key("servers")
+    {
+        log::warn!("检测到错误的 MCP 格式 [mcp.servers]，正在清理并迁移到 [mcp_servers]");
+        tbl.remove("servers");
     }
 
     // 5) 构造目标 servers 表（稳定的键顺序）
@@ -377,13 +374,12 @@ pub fn sync_single_server_to_codex(
     };
 
     // 清理可能存在的错误格式 [mcp.servers]
-    if let Some(mcp_item) = doc.get_mut("mcp") {
-        if let Some(tbl) = mcp_item.as_table_like_mut() {
-            if tbl.contains_key("servers") {
-                log::warn!("检测到错误的 MCP 格式 [mcp.servers]，正在清理并迁移到 [mcp_servers]");
-                tbl.remove("servers");
-            }
-        }
+    if let Some(mcp_item) = doc.get_mut("mcp")
+        && let Some(tbl) = mcp_item.as_table_like_mut()
+        && tbl.contains_key("servers")
+    {
+        log::warn!("检测到错误的 MCP 格式 [mcp.servers]，正在清理并迁移到 [mcp_servers]");
+        tbl.remove("servers");
     }
 
     // 确保 [mcp_servers] 表存在
@@ -434,12 +430,11 @@ pub fn remove_server_from_codex(id: &str) -> Result<(), AppError> {
     }
 
     // 同时清理可能存在于错误位置的数据：[mcp.servers]（如果存在）
-    if let Some(mcp_table) = doc.get_mut("mcp").and_then(|t| t.as_table_mut()) {
-        if let Some(servers) = mcp_table.get_mut("servers").and_then(|s| s.as_table_mut()) {
-            if servers.remove(id).is_some() {
-                log::warn!("从错误的 MCP 格式 [mcp.servers] 中清理了服务器 '{id}'");
-            }
-        }
+    if let Some(mcp_table) = doc.get_mut("mcp").and_then(|t| t.as_table_mut())
+        && let Some(servers) = mcp_table.get_mut("servers").and_then(|s| s.as_table_mut())
+        && servers.remove(id).is_some()
+    {
+        log::warn!("从错误的 MCP 格式 [mcp.servers] 中清理了服务器 '{id}'");
     }
 
     // 写回文件
@@ -620,10 +615,10 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
                 }
             }
 
-            if let Some(cwd) = spec.get("cwd").and_then(|v| v.as_str()) {
-                if !cwd.trim().is_empty() {
-                    t["cwd"] = toml_edit::value(cwd);
-                }
+            if let Some(cwd) = spec.get("cwd").and_then(|v| v.as_str())
+                && !cwd.trim().is_empty()
+            {
+                t["cwd"] = toml_edit::value(cwd);
             }
 
             if let Some(env) = spec.get("env").and_then(|v| v.as_object()) {

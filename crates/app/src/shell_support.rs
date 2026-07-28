@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use fs2::FileExt;
-use gpui::{point, px, size, Bounds, Pixels};
+use gpui::{Bounds, Pixels, point, px, size};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
@@ -55,7 +55,10 @@ fn system_info() -> String {
 pub fn setup_panic_hook() {
     // Ensure a backtrace is captured even in release builds.
     if std::env::var("RUST_BACKTRACE").is_err() {
-        std::env::set_var("RUST_BACKTRACE", "1");
+        // SAFETY: the doc comment above is the contract — `main` calls this
+        // before it builds the async runtime or spawns any service thread, so
+        // this process is still single-threaded here.
+        unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
     }
 
     let default_hook = panic::take_hook();
@@ -193,11 +196,11 @@ pub fn save_window_bounds(bounds: Bounds<Pixels>) {
         height: f32::from(bounds.size.height),
     };
     let path = window_state_path();
-    if let Some(parent) = path.parent() {
-        if let Err(err) = fs::create_dir_all(parent) {
-            log::warn!("创建窗口状态目录失败: {err}");
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(err) = fs::create_dir_all(parent)
+    {
+        log::warn!("创建窗口状态目录失败: {err}");
+        return;
     }
     match serde_json::to_string_pretty(&state) {
         Ok(json) => {

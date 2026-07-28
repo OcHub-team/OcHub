@@ -8,7 +8,12 @@ use ochcli::output::Output;
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Some(data_dir) = &cli.data_dir {
-        std::env::set_var("OCHUB_DATA_DIR", data_dir);
+        // SAFETY: first statement of `main` after argument parsing. Tokio's
+        // worker threads exist by now but hold no task yet, so nothing else in
+        // the process can be reading the environment during the write. Every
+        // env reader below (the tracing filter, path resolution) runs after it
+        // on this thread.
+        unsafe { std::env::set_var("OCHUB_DATA_DIR", data_dir) };
     }
     let locale = cli
         .lang

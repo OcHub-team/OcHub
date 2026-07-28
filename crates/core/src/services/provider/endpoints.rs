@@ -78,13 +78,12 @@ pub fn update_endpoint_last_used(
 
     // Get provider, update last_used, save back
     let mut providers = state.db.get_all_providers(app_type.as_str())?;
-    if let Some(provider) = providers.get_mut(provider_id) {
-        if let Some(meta) = provider.meta.as_mut() {
-            if let Some(endpoint) = meta.custom_endpoints.get_mut(&normalized) {
-                endpoint.last_used = Some(now_millis());
-                state.db.save_provider(app_type.as_str(), provider)?;
-            }
-        }
+    if let Some(provider) = providers.get_mut(provider_id)
+        && let Some(meta) = provider.meta.as_mut()
+        && let Some(endpoint) = meta.custom_endpoints.get_mut(&normalized)
+    {
+        endpoint.last_used = Some(now_millis());
+        state.db.save_provider(app_type.as_str(), provider)?;
     }
     Ok(())
 }

@@ -2,7 +2,7 @@
 //!
 //! 负责数据库表结构的创建和版本迁移。
 
-use super::{lock_conn, Database, SCHEMA_VERSION};
+use super::{Database, SCHEMA_VERSION, lock_conn};
 use crate::error::AppError;
 use rusqlite::Connection;
 
@@ -1978,9 +1978,10 @@ mod schema_migration_tests {
     fn migrates_legacy_proxy_data_to_gateway_usage_schema() {
         let conn = v1_conn();
         // v1 rejects unknown app ids
-        assert!(conn
-            .execute("INSERT INTO proxy_config (app_type) VALUES ('my-app')", [])
-            .is_err());
+        assert!(
+            conn.execute("INSERT INTO proxy_config (app_type) VALUES ('my-app')", [])
+                .is_err()
+        );
 
         Database::create_tables_on_conn(&conn).unwrap();
         Database::apply_schema_migrations_on_conn(&conn).unwrap();

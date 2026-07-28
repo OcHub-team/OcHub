@@ -7,7 +7,7 @@
 //!
 //! skills.sh 搜索与存储无关，保持原有 HTTP 实现。
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -17,8 +17,8 @@ use std::sync::Arc;
 use tokio::time::timeout;
 
 use crate::app_type::AppType;
-use crate::db::legacy_json::{InstalledSkill, SkillApps, SkillRepo};
 use crate::db::Database;
+use crate::db::legacy_json::{InstalledSkill, SkillApps, SkillRepo};
 use crate::error::format_skill_error;
 use crate::paths::{get_app_config_dir, get_claude_config_dir};
 use crate::settings::SkillStorageLocation;
@@ -332,7 +332,7 @@ fn parse_list_json(stdout: &str) -> Result<Vec<CliInstalledSkill>> {
                 "CLI_OUTPUT_UNPARSEABLE",
                 &[("output", stdout.trim())],
                 None,
-            )))
+            )));
         }
     };
     serde_json::from_str(json).map_err(|e| {
@@ -893,7 +893,7 @@ impl SkillService {
                         "SKILL_SOURCE_UNKNOWN",
                         &[("skill", &skill.name)],
                         Some("uninstallFirst"),
-                    )))
+                    )));
                 }
             };
             cli.run_ok(&[
@@ -1324,8 +1324,7 @@ mod tests {
     use super::*;
 
     // `npx -y skills list -g`（空仓库）实测输出，含 ANSI dim-gray 着色
-    const LIST_EMPTY_SAMPLE: &str =
-        "\x1b[38;5;102mNo global skills found.\x1b[0m\n\x1b[38;5;102mTry listing project skills without -g\x1b[0m\n";
+    const LIST_EMPTY_SAMPLE: &str = "\x1b[38;5;102mNo global skills found.\x1b[0m\n\x1b[38;5;102mTry listing project skills without -g\x1b[0m\n";
 
     // `npx -y skills list -g --json` 实测输出
     const LIST_JSON_SAMPLE: &str = r#"[
@@ -1468,7 +1467,9 @@ mod tests {
         assert_eq!(branch, None);
         assert_eq!(
             readme.as_deref(),
-            Some("https://github.com/vercel-labs/agent-skills/blob/HEAD/skills/deploy-to-vercel/SKILL.md")
+            Some(
+                "https://github.com/vercel-labs/agent-skills/blob/HEAD/skills/deploy-to-vercel/SKILL.md"
+            )
         );
     }
 

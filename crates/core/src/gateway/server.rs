@@ -2,14 +2,14 @@
 //! OpenAI-style model list, token counting, and a WebSocket transport for the
 //! responses dialect.
 
+use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use axum::Router;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::gateway::pipeline::{self, GatewayState, PipelineOutcome, StreamFrame};
 use crate::gateway::types::{Dialect, GatewayKey};
@@ -33,13 +33,12 @@ pub fn build_router(state: GatewayState) -> Router {
 
 /// Extract the presented key secret from Authorization / x-api-key headers.
 fn presented_secret(headers: &HeaderMap) -> Option<String> {
-    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(token) = auth
+    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok())
+        && let Some(token) = auth
             .strip_prefix("Bearer ")
             .or_else(|| auth.strip_prefix("bearer "))
-        {
-            return Some(token.trim().to_string());
-        }
+    {
+        return Some(token.trim().to_string());
     }
     headers
         .get("x-api-key")
@@ -133,7 +132,7 @@ async fn handle_responses(
                     StatusCode::BAD_REQUEST,
                     format!("failed to read request body: {e}"),
                 )
-                    .into_response()
+                    .into_response();
             }
         };
         run_http(state, Dialect::Responses, headers, bytes).await
@@ -312,7 +311,7 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
                         "error": { "message": "client route is unavailable" }
                     })),
                 )
-                    .into_response()
+                    .into_response();
             }
             Err(_) => {
                 return (
@@ -321,7 +320,7 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
                         "error": { "message": "failed to load client route" }
                     })),
                 )
-                    .into_response()
+                    .into_response();
             }
         },
         None => None,
@@ -353,31 +352,31 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
                 models.push(model.to_string());
             }
         }
-        if let Some(default_model) = &route.default_model {
-            if !models.contains(default_model) {
-                models.push(default_model.clone());
-            }
+        if let Some(default_model) = &route.default_model
+            && !models.contains(default_model)
+        {
+            models.push(default_model.clone());
         }
     }
     // A per-app policy is an explicit catalog selection. Only legacy keys
     // inherit every model advertised by the station.
-    if model_policy.is_none() {
-        if let Ok(channels) = state.db.get_gateway_channels() {
-            for c in channels.iter().filter(|channel| {
-                channel.enabled
-                    && route
-                        .as_ref()
-                        .is_none_or(|route| route.allows_channel(&channel.id))
-            }) {
-                for m in &c.models {
-                    let model = m.trim();
-                    if !model.is_empty()
-                        && !model.contains('*')
-                        && !mapped_targets.contains(model)
-                        && !models.iter().any(|existing| existing == model)
-                    {
-                        models.push(model.to_string());
-                    }
+    if model_policy.is_none()
+        && let Ok(channels) = state.db.get_gateway_channels()
+    {
+        for c in channels.iter().filter(|channel| {
+            channel.enabled
+                && route
+                    .as_ref()
+                    .is_none_or(|route| route.allows_channel(&channel.id))
+        }) {
+            for m in &c.models {
+                let model = m.trim();
+                if !model.is_empty()
+                    && !model.contains('*')
+                    && !mapped_targets.contains(model)
+                    && !models.iter().any(|existing| existing == model)
+                {
+                    models.push(model.to_string());
                 }
             }
         }

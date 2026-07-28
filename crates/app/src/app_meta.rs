@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use gpui::SharedString;
-use ochub_core::plugin::{self, AppPlugin};
 use ochub_core::AppType;
+use ochub_core::plugin::{self, AppPlugin};
 
 use crate::icons::IconName;
 

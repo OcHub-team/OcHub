@@ -1,10 +1,10 @@
 //! Deep link module tests
 
+use super::DeepLinkImportRequest;
 use super::mcp::parse_mcp_apps;
 use super::parser::parse_deeplink_url;
 use super::provider::parse_and_merge_config;
 use super::utils::{infer_homepage_from_endpoint, validate_url};
-use super::DeepLinkImportRequest;
 use crate::AppType;
 use base64::prelude::*;
 #[cfg(any())]
@@ -105,10 +105,12 @@ fn test_parse_unsupported_version() {
 
     let result = parse_deeplink_url(url);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Unsupported protocol version"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported protocol version")
+    );
 }
 
 #[test]
@@ -118,10 +120,12 @@ fn test_parse_missing_required_field() {
 
     let result = parse_deeplink_url(url);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Missing 'name' parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing 'name' parameter")
+    );
 }
 
 // =============================================================================
@@ -138,10 +142,12 @@ fn test_validate_invalid_url() {
 fn test_validate_invalid_scheme() {
     let result = validate_url("ftp://example.com", "test");
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("must be http or https"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("must be http or https")
+    );
 }
 
 #[test]

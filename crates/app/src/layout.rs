@@ -39,14 +39,14 @@
 use std::rc::Rc;
 
 use gpui::{
-    actions, div, prelude::*, px, AnyElement, App, ElementId, FontWeight, KeyBinding, KeyDownEvent,
-    SharedString, Window,
+    AnyElement, App, ElementId, FontWeight, KeyBinding, KeyDownEvent, SharedString, Window,
+    actions, div, prelude::*, px,
 };
 
 use crate::components::{self, ButtonSize, ButtonTone, DISABLED_OPACITY};
 use crate::i18n::k;
-use crate::icons::{icon, IconName};
-use crate::scrollbar::{contain_vertical_scroll, VerticalScrollbar};
+use crate::icons::{IconName, icon};
+use crate::scrollbar::{VerticalScrollbar, contain_vertical_scroll};
 use crate::tf;
 use crate::theme;
 
@@ -176,7 +176,7 @@ pub fn virtual_body(
     id: &'static str,
     list: gpui::List,
     state: &gpui::ListState,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     virtual_body_with_width(id, list, state, CONTENT_MAX_WIDTH)
 }
 
@@ -185,7 +185,7 @@ pub fn wide_virtual_body(
     id: &'static str,
     list: gpui::List,
     state: &gpui::ListState,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     virtual_body_with_width(id, list, state, WIDE_MAX_WIDTH)
 }
 
@@ -194,7 +194,7 @@ fn virtual_body_with_width(
     list: gpui::List,
     state: &gpui::ListState,
     max_width: f32,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let contained_state = state.clone();
     div()
         .relative()

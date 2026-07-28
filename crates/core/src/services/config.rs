@@ -84,14 +84,13 @@ impl ConfigService {
 
         let value = if is_cleared { None } else { Some(snippet) };
 
-        if matches!(app_type, "claude" | "codex") {
-            if let Some(legacy_snippet) = old_snippet
+        if matches!(app_type, "claude" | "codex")
+            && let Some(legacy_snippet) = old_snippet
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-            {
-                let app = app_type.parse::<AppType>()?;
-                ProviderService::migrate_legacy_common_config_usage(state, app, legacy_snippet)?;
-            }
+        {
+            let app = app_type.parse::<AppType>()?;
+            ProviderService::migrate_legacy_common_config_usage(state, app, legacy_snippet)?;
         }
 
         state.db.set_config_snippet(app_type, value)?;

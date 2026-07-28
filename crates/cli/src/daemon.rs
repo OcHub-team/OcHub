@@ -12,9 +12,9 @@ use ochub_core::application::{
 use ochub_core::runtime::{
     self, IpcError, IpcRequest, IpcResponse, OwnerGuard, OwnerKind, PROTOCOL_VERSION,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::command::{Cli, Command, DaemonCommand, GatewayCommand};
 use crate::error::CliError;
@@ -336,7 +336,7 @@ async fn handle_request(
                     return error_response(
                         request.request_id.clone(),
                         CliError::InvalidInput(error.to_string()),
-                    )
+                    );
                 }
             };
             if !remote_command_allowed(&cli.command) {
@@ -440,13 +440,12 @@ pub async fn start_background(cli: &Cli) -> Result<ochub_core::runtime::OwnerRec
     process.spawn()?;
 
     for _ in 0..50 {
-        if let Some(owner) = runtime::active_owner()? {
-            if crate::runtime_client::ping(cli.socket.as_deref(), 1)
+        if let Some(owner) = runtime::active_owner()?
+            && crate::runtime_client::ping(cli.socket.as_deref(), 1)
                 .await
                 .is_ok()
-            {
-                return Ok(owner);
-            }
+        {
+            return Ok(owner);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

@@ -359,13 +359,13 @@ fn extend_mise_node_search_paths(paths: &mut Vec<std::path::PathBuf>, home: &Pat
     push_unique_path(paths, mise_base.join("shims"));
 
     let node_installs = mise_base.join("installs").join("node");
-    if node_installs.exists() {
-        if let Ok(entries) = std::fs::read_dir(&node_installs) {
-            for entry in entries.flatten() {
-                let bin_path = entry.path().join("bin");
-                if bin_path.exists() {
-                    push_unique_path(paths, bin_path);
-                }
+    if node_installs.exists()
+        && let Ok(entries) = std::fs::read_dir(&node_installs)
+    {
+        for entry in entries.flatten() {
+            let bin_path = entry.path().join("bin");
+            if bin_path.exists() {
+                push_unique_path(paths, bin_path);
             }
         }
     }
@@ -422,13 +422,13 @@ fn build_tool_search_paths(tool: &str) -> Vec<std::path::PathBuf> {
         );
         if tool == "hermes" {
             let python_base = home.join("Library").join("Python");
-            if python_base.exists() {
-                if let Ok(entries) = std::fs::read_dir(&python_base) {
-                    for entry in entries.flatten() {
-                        let bin_path = entry.path().join("bin");
-                        if bin_path.exists() {
-                            push_unique_path(&mut search_paths, bin_path);
-                        }
+            if python_base.exists()
+                && let Ok(entries) = std::fs::read_dir(&python_base)
+            {
+                for entry in entries.flatten() {
+                    let bin_path = entry.path().join("bin");
+                    if bin_path.exists() {
+                        push_unique_path(&mut search_paths, bin_path);
                     }
                 }
             }
@@ -445,25 +445,25 @@ fn build_tool_search_paths(tool: &str) -> Vec<std::path::PathBuf> {
     }
 
     let fnm_base = home.join(".local/state/fnm_multishells");
-    if fnm_base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&fnm_base) {
-            for entry in entries.flatten() {
-                let bin_path = entry.path().join("bin");
-                if bin_path.exists() {
-                    push_unique_path(&mut search_paths, bin_path);
-                }
+    if fnm_base.exists()
+        && let Ok(entries) = std::fs::read_dir(&fnm_base)
+    {
+        for entry in entries.flatten() {
+            let bin_path = entry.path().join("bin");
+            if bin_path.exists() {
+                push_unique_path(&mut search_paths, bin_path);
             }
         }
     }
 
     let nvm_base = home.join(".nvm/versions/node");
-    if nvm_base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&nvm_base) {
-            for entry in entries.flatten() {
-                let bin_path = entry.path().join("bin");
-                if bin_path.exists() {
-                    push_unique_path(&mut search_paths, bin_path);
-                }
+    if nvm_base.exists()
+        && let Ok(entries) = std::fs::read_dir(&nvm_base)
+    {
+        for entry in entries.flatten() {
+            let bin_path = entry.path().join("bin");
+            if bin_path.exists() {
+                push_unique_path(&mut search_paths, bin_path);
             }
         }
     }
@@ -816,10 +816,10 @@ fn pick_latest_version(
 
     let mut best = latest.to_string();
     for tag in prerelease_tags {
-        if let Some(candidate) = dist_tags.get(*tag).and_then(|v| v.as_str()) {
-            if compare_semver(candidate, &best) == Some(Ordering::Greater) {
-                best = candidate.to_string();
-            }
+        if let Some(candidate) = dist_tags.get(*tag).and_then(|v| v.as_str())
+            && compare_semver(candidate, &best) == Some(Ordering::Greater)
+        {
+            best = candidate.to_string();
         }
     }
     Some(best)
@@ -860,15 +860,13 @@ async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Op
         .send()
         .await
     {
-        Ok(resp) => {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                json.get("tag_name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.strip_prefix('v').unwrap_or(s).to_string())
-            } else {
-                None
-            }
-        }
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(json) => json
+                .get("tag_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.strip_prefix('v').unwrap_or(s).to_string()),
+            _ => None,
+        },
         Err(_) => None,
     }
 }
@@ -878,16 +876,14 @@ async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Op
 async fn fetch_pypi_latest_version(client: &reqwest::Client, package: &str) -> Option<String> {
     let url = format!("https://pypi.org/pypi/{package}/json");
     match client.get(&url).send().await {
-        Ok(resp) => {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                json.get("info")
-                    .and_then(|info| info.get("version"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            } else {
-                None
-            }
-        }
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(json) => json
+                .get("info")
+                .and_then(|info| info.get("version"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            _ => None,
+        },
         Err(_) => None,
     }
 }
@@ -1256,10 +1252,11 @@ fn default_install(installs: &[ToolInstallation]) -> Option<&ToolInstallation> {
 fn installs_anchored_command(tool: &str, installs: &[ToolInstallation]) -> Option<String> {
     let inst = default_install(installs)?;
     let real = inst.real.to_string_lossy();
-    if tool == "codex" && !inst.runnable {
-        if let Some(cmd) = codex_repair_command(&inst.path, &real) {
-            return Some(cmd);
-        }
+    if tool == "codex"
+        && !inst.runnable
+        && let Some(cmd) = codex_repair_command(&inst.path, &real)
+    {
+        return Some(cmd);
     }
     anchored_command_from_paths(tool, &inst.path, &real)
 }
@@ -1268,21 +1265,16 @@ fn installs_anchored_command(tool: &str, installs: &[ToolInstallation]) -> Optio
 // 静态命令 / 安装命令（POSIX）
 // ===========================================================================
 
-const CLAUDE_INSTALL_UNIX: &str =
-    "bash -c 'tmp=$(mktemp) && curl -fsSL https://claude.ai/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
-const OPENCODE_INSTALL_UNIX: &str =
-    "bash -c 'tmp=$(mktemp) && curl -fsSL https://opencode.ai/install -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
-const HERMES_INSTALL_UNIX: &str =
-    "bash -c 'tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
-const HERMES_UPDATE_UNIX: &str =
-    "hermes update || bash -c 'tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
+const CLAUDE_INSTALL_UNIX: &str = "bash -c 'tmp=$(mktemp) && curl -fsSL https://claude.ai/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
+const OPENCODE_INSTALL_UNIX: &str = "bash -c 'tmp=$(mktemp) && curl -fsSL https://opencode.ai/install -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
+const HERMES_INSTALL_UNIX: &str = "bash -c 'tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
+const HERMES_UPDATE_UNIX: &str = "hermes update || bash -c 'tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
 #[cfg(target_os = "windows")]
-const HERMES_INSTALL_WINDOWS_SCRIPT: &str =
-    "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex";
+const HERMES_INSTALL_WINDOWS_SCRIPT: &str = "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex";
 
 #[cfg(target_os = "windows")]
 fn powershell_encoded_command(script: &str) -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     let mut bytes = Vec::with_capacity(script.len() * 2);
     for unit in script.encode_utf16() {

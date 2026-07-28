@@ -8,11 +8,11 @@
 //! ~/.claude/projects/*/*.jsonl → 增量解析 → 去重 → 费用计算 → usage_logs 表
 //! ```
 
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use crate::paths::get_claude_config_dir;
 use crate::services::usage_stats::{
-    effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
+    DedupKey, effective_usage_log_filter, find_model_pricing, should_skip_session_insert,
 };
 use crate::usage_tracking::calculator::{CostCalculator, ModelPricing};
 use crate::usage_tracking::parser::TokenUsage;
@@ -147,13 +147,13 @@ fn collect_jsonl_files(projects_dir: &Path) -> Vec<PathBuf> {
                         // 额外下探 Workflow 子 agent:
                         // 项目/SESSION_ID/subagents/workflows/wf_<ID>/*.jsonl
                         let workflows_dir = subagents_dir.join("workflows");
-                        if workflows_dir.is_dir() {
-                            if let Ok(wf_entries) = fs::read_dir(&workflows_dir) {
-                                for wf_entry in wf_entries.flatten() {
-                                    let wf_path = wf_entry.path();
-                                    if wf_path.is_dir() {
-                                        push_jsonl_children(&wf_path, &mut files);
-                                    }
+                        if workflows_dir.is_dir()
+                            && let Ok(wf_entries) = fs::read_dir(&workflows_dir)
+                        {
+                            for wf_entry in wf_entries.flatten() {
+                                let wf_path = wf_entry.path();
+                                if wf_path.is_dir() {
+                                    push_jsonl_children(&wf_path, &mut files);
                                 }
                             }
                         }
@@ -227,10 +227,10 @@ fn sync_single_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppEr
         };
 
         // 提取 session ID (从 system 或首条消息)
-        if current_session_id.is_none() {
-            if let Some(sid) = value.get("sessionId").and_then(|v| v.as_str()) {
-                current_session_id = Some(sid.to_string());
-            }
+        if current_session_id.is_none()
+            && let Some(sid) = value.get("sessionId").and_then(|v| v.as_str())
+        {
+            current_session_id = Some(sid.to_string());
         }
 
         // 只处理 assistant 类型的消息

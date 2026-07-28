@@ -41,7 +41,7 @@ pub use validation::{extract_server_spec, validate_server_spec};
 
 // Re-export the live MCP-config helpers (cc-switch top-level `claude_mcp.rs`).
 pub use claude_mcp::{
-    clear_has_completed_onboarding, delete_mcp_server, get_mcp_status, read_mcp_json,
+    McpStatus, clear_has_completed_onboarding, delete_mcp_server, get_mcp_status, read_mcp_json,
     read_mcp_servers_map, set_has_completed_onboarding, set_mcp_servers_map, upsert_mcp_server,
-    validate_command_in_path, McpStatus,
+    validate_command_in_path,
 };

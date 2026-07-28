@@ -7,5 +7,5 @@
 pub mod checker;
 pub mod manager;
 
-pub use checker::{check_env_conflicts, EnvConflict};
-pub use manager::{delete_env_vars, restore_env_backup, restore_from_backup, BackupInfo};
+pub use checker::{EnvConflict, check_env_conflicts};
+pub use manager::{BackupInfo, delete_env_vars, restore_env_backup, restore_from_backup};

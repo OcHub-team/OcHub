@@ -1,5 +1,5 @@
 use crate::application::{
-    redact_json, Application, ApplicationError, ApplicationResult, OperationOutcome,
+    Application, ApplicationError, ApplicationResult, OperationOutcome, redact_json,
 };
 use crate::settings::{S3SyncSettings, WebDavSyncSettings};
 

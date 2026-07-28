@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use ochub_core::application::ApplicationError;
 use ochub_core::runtime::{self, IpcRequest, IpcResponse, OwnerRecord, PROTOCOL_VERSION};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::command::Cli;

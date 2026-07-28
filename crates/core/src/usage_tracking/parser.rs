@@ -104,15 +104,15 @@ impl TokenUsage {
                 match event_type {
                     "message_start" => {
                         if let Some(message) = event.get("message") {
-                            if model.is_none() {
-                                if let Some(m) = message.get("model").and_then(|v| v.as_str()) {
-                                    model = Some(m.to_string());
-                                }
+                            if model.is_none()
+                                && let Some(m) = message.get("model").and_then(|v| v.as_str())
+                            {
+                                model = Some(m.to_string());
                             }
-                            if message_id.is_none() {
-                                if let Some(id) = message.get("id").and_then(|v| v.as_str()) {
-                                    message_id = Some(id.to_string());
-                                }
+                            if message_id.is_none()
+                                && let Some(id) = message.get("id").and_then(|v| v.as_str())
+                            {
+                                message_id = Some(id.to_string());
                             }
                         }
                         if let Some(msg_usage) = event.get("message").and_then(|m| m.get("usage")) {
@@ -178,17 +178,17 @@ impl TokenUsage {
                                 }
                             }
                             // 从 message_delta 中处理缓存命中(cache_read_input_tokens)
-                            if usage.cache_read_tokens == 0 {
-                                if let Some(cache_read) = delta_cache_read {
-                                    usage.cache_read_tokens = cache_read;
-                                }
+                            if usage.cache_read_tokens == 0
+                                && let Some(cache_read) = delta_cache_read
+                            {
+                                usage.cache_read_tokens = cache_read;
                             }
                             // 从 message_delta 中处理缓存创建(cache_creation_input_tokens)
                             // 注: 现在 zhipu 没有返回 cache_creation_input_tokens 字段
-                            if usage.cache_creation_tokens == 0 {
-                                if let Some(cache_creation) = delta_cache_creation {
-                                    usage.cache_creation_tokens = cache_creation;
-                                }
+                            if usage.cache_creation_tokens == 0
+                                && let Some(cache_creation) = delta_cache_creation
+                            {
+                                usage.cache_creation_tokens = cache_creation;
                             }
                         }
                     }
@@ -325,11 +325,11 @@ impl TokenUsage {
         for event in events {
             if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
                 log::debug!("[Codex] 事件类型: {event_type}");
-                if event_type == "response.completed" {
-                    if let Some(response) = event.get("response") {
-                        log::debug!("[Codex] 找到 response.completed 事件，解析 usage");
-                        return Self::from_codex_response_adjusted(response);
-                    }
+                if event_type == "response.completed"
+                    && let Some(response) = event.get("response")
+                {
+                    log::debug!("[Codex] 找到 response.completed 事件，解析 usage");
+                    return Self::from_codex_response_adjusted(response);
                 }
             }
         }
@@ -367,13 +367,12 @@ impl TokenUsage {
 
         // 先尝试 Codex Responses API 格式 (response.completed 事件)
         for event in events {
-            if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                if event_type == "response.completed" {
-                    if let Some(response) = event.get("response") {
-                        log::debug!("[Codex] 找到 response.completed 事件");
-                        return Self::from_codex_response_auto(response);
-                    }
-                }
+            if let Some(event_type) = event.get("type").and_then(|v| v.as_str())
+                && event_type == "response.completed"
+                && let Some(response) = event.get("response")
+            {
+                log::debug!("[Codex] 找到 response.completed 事件");
+                return Self::from_codex_response_auto(response);
             }
         }
 
@@ -418,11 +417,11 @@ impl TokenUsage {
         log::debug!("[Codex] 解析 OpenAI 流式事件，共 {} 个事件", events.len());
         // OpenAI 流式响应在最后一个 chunk 中包含 usage
         for event in events.iter().rev() {
-            if let Some(usage) = event.get("usage") {
-                if !usage.is_null() {
-                    log::debug!("[Codex] 找到 usage: {usage:?}");
-                    return Self::from_openai_response(event);
-                }
+            if let Some(usage) = event.get("usage")
+                && !usage.is_null()
+            {
+                log::debug!("[Codex] 找到 usage: {usage:?}");
+                return Self::from_openai_response(event);
             }
         }
         log::debug!("[Codex] 未找到 usage 信息");
@@ -488,10 +487,10 @@ impl TokenUsage {
             }
 
             // 提取实际使用的模型名称（modelVersion 字段）
-            if model.is_none() {
-                if let Some(model_version) = chunk.get("modelVersion").and_then(|v| v.as_str()) {
-                    model = Some(model_version.to_string());
-                }
+            if model.is_none()
+                && let Some(model_version) = chunk.get("modelVersion").and_then(|v| v.as_str())
+            {
+                model = Some(model_version.to_string());
             }
         }
 

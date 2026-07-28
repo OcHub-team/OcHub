@@ -38,7 +38,7 @@ pub use dto::{
 };
 pub use error::{ApplicationError, ApplicationResult};
 pub use gateway::GatewayStation;
-pub use providers::{redact_json, ProviderSwitchPolicy};
+pub use providers::{ProviderSwitchPolicy, redact_json};
 pub use skills::{parse_skill_repo_spec, parse_skill_source};
 
 /// Options controlling one application-layer runtime.

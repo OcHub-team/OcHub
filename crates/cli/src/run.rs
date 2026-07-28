@@ -4,14 +4,14 @@ use std::path::PathBuf;
 use chrono::{DateTime, Days, Local, NaiveDate, TimeZone};
 use clap::CommandFactory;
 use ochub_core::application::{
-    parse_skill_repo_spec, parse_skill_source, redact_json, Application, ApplicationError,
-    ApplicationResult, GatewayStation, OpenOptions, ProviderSwitchPolicy, UsageFilter,
+    Application, ApplicationError, ApplicationResult, GatewayStation, OpenOptions,
+    ProviderSwitchPolicy, UsageFilter, parse_skill_repo_spec, parse_skill_source, redact_json,
 };
 use ochub_core::gateway::types::GatewayAppModelPolicy;
 use ochub_core::gateway::{GatewayChannel, GatewayModelRule, GatewayRoute};
 use ochub_core::{AppId, Provider, UsageScript};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::command::{
     AppCommand, AppPathCommand, AuthAccountCommand, AuthBindingCommand, AuthCommand, BackupCommand,
@@ -49,7 +49,7 @@ pub async fn execute(cli: Cli, output: &Output) -> Result<(), CliError> {
                     "schemaVersion": 1
                 }),
                 &[],
-            )
+            );
         }
         Command::Completion(args) => {
             let mut command = Cli::command();
@@ -103,14 +103,13 @@ pub async fn execute(cli: Cli, output: &Output) -> Result<(), CliError> {
         Command::Update(crate::command::UpdateArgs {
             command: UpdateCommand::Install
         })
-    ) {
-        if let Some(owner) = ochub_core::runtime::active_owner()? {
-            return Err(ApplicationError::OwnerConflict(format!(
-                "runtime pid {} must be stopped before update install",
-                owner.pid
-            ))
-            .into());
-        }
+    ) && let Some(owner) = ochub_core::runtime::active_owner()?
+    {
+        return Err(ApplicationError::OwnerConflict(format!(
+            "runtime pid {} must be stopped before update install",
+            owner.pid
+        ))
+        .into());
     }
     if crate::runtime_client::try_execute(&cli, output).await? {
         return Ok(());
@@ -164,34 +163,34 @@ pub async fn execute_with_application(
     output: &Output,
 ) -> Result<(), CliError> {
     let mut journal = None;
-    if !cli.dry_run {
-        if let Some(operation) = mutation_name(&cli.command) {
-            let blocking = ochub_core::runtime::journal::blocking_operations()?;
-            if !blocking.is_empty() {
-                return Err(ApplicationError::RecoveryRequired(format!(
-                    "{} interrupted operation(s): {}",
-                    blocking.len(),
-                    blocking
-                        .iter()
-                        .map(|record| record.id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-                .into());
-            }
-            let actor = ochub_core::runtime::active_owner()?
-                .filter(|owner| owner.pid == std::process::id())
-                .map(|_| "owner")
-                .unwrap_or("cli");
-            journal = Some(ochub_core::runtime::journal::OperationHandle::begin(
-                operation,
-                actor,
-                json!({
-                    "operation": operation,
-                    "dataDir": ochub_core::paths::get_app_config_dir()
-                }),
-            )?);
+    if !cli.dry_run
+        && let Some(operation) = mutation_name(&cli.command)
+    {
+        let blocking = ochub_core::runtime::journal::blocking_operations()?;
+        if !blocking.is_empty() {
+            return Err(ApplicationError::RecoveryRequired(format!(
+                "{} interrupted operation(s): {}",
+                blocking.len(),
+                blocking
+                    .iter()
+                    .map(|record| record.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+            .into());
         }
+        let actor = ochub_core::runtime::active_owner()?
+            .filter(|owner| owner.pid == std::process::id())
+            .map(|_| "owner")
+            .unwrap_or("cli");
+        journal = Some(ochub_core::runtime::journal::OperationHandle::begin(
+            operation,
+            actor,
+            json!({
+                "operation": operation,
+                "dataDir": ochub_core::paths::get_app_config_dir()
+            }),
+        )?);
     }
 
     let result = dispatch(application, cli, output).await;
@@ -1355,7 +1354,7 @@ fn parse_time_bound(value: &str, end_of_day: bool) -> Result<i64, CliError> {
         chrono::LocalResult::None => {
             return Err(CliError::InvalidInput(format!(
                 "date has no local midnight in the configured timezone: {value}"
-            )))
+            )));
         }
     };
     Ok(if end_of_day {
@@ -1389,7 +1388,7 @@ fn parse_duration(value: &str) -> Result<std::time::Duration, CliError> {
         _ => {
             return Err(CliError::InvalidInput(format!(
                 "unsupported duration unit in {value}; use ms, s, m, or h"
-            )))
+            )));
         }
     };
     std::time::Duration::try_from_secs_f64(seconds)
@@ -1905,7 +1904,7 @@ fn run_mcp(
                 _ => {
                     return Err(CliError::InvalidInput(
                         "provide exactly one MCP id or --from <file>".to_string(),
-                    ))
+                    ));
                 }
             };
             application.validate_mcp_server(&server)?;

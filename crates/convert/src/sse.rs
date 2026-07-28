@@ -31,12 +31,12 @@ impl WireEvent {
     /// Render as an SSE block (`event:` line when named, `data:` line, blank line).
     pub fn to_sse(&self) -> String {
         let mut out = String::with_capacity(self.data.len() + 32);
-        if let Some(name) = &self.event {
-            if !name.is_empty() {
-                out.push_str("event: ");
-                out.push_str(name);
-                out.push('\n');
-            }
+        if let Some(name) = &self.event
+            && !name.is_empty()
+        {
+            out.push_str("event: ");
+            out.push_str(name);
+            out.push('\n');
         }
         out.push_str("data: ");
         out.push_str(&self.data);

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::application::{
-    providers::redact_json, Application, ApplicationError, ApplicationResult,
+    Application, ApplicationError, ApplicationResult, providers::redact_json,
 };
 
 impl Application {

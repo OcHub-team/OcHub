@@ -7,7 +7,7 @@
 //! - *chat* `prompt_tokens` and *responses* `input_tokens` are **totals**
 //!   (cached tokens included, detailed in `*_tokens_details`).
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn u64_field(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(Value::as_u64).unwrap_or(0)

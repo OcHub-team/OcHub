@@ -7,11 +7,11 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::common::{
-    assemble, content_to_plain_text, convert_responses_tools, convert_tool_choice,
-    image_block_from_url, push_message, resolve_thinking_budget, MessagesRequestOptions,
+    MessagesRequestOptions, assemble, content_to_plain_text, convert_responses_tools,
+    convert_tool_choice, image_block_from_url, push_message, resolve_thinking_budget,
 };
 use crate::usage::{merge_messages_usage, messages_usage_to_responses};
 use crate::util::{now_unix, short_id};
@@ -69,10 +69,10 @@ pub fn request_to_messages(
     let mut system: Vec<Value> = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
 
-    if let Some(instr) = obj.get("instructions").and_then(Value::as_str) {
-        if !instr.is_empty() {
-            system.push(json!({ "type": "text", "text": instr }));
-        }
+    if let Some(instr) = obj.get("instructions").and_then(Value::as_str)
+        && !instr.is_empty()
+    {
+        system.push(json!({ "type": "text", "text": instr }));
     }
 
     match obj.get("input") {

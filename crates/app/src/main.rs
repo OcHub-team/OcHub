@@ -43,12 +43,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use gpui::{
-    point, prelude::*, px, size, App, AssetSource, Bounds, SharedString, TitlebarOptions, Window,
-    WindowBounds, WindowOptions,
+    App, AssetSource, Bounds, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    point, prelude::*, px, size,
 };
 use gpui_platform::application;
-use ochub_core::db::Database;
 use ochub_core::AppState;
+use ochub_core::db::Database;
 
 use app_ui::AppRoot;
 use i18n::{k, raw};
@@ -313,7 +313,7 @@ pub(crate) fn close_main_window(cx: &mut App) {
 pub(crate) fn set_windows_window_visible(window: &Window, visible: bool) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_RESTORE};
+    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_RESTORE, ShowWindow};
 
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return false;

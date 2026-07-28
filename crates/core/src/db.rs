@@ -24,11 +24,11 @@ mod schema;
 
 // DAO 类型导出供外部使用（这些是供尚未移植的服务层使用的接缝，暂时未被调用）
 #[allow(unused_imports)]
-pub(crate) use dao::providers_seed::{is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
+pub(crate) use dao::providers_seed::{CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, is_official_seed_id};
 #[allow(unused_imports)]
 pub(crate) use dao::usage_config::{
-    validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
-    PRICING_SOURCE_RESPONSE,
+    PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE, validate_cost_multiplier,
+    validate_pricing_source,
 };
 
 pub use legacy_json::{
@@ -37,7 +37,7 @@ pub use legacy_json::{
 };
 
 use crate::error::AppError;
-use rusqlite::{hooks::Action, Connection};
+use rusqlite::{Connection, hooks::Action};
 use serde::Serialize;
 use std::sync::Mutex;
 

@@ -20,14 +20,14 @@
 //! collapsing the provider down to name/baseURL/key/one-model like the legacy
 //! generic form did.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::{
-    set_str, str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection,
-    FormValues, GridColumn, Language, PreviewFile, SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
+    GridColumn, Language, PreviewFile, SelectOption, set_str, str_val,
 };
-use crate::model::ProviderMeta;
 use crate::AppType;
+use crate::model::ProviderMeta;
 
 /// The five AI-SDK packages OpenCode understands as a provider `npm`.
 const NPM_OPENAI_COMPATIBLE: &str = "@ai-sdk/openai-compatible";
@@ -554,10 +554,10 @@ fn string_map_to_object(value: Option<&Value>) -> Map<String, Value> {
             if k.trim().is_empty() {
                 continue;
             }
-            if let Some(s) = v.as_str() {
-                if !s.is_empty() {
-                    out.insert(k.clone(), Value::String(s.to_string()));
-                }
+            if let Some(s) = v.as_str()
+                && !s.is_empty()
+            {
+                out.insert(k.clone(), Value::String(s.to_string()));
             }
         }
     }
@@ -587,10 +587,10 @@ fn parse_scalar(s: &str) -> Value {
     if let Ok(n) = t.parse::<i64>() {
         return json!(n);
     }
-    if let Ok(f) = t.parse::<f64>() {
-        if let Some(num) = serde_json::Number::from_f64(f) {
-            return Value::Number(num);
-        }
+    if let Ok(f) = t.parse::<f64>()
+        && let Some(num) = serde_json::Number::from_f64(f)
+    {
+        return Value::Number(num);
     }
     Value::String(s.to_string())
 }
@@ -642,11 +642,13 @@ mod tests {
         assert_eq!(str_val(&values, "npm"), NPM_OPENAI_COMPATIBLE);
         assert_eq!(str_val(&values, "name"), "");
         assert_eq!(str_val(&values, "base_url"), "");
-        assert!(values
-            .get("models")
-            .and_then(Value::as_array)
-            .map(|a| a.is_empty())
-            .unwrap_or(false));
+        assert!(
+            values
+                .get("models")
+                .and_then(Value::as_array)
+                .map(|a| a.is_empty())
+                .unwrap_or(false)
+        );
     }
 
     #[test]
@@ -708,10 +710,12 @@ mod tests {
         let large = &result.settings_config["models"]["myco-large"];
         assert_eq!(large["name"].as_str(), Some("MyCo Large"));
         // The object key (id) is "myco-large", distinct from the display name.
-        assert!(result.settings_config["models"]
-            .as_object()
-            .unwrap()
-            .contains_key("myco-large"));
+        assert!(
+            result.settings_config["models"]
+                .as_object()
+                .unwrap()
+                .contains_key("myco-large")
+        );
     }
 
     #[test]
@@ -830,12 +834,17 @@ mod tests {
             ]),
         );
         let issues = OpenCodeConfig.validate(&v);
-        assert!(issues
-            .iter()
-            .any(|i| i.severity == super::super::Severity::Error && i.message.contains("重复")));
-        assert!(issues
-            .iter()
-            .any(|i| i.severity == super::super::Severity::Error && i.message.contains("缺少 ID")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == super::super::Severity::Error && i.message.contains("重复"))
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == super::super::Severity::Error
+                    && i.message.contains("缺少 ID"))
+        );
     }
 
     #[test]
@@ -843,9 +852,11 @@ mod tests {
         let mut v = sample_values();
         set_str(&mut v, "provider_id", "");
         let issues = OpenCodeConfig.validate(&v);
-        assert!(issues
-            .iter()
-            .any(|i| i.field.as_deref() == Some("provider_id")
-                && i.severity == super::super::Severity::Error));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.field.as_deref() == Some("provider_id")
+                    && i.severity == super::super::Severity::Error)
+        );
     }
 }

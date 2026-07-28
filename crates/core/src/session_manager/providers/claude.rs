@@ -8,8 +8,8 @@ use crate::paths::get_claude_config_dir;
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
-    extract_text, parse_timestamp_to_ms, path_basename, read_head_tail_lines, truncate_summary,
-    TITLE_MAX_CHARS,
+    TITLE_MAX_CHARS, extract_text, parse_timestamp_to_ms, path_basename, read_head_tail_lines,
+    truncate_summary,
 };
 
 const PROVIDER_ID: &str = "claude";
@@ -60,15 +60,15 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
             .to_string();
 
         // Claude wraps tool_result inside user messages; reclassify as "tool" role
-        if role == "user" {
-            if let Some(Value::Array(items)) = message.get("content") {
-                let all_tool_results = !items.is_empty()
-                    && items.iter().all(|item| {
-                        item.get("type").and_then(Value::as_str) == Some("tool_result")
-                    });
-                if all_tool_results {
-                    role = "tool".to_string();
-                }
+        if role == "user"
+            && let Some(Value::Array(items)) = message.get("content")
+        {
+            let all_tool_results = !items.is_empty()
+                && items
+                    .iter()
+                    .all(|item| item.get("type").and_then(Value::as_str) == Some("tool_result"));
+            if all_tool_results {
+                role = "tool".to_string();
             }
         }
 
@@ -162,16 +162,14 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
                     .and_then(|m| m.get("role"))
                     .and_then(Value::as_str)
                     == Some("user");
-            if is_user {
-                if let Some(message) = value.get("message") {
-                    let text = message.get("content").map(extract_text).unwrap_or_default();
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty()
-                        && !trimmed.contains("<local-command-caveat>")
-                        && !trimmed.starts_with("<command-name>")
-                    {
-                        first_user_message = Some(trimmed.to_string());
-                    }
+            if is_user && let Some(message) = value.get("message") {
+                let text = message.get("content").map(extract_text).unwrap_or_default();
+                let trimmed = text.trim();
+                if !trimmed.is_empty()
+                    && !trimmed.contains("<local-command-caveat>")
+                    && !trimmed.starts_with("<command-name>")
+                {
+                    first_user_message = Some(trimmed.to_string());
                 }
             }
         }

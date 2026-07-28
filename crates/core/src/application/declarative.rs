@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::application::{Application, ApplicationError, ApplicationResult, ProviderSwitchPolicy};
@@ -786,14 +786,14 @@ fn ownership_conflict(
     if action == "noop" || adopt {
         return;
     }
-    if let Some(record) = ownership.resources.get(key) {
-        if record.manager != manager {
-            conflicts.push(json!({
-                "resource": key,
-                "owner": record.manager,
-                "requestedManager": manager
-            }));
-        }
+    if let Some(record) = ownership.resources.get(key)
+        && record.manager != manager
+    {
+        conflicts.push(json!({
+            "resource": key,
+            "owner": record.manager,
+            "requestedManager": manager
+        }));
     }
 }
 

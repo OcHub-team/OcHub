@@ -1,4 +1,4 @@
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use crate::model::{Provider, ProviderMeta};
 use indexmap::IndexMap;
@@ -687,7 +687,7 @@ impl Database {
 #[cfg(test)]
 mod ensure_official_seed_tests {
     use crate::app_type::AppType;
-    use crate::db::{Database, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
+    use crate::db::{CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, Database};
 
     #[test]
     fn ensure_inserts_when_missing() {

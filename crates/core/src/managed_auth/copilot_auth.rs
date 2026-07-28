@@ -738,10 +738,10 @@ impl CopilotAuthManager {
         // 检查缓存的 token
         {
             let tokens = self.copilot_tokens.read().await;
-            if let Some(copilot_token) = tokens.get(account_id) {
-                if !copilot_token.is_expiring_soon() {
-                    return Ok(copilot_token.token.clone());
-                }
+            if let Some(copilot_token) = tokens.get(account_id)
+                && !copilot_token.is_expiring_soon()
+            {
+                return Ok(copilot_token.token.clone());
             }
         }
 
@@ -754,10 +754,10 @@ impl CopilotAuthManager {
         // double-check：等待锁期间可能已由其他请求刷新完成
         {
             let tokens = self.copilot_tokens.read().await;
-            if let Some(copilot_token) = tokens.get(account_id) {
-                if !copilot_token.is_expiring_soon() {
-                    return Ok(copilot_token.token.clone());
-                }
+            if let Some(copilot_token) = tokens.get(account_id)
+                && !copilot_token.is_expiring_soon()
+            {
+                return Ok(copilot_token.token.clone());
             }
         }
 
@@ -1213,10 +1213,10 @@ impl CopilotAuthManager {
         let stored_default = self.default_account_id.read().await.clone();
         let accounts = self.accounts.read().await;
 
-        if let Some(default_id) = stored_default {
-            if accounts.contains_key(&default_id) {
-                return Some(default_id);
-            }
+        if let Some(default_id) = stored_default
+            && accounts.contains_key(&default_id)
+        {
+            return Some(default_id);
         }
 
         Self::fallback_default_account_id(&accounts)
@@ -1414,10 +1414,10 @@ impl CopilotAuthManager {
             }
             if let Ok(mut default_account_id) = self.default_account_id.try_write() {
                 *default_account_id = store.default_account_id;
-                if default_account_id.is_none() {
-                    if let Ok(accounts) = self.accounts.try_read() {
-                        *default_account_id = Self::fallback_default_account_id(&accounts);
-                    }
+                if default_account_id.is_none()
+                    && let Ok(accounts) = self.accounts.try_read()
+                {
+                    *default_account_id = Self::fallback_default_account_id(&accounts);
                 }
             }
         } else if store.github_token.is_some() {

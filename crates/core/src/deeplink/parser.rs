@@ -2,8 +2,8 @@
 //!
 //! Parses ochub:// URLs into DeepLinkImportRequest structures.
 
-use super::utils::validate_url;
 use super::DeepLinkImportRequest;
+use super::utils::validate_url;
 use crate::error::AppError;
 use std::collections::HashMap;
 use url::Url;
@@ -98,10 +98,10 @@ fn parse_provider_deeplink(
     let api_key = params.get("apiKey").cloned();
 
     // Validate URLs only if provided
-    if let Some(ref hp) = homepage {
-        if !hp.is_empty() {
-            validate_url(hp, "homepage")?;
-        }
+    if let Some(ref hp) = homepage
+        && !hp.is_empty()
+    {
+        validate_url(hp, "homepage")?;
     }
     // Validate each endpoint (supports comma-separated multiple URLs)
     if let Some(ref ep) = endpoint {

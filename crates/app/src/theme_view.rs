@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use gpui::{
-    canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, size, App, Background,
-    Bounds, ColorSpace, Context, Entity, FontWeight, ListAlignment, ListState, PathBuilder,
-    PathPromptOptions, Pixels, Point, Rgba, SharedString, Window,
+    App, Background, Bounds, ColorSpace, Context, Entity, FontWeight, ListAlignment, ListState,
+    PathBuilder, PathPromptOptions, Pixels, Point, Rgba, SharedString, Window, canvas, div,
+    linear_color_stop, linear_gradient, point, prelude::*, px, size,
 };
 use ochub_core::settings::{self, ThemeMode};
 
@@ -21,8 +21,8 @@ use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme::{
-    self, Theme, ThemeColor, ThemeFamily, ThemeRecord, ThemeWindowBackground,
-    MAX_SURFACE_OPACITY_PERCENT, MIN_SURFACE_OPACITY_PERCENT, THEME_TOKENS,
+    self, MAX_SURFACE_OPACITY_PERCENT, MIN_SURFACE_OPACITY_PERCENT, THEME_TOKENS, Theme,
+    ThemeColor, ThemeFamily, ThemeRecord, ThemeWindowBackground,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,11 +41,7 @@ impl EditorVariant {
     }
 
     fn from_index(index: usize) -> Self {
-        if index == 0 {
-            Self::Light
-        } else {
-            Self::Dark
-        }
+        if index == 0 { Self::Light } else { Self::Dark }
     }
 
     fn label(self) -> &'static str {
@@ -1138,7 +1134,7 @@ impl ThemeView {
         );
     }
 
-    fn pair_preview(family: &ThemeFamily) -> impl IntoElement {
+    fn pair_preview(family: &ThemeFamily) -> impl IntoElement + use<> {
         let light = family.light;
         let dark = family.dark;
         canvas(
@@ -2110,7 +2106,7 @@ crate::notifications::impl_status_toasts_leveled!(ThemeView);
 
 #[cfg(test)]
 mod tests {
-    use gpui::{point, px, size, Bounds};
+    use gpui::{Bounds, point, px, size};
 
     use super::ThemeView;
 

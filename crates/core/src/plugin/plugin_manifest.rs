@@ -145,10 +145,10 @@ impl AppPlugin for ManifestPlugin {
 impl LiveConfigOps for ManifestPlugin {
     fn write_live(&self, _db: &Database, provider: &Provider) -> Result<(), AppError> {
         // 1. live_validate precondition.
-        if let Some(name) = &self.manifest.hooks.live_validate {
-            if let Some(hook) = self.hooks.live_validate(name) {
-                hook(provider)?;
-            }
+        if let Some(name) = &self.manifest.hooks.live_validate
+            && let Some(hook) = self.hooks.live_validate(name)
+        {
+            hook(provider)?;
         }
 
         let config_dir = self.resolve_config_dir();

@@ -7,12 +7,12 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::common::{
-    assemble, chat_content_to_blocks, content_to_plain_text, content_to_system_blocks,
-    convert_chat_tools, convert_tool_choice, push_message, resolve_thinking_budget,
-    MessagesRequestOptions,
+    MessagesRequestOptions, assemble, chat_content_to_blocks, content_to_plain_text,
+    content_to_system_blocks, convert_chat_tools, convert_tool_choice, push_message,
+    resolve_thinking_budget,
 };
 use crate::usage::{merge_messages_usage, messages_usage_to_chat};
 use crate::util::{now_unix, short_id};
@@ -374,10 +374,9 @@ impl MessagesToChatStream {
                         if let Some(sig) = delta
                             .and_then(|d| d.get("signature"))
                             .and_then(Value::as_str)
+                            && let Some((_, s)) = self.thinking_acc.get_mut(&block_index)
                         {
-                            if let Some((_, s)) = self.thinking_acc.get_mut(&block_index) {
-                                s.push_str(sig);
-                            }
+                            s.push_str(sig);
                         }
                     }
                     Some("input_json_delta") => {
@@ -400,14 +399,14 @@ impl MessagesToChatStream {
             }
             "content_block_stop" => {
                 // Finalize a thinking block (text + signature) for the round-trip.
-                if let Some((text, sig)) = self.thinking_acc.remove(&block_index) {
-                    if !sig.is_empty() {
-                        self.thinking_blocks.push(json!({
-                            "type": "thinking",
-                            "thinking": text,
-                            "signature": sig,
-                        }));
-                    }
+                if let Some((text, sig)) = self.thinking_acc.remove(&block_index)
+                    && !sig.is_empty()
+                {
+                    self.thinking_blocks.push(json!({
+                        "type": "thinking",
+                        "thinking": text,
+                        "signature": sig,
+                    }));
                 }
             }
             "message_delta" => {
@@ -430,11 +429,11 @@ impl MessagesToChatStream {
                     None,
                 ));
                 // Final usage-only chunk — only when the client opted in.
-                if self.include_usage {
-                    if let Some(u) = &self.last_usage {
-                        let usage = messages_usage_to_chat(u);
-                        out.push(self.chunk(json!([]), Some(usage)));
-                    }
+                if self.include_usage
+                    && let Some(u) = &self.last_usage
+                {
+                    let usage = messages_usage_to_chat(u);
+                    out.push(self.chunk(json!([]), Some(usage)));
                 }
                 if !self.thinking_blocks.is_empty() && !self.tool_ids.is_empty() {
                     out.push(Output::Capture(SignatureCapture {
@@ -611,7 +610,7 @@ mod tests {
         assert!(done);
         assert_eq!(usages, 2); // message_start seed + message_delta merge
         assert_eq!(captures, 0); // fixture has no signed thinking
-                                 // role chunk, text delta, tool start, 2 arg deltas, finish, usage chunk
+        // role chunk, text delta, tool start, 2 arg deltas, finish, usage chunk
         assert_eq!(chunks.len(), 7);
         assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
         assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "Hello");

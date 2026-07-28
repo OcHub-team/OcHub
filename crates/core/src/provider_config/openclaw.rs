@@ -19,15 +19,15 @@
 
 use std::collections::HashMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::{
-    str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
-    GridColumn, Language, PreviewFile, SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
+    GridColumn, Language, PreviewFile, SelectOption, str_val,
 };
+use crate::AppType;
 use crate::apps::openclaw::{OpenClawModelEntry, OpenClawProviderConfig};
 use crate::model::ProviderMeta;
-use crate::AppType;
 
 /// The five valid `api` wire protocols OpenClaw accepts.
 const API_PROTOCOLS: &[&str] = &[
@@ -94,31 +94,35 @@ impl AppConfig for OpenClawConfig {
             ),
             FormSection::new(
                 "模型",
-                vec![FormField::new(
-                    "models",
-                    "模型列表",
-                    FieldKind::ModelGrid {
-                        columns: vec![
-                            GridColumn::text("id", "模型 ID", "gpt-4o"),
-                            GridColumn::text("name", "显示名", "GPT-4o"),
-                            GridColumn::text("context", "上下文窗口", "128000"),
-                            GridColumn::toggle("reasoning", "推理"),
-                        ],
-                    },
-                )
-                .help("provider.models[]，每行一个模型；全部保留，非破坏式回写。")],
+                vec![
+                    FormField::new(
+                        "models",
+                        "模型列表",
+                        FieldKind::ModelGrid {
+                            columns: vec![
+                                GridColumn::text("id", "模型 ID", "gpt-4o"),
+                                GridColumn::text("name", "显示名", "GPT-4o"),
+                                GridColumn::text("context", "上下文窗口", "128000"),
+                                GridColumn::toggle("reasoning", "推理"),
+                            ],
+                        },
+                    )
+                    .help("provider.models[]，每行一个模型；全部保留，非破坏式回写。"),
+                ],
             ),
             FormSection::new(
                 "高级",
-                vec![FormField::new(
-                    "headers",
-                    "自定义请求头",
-                    FieldKind::KeyValue {
-                        key_placeholder: "X-Header".into(),
-                        value_placeholder: "value".into(),
-                    },
-                )
-                .help("写入 headers{}，附加到每次请求。")],
+                vec![
+                    FormField::new(
+                        "headers",
+                        "自定义请求头",
+                        FieldKind::KeyValue {
+                            key_placeholder: "X-Header".into(),
+                            value_placeholder: "value".into(),
+                        },
+                    )
+                    .help("写入 headers{}，附加到每次请求。"),
+                ],
             )
             .advanced(),
         ]
@@ -250,10 +254,10 @@ impl AppConfig for OpenClawConfig {
         let mut headers = HashMap::new();
         if let Some(obj) = values.get("headers").and_then(Value::as_object) {
             for (k, v) in obj {
-                if let Some(s) = v.as_str() {
-                    if !k.trim().is_empty() {
-                        headers.insert(k.clone(), s.to_string());
-                    }
+                if let Some(s) = v.as_str()
+                    && !k.trim().is_empty()
+                {
+                    headers.insert(k.clone(), s.to_string());
                 }
             }
         }
@@ -544,10 +548,12 @@ mod tests {
         let mut v = sample_values();
         super::super::set_str(&mut v, "api", "openai");
         let issues = OpenClawConfig.validate(&v);
-        assert!(issues
-            .iter()
-            .any(|i| i.severity == super::super::Severity::Error
-                && i.field.as_deref() == Some("api")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == super::super::Severity::Error
+                    && i.field.as_deref() == Some("api"))
+        );
     }
 
     #[test]

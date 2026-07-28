@@ -2,13 +2,13 @@
 //!
 //! Handles importing provider configurations via ochub:// URLs.
 
-use super::utils::{decode_base64_param, infer_homepage_from_endpoint};
 use super::DeepLinkImportRequest;
+use super::utils::{decode_base64_param, infer_homepage_from_endpoint};
+use crate::AppType;
 use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::model::{Provider, ProviderMeta, UsageScript};
 use crate::services::ProviderService;
-use crate::AppType;
 use serde_json::json;
 use std::io::Read;
 use std::str::FromStr;
@@ -40,10 +40,10 @@ pub fn import_provider_from_deeplink(
     // Step 1: Merge config file if provided (v3.8+)
     let mut merged_request = parse_and_merge_config(&request)?;
 
-    if let Some(app) = merged_request.app.as_deref() {
-        if let Ok(id) = crate::app_id::AppId::parse(app) {
-            crate::plugin::registry::ensure_app_enabled(&id)?;
-        }
+    if let Some(app) = merged_request.app.as_deref()
+        && let Ok(id) = crate::app_id::AppId::parse(app)
+    {
+        crate::plugin::registry::ensure_app_enabled(&id)?;
     }
 
     // Extract required fields (now as Option)
@@ -126,15 +126,15 @@ pub fn import_provider_from_deeplink(
     // Add extra endpoints as custom endpoints (skip first one as it's the primary)
     for ep in all_endpoints.iter().skip(1) {
         let normalized = ep.trim().trim_end_matches('/').to_string();
-        if !normalized.is_empty() {
-            if let Err(e) = ProviderService::add_custom_endpoint(
+        if !normalized.is_empty()
+            && let Err(e) = ProviderService::add_custom_endpoint(
                 state,
                 app_type,
                 &provider_id,
                 normalized.clone(),
-            ) {
-                log::warn!("Failed to add custom endpoint '{normalized}': {e}");
-            }
+            )
+        {
+            log::warn!("Failed to add custom endpoint '{normalized}': {e}");
         }
     }
 
@@ -560,7 +560,7 @@ pub fn parse_and_merge_config(
         _ => {
             return Err(AppError::InvalidInput(format!(
                 "Unsupported config format: {format}"
-            )))
+            )));
         }
     };
 
@@ -587,7 +587,7 @@ pub fn parse_and_merge_config(
             return Err(AppError::InvalidInput(format!(
                 "Invalid app type: {:?}",
                 request.app
-            )))
+            )));
         }
     }
 
@@ -661,26 +661,26 @@ fn merge_claude_config(
         })?;
 
     // Auto-fill API key if not provided in URL
-    if request.api_key.as_ref().is_none_or(|s| s.is_empty()) {
-        if let Some(token) = env.get("ANTHROPIC_AUTH_TOKEN").and_then(|v| v.as_str()) {
-            request.api_key = Some(token.to_string());
-        }
+    if request.api_key.as_ref().is_none_or(|s| s.is_empty())
+        && let Some(token) = env.get("ANTHROPIC_AUTH_TOKEN").and_then(|v| v.as_str())
+    {
+        request.api_key = Some(token.to_string());
     }
 
     // Auto-fill endpoint if not provided in URL
-    if request.endpoint.as_ref().is_none_or(|s| s.is_empty()) {
-        if let Some(base_url) = env.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str()) {
-            request.endpoint = Some(base_url.to_string());
-        }
+    if request.endpoint.as_ref().is_none_or(|s| s.is_empty())
+        && let Some(base_url) = env.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str())
+    {
+        request.endpoint = Some(base_url.to_string());
     }
 
     // Auto-fill homepage from endpoint if not provided
-    if request.homepage.as_ref().is_none_or(|s| s.is_empty()) {
-        if let Some(endpoint) = request.endpoint.as_ref().filter(|s| !s.is_empty()) {
-            request.homepage = infer_homepage_from_endpoint(endpoint);
-            if request.homepage.is_none() {
-                request.homepage = Some("https://anthropic.com".to_string());
-            }
+    if request.homepage.as_ref().is_none_or(|s| s.is_empty())
+        && let Some(endpoint) = request.endpoint.as_ref().filter(|s| !s.is_empty())
+    {
+        request.homepage = infer_homepage_from_endpoint(endpoint);
+        if request.homepage.is_none() {
+            request.homepage = Some("https://anthropic.com".to_string());
         }
     }
 
@@ -733,28 +733,28 @@ fn merge_codex_config(
         // Parse TOML config string to extract base_url and model
         if let Ok(toml_value) = toml::from_str::<toml::Value>(config_str) {
             // Extract base_url from model_providers section
-            if request.endpoint.as_ref().is_none_or(|s| s.is_empty()) {
-                if let Some(base_url) = extract_codex_base_url(&toml_value) {
-                    request.endpoint = Some(base_url);
-                }
+            if request.endpoint.as_ref().is_none_or(|s| s.is_empty())
+                && let Some(base_url) = extract_codex_base_url(&toml_value)
+            {
+                request.endpoint = Some(base_url);
             }
 
             // Extract model
-            if request.model.is_none() {
-                if let Some(model) = toml_value.get("model").and_then(|v| v.as_str()) {
-                    request.model = Some(model.to_string());
-                }
+            if request.model.is_none()
+                && let Some(model) = toml_value.get("model").and_then(|v| v.as_str())
+            {
+                request.model = Some(model.to_string());
             }
         }
     }
 
     // Auto-fill homepage from endpoint
-    if request.homepage.as_ref().is_none_or(|s| s.is_empty()) {
-        if let Some(endpoint) = request.endpoint.as_ref().filter(|s| !s.is_empty()) {
-            request.homepage = infer_homepage_from_endpoint(endpoint);
-            if request.homepage.is_none() {
-                request.homepage = Some("https://openai.com".to_string());
-            }
+    if request.homepage.as_ref().is_none_or(|s| s.is_empty())
+        && let Some(endpoint) = request.endpoint.as_ref().filter(|s| !s.is_empty())
+    {
+        request.homepage = infer_homepage_from_endpoint(endpoint);
+        if request.homepage.is_none() {
+            request.homepage = Some("https://openai.com".to_string());
         }
     }
 
@@ -770,33 +770,31 @@ fn merge_additive_config(
     config: &serde_json::Value,
 ) -> Result<(), AppError> {
     // Extract api_key from config if not provided in URL
-    if request.api_key.as_ref().is_none_or(|s| s.is_empty()) {
-        if let Some(api_key) = config
+    if request.api_key.as_ref().is_none_or(|s| s.is_empty())
+        && let Some(api_key) = config
             .get("apiKey")
             .or_else(|| config.get("api_key"))
             .and_then(|v| v.as_str())
-        {
-            request.api_key = Some(api_key.to_string());
-        }
+    {
+        request.api_key = Some(api_key.to_string());
     }
 
     // Extract endpoint from config if not provided in URL
-    if request.endpoint.as_ref().is_none_or(|s| s.is_empty()) {
-        if let Some(base_url) = config
+    if request.endpoint.as_ref().is_none_or(|s| s.is_empty())
+        && let Some(base_url) = config
             .get("baseUrl")
             .or_else(|| config.get("base_url"))
             .or_else(|| config.get("options").and_then(|o| o.get("baseURL")))
             .and_then(|v| v.as_str())
-        {
-            request.endpoint = Some(base_url.to_string());
-        }
+    {
+        request.endpoint = Some(base_url.to_string());
     }
 
     // Auto-fill homepage from endpoint
-    if request.homepage.as_ref().is_none_or(|s| s.is_empty()) {
-        if let Some(endpoint) = request.endpoint.as_ref().filter(|s| !s.is_empty()) {
-            request.homepage = infer_homepage_from_endpoint(endpoint);
-        }
+    if request.homepage.as_ref().is_none_or(|s| s.is_empty())
+        && let Some(endpoint) = request.endpoint.as_ref().filter(|s| !s.is_empty())
+    {
+        request.homepage = infer_homepage_from_endpoint(endpoint);
     }
 
     Ok(())

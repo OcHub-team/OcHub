@@ -10,8 +10,8 @@ use std::sync::{Arc, LazyLock, RwLock};
 use crate::app_id::AppId;
 use crate::error::AppError;
 
-use super::builtin::builtin_plugins;
 use super::AppPlugin;
+use super::builtin::builtin_plugins;
 
 pub struct PluginRegistry {
     plugins: BTreeMap<AppId, Arc<dyn AppPlugin>>,
@@ -208,7 +208,7 @@ mod tests {
     fn enabled_gating_follows_settings_map() {
         let _guard = crate::test_support::env_lock();
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("OCHUB_TEST_HOME", temp.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", temp.path());
         crate::settings::reload_settings().unwrap();
 
         // Defaults: hermes off, everything else on.
@@ -240,7 +240,7 @@ mod tests {
             Err(AppError::AppDisabled(_))
         ));
 
-        std::env::remove_var("OCHUB_TEST_HOME");
+        crate::test_support::remove_var("OCHUB_TEST_HOME");
         crate::settings::reload_settings().ok();
     }
 }

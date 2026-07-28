@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::db::Database;
@@ -164,10 +164,8 @@ impl GatewayService {
             .get_gateway_config()
             .map(|c| c.enabled)
             .unwrap_or(false);
-        if enabled {
-            if let Err(e) = self.start().await {
-                log::warn!("[gateway] background autostart failed: {e}");
-            }
+        if enabled && let Err(e) = self.start().await {
+            log::warn!("[gateway] background autostart failed: {e}");
         }
     }
 
@@ -263,10 +261,10 @@ impl Drop for GatewayService {
         if let Some(command_tx) = &self.command_tx {
             let _ = command_tx.send(GatewayCommand::Shutdown);
         }
-        if let Some(worker_thread) = self.worker_thread.take() {
-            if worker_thread.thread().id() != std::thread::current().id() {
-                let _ = worker_thread.join();
-            }
+        if let Some(worker_thread) = self.worker_thread.take()
+            && worker_thread.thread().id() != std::thread::current().id()
+        {
+            let _ = worker_thread.join();
         }
     }
 }

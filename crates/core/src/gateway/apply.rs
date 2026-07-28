@@ -146,14 +146,13 @@ pub fn ensure_app_route(state: &AppState, app_type: AppType) -> Result<GatewayRo
         .into_iter()
         .find(|key| key.name == app_type.as_str() && key.enabled)
         .and_then(|key| key.route_id);
-    if let Some(route_id) = bound_route_id {
-        if let Some(route) = state
+    if let Some(route_id) = bound_route_id
+        && let Some(route) = state
             .db
             .get_gateway_route_by_id(&route_id)?
             .filter(|route| route.enabled)
-        {
-            return Ok(route);
-        }
+    {
+        return Ok(route);
     }
     if let Some(route) = state.db.get_gateway_route_for_app(app_type.as_str())? {
         return Ok(route);
@@ -261,10 +260,11 @@ fn route_client_models(route: &GatewayRoute, channels: &[GatewayChannel]) -> Vec
             models.push(rule.model.clone());
         }
     }
-    if let Some(default) = &route.default_model {
-        if !default.trim().is_empty() && !models.contains(default) {
-            models.push(default.clone());
-        }
+    if let Some(default) = &route.default_model
+        && !default.trim().is_empty()
+        && !models.contains(default)
+    {
+        models.push(default.clone());
     }
     for channel in channels
         .iter()
@@ -515,7 +515,7 @@ pub fn apply_to_app(
         0 => {
             return Err(AppError::InvalidInput(
                 "请先添加并启用一个模型供应商".to_string(),
-            ))
+            ));
         }
         1 => station_routes.remove(0),
         // Refuse to pick one implicitly: which station wins would depend on DB
@@ -523,7 +523,7 @@ pub fn apply_to_app(
         _ => {
             return Err(AppError::InvalidInput(
                 "存在多个已启用的模型供应商，请在模型供应商页面选择要应用的一个".to_string(),
-            ))
+            ));
         }
     };
     let policy = station_model_policy(state, app_type, &route)?;
@@ -1117,11 +1117,13 @@ mod tests {
         let codex_toml = codex["config"].as_str().unwrap();
         assert!(codex_toml.contains("model = \"gpt-5.6\""));
         assert_eq!(codex["modelCatalog"]["models"][0]["model"], "gpt-5.6");
-        assert!(codex["modelCatalog"]["models"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|model| model["model"] == "claude-opus-5"));
+        assert!(
+            codex["modelCatalog"]["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|model| model["model"] == "claude-opus-5")
+        );
 
         let claude = gateway_settings_for_provider(
             AppType::Claude,
@@ -1240,9 +1242,11 @@ mod tests {
         let second = gateway_provider_id("station:second");
         assert_ne!(first, second);
         assert!(first.starts_with("local-gateway-"));
-        assert!(first
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-'));
+        assert!(
+            first
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        );
         assert_ne!(
             gateway_key_label(AppType::Claude, "station:first"),
             gateway_key_label(AppType::Claude, "station:second")
@@ -1456,9 +1460,11 @@ mod tests {
         route.enabled = false;
         state.db.upsert_gateway_route(&route).unwrap();
 
-        assert!(station_channel_options(&state, AppType::Claude)
-            .unwrap()
-            .is_empty());
+        assert!(
+            station_channel_options(&state, AppType::Claude)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

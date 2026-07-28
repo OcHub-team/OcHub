@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use url::Url;
 
 use crate::application::{Application, ApplicationError, ApplicationResult};
@@ -515,10 +515,10 @@ impl Application {
             if channel.endpoint_id.is_none() {
                 channel.endpoint_id = Some(format!("station-endpoint:{id}:{index}"));
             }
-            if channel.api_key.is_empty() {
-                if let Some(existing) = old_by_id.get(channel.id.as_str()) {
-                    channel.api_key.clone_from(&existing.api_key);
-                }
+            if channel.api_key.is_empty()
+                && let Some(existing) = old_by_id.get(channel.id.as_str())
+            {
+                channel.api_key.clone_from(&existing.api_key);
             }
             validate_channel(channel)?;
         }
@@ -914,12 +914,12 @@ fn validate_route_references(
         )));
     }
     for rule in &route.model_rules {
-        if let Some(channel_id) = &rule.channel_id {
-            if !known.contains(channel_id.as_str()) {
-                return Err(ApplicationError::InvalidInput(format!(
-                    "gateway route rule references missing channel: {channel_id}"
-                )));
-            }
+        if let Some(channel_id) = &rule.channel_id
+            && !known.contains(channel_id.as_str())
+        {
+            return Err(ApplicationError::InvalidInput(format!(
+                "gateway route rule references missing channel: {channel_id}"
+            )));
         }
     }
     Ok(())

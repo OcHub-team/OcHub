@@ -630,23 +630,22 @@ fn parse_minimax_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
     }
 
     // 周桶:仅当 status=1 时激活;status=3 等表示该套餐无周限额,跳过
-    if item.get("current_weekly_status").and_then(|v| v.as_i64()) == Some(1) {
-        if let Some(remain_pct) = item
+    if item.get("current_weekly_status").and_then(|v| v.as_i64()) == Some(1)
+        && let Some(remain_pct) = item
             .get("current_weekly_remaining_percent")
             .and_then(|v| v.as_f64())
-        {
-            let resets_at = item
-                .get("weekly_end_time")
-                .and_then(|v| v.as_i64())
-                .and_then(millis_to_iso8601);
-            tiers.push(QuotaTier {
-                name: TIER_WEEKLY_LIMIT.to_string(),
-                utilization: 100.0 - remain_pct,
-                resets_at,
-                used_value_usd: None,
-                max_value_usd: None,
-            });
-        }
+    {
+        let resets_at = item
+            .get("weekly_end_time")
+            .and_then(|v| v.as_i64())
+            .and_then(millis_to_iso8601);
+        tiers.push(QuotaTier {
+            name: TIER_WEEKLY_LIMIT.to_string(),
+            utilization: 100.0 - remain_pct,
+            resets_at,
+            used_value_usd: None,
+            max_value_usd: None,
+        });
     }
 
     tiers
@@ -705,8 +704,8 @@ pub async fn get_coding_plan_quota(
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_minimax_tiers, parse_zhipu_token_tiers, zhipu_quota_base, TIER_FIVE_HOUR,
-        TIER_WEEKLY_LIMIT,
+        TIER_FIVE_HOUR, TIER_WEEKLY_LIMIT, parse_minimax_tiers, parse_zhipu_token_tiers,
+        zhipu_quota_base,
     };
     use serde_json::json;
 

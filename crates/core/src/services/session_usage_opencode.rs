@@ -12,12 +12,12 @@
 //! ```
 
 use crate::apps::opencode::get_opencode_db_path;
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use crate::services::session_usage::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    SessionSyncResult, get_sync_state, metadata_modified_nanos, update_sync_state,
 };
-use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
+use crate::services::usage_stats::{DedupKey, find_model_pricing, should_skip_session_insert};
 use crate::usage_tracking::calculator::CostCalculator;
 use crate::usage_tracking::parser::TokenUsage;
 use rust_decimal::Decimal;

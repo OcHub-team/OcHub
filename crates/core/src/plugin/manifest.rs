@@ -17,8 +17,8 @@ use serde::Deserialize;
 
 use crate::app_id::AppId;
 
-use super::hooks::HookRegistry;
 use super::AppMode;
+use super::hooks::HookRegistry;
 
 /// The only manifest schema version this build understands.
 pub const MANIFEST_VERSION: u32 = 1;
@@ -494,15 +494,15 @@ impl AppManifest {
             if !file_ids.insert(f.id.as_str()) {
                 return Err(ManifestError::check(format!("重复的文件 id: {}", f.id)));
             }
-            if let Some(m) = &f.dir_mode {
-                if parse_octal(m).is_none() {
-                    return Err(ManifestError::check(format!("无效的 dir_mode: {m}")));
-                }
+            if let Some(m) = &f.dir_mode
+                && parse_octal(m).is_none()
+            {
+                return Err(ManifestError::check(format!("无效的 dir_mode: {m}")));
             }
-            if let Some(m) = &f.file_mode {
-                if parse_octal(m).is_none() {
-                    return Err(ManifestError::check(format!("无效的 file_mode: {m}")));
-                }
+            if let Some(m) = &f.file_mode
+                && parse_octal(m).is_none()
+            {
+                return Err(ManifestError::check(format!("无效的 file_mode: {m}")));
             }
         }
 
@@ -551,13 +551,13 @@ impl AppManifest {
                         field.id
                     )));
                 }
-                if let Some(rule) = &map.rule {
-                    if rule != "rest" {
-                        return Err(ManifestError::check(format!(
-                            "字段 {} 的 map.rule 仅支持 \"rest\": {rule}",
-                            field.id
-                        )));
-                    }
+                if let Some(rule) = &map.rule
+                    && rule != "rest"
+                {
+                    return Err(ManifestError::check(format!(
+                        "字段 {} 的 map.rule 仅支持 \"rest\": {rule}",
+                        field.id
+                    )));
                 }
                 if let Some(cond) = &map.emit_when {
                     check_field_ref(&cond.field, "emit_when")?;
@@ -612,12 +612,12 @@ impl AppManifest {
         }
 
         // --- hooks exist in registry ---
-        if let Some(name) = &self.hooks.live_validate {
-            if !hooks.has_live_validate(name) {
-                return Err(ManifestError::check(format!(
-                    "未知的 live_validate hook: {name}"
-                )));
-            }
+        if let Some(name) = &self.hooks.live_validate
+            && !hooks.has_live_validate(name)
+        {
+            return Err(ManifestError::check(format!(
+                "未知的 live_validate hook: {name}"
+            )));
         }
         for name in &self.hooks.post_write {
             if !hooks.has_post_write(name) {
@@ -626,10 +626,10 @@ impl AppManifest {
                 )));
             }
         }
-        if let Some(name) = &self.hooks.decode {
-            if !hooks.has_decode(name) {
-                return Err(ManifestError::check(format!("未知的 decode hook: {name}")));
-            }
+        if let Some(name) = &self.hooks.decode
+            && !hooks.has_decode(name)
+        {
+            return Err(ManifestError::check(format!("未知的 decode hook: {name}")));
         }
 
         Ok(())

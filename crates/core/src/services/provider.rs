@@ -399,16 +399,15 @@ impl ProviderService {
                     crate::services::OmoService::write_provider_config_to_file(&provider, variant)?;
                 }
                 if let Err(err) = state.db.save_provider(app_type.as_str(), &provider) {
-                    if is_current {
-                        if let Err(rollback_err) =
+                    if is_current
+                        && let Err(rollback_err) =
                             crate::services::OmoService::write_config_to_file(state, variant)
-                        {
-                            log::warn!(
-                                "Failed to roll back {} config after DB save error: {}",
-                                variant.label,
-                                rollback_err
-                            );
-                        }
+                    {
+                        log::warn!(
+                            "Failed to roll back {} config after DB save error: {}",
+                            variant.label,
+                            rollback_err
+                        );
                     }
                     return Err(err);
                 }
@@ -662,15 +661,15 @@ impl ProviderService {
         // not of that provider, and `write_live_preserving_user_edits` carries
         // it forward instead. Account state is the exception: it belongs to the
         // account that was active and cannot follow the switch.
-        if let (Some(current_id), Some(outgoing)) = (current_id.as_deref(), outgoing) {
-            if current_id != id && !app_type.is_additive_mode() {
-                if let Err(e) = Self::capture_outgoing_account_state(state, &app_type, outgoing) {
-                    log::warn!("Backfill failed: {e}");
-                    result
-                        .warnings
-                        .push(format!("backfill_failed:{current_id}"));
-                }
-            }
+        if let (Some(current_id), Some(outgoing)) = (current_id.as_deref(), outgoing)
+            && current_id != id
+            && !app_type.is_additive_mode()
+            && let Err(e) = Self::capture_outgoing_account_state(state, &app_type, outgoing)
+        {
+            log::warn!("Backfill failed: {e}");
+            result
+                .warnings
+                .push(format!("backfill_failed:{current_id}"));
         }
 
         // Additive mode apps skip setting is_current (no such concept)
@@ -696,18 +695,17 @@ impl ProviderService {
         }
 
         // Hermes is additive: update top-level `model:` section to point at this provider.
-        if matches!(app_type, AppType::Hermes) {
-            if let Err(e) =
+        if matches!(app_type, AppType::Hermes)
+            && let Err(e) =
                 crate::apps::hermes::apply_switch_defaults(&provider.id, &provider.settings_config)
-            {
-                log::warn!(
-                    "Failed to update Hermes model defaults after switching to '{}': {e}",
-                    provider.id
-                );
-                result
-                    .warnings
-                    .push(format!("hermes_model_defaults_failed:{}", provider.id));
-            }
+        {
+            log::warn!(
+                "Failed to update Hermes model defaults after switching to '{}': {e}",
+                provider.id
+            );
+            result
+                .warnings
+                .push(format!("hermes_model_defaults_failed:{}", provider.id));
         }
 
         // For additive-mode providers that were DB-only, flip the live_config_managed flag.
@@ -960,11 +958,11 @@ impl ProviderService {
     fn extract_opencode_common_config(settings: &Value) -> Result<String, AppError> {
         let mut config = settings.clone();
 
-        if let Some(obj) = config.as_object_mut() {
-            if let Some(options) = obj.get_mut("options").and_then(|v| v.as_object_mut()) {
-                options.remove("apiKey");
-                options.remove("baseURL");
-            }
+        if let Some(obj) = config.as_object_mut()
+            && let Some(options) = obj.get_mut("options").and_then(|v| v.as_object_mut())
+        {
+            options.remove("apiKey");
+            options.remove("baseURL");
         }
 
         if config.is_null() || (config.is_object() && config.as_object().unwrap().is_empty()) {
@@ -1465,29 +1463,29 @@ pub(crate) fn normalize_claude_models_in_value(settings: &mut Value) -> bool {
         .or_else(|| model.clone())
         .or_else(|| small_fast.clone());
 
-    if env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL").is_none() {
-        if let Some(v) = target_haiku {
-            env.insert(
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
-                Value::String(v),
-            );
-            changed = true;
-        }
+    if env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL").is_none()
+        && let Some(v) = target_haiku
+    {
+        env.insert(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            Value::String(v),
+        );
+        changed = true;
     }
-    if env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").is_none() {
-        if let Some(v) = target_sonnet {
-            env.insert(
-                "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
-                Value::String(v),
-            );
-            changed = true;
-        }
+    if env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").is_none()
+        && let Some(v) = target_sonnet
+    {
+        env.insert(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            Value::String(v),
+        );
+        changed = true;
     }
-    if env.get("ANTHROPIC_DEFAULT_OPUS_MODEL").is_none() {
-        if let Some(v) = target_opus {
-            env.insert("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), Value::String(v));
-            changed = true;
-        }
+    if env.get("ANTHROPIC_DEFAULT_OPUS_MODEL").is_none()
+        && let Some(v) = target_opus
+    {
+        env.insert("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), Value::String(v));
+        changed = true;
     }
 
     if env.remove("ANTHROPIC_SMALL_FAST_MODEL").is_some() {

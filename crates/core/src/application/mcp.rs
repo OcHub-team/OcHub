@@ -1,4 +1,4 @@
-use crate::application::{redact_json, Application, ApplicationError, ApplicationResult};
+use crate::application::{Application, ApplicationError, ApplicationResult, redact_json};
 use crate::db::McpServer;
 use crate::mcp::validate_server_spec;
 use crate::services::McpService;

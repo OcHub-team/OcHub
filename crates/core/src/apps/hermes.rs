@@ -140,10 +140,10 @@ fn deduplicate_top_level_keys(raw: &str) -> String {
     let mut sections: Vec<(&str, usize)> = Vec::new();
     let mut offset = 0;
     for line in raw.split('\n') {
-        if is_top_level_key_line(line) {
-            if let Some(colon_pos) = line.find(':') {
-                sections.push((&line[..colon_pos], offset));
-            }
+        if is_top_level_key_line(line)
+            && let Some(colon_pos) = line.find(':')
+        {
+            sections.push((&line[..colon_pos], offset));
         }
         offset += line.len() + 1;
     }
@@ -1116,11 +1116,11 @@ mod tests {
         let _guard = test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let old_test_home = std::env::var_os("OCHUB_TEST_HOME");
-        std::env::set_var("OCHUB_TEST_HOME", tmp.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", tmp.path());
         let result = test_fn();
         match old_test_home {
-            Some(value) => std::env::set_var("OCHUB_TEST_HOME", value),
-            None => std::env::remove_var("OCHUB_TEST_HOME"),
+            Some(value) => crate::test_support::set_var("OCHUB_TEST_HOME", value),
+            None => crate::test_support::remove_var("OCHUB_TEST_HOME"),
         }
         result
     }

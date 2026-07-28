@@ -5,8 +5,9 @@ pub mod tools;
 
 pub use provider_terminal::open_provider_terminal;
 pub use tools::{
-    get_tool_versions, probe_tool_installations, run_tool_lifecycle_action, ToolInstallation,
-    ToolInstallationReport, ToolLifecycleAction, ToolVersion, WslShellPreferenceInput,
+    ToolInstallation, ToolInstallationReport, ToolLifecycleAction, ToolVersion,
+    WslShellPreferenceInput, get_tool_versions, probe_tool_installations,
+    run_tool_lifecycle_action,
 };
 
 use serde::{Deserialize, Serialize};

@@ -23,7 +23,11 @@ struct DaemonCli {
 async fn main() -> ExitCode {
     let cli = DaemonCli::parse();
     if let Some(data_dir) = &cli.data_dir {
-        std::env::set_var("OCHUB_DATA_DIR", data_dir);
+        // SAFETY: first statement of `main` after argument parsing. Tokio's
+        // worker threads exist by now but hold no task yet, so nothing else in
+        // the process can be reading the environment during the write. The
+        // daemon's own readers all run after this point.
+        unsafe { std::env::set_var("OCHUB_DATA_DIR", data_dir) };
     }
     tracing_subscriber::fmt()
         .with_env_filter(

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::application::{Application, ApplicationError, ApplicationResult};
 use crate::settings::ThemeMode;

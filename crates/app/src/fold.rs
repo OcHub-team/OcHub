@@ -55,13 +55,13 @@ fn json_regions(content: &str) -> Vec<FoldRegion> {
             '\n' => line += 1,
             '{' | '[' if !in_string => stack.push(line),
             '}' | ']' if !in_string => {
-                if let Some(open_line) = stack.pop() {
-                    if line > open_line {
-                        regions.push(FoldRegion {
-                            header: open_line,
-                            last: line,
-                        });
-                    }
+                if let Some(open_line) = stack.pop()
+                    && line > open_line
+                {
+                    regions.push(FoldRegion {
+                        header: open_line,
+                        last: line,
+                    });
                 }
             }
             _ => {}

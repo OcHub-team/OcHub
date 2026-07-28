@@ -5,7 +5,7 @@
 //! - [`ResponsesToMessagesStream`] — `response.*` events → messages SSE event
 //!   sequence (push-based; the upstream may arrive over SSE or WebSocket).
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::usage::responses_usage_to_messages;
 use crate::util::short_id;
@@ -165,14 +165,14 @@ pub fn request_to_responses(
 
     let system_text = system_to_text(obj.get("system"));
     let mut input: Vec<Value> = Vec::new();
-    if !opts.system_as_instructions {
-        if let Some(text) = &system_text {
-            input.push(json!({
-                "type": "message",
-                "role": "user",
-                "content": [{ "type": "input_text", "text": text }],
-            }));
-        }
+    if !opts.system_as_instructions
+        && let Some(text) = &system_text
+    {
+        input.push(json!({
+            "type": "message",
+            "role": "user",
+            "content": [{ "type": "input_text", "text": text }],
+        }));
     }
 
     if let Some(messages) = obj.get("messages").and_then(Value::as_array) {
@@ -241,17 +241,17 @@ pub fn request_to_responses(
                                 // replayed thinking block (the upstream signs its
                                 // own reasoning); carry the text so context isn't
                                 // lost.
-                                if let Some(t) = block.get("thinking").and_then(Value::as_str) {
-                                    if !t.is_empty() {
-                                        parts.push(text_part(is_assistant, t));
-                                    }
+                                if let Some(t) = block.get("thinking").and_then(Value::as_str)
+                                    && !t.is_empty()
+                                {
+                                    parts.push(text_part(is_assistant, t));
                                 }
                             }
                             _ => {
-                                if let Some(t) = block.get("text").and_then(Value::as_str) {
-                                    if !t.is_empty() {
-                                        parts.push(text_part(is_assistant, t));
-                                    }
+                                if let Some(t) = block.get("text").and_then(Value::as_str)
+                                    && !t.is_empty()
+                                {
+                                    parts.push(text_part(is_assistant, t));
                                 }
                             }
                         }
@@ -300,10 +300,10 @@ pub fn request_to_responses(
 
     let mut out = Map::new();
     out.insert("model".into(), json!(model));
-    if opts.system_as_instructions {
-        if let Some(text) = &system_text {
-            out.insert("instructions".into(), json!(text));
-        }
+    if opts.system_as_instructions
+        && let Some(text) = &system_text
+    {
+        out.insert("instructions".into(), json!(text));
     }
     out.insert("input".into(), Value::Array(input));
     if !tools.is_empty() {
@@ -360,11 +360,7 @@ fn output_stop_reason(output: &[Value]) -> &'static str {
             Some("function_call") | Some("custom_tool_call")
         )
     });
-    if used_tool {
-        "tool_use"
-    } else {
-        "end_turn"
-    }
+    if used_tool { "tool_use" } else { "end_turn" }
 }
 
 fn output_to_content(output: &[Value]) -> Vec<Value> {
@@ -395,14 +391,14 @@ fn output_to_content(output: &[Value]) -> Vec<Value> {
                 }
             }
             Some("message") => {
-                if item.get("role").and_then(Value::as_str) == Some("assistant") {
-                    if let Some(parts) = item.get("content").and_then(Value::as_array) {
-                        for part in parts {
-                            if part.get("type").and_then(Value::as_str) == Some("output_text") {
-                                if let Some(t) = part.get("text").and_then(Value::as_str) {
-                                    content.push(json!({ "type": "text", "text": t }));
-                                }
-                            }
+                if item.get("role").and_then(Value::as_str) == Some("assistant")
+                    && let Some(parts) = item.get("content").and_then(Value::as_array)
+                {
+                    for part in parts {
+                        if part.get("type").and_then(Value::as_str) == Some("output_text")
+                            && let Some(t) = part.get("text").and_then(Value::as_str)
+                        {
+                            content.push(json!({ "type": "text", "text": t }));
                         }
                     }
                 }

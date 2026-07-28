@@ -1,10 +1,10 @@
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::db::Database;
 use crate::db::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
+use crate::db::Database;
 use crate::error::AppError;
 use crate::model::Provider;
 #[cfg(any(target_os = "macos", windows))]
@@ -244,14 +244,15 @@ pub fn validate_direct_provider(provider: &Provider) -> Result<(), AppError> {
     }
 
     if let Some(meta) = provider.meta.as_ref() {
-        if let Some(api_format) = meta.api_format.as_deref() {
-            if !api_format.trim().is_empty() && api_format != "anthropic" {
-                return Err(AppError::localized(
-                    "claude_desktop.provider.api_format_unsupported",
-                    "Claude Desktop 第一阶段只支持原生 Anthropic Messages API",
-                    "Claude Desktop phase 1 only supports native Anthropic Messages API",
-                ));
-            }
+        if let Some(api_format) = meta.api_format.as_deref()
+            && !api_format.trim().is_empty()
+            && api_format != "anthropic"
+        {
+            return Err(AppError::localized(
+                "claude_desktop.provider.api_format_unsupported",
+                "Claude Desktop 第一阶段只支持原生 Anthropic Messages API",
+                "Claude Desktop phase 1 only supports native Anthropic Messages API",
+            ));
         }
 
         if matches!(

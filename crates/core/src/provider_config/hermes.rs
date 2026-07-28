@@ -34,11 +34,11 @@
 use serde_json::{Map, Value};
 
 use super::{
-    set_str, str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection,
-    FormValues, GridColumn, Language, PreviewFile, SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
+    GridColumn, Language, PreviewFile, SelectOption, set_str, str_val,
 };
-use crate::model::ProviderMeta;
 use crate::AppType;
+use crate::model::ProviderMeta;
 
 const MODE_CHAT_COMPLETIONS: &str = "chat_completions";
 const MODE_ANTHROPIC_MESSAGES: &str = "anthropic_messages";
@@ -507,13 +507,13 @@ fn build_yaml_entry(values: &FormValues, name: &str) -> serde_norway::Value {
         m.insert(yaml_str("models"), serde_norway::Value::Mapping(models_map));
     }
 
-    if let Some(delay) = parse_delay(str_val(values, "rate_limit_delay")) {
-        if let Some(f) = delay.as_f64() {
-            m.insert(
-                yaml_str("rate_limit_delay"),
-                serde_norway::Value::Number(serde_norway::Number::from(f)),
-            );
-        }
+    if let Some(delay) = parse_delay(str_val(values, "rate_limit_delay"))
+        && let Some(f) = delay.as_f64()
+    {
+        m.insert(
+            yaml_str("rate_limit_delay"),
+            serde_norway::Value::Number(serde_norway::Number::from(f)),
+        );
     }
 
     serde_norway::Value::Mapping(m)
@@ -740,25 +740,31 @@ mod tests {
         let mut v = openrouter_values();
         set_str(&mut v, "api_mode", "");
         let issues = HermesConfig.validate(&v);
-        assert!(issues
-            .iter()
-            .any(|i| i.severity == super::super::Severity::Error
-                && i.field.as_deref() == Some("api_mode")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == super::super::Severity::Error
+                    && i.field.as_deref() == Some("api_mode"))
+        );
 
         // Unknown mode -> error.
         let mut v = openrouter_values();
         set_str(&mut v, "api_mode", "weird_mode");
         let issues = HermesConfig.validate(&v);
-        assert!(issues
-            .iter()
-            .any(|i| i.severity == super::super::Severity::Error
-                && i.field.as_deref() == Some("api_mode")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == super::super::Severity::Error
+                    && i.field.as_deref() == Some("api_mode"))
+        );
 
         // A valid config has no api_mode error.
         let issues = HermesConfig.validate(&openrouter_values());
-        assert!(!issues
-            .iter()
-            .any(|i| i.field.as_deref() == Some("api_mode")));
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.field.as_deref() == Some("api_mode"))
+        );
     }
 
     #[test]
@@ -772,8 +778,10 @@ mod tests {
         let issues = HermesConfig.validate(&v);
         assert!(issues.iter().any(|i| i.field.as_deref() == Some("models")
             && i.severity == super::super::Severity::Warning));
-        assert!(issues
-            .iter()
-            .any(|i| i.field.as_deref() == Some("rate_limit_delay")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.field.as_deref() == Some("rate_limit_delay"))
+        );
     }
 }

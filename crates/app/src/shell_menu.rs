@@ -2,18 +2,18 @@
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use gpui::Global;
-use gpui::{actions, App, AppContext, Menu, MenuItem, OsAction, SharedString, SystemMenuType};
+use gpui::{App, AppContext, Menu, MenuItem, OsAction, SharedString, SystemMenuType, actions};
 use ochub_core::services::provider::ProviderService;
 use ochub_core::services::subscription::{
     SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
     TIER_WEEKLY_LIMIT,
 };
-use ochub_core::{settings, AppState, AppType, Provider, UsageResult};
+use ochub_core::{AppState, AppType, Provider, UsageResult, settings};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tray_icon::menu::{
     CheckMenuItem as TrayCheckMenuItem, Menu as TrayMenu, MenuEvent, MenuItem as TrayMenuItem,
@@ -829,13 +829,12 @@ fn usage_suffix(
         {
             return Some(format!(" · {summary}"));
         }
-        if provider_uses_official_subscription(provider) {
-            if let Some(Some(summary)) = app
+        if provider_uses_official_subscription(provider)
+            && let Some(Some(summary)) = app
                 .usage_cache
                 .with_subscription(&app_type, format_subscription_summary)
-            {
-                return Some(format!(" · {summary}"));
-            }
+        {
+            return Some(format!(" · {summary}"));
         }
     } else {
         app.usage_cache.invalidate_script(&app_type, provider_id);

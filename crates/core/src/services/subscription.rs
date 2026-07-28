@@ -126,8 +126,8 @@ fn read_claude_credentials() -> (Option<String>, CredentialStatus, Option<String
 
 /// 从 macOS Keychain 读取 Claude 凭据
 #[cfg(target_os = "macos")]
-fn read_claude_credentials_from_keychain(
-) -> Option<(Option<String>, CredentialStatus, Option<String>)> {
+fn read_claude_credentials_from_keychain()
+-> Option<(Option<String>, CredentialStatus, Option<String>)> {
     let output = std::process::Command::new("security")
         .args([
             "find-generic-password",
@@ -227,14 +227,14 @@ fn parse_claude_credentials_json(
     };
 
     // 检查 token 是否过期
-    if let Some(expires_at) = entry.expires_at {
-        if is_token_expired(&expires_at) {
-            return (
-                Some(access_token),
-                CredentialStatus::Expired,
-                Some("OAuth token has expired".to_string()),
-            );
-        }
+    if let Some(expires_at) = entry.expires_at
+        && is_token_expired(&expires_at)
+    {
+        return (
+            Some(access_token),
+            CredentialStatus::Expired,
+            Some("OAuth token has expired".to_string()),
+        );
     }
 
     (Some(access_token), CredentialStatus::Valid, None)
@@ -369,18 +369,17 @@ async fn query_claude_quota(access_token: &str) -> SubscriptionQuota {
     // 解析已知的 tier 窗口
     let mut tiers = Vec::new();
     for &tier_name in KNOWN_TIERS {
-        if let Some(window) = body.get(tier_name) {
-            if let Ok(w) = serde_json::from_value::<ApiUsageWindow>(window.clone()) {
-                if let Some(util) = w.utilization {
-                    tiers.push(QuotaTier {
-                        name: tier_name.to_string(),
-                        utilization: util,
-                        resets_at: w.resets_at,
-                        used_value_usd: None,
-                        max_value_usd: None,
-                    });
-                }
-            }
+        if let Some(window) = body.get(tier_name)
+            && let Ok(w) = serde_json::from_value::<ApiUsageWindow>(window.clone())
+            && let Some(util) = w.utilization
+        {
+            tiers.push(QuotaTier {
+                name: tier_name.to_string(),
+                utilization: util,
+                resets_at: w.resets_at,
+                used_value_usd: None,
+                max_value_usd: None,
+            });
         }
     }
 
@@ -390,16 +389,16 @@ async fn query_claude_quota(access_token: &str) -> SubscriptionQuota {
             if key == "extra_usage" || KNOWN_TIERS.contains(&key.as_str()) {
                 continue;
             }
-            if let Ok(w) = serde_json::from_value::<ApiUsageWindow>(value.clone()) {
-                if let Some(util) = w.utilization {
-                    tiers.push(QuotaTier {
-                        name: key.clone(),
-                        utilization: util,
-                        resets_at: w.resets_at,
-                        used_value_usd: None,
-                        max_value_usd: None,
-                    });
-                }
+            if let Ok(w) = serde_json::from_value::<ApiUsageWindow>(value.clone())
+                && let Some(util) = w.utilization
+            {
+                tiers.push(QuotaTier {
+                    name: key.clone(),
+                    utilization: util,
+                    resets_at: w.resets_at,
+                    used_value_usd: None,
+                    max_value_usd: None,
+                });
             }
         }
     }
@@ -563,15 +562,15 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
     };
 
     // 检查 token 是否可能过期（距上次刷新 > 8 天）
-    if let Some(ref last_refresh) = auth.last_refresh {
-        if is_codex_token_stale(last_refresh) {
-            return (
-                Some(access_token),
-                tokens.account_id,
-                CredentialStatus::Expired,
-                Some("Codex token may be stale (>8 days since last refresh)".to_string()),
-            );
-        }
+    if let Some(ref last_refresh) = auth.last_refresh
+        && is_codex_token_stale(last_refresh)
+    {
+        return (
+            Some(access_token),
+            tokens.account_id,
+            CredentialStatus::Expired,
+            Some("Codex token may be stale (>8 days since last refresh)".to_string()),
+        );
     }
 
     (

@@ -8,8 +8,8 @@ use crate::application::{
     Application, ApplicationError, ApplicationResult, UsageFilter, UsageLimitItem,
 };
 use crate::services::pricing_catalog::{
-    refresh_pricing_catalog, PricingCatalogEntry, PricingCatalogRefreshOutcome,
-    PricingCatalogStatus,
+    PricingCatalogEntry, PricingCatalogRefreshOutcome, PricingCatalogStatus,
+    refresh_pricing_catalog,
 };
 use crate::services::session_usage::{DataSourceSummary, SessionSyncResult};
 use crate::services::usage_stats::{

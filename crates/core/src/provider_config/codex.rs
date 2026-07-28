@@ -10,15 +10,15 @@
 //! emitted with `toml_edit`, preserving any keys the form does not model, rather
 //! than asking the user to hand-write escaped TOML inside a JSON blob.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue};
 
 use super::{
-    bool_val, set_bool, set_str, str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind,
-    FormField, FormSection, FormValues, Language, PreviewFile, SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues, Language,
+    PreviewFile, SelectOption, bool_val, set_bool, set_str, str_val,
 };
-use crate::model::ProviderMeta;
 use crate::AppType;
+use crate::model::ProviderMeta;
 
 const AUTH_API_KEY: &str = "api_key";
 const AUTH_OPENAI_LOGIN: &str = "openai_login";
@@ -794,9 +794,11 @@ mod tests {
             result.settings_config["auth"]["tokens"]["refresh_token"],
             "oauth-refresh"
         );
-        assert!(result.settings_config["auth"]
-            .get("OPENAI_API_KEY")
-            .is_none());
+        assert!(
+            result.settings_config["auth"]
+                .get("OPENAI_API_KEY")
+                .is_none()
+        );
     }
 
     #[test]
@@ -978,10 +980,12 @@ env_key = "LEGACY_API_KEY"
         let mut v = deepseek_values();
         set_str(&mut v, "wire_api", "chat");
         let issues = CodexConfig.validate(&v);
-        assert!(issues
-            .iter()
-            .any(|i| i.severity == super::super::Severity::Error
-                && i.field.as_deref() == Some("wire_api")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == super::super::Severity::Error
+                    && i.field.as_deref() == Some("wire_api"))
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use gpui::{prelude::*, px, svg, Rgba};
+use gpui::{Rgba, prelude::*, px, svg};
 
 /// The icon registry — variants are allowed to be unused at any given time;
 /// they exist so any view/gallery can reach for them without adding assets.

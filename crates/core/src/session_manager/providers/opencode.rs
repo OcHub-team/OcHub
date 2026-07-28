@@ -14,10 +14,10 @@ const PROVIDER_ID: &str = "opencode";
 /// Respects `XDG_DATA_HOME` on all platforms; falls back to
 /// `~/.local/share/opencode/`.
 pub(crate) fn get_opencode_base_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("opencode");
-        }
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg).join("opencode");
     }
     dirs::home_dir()
         .map(|h| h.join(".local/share/opencode"))
@@ -721,10 +721,12 @@ mod tests {
         assert!(!message_dir.exists());
         assert!(!session_diff.exists());
         assert!(!part_dir.exists());
-        assert!(storage
-            .join("project")
-            .join(format!("{project_id}.json"))
-            .exists());
+        assert!(
+            storage
+                .join("project")
+                .join(format!("{project_id}.json"))
+                .exists()
+        );
     }
 
     #[test]
@@ -785,7 +787,7 @@ mod tests {
         let _guard = opencode_env_lock().lock().expect("lock");
         let temp = tempdir().expect("tempdir");
         let original_xdg = std::env::var_os("XDG_DATA_HOME");
-        std::env::set_var("XDG_DATA_HOME", temp.path());
+        crate::test_support::set_var("XDG_DATA_HOME", temp.path());
 
         let base_dir = temp.path().join("opencode");
         std::fs::create_dir_all(&base_dir).expect("create base dir");
@@ -809,9 +811,9 @@ mod tests {
 
         #[allow(deprecated)]
         if let Some(value) = original_xdg {
-            std::env::set_var("XDG_DATA_HOME", value);
+            crate::test_support::set_var("XDG_DATA_HOME", value);
         } else {
-            std::env::remove_var("XDG_DATA_HOME");
+            crate::test_support::remove_var("XDG_DATA_HOME");
         }
 
         assert_eq!(sessions.len(), 2);
@@ -896,7 +898,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let original_xdg = std::env::var_os("XDG_DATA_HOME");
         #[allow(deprecated)]
-        std::env::set_var("XDG_DATA_HOME", temp.path());
+        crate::test_support::set_var("XDG_DATA_HOME", temp.path());
 
         let base_dir = temp.path().join("opencode");
         std::fs::create_dir_all(&base_dir).expect("create base dir");
@@ -954,9 +956,9 @@ mod tests {
 
         #[allow(deprecated)]
         if let Some(value) = original_xdg {
-            std::env::set_var("XDG_DATA_HOME", value);
+            crate::test_support::set_var("XDG_DATA_HOME", value);
         } else {
-            std::env::remove_var("XDG_DATA_HOME");
+            crate::test_support::remove_var("XDG_DATA_HOME");
         }
     }
 
@@ -966,7 +968,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let original_xdg = std::env::var_os("XDG_DATA_HOME");
         #[allow(deprecated)]
-        std::env::set_var("XDG_DATA_HOME", temp.path());
+        crate::test_support::set_var("XDG_DATA_HOME", temp.path());
 
         let expected_base_dir = temp.path().join("opencode");
         std::fs::create_dir_all(&expected_base_dir).expect("create expected base dir");
@@ -989,9 +991,9 @@ mod tests {
 
         #[allow(deprecated)]
         if let Some(value) = original_xdg {
-            std::env::set_var("XDG_DATA_HOME", value);
+            crate::test_support::set_var("XDG_DATA_HOME", value);
         } else {
-            std::env::remove_var("XDG_DATA_HOME");
+            crate::test_support::remove_var("XDG_DATA_HOME");
         }
     }
 }

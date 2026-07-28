@@ -4,9 +4,9 @@
 //! 失败时不写标记，下一次启动自动重试。
 
 use crate::apps::codex::{
-    get_codex_config_dir, read_codex_config_text, OCHUB_CODEX_MODEL_PROVIDER_ID,
+    OCHUB_CODEX_MODEL_PROVIDER_ID, get_codex_config_dir, read_codex_config_text,
 };
-use crate::db::{is_official_seed_id, Database};
+use crate::db::{Database, is_official_seed_id};
 use crate::error::AppError;
 use crate::paths::{atomic_write, copy_file, get_app_config_dir, get_home_dir};
 use crate::settings::{
@@ -14,7 +14,7 @@ use crate::settings::{
     CodexThirdPartyHistoryProviderBucketMigration,
 };
 use chrono::{Local, Utc};
-use rusqlite::{backup::Backup, params_from_iter, Connection};
+use rusqlite::{Connection, backup::Backup, params_from_iter};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
@@ -194,8 +194,8 @@ pub fn maybe_migrate_codex_provider_template_bucket(
 /// custom 桶里官方与第三方会话无法区分，自动逻辑绝不反向搬回；
 /// 用户可在关闭开关时选择按备份账本精确还原（见 `restore_codex_official_history_from_backups`）。
 /// 迁移前 jsonl / state DB 均备份到 `~/.cc-switch/backups/codex-official-history-unify-v1/`。
-pub fn maybe_migrate_codex_official_history_to_unified_bucket(
-) -> Result<CodexHistoryProviderBucketMigrationOutcome, AppError> {
+pub fn maybe_migrate_codex_official_history_to_unified_bucket()
+-> Result<CodexHistoryProviderBucketMigrationOutcome, AppError> {
     if !crate::settings::unify_codex_session_history() {
         return Ok(CodexHistoryProviderBucketMigrationOutcome {
             skipped_reason: Some("unify_toggle_off".to_string()),
@@ -350,8 +350,8 @@ fn has_official_history_unify_backup_for_dir(ledger_parent: &Path, codex_dir_key
 /// 扫描全部备份代际取并集，多次开关循环后仍能还原早期迁入的会话；
 /// 还原前改动目标先备份到独立的 restore 目录（保持迁移账本目录纯净），
 /// 且只改写当前仍为 custom 的目标，重复执行无害。
-pub fn restore_codex_official_history_from_backups(
-) -> Result<CodexOfficialHistoryRestoreOutcome, AppError> {
+pub fn restore_codex_official_history_from_backups()
+-> Result<CodexOfficialHistoryRestoreOutcome, AppError> {
     let _op_guard = lock_codex_official_history_op();
     // 开关已（重新）开启时拒绝还原：live 正路由 custom，把账本会话翻回
     // openai 桶等于亲手制造分裂。覆盖"关闭保存成功后用户立刻重新开启，

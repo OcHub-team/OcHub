@@ -15,21 +15,21 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, size, App, Bounds, ClipboardItem, Context,
-    CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    Focusable, GlobalElementId, Hitbox, HitboxBehavior, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollHandle, ShapedLine, SharedString,
-    Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    ScrollHandle, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    actions, div, fill, point, prelude::*, px, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use zed_text::{Buffer as TextBuffer, BufferId, ReplicaId};
 
-use crate::fold::{fold_regions, FoldRegion};
+use crate::fold::{FoldRegion, fold_regions};
 use crate::highlight::{self, Lang};
 use crate::text_input::{
-    closest_match, find_matches, render_find_bar, Backspace, CaretBlink, CloseFind, Copy, Cut,
-    Delete, Down, End, Find, FindNext, FindPrevious, Home, Left, Newline, Paste, Redo, Right,
-    SelectAll, SelectLeft, SelectRight, ShowCharacterPalette, TextInput, Undo, Up,
+    Backspace, CaretBlink, CloseFind, Copy, Cut, Delete, Down, End, Find, FindNext, FindPrevious,
+    Home, Left, Newline, Paste, Redo, Right, SelectAll, SelectLeft, SelectRight,
+    ShowCharacterPalette, TextInput, Undo, Up, closest_match, find_matches, render_find_bar,
 };
 use crate::theme;
 
@@ -890,17 +890,15 @@ impl CodeEditor {
         }
 
         // Clicks in the gutter toggle the fold region headed on that row.
-        if let (Some(origin), Some(bounds)) = (self.text_origin, self.last_bounds) {
-            if event.position.x < origin.x && event.position.x >= bounds.left() {
-                if let Some(row) = self.row_for_position(event.position) {
-                    if let Some(line) = self.line_for_visible_row(row) {
-                        if self.region_at(line).is_some() {
-                            self.toggle_fold(line, cx);
-                            return;
-                        }
-                    }
-                }
-            }
+        if let (Some(origin), Some(bounds)) = (self.text_origin, self.last_bounds)
+            && event.position.x < origin.x
+            && event.position.x >= bounds.left()
+            && let Some(row) = self.row_for_position(event.position)
+            && let Some(line) = self.line_for_visible_row(row)
+            && self.region_at(line).is_some()
+        {
+            self.toggle_fold(line, cx);
+            return;
         }
         self.is_selecting = true;
         if event.modifiers.shift {
@@ -1721,10 +1719,10 @@ impl Element for CodeEditorElement {
             .ok();
         }
 
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
         }
 
         if let Some(scrollbar) = &prepaint.scrollbar {
@@ -1971,7 +1969,7 @@ mod tests {
         horizontal_scroll_for_caret, line_starts_after_edit, painted_row_range,
         scroll_amount_for_thumb_top, vertical_scrollbar_geometry,
     };
-    use gpui::{point, px, size, Bounds};
+    use gpui::{Bounds, point, px, size};
 
     #[test]
     fn editor_shapes_only_viewport_rows_with_small_overdraw() {

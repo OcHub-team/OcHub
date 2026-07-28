@@ -42,11 +42,11 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::session_manager::{SessionMessage, SessionMeta};
 
@@ -916,14 +916,18 @@ mod tests {
         );
 
         assert_eq!(index.search("config", 10).expect("search").len(), 1);
-        assert!(index
-            .search("SECRET_TOOL_OUTPUT", 10)
-            .expect("search")
-            .is_empty());
-        assert!(index
-            .search("SECRET_SYSTEM_PROMPT", 10)
-            .expect("search")
-            .is_empty());
+        assert!(
+            index
+                .search("SECRET_TOOL_OUTPUT", 10)
+                .expect("search")
+                .is_empty()
+        );
+        assert!(
+            index
+                .search("SECRET_SYSTEM_PROMPT", 10)
+                .expect("search")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1239,10 +1243,12 @@ mod tests {
         let body = format!("{}NEEDLE_PAST_THE_CAP", "x".repeat(BODY_MAX_CHARS));
         sync(&index, &[meta("s1", &path)], vec![message("user", &body)]);
 
-        assert!(index
-            .search("NEEDLE_PAST_THE_CAP", 10)
-            .expect("search")
-            .is_empty());
+        assert!(
+            index
+                .search("NEEDLE_PAST_THE_CAP", 10)
+                .expect("search")
+                .is_empty()
+        );
     }
 
     #[test]

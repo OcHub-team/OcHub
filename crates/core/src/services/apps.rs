@@ -45,7 +45,7 @@ mod tests {
     fn test_home() -> HomeGuard {
         let lock = crate::test_support::env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("OCHUB_TEST_HOME", dir.path());
+        crate::test_support::set_var("OCHUB_TEST_HOME", dir.path());
         crate::settings::reload_settings().unwrap();
         HomeGuard {
             _lock: lock,
@@ -55,7 +55,7 @@ mod tests {
 
     impl Drop for HomeGuard {
         fn drop(&mut self) {
-            std::env::remove_var("OCHUB_TEST_HOME");
+            crate::test_support::remove_var("OCHUB_TEST_HOME");
             let _ = crate::settings::reload_settings();
         }
     }

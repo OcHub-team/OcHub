@@ -7,7 +7,7 @@ use crate::paths::{
     atomic_write, delete_file, get_home_dir, read_json_file, sanitize_provider_name,
     write_json_file, write_text_file,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use toml_edit::{DocumentMut, Item};
 
@@ -216,15 +216,14 @@ pub fn extract_codex_api_key(auth: Option<&Value>, config_text: Option<&str>) ->
 pub fn extract_codex_base_url(config_text: &str) -> Option<String> {
     let doc = config_text.parse::<toml::Table>().ok()?;
 
-    if let Some(active_provider) = doc.get("model_provider").and_then(|v| v.as_str()) {
-        if let Some(base_url) = doc
+    if let Some(active_provider) = doc.get("model_provider").and_then(|v| v.as_str())
+        && let Some(base_url) = doc
             .get("model_providers")
             .and_then(|providers| providers.get(active_provider))
             .and_then(|provider| provider.get("base_url"))
             .and_then(|v| v.as_str())
-        {
-            return Some(base_url.to_string());
-        }
+    {
+        return Some(base_url.to_string());
     }
 
     doc.get("base_url")
@@ -974,14 +973,12 @@ fn set_codex_experimental_bearer_token(config_text: &str, token: &str) -> Result
     if let Some(model_providers) = doc
         .get_mut("model_providers")
         .and_then(|item| item.as_table_mut())
-    {
-        if let Some(provider_table) = model_providers
+        && let Some(provider_table) = model_providers
             .get_mut(provider_id.as_str())
             .and_then(|item| item.as_table_mut())
-        {
-            provider_table["experimental_bearer_token"] = toml_edit::value(token);
-            return Ok(doc.to_string());
-        }
+    {
+        provider_table["experimental_bearer_token"] = toml_edit::value(token);
+        return Ok(doc.to_string());
     }
 
     doc["experimental_bearer_token"] = toml_edit::value(token);
@@ -1042,21 +1039,20 @@ pub fn remove_codex_experimental_bearer_token_if(
         .parse::<DocumentMut>()
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
 
-    if let Some(provider_id) = active_codex_model_provider_id(&doc) {
-        if let Some(provider_table) = doc
+    if let Some(provider_id) = active_codex_model_provider_id(&doc)
+        && let Some(provider_table) = doc
             .get_mut("model_providers")
             .and_then(|item| item.as_table_mut())
             .and_then(|table| table.get_mut(provider_id.as_str()))
             .and_then(|item| item.as_table_mut())
-        {
-            let should_remove = provider_table
-                .get("experimental_bearer_token")
-                .and_then(|item| item.as_str())
-                .map(str::trim)
-                .is_some_and(&predicate);
-            if should_remove {
-                provider_table.remove("experimental_bearer_token");
-            }
+    {
+        let should_remove = provider_table
+            .get("experimental_bearer_token")
+            .and_then(|item| item.as_str())
+            .map(str::trim)
+            .is_some_and(&predicate);
+        if should_remove {
+            provider_table.remove("experimental_bearer_token");
         }
     }
 
@@ -1166,13 +1162,13 @@ pub fn inject_codex_unified_session_bucket(config_text: &str) -> Result<String, 
         parent.set_implicit(true);
         doc["model_providers"] = toml_edit::Item::Table(parent);
     }
-    if let Some(providers) = doc["model_providers"].as_table_mut() {
-        if !providers.contains_key(OCHUB_CODEX_MODEL_PROVIDER_ID) {
-            providers.insert(
-                OCHUB_CODEX_MODEL_PROVIDER_ID,
-                toml_edit::Item::Table(codex_unified_official_provider_table()),
-            );
-        }
+    if let Some(providers) = doc["model_providers"].as_table_mut()
+        && !providers.contains_key(OCHUB_CODEX_MODEL_PROVIDER_ID)
+    {
+        providers.insert(
+            OCHUB_CODEX_MODEL_PROVIDER_ID,
+            toml_edit::Item::Table(codex_unified_official_provider_table()),
+        );
     }
     Ok(doc.to_string())
 }
@@ -1235,10 +1231,10 @@ pub fn apply_codex_unified_session_bucket_to_settings(
         .unwrap_or("")
         .to_string();
     let injected = inject_codex_unified_session_bucket(&config_text)?;
-    if injected != config_text {
-        if let Some(obj) = settings.as_object_mut() {
-            obj.insert("config".to_string(), Value::String(injected));
-        }
+    if injected != config_text
+        && let Some(obj) = settings.as_object_mut()
+    {
+        obj.insert("config".to_string(), Value::String(injected));
     }
     Ok(())
 }
@@ -1256,10 +1252,10 @@ pub fn strip_codex_unified_session_bucket_from_settings(
         return Ok(());
     };
     let stripped = strip_codex_unified_session_bucket(&config_text)?;
-    if stripped != config_text {
-        if let Some(obj) = settings.as_object_mut() {
-            obj.insert("config".to_string(), Value::String(stripped));
-        }
+    if stripped != config_text
+        && let Some(obj) = settings.as_object_mut()
+    {
+        obj.insert("config".to_string(), Value::String(stripped));
     }
     Ok(())
 }

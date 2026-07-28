@@ -2,7 +2,7 @@
 //! converters: content/block mapping, tool & tool_choice conversion, prompt-cache
 //! breakpoints, thinking-budget resolution, and final messages-request assembly.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// Options for building a messages-dialect request.
 #[derive(Debug, Clone)]
@@ -34,13 +34,12 @@ impl Default for MessagesRequestOptions {
 /// a single messages-dialect message, which that dialect expects for
 /// `tool_result` blocks.
 pub(crate) fn push_message(messages: &mut Vec<Value>, role: &str, mut blocks: Vec<Value>) {
-    if let Some(last) = messages.last_mut() {
-        if last.get("role").and_then(Value::as_str) == Some(role) {
-            if let Some(arr) = last.get_mut("content").and_then(Value::as_array_mut) {
-                arr.append(&mut blocks);
-                return;
-            }
-        }
+    if let Some(last) = messages.last_mut()
+        && last.get("role").and_then(Value::as_str) == Some(role)
+        && let Some(arr) = last.get_mut("content").and_then(Value::as_array_mut)
+    {
+        arr.append(&mut blocks);
+        return;
     }
     messages.push(json!({ "role": role, "content": blocks }));
 }
@@ -313,10 +312,10 @@ pub(crate) fn assemble(
     // out-of-range client value. With thinking enabled the upstream also
     // requires max_tokens > budget_tokens.
     let mut max_tokens = max_tokens.clamp(1, i32::MAX as i64);
-    if let Some(budget) = thinking_budget {
-        if max_tokens <= budget {
-            max_tokens = (budget + 4096).min(i32::MAX as i64);
-        }
+    if let Some(budget) = thinking_budget
+        && max_tokens <= budget
+    {
+        max_tokens = (budget + 4096).min(i32::MAX as i64);
     }
     out.insert("max_tokens".into(), json!(max_tokens));
     // The messages dialect requires the first message to use the `user` role.
@@ -345,10 +344,10 @@ pub(crate) fn assemble(
     out.insert("messages".into(), Value::Array(messages));
     // With thinking enabled the upstream requires temperature unset (defaults to
     // 1), so only forward the client's temperature when thinking is off.
-    if thinking_budget.is_none() {
-        if let Some(t) = temperature {
-            out.insert("temperature".into(), json!(t));
-        }
+    if thinking_budget.is_none()
+        && let Some(t) = temperature
+    {
+        out.insert("temperature".into(), json!(t));
     }
     if let Some(s) = stream {
         out.insert("stream".into(), json!(s));
@@ -363,19 +362,19 @@ pub(crate) fn assemble(
     });
     if tools.is_empty() {
         tool_choice = None;
-    } else if let Some(choice) = tool_choice.as_mut() {
-        if choice.get("type").and_then(Value::as_str) == Some("tool") {
-            let selected_name = choice.get("name").and_then(Value::as_str);
-            let selected_exists = selected_name
-                .map(|selected| {
-                    tools
-                        .iter()
-                        .any(|tool| tool.get("name").and_then(Value::as_str) == Some(selected))
-                })
-                .unwrap_or(false);
-            if !selected_exists {
-                *choice = json!({ "type": "auto" });
-            }
+    } else if let Some(choice) = tool_choice.as_mut()
+        && choice.get("type").and_then(Value::as_str) == Some("tool")
+    {
+        let selected_name = choice.get("name").and_then(Value::as_str);
+        let selected_exists = selected_name
+            .map(|selected| {
+                tools
+                    .iter()
+                    .any(|tool| tool.get("name").and_then(Value::as_str) == Some(selected))
+            })
+            .unwrap_or(false);
+        if !selected_exists {
+            *choice = json!({ "type": "auto" });
         }
     }
     if !tools.is_empty() {

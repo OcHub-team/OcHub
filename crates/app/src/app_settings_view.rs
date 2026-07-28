@@ -9,9 +9,9 @@
 //! in the global [`AppSettings`] (persisted via `settings::mutate_settings`);
 //! only their *placement* is app-scoped.
 
-use gpui::{div, prelude::*, Context, Entity, ScrollHandle, SharedString, Window};
-use ochub_core::settings::{self, AppSettings};
+use gpui::{Context, Entity, ScrollHandle, SharedString, Window, div, prelude::*};
 use ochub_core::AppType;
+use ochub_core::settings::{self, AppSettings};
 
 use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -171,7 +171,11 @@ impl AppSettingsView {
         );
     }
 
-    fn render_toggle_row(&self, toggle: AppToggle, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toggle_row(
+        &self,
+        toggle: AppToggle,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let on = (toggle.get)(&self.settings);
         layout::row()
             .id(toggle.id)

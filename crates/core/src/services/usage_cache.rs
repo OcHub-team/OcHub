@@ -111,43 +111,59 @@ mod tests {
     #[test]
     fn subscription_round_trip() {
         let cache = UsageCache::new();
-        assert!(cache
-            .with_subscription(&AppType::Claude, |q| q.success)
-            .is_none());
+        assert!(
+            cache
+                .with_subscription(&AppType::Claude, |q| q.success)
+                .is_none()
+        );
         cache.put_subscription(AppType::Claude, fake_quota());
-        assert!(cache
-            .with_subscription(&AppType::Claude, |q| q.success)
-            .unwrap());
-        assert!(cache
-            .with_subscription(&AppType::Codex, |q| q.success)
-            .is_none());
+        assert!(
+            cache
+                .with_subscription(&AppType::Claude, |q| q.success)
+                .unwrap()
+        );
+        assert!(
+            cache
+                .with_subscription(&AppType::Codex, |q| q.success)
+                .is_none()
+        );
     }
 
     #[test]
     fn script_round_trip_and_invalidate() {
         let cache = UsageCache::new();
-        assert!(cache
-            .with_script(&AppType::Codex, "pid", |r| r.success)
-            .is_none());
+        assert!(
+            cache
+                .with_script(&AppType::Codex, "pid", |r| r.success)
+                .is_none()
+        );
         cache.put_script(AppType::Codex, "pid".to_string(), fake_result());
-        assert!(cache
-            .with_script(&AppType::Codex, "pid", |r| r.success)
-            .is_some());
+        assert!(
+            cache
+                .with_script(&AppType::Codex, "pid", |r| r.success)
+                .is_some()
+        );
         cache.invalidate_script(&AppType::Codex, "pid");
-        assert!(cache
-            .with_script(&AppType::Codex, "pid", |r| r.success)
-            .is_none());
+        assert!(
+            cache
+                .with_script(&AppType::Codex, "pid", |r| r.success)
+                .is_none()
+        );
     }
 
     #[test]
     fn script_keys_are_isolated_by_app_type() {
         let cache = UsageCache::new();
         cache.put_script(AppType::Claude, "same".to_string(), fake_result());
-        assert!(cache
-            .with_script(&AppType::Claude, "same", |r| r.success)
-            .is_some());
-        assert!(cache
-            .with_script(&AppType::Codex, "same", |r| r.success)
-            .is_none());
+        assert!(
+            cache
+                .with_script(&AppType::Claude, "same", |r| r.success)
+                .is_some()
+        );
+        assert!(
+            cache
+                .with_script(&AppType::Codex, "same", |r| r.success)
+                .is_none()
+        );
     }
 }

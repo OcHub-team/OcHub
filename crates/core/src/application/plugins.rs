@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::AppId;
 use crate::application::{
     Application, ApplicationError, ApplicationResult, PluginDetails, PluginSummary,
 };
 use crate::plugin::{AppManifest, ManifestPlugin, ManifestSource};
-use crate::AppId;
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 

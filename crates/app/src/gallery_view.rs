@@ -2,7 +2,7 @@
 //! component in every state so visual tuning and regression checks don't
 //! require clicking through the whole app (GPUI has no hot reload).
 
-use gpui::{div, prelude::*, px, Context, FontWeight, ScrollHandle, SharedString, Window};
+use gpui::{Context, FontWeight, ScrollHandle, SharedString, Window, div, prelude::*, px};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::icons::IconName;
@@ -105,20 +105,24 @@ impl gpui::Render for GalleryView {
 
         let segmented_demo = components::card()
             .gap_3()
-            .child(Self::demo_row(vec![components::segmented(
-                "g-seg-1",
-                &["AUTH_TOKEN (Bearer)", "API_KEY (x-api-key)"],
-                0,
-                |_, _, _| {},
-            )
-            .into_any_element()]))
-            .child(Self::demo_row(vec![components::segmented(
-                "g-seg-2",
-                &["messages", "chat", "responses"],
-                1,
-                |_, _, _| {},
-            )
-            .into_any_element()]));
+            .child(Self::demo_row(vec![
+                components::segmented(
+                    "g-seg-1",
+                    &["AUTH_TOKEN (Bearer)", "API_KEY (x-api-key)"],
+                    0,
+                    |_, _, _| {},
+                )
+                .into_any_element(),
+            ]))
+            .child(Self::demo_row(vec![
+                components::segmented(
+                    "g-seg-2",
+                    &["messages", "chat", "responses"],
+                    1,
+                    |_, _, _| {},
+                )
+                .into_any_element(),
+            ]));
 
         let badges = components::card()
             .gap_3()

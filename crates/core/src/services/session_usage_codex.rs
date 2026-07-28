@@ -14,12 +14,12 @@
 //! - `event_msg` (type=token_count) → 提取累计 token 用量，计算 delta
 
 use crate::apps::codex::get_codex_config_dir;
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use crate::services::session_usage::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    SessionSyncResult, get_sync_state, metadata_modified_nanos, update_sync_state,
 };
-use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
+use crate::services::usage_stats::{DedupKey, find_model_pricing, should_skip_session_insert};
 use crate::usage_tracking::calculator::{CostCalculator, ModelPricing};
 use crate::usage_tracking::parser::TokenUsage;
 use rust_decimal::Decimal;
@@ -92,12 +92,12 @@ fn normalize_codex_model(raw: &str) -> String {
     // Step 4: 剥离紧凑日期后缀 -YYYYMMDD（正好 9 字符）
     if name.len() > 9 {
         let parts: Vec<&str> = name.rsplitn(2, '-').collect();
-        if parts.len() == 2 {
-            if let Some(suffix) = parts.first() {
-                if suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_digit()) {
-                    name = parts[1].to_string();
-                }
-            }
+        if parts.len() == 2
+            && let Some(suffix) = parts.first()
+            && suffix.len() == 8
+            && suffix.chars().all(|c| c.is_ascii_digit())
+        {
+            name = parts[1].to_string();
         }
     }
 
@@ -197,13 +197,13 @@ fn collect_codex_session_files(codex_dir: &Path) -> Vec<PathBuf> {
 
     // 2. 扫描 archived_sessions/*.jsonl（扁平归档目录）
     let archived_dir = codex_dir.join("archived_sessions");
-    if archived_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&archived_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                    files.push(path);
-                }
+    if archived_dir.is_dir()
+        && let Ok(entries) = fs::read_dir(&archived_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                files.push(path);
             }
         }
     }

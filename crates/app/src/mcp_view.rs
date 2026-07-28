@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, Context, Entity, FontWeight, ListAlignment, ListState, ScrollHandle,
-    SharedString, Window,
+    Context, Entity, FontWeight, ListAlignment, ListState, ScrollHandle, SharedString, Window, div,
+    prelude::*, px,
 };
 use ochub_core::db::legacy_json::{McpApps, McpServer};
 use ochub_core::services::McpService;
@@ -490,7 +490,7 @@ impl McpView {
         server: &McpServer,
         app: AppType,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let enabled = server.apps.is_enabled_for(&app);
         let id = server.id.clone();
         Self::toggle_chip(
@@ -504,7 +504,7 @@ impl McpView {
         }))
     }
 
-    fn render_card(&self, server: &McpServer, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_card(&self, server: &McpServer, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let delete_id = server.id.clone();
         let delete_name = server.name.clone();
         let edit_id = server.id.clone();
@@ -597,7 +597,11 @@ impl McpView {
             )
     }
 
-    fn render_form_app_toggle(&self, app: AppType, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_form_app_toggle(
+        &self,
+        app: AppType,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let enabled = self.apps.is_enabled_for(&app);
         Self::toggle_chip(
             format!("mcp-form-app-{}", app.as_str()),
@@ -610,7 +614,7 @@ impl McpView {
         }))
     }
 
-    fn render_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let title = if self.form_mode == FormMode::Edit {
             t(k::MCP_FORM_TITLE_EDIT)
         } else {

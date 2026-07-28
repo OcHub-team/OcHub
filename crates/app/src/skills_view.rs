@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    div, prelude::*, px, Context, FontWeight, ListAlignment, ListState, SharedString, Window,
+    Context, FontWeight, ListAlignment, ListState, SharedString, Window, div, prelude::*, px,
 };
 use ochub_core::db::legacy_json::{InstalledSkill, SkillRepo};
-use ochub_core::services::skill::{DiscoverableSkill, SkillUpdateInfo, SkillsShDiscoverableSkill};
 use ochub_core::services::SkillService;
+use ochub_core::services::skill::{DiscoverableSkill, SkillUpdateInfo, SkillsShDiscoverableSkill};
 use ochub_core::{AppState, AppType};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
@@ -196,10 +196,10 @@ impl SkillsView {
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        if !self.skill_apps.contains(&self.selected_app) {
-            if let Some(first) = self.skill_apps.first() {
-                self.selected_app = *first;
-            }
+        if !self.skill_apps.contains(&self.selected_app)
+            && let Some(first) = self.skill_apps.first()
+        {
+            self.selected_app = *first;
         }
         self.reload_generation = self.reload_generation.wrapping_add(1);
         let generation = self.reload_generation;
@@ -1066,7 +1066,7 @@ impl SkillsView {
 
     // ── 渲染 ────────────────────────────────────────────────────────────────
 
-    fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let labels = [
             tf!(k::SKILLS_TAB_INSTALLED, count = self.skills.len()),
             raw(k::SKILLS_TAB_DISCOVER).to_string(),
@@ -1091,7 +1091,11 @@ impl SkillsView {
         ))
     }
 
-    fn render_target_picker(&self, id: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_target_picker(
+        &self,
+        id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let apps = self.skill_apps.clone();
         let labels: Vec<String> = apps
             .iter()
@@ -1127,7 +1131,7 @@ impl SkillsView {
             ))
     }
 
-    fn render_stats(&self) -> impl IntoElement {
+    fn render_stats(&self) -> impl IntoElement + use<> {
         let remote_count = self.skills.iter().filter(|s| is_remote(s)).count();
         let tile = |child: gpui::Div| div().flex_1().min_w(px(200.)).child(child);
         div()
@@ -1176,7 +1180,7 @@ impl SkillsView {
             )))
     }
 
-    fn render_installed_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_installed_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut actions = div().flex().flex_row().items_center().gap_2().flex_none();
         actions = actions.child(
             components::button(
@@ -1328,7 +1332,7 @@ impl SkillsView {
         &self,
         skill: &InstalledSkill,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let confirm_target = ConfirmAction::Uninstall {
             id: skill.id.clone(),
             name: skill.name.clone(),
@@ -1517,7 +1521,7 @@ impl SkillsView {
             .child(self.render_app_toggles(skill, cx))
     }
 
-    fn render_discover_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_discover_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mode_selected = match self.discover_mode {
             DiscoverMode::Market => 0,
             DiscoverMode::Repos => 1,
@@ -1552,7 +1556,7 @@ impl SkillsView {
             .child(self.render_target_picker("skills-target-discover", cx))
     }
 
-    fn render_market_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_market_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut col = div()
             .flex()
             .flex_col()
@@ -1602,7 +1606,7 @@ impl SkillsView {
         &self,
         skill: &SkillsShDiscoverableSkill,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let installing = self.installing.contains(&skill.key);
         let (already, conflict) =
             self.install_state(&skill.directory, &skill.repo_owner, &skill.repo_name);
@@ -1708,7 +1712,7 @@ impl SkillsView {
         )
     }
 
-    fn render_market_more(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_market_more(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div().flex().flex_row().justify_center().w_full().child(
             components::button(
                 "skill-market-more",
@@ -1730,7 +1734,7 @@ impl SkillsView {
         )
     }
 
-    fn render_repo_manager(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_repo_manager(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
         for repo in &self.repos {
             let owner = repo.owner.clone();
@@ -1822,7 +1826,7 @@ impl SkillsView {
         )
     }
 
-    fn render_repo_results_header(&self) -> impl IntoElement {
+    fn render_repo_results_header(&self) -> impl IntoElement + use<> {
         let mut col = div()
             .flex()
             .flex_col()
@@ -1854,7 +1858,7 @@ impl SkillsView {
         &self,
         skill: &DiscoverableSkill,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let install_skill = skill.clone();
         let installing = self.installing.contains(&skill.key);
         let (already, conflict) =

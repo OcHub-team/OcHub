@@ -7,10 +7,10 @@
 //! will not compile until one exists. That is what makes search coverage a
 //! compiler guarantee rather than a table someone has to remember to update.
 
-use gpui::{div, prelude::*, AnyElement, Context, SharedString};
+use gpui::{AnyElement, Context, SharedString, div, prelude::*};
 
 use crate::components;
-use crate::i18n::{k, raw, t, Key};
+use crate::i18n::{Key, k, raw, t};
 use crate::icons::IconName;
 use crate::tf;
 use crate::theme;

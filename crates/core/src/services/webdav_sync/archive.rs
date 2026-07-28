@@ -3,15 +3,15 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use tempfile::{tempdir, TempDir};
-use zip::write::SimpleFileOptions;
+use tempfile::{TempDir, tempdir};
 use zip::DateTime;
+use zip::write::SimpleFileOptions;
 
 use crate::error::AppError;
 use crate::services::skill::SkillService;
 
 use crate::services::sync_protocol::{
-    io_context_localized, localized, MAX_SYNC_ARTIFACT_BYTES, REMOTE_SKILLS_ZIP,
+    MAX_SYNC_ARTIFACT_BYTES, REMOTE_SKILLS_ZIP, io_context_localized, localized,
 };
 
 /// Maximum number of entries allowed in a zip archive.

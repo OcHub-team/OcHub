@@ -14,7 +14,7 @@
 //! | `type: "sse"/"http"` | `type: "remote"`    |
 //! | `url`                | `url`               |
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::apps::opencode as opencode_config;
@@ -68,10 +68,11 @@ pub fn convert_to_opencode_format(spec: &Value) -> Result<Value, AppError> {
             result.insert("command".into(), Value::Array(command_arr));
 
             // Convert env → environment
-            if let Some(env) = obj.get("env") {
-                if env.is_object() && !env.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-                    result.insert("environment".into(), env.clone());
-                }
+            if let Some(env) = obj.get("env")
+                && env.is_object()
+                && !env.as_object().map(|o| o.is_empty()).unwrap_or(true)
+            {
+                result.insert("environment".into(), env.clone());
             }
 
             // Add enabled flag (OpenCode expects this)
@@ -87,11 +88,11 @@ pub fn convert_to_opencode_format(spec: &Value) -> Result<Value, AppError> {
             }
 
             // Convert headers if present
-            if let Some(headers) = obj.get("headers") {
-                if headers.is_object() && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true)
-                {
-                    result.insert("headers".into(), headers.clone());
-                }
+            if let Some(headers) = obj.get("headers")
+                && headers.is_object()
+                && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true)
+            {
+                result.insert("headers".into(), headers.clone());
             }
 
             // Add enabled flag
@@ -129,26 +130,27 @@ pub fn convert_from_opencode_format(spec: &Value) -> Result<Value, AppError> {
             result.insert("type".into(), json!("stdio"));
 
             // Split command array into command and args
-            if let Some(cmd_arr) = obj.get("command").and_then(|v| v.as_array()) {
-                if !cmd_arr.is_empty() {
-                    // First element is the command
-                    if let Some(cmd) = cmd_arr.first().and_then(|v| v.as_str()) {
-                        result.insert("command".into(), json!(cmd));
-                    }
+            if let Some(cmd_arr) = obj.get("command").and_then(|v| v.as_array())
+                && !cmd_arr.is_empty()
+            {
+                // First element is the command
+                if let Some(cmd) = cmd_arr.first().and_then(|v| v.as_str()) {
+                    result.insert("command".into(), json!(cmd));
+                }
 
-                    // Rest are args
-                    if cmd_arr.len() > 1 {
-                        let args: Vec<Value> = cmd_arr[1..].to_vec();
-                        result.insert("args".into(), Value::Array(args));
-                    }
+                // Rest are args
+                if cmd_arr.len() > 1 {
+                    let args: Vec<Value> = cmd_arr[1..].to_vec();
+                    result.insert("args".into(), Value::Array(args));
                 }
             }
 
             // Convert environment → env
-            if let Some(env) = obj.get("environment") {
-                if env.is_object() && !env.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-                    result.insert("env".into(), env.clone());
-                }
+            if let Some(env) = obj.get("environment")
+                && env.is_object()
+                && !env.as_object().map(|o| o.is_empty()).unwrap_or(true)
+            {
+                result.insert("env".into(), env.clone());
             }
         }
         "remote" => {
@@ -161,11 +163,11 @@ pub fn convert_from_opencode_format(spec: &Value) -> Result<Value, AppError> {
             }
 
             // Preserve headers
-            if let Some(headers) = obj.get("headers") {
-                if headers.is_object() && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true)
-                {
-                    result.insert("headers".into(), headers.clone());
-                }
+            if let Some(headers) = obj.get("headers")
+                && headers.is_object()
+                && !headers.as_object().map(|o| o.is_empty()).unwrap_or(true)
+            {
+                result.insert("headers".into(), headers.clone());
             }
         }
         _ => {

@@ -12,13 +12,13 @@ use std::time::Instant;
 use ochub_convert::aggregate;
 use ochub_convert::usage as conv_usage;
 use ochub_convert::{
-    chat as conv_chat, chat_upstream as conv_chat_upstream, messages as conv_messages,
-    responses as conv_responses, MessagesRequestOptions, Output, ResponsesRequestOptions,
-    SignatureCapture, SseParser, WireEvent,
+    MessagesRequestOptions, Output, ResponsesRequestOptions, SignatureCapture, SseParser,
+    WireEvent, chat as conv_chat, chat_upstream as conv_chat_upstream, messages as conv_messages,
+    responses as conv_responses,
 };
-use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use serde_json::{Value, json};
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 
 use crate::db::Database;
 use crate::gateway::router::candidates_for_model_ranked;
@@ -448,10 +448,10 @@ fn collect_outputs(outputs: Vec<Output>, out: &mut Converted) {
 }
 
 fn event_name(ev: &WireEvent) -> Option<String> {
-    if let Some(name) = &ev.event {
-        if !name.is_empty() {
-            return Some(name.clone());
-        }
+    if let Some(name) = &ev.event
+        && !name.is_empty()
+    {
+        return Some(name.clone());
     }
     serde_json::from_str::<Value>(&ev.data)
         .ok()
@@ -478,17 +478,17 @@ fn passthrough_usage_tap(inlet: Dialect, ev: &WireEvent, merged: &mut Option<Val
             _ => {}
         },
         Dialect::Chat => {
-            if let Some(u) = parsed.get("usage") {
-                if !u.is_null() {
-                    *merged = Some(chat_usage_to_messages(u));
-                }
+            if let Some(u) = parsed.get("usage")
+                && !u.is_null()
+            {
+                *merged = Some(chat_usage_to_messages(u));
             }
         }
         Dialect::Responses => {
-            if parsed.get("type").and_then(Value::as_str) == Some("response.completed") {
-                if let Some(u) = parsed.pointer("/response/usage") {
-                    *merged = Some(conv_usage::responses_usage_to_messages(u));
-                }
+            if parsed.get("type").and_then(Value::as_str) == Some("response.completed")
+                && let Some(u) = parsed.pointer("/response/usage")
+            {
+                *merged = Some(conv_usage::responses_usage_to_messages(u));
             }
         }
     }
@@ -547,14 +547,14 @@ fn convert_nonstream(
         Dialect::Chat => {
             let v: Value = serde_json::from_slice(raw)
                 .map_err(|_| "failed to parse upstream chat body".to_string())?;
-            if let Some(err) = v.get("error") {
-                if !err.is_null() {
-                    return Err(err
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("upstream error")
-                        .to_string());
-                }
+            if let Some(err) = v.get("error")
+                && !err.is_null()
+            {
+                return Err(err
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("upstream error")
+                    .to_string());
             }
             let usage = v.get("usage").map(chat_usage_to_messages);
             let body = match inlet {
@@ -754,7 +754,7 @@ pub async fn run(
             return PipelineOutcome::Json {
                 status: 400,
                 body: error_body(inlet, &format!("invalid JSON body: {e}")),
-            }
+            };
         }
     };
     let route = match route_for_key(&state.db, key.as_ref()) {
@@ -763,7 +763,7 @@ pub async fn run(
             return PipelineOutcome::Json {
                 status: 503,
                 body: error_body(inlet, &message),
-            }
+            };
         }
     };
     let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
@@ -802,7 +802,7 @@ pub async fn run(
             return PipelineOutcome::Json {
                 status: 500,
                 body: error_body(inlet, &format!("channel lookup failed: {e}")),
-            }
+            };
         }
     };
     let rule = request_model_rule(model_policy, route.as_ref(), &meta.model).cloned();
@@ -925,7 +925,7 @@ pub async fn run(
                 return PipelineOutcome::Json {
                     status: 502,
                     body: error_body(inlet, &format!("upstream body read failed: {e}")),
-                }
+                };
             }
         };
         match convert_nonstream(inlet, channel.dialect, &raw, &meta.model) {
@@ -945,10 +945,10 @@ pub async fn run(
                     );
                 }
                 // Store thinking signatures for messages-dialect follow-ups.
-                if let Some(content) = client_body.get("content").and_then(Value::as_array) {
-                    if let Some(capture) = ochub_convert::signature::capture_from_content(content) {
-                        ochub_convert::signature::store_capture(&*state.signatures, &capture);
-                    }
+                if let Some(content) = client_body.get("content").and_then(Value::as_array)
+                    && let Some(capture) = ochub_convert::signature::capture_from_content(content)
+                {
+                    ochub_convert::signature::store_capture(&*state.signatures, &capture);
                 }
                 return PipelineOutcome::Json {
                     status: 200,
@@ -959,7 +959,7 @@ pub async fn run(
                 return PipelineOutcome::Json {
                     status: 502,
                     body: error_body(inlet, &e),
-                }
+                };
             }
         }
     }
@@ -1584,9 +1584,11 @@ mod tests {
         }
         assert!(got_done);
         assert!(datas.iter().any(|d| d.contains("\"content\":\"Hello\"")));
-        assert!(datas
-            .iter()
-            .any(|d| d.contains("\"finish_reason\":\"stop\"")));
+        assert!(
+            datas
+                .iter()
+                .any(|d| d.contains("\"finish_reason\":\"stop\""))
+        );
         // Terminal usage chunk: prompt = 10 + 2 cached.
         let usage_chunk = datas.last().unwrap();
         assert!(

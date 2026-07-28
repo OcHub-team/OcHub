@@ -23,14 +23,14 @@
 //! re-introduce the legacy `ANTHROPIC_SMALL_FAST_MODEL`, which the switch path
 //! (`normalize_claude_models_in_value`) removes.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::{
-    bool_val, set_bool, set_str, str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind,
-    FormField, FormSection, FormValues, GridColumn, Language, PreviewFile, SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
+    GridColumn, Language, PreviewFile, SelectOption, bool_val, set_bool, set_str, str_val,
 };
-use crate::model::ProviderMeta;
 use crate::AppType;
+use crate::model::ProviderMeta;
 
 const AUTH_TOKEN_KEY: &str = "ANTHROPIC_AUTH_TOKEN";
 const AUTH_API_KEY: &str = "ANTHROPIC_API_KEY";
@@ -737,10 +737,12 @@ mod tests {
             ]),
         );
         let issues = ClaudeConfig.validate(&v);
-        assert!(issues
-            .iter()
-            .any(|i| i.severity == super::super::Severity::Error
-                && i.field.as_deref() == Some("base_url")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == super::super::Severity::Error
+                    && i.field.as_deref() == Some("base_url"))
+        );
         assert!(issues.iter().any(|i| i.message.contains("1M")));
     }
 

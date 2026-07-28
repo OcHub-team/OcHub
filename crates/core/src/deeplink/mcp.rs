@@ -2,8 +2,8 @@
 //!
 //! Handles batch import of MCP server configurations via ochub:// URLs.
 
-use super::utils::decode_base64_param;
 use super::DeepLinkImportRequest;
+use super::utils::decode_base64_param;
 use crate::app_state::AppState;
 use crate::db::{McpApps, McpServer};
 use crate::error::AppError;
@@ -182,7 +182,7 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
             other => {
                 return Err(AppError::InvalidInput(format!(
                     "Invalid app in 'apps': {other}"
-                )))
+                )));
             }
         }
     }

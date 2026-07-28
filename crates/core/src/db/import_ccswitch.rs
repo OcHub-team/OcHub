@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::legacy_json::{CommonConfigSnippets, McpRoot, MultiAppConfig, SkillStore};
-use super::{lock_conn, Database};
+use super::{Database, lock_conn};
 use crate::app_type::AppType;
 use crate::error::AppError;
 use crate::model::{Provider, ProviderManager};
@@ -822,10 +822,12 @@ mod json_tests {
         // `gemini` had no providers and `prompts` is not an app at all.
         assert!(loaded.skipped.iter().any(|s| s.starts_with("gemini")));
         assert!(loaded.skipped.iter().any(|s| s.starts_with("prompts")));
-        assert!(loaded
-            .skipped
-            .iter()
-            .any(|s| s.starts_with("future_section")));
+        assert!(
+            loaded
+                .skipped
+                .iter()
+                .any(|s| s.starts_with("future_section"))
+        );
 
         // The one bad provider is reported and skipped; its siblings survive.
         assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
@@ -1081,10 +1083,12 @@ mod tests {
         assert!(!Database::table_exists_in(&conn, "main", "proxy_live_backup").unwrap());
 
         // 源库中缺失的表记入 skipped
-        assert!(report
-            .skipped_tables
-            .iter()
-            .any(|s| s.starts_with("mcp_servers")));
+        assert!(
+            report
+                .skipped_tables
+                .iter()
+                .any(|s| s.starts_with("mcp_servers"))
+        );
 
         // 源库未被写入（journal 模式下写入会产生 -wal/-journal 文件或修改内容）
         let source_version: i32 = Connection::open(&source)

@@ -401,7 +401,7 @@ pub async fn get_balance(base_url: &str, api_key: &str) -> Result<UsageResult, S
                 success: false,
                 data: None,
                 error: Some("Unknown balance provider".to_string()),
-            })
+            });
         }
     };
 

@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, ClipboardItem, Context, Entity, EventEmitter, FontWeight, ListAlignment,
-    ListOffset, ListState, ScrollHandle, SharedString, Window,
+    ClipboardItem, Context, Entity, EventEmitter, FontWeight, ListAlignment, ListOffset, ListState,
+    ScrollHandle, SharedString, Window, div, prelude::*, px,
 };
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
@@ -23,7 +23,7 @@ use ochub_core::{AppState, AppType};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
-use crate::icons::{icon, IconName};
+use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;

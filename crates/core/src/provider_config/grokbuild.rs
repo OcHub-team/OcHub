@@ -1,15 +1,15 @@
 //! Grok Build provider config codec.
 
-use serde_json::{json, Value};
-use toml_edit::{value, DocumentMut, Item};
+use serde_json::{Value, json};
+use toml_edit::{DocumentMut, Item, value};
 
 use super::{
-    set_str, str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection,
-    FormValues, Language, Preset, PreviewFile, SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues, Language,
+    Preset, PreviewFile, SelectOption, set_str, str_val,
 };
+use crate::AppType;
 use crate::apps::grokbuild::{DEFAULT_API_BACKEND, DEFAULT_CONTEXT_WINDOW, DEFAULT_MODEL};
 use crate::model::ProviderMeta;
-use crate::AppType;
 
 const CREDENTIAL_INLINE: &str = "inline";
 const CREDENTIAL_ENV: &str = "env";
@@ -303,15 +303,12 @@ fn update_document(values: &FormValues, prior: &Value) -> DocumentMut {
     if previous_profile
         .as_deref()
         .is_some_and(|previous| previous != profile)
+        && let Some(models) = document.get_mut("model").and_then(Item::as_table_mut)
+        && let Some(previous) = previous_profile
+            .as_deref()
+            .and_then(|key| models.remove(key))
     {
-        if let Some(models) = document.get_mut("model").and_then(Item::as_table_mut) {
-            if let Some(previous) = previous_profile
-                .as_deref()
-                .and_then(|key| models.remove(key))
-            {
-                models.insert(profile, previous);
-            }
-        }
+        models.insert(profile, previous);
     }
 
     document["models"]["default"] = value(profile);
@@ -364,11 +361,7 @@ fn update_document(values: &FormValues, prior: &Value) -> DocumentMut {
 
 fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     let value = value.trim();
-    if value.is_empty() {
-        fallback
-    } else {
-        value
-    }
+    if value.is_empty() { fallback } else { value }
 }
 
 fn preset(preset_name: &str, name: &str, base_url: &str, model: &str, env_key: &str) -> Preset {

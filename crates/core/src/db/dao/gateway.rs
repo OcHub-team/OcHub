@@ -1,6 +1,6 @@
 //! Gateway (local relay) DAO: channels, local API keys, and settings blob.
 
-use crate::db::{lock_conn, to_json_string, Database};
+use crate::db::{Database, lock_conn, to_json_string};
 use crate::error::AppError;
 use crate::gateway::types::{
     Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayReasoningConfig, GatewayRoute,
@@ -31,8 +31,7 @@ fn row_to_channel(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayChannel> {
     })
 }
 
-const CHANNEL_COLUMNS: &str =
-    "id, endpoint_id, name, dialect, base_url, api_key, path_override, models, \
+const CHANNEL_COLUMNS: &str = "id, endpoint_id, name, dialect, base_url, api_key, path_override, models, \
      model_override, priority, weight, enabled, extra_headers, imported_from";
 
 fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
@@ -54,8 +53,7 @@ fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
     })
 }
 
-const ROUTE_COLUMNS: &str =
-    "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, enabled, created_at";
+const ROUTE_COLUMNS: &str = "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, enabled, created_at";
 
 impl Database {
     // -- settings blob ------------------------------------------------------

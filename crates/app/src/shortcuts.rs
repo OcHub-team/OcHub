@@ -4,7 +4,7 @@
 //! the shell/view level so focused controls can bubble Save/Cancel/Close to the
 //! page that owns their data.
 
-use gpui::{actions, App, KeyBinding};
+use gpui::{App, KeyBinding, actions};
 
 actions!(ochub_shortcuts, [Save, Cancel, CloseWindow, OpenSettings]);
 

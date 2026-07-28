@@ -466,10 +466,10 @@ fn scan_registry() -> ThemeRegistry {
 }
 
 pub fn load_registry() -> Arc<ThemeRegistry> {
-    if let Ok(cache) = REGISTRY_CACHE.read() {
-        if let Some(registry) = cache.as_ref() {
-            return registry.clone();
-        }
+    if let Ok(cache) = REGISTRY_CACHE.read()
+        && let Some(registry) = cache.as_ref()
+    {
+        return registry.clone();
     }
     reload_registry()
 }

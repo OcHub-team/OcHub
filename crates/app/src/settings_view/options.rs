@@ -6,7 +6,7 @@ use gpui::SharedString;
 use ochub_core::i18n::Locale;
 
 use crate::components;
-use crate::i18n::{k, raw, t, Key};
+use crate::i18n::{Key, k, raw, t};
 use crate::tf;
 
 /// Which platforms can launch a given terminal.

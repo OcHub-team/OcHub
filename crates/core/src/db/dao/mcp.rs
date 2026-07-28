@@ -3,7 +3,7 @@
 //! 提供 MCP 服务器的 CRUD 操作。
 
 use crate::db::legacy_json::{McpApps, McpServer};
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use indexmap::IndexMap;
 use rusqlite::params;

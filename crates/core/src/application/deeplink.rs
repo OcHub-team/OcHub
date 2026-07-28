@@ -1,6 +1,6 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::application::{redact_json, Application, ApplicationError, ApplicationResult};
+use crate::application::{Application, ApplicationError, ApplicationResult, redact_json};
 use crate::deeplink::DeepLinkImportRequest;
 
 impl Application {

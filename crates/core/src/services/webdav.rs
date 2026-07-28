@@ -470,7 +470,7 @@ fn ensure_content_length_within_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_LENGTH};
+    use reqwest::header::{CONTENT_LENGTH, HeaderMap, HeaderValue};
 
     #[test]
     fn build_remote_url_encodes_path_segments() {

@@ -226,11 +226,11 @@ fn toml_item_is_subset(target: &Item, source: &Item) -> bool {
 }
 
 fn merge_toml_item(target: &mut Item, source: &Item) {
-    if let Some(source_table) = source.as_table_like() {
-        if let Some(target_table) = target.as_table_like_mut() {
-            merge_toml_table_like(target_table, source_table);
-            return;
-        }
+    if let Some(source_table) = source.as_table_like()
+        && let Some(target_table) = target.as_table_like_mut()
+    {
+        merge_toml_table_like(target_table, source_table);
+        return;
     }
 
     *target = source.clone();
@@ -248,14 +248,14 @@ fn merge_toml_table_like(target: &mut dyn TableLike, source: &dyn TableLike) {
 }
 
 fn remove_toml_item(target: &mut Item, source: &Item) {
-    if let Some(source_table) = source.as_table_like() {
-        if let Some(target_table) = target.as_table_like_mut() {
-            remove_toml_table_like(target_table, source_table);
-            if target_table.is_empty() {
-                *target = Item::None;
-            }
-            return;
+    if let Some(source_table) = source.as_table_like()
+        && let Some(target_table) = target.as_table_like_mut()
+    {
+        remove_toml_table_like(target_table, source_table);
+        if target_table.is_empty() {
+            *target = Item::None;
         }
+        return;
     }
 
     if let Some(source_value) = source.as_value() {
@@ -458,17 +458,17 @@ pub(crate) fn build_effective_settings_with_common_config(
     let snippet = db.get_config_snippet(app_type.as_str())?;
     let mut effective_settings = provider.settings_config.clone();
 
-    if provider_uses_common_config(app_type, provider, snippet.as_deref()) {
-        if let Some(snippet_text) = snippet.as_deref() {
-            match apply_common_config_to_settings(app_type, &effective_settings, snippet_text) {
-                Ok(settings) => effective_settings = settings,
-                Err(err) => {
-                    log::warn!(
-                        "Failed to apply common config for {} provider '{}': {err}",
-                        app_type.as_str(),
-                        provider.id
-                    );
-                }
+    if provider_uses_common_config(app_type, provider, snippet.as_deref())
+        && let Some(snippet_text) = snippet.as_deref()
+    {
+        match apply_common_config_to_settings(app_type, &effective_settings, snippet_text) {
+            Ok(settings) => effective_settings = settings,
+            Err(err) => {
+                log::warn!(
+                    "Failed to apply common config for {} provider '{}': {err}",
+                    app_type.as_str(),
+                    provider.id
+                );
             }
         }
     }
@@ -799,9 +799,9 @@ pub(crate) fn write_opencode_live_snapshot(provider: &Provider) -> Result<(), Ap
             // Detect full config structure (has $schema or top-level provider field)
             if obj.contains_key("$schema") || obj.contains_key("provider") {
                 log::warn!(
-                        "OpenCode provider '{}' has full config structure in settings_config, attempting to extract fragment",
-                        provider.id
-                    );
+                    "OpenCode provider '{}' has full config structure in settings_config, attempting to extract fragment",
+                    provider.id
+                );
                 // Try to extract from provider.{id}
                 obj.get("provider")
                     .and_then(|p| p.get(&provider.id))
@@ -839,9 +839,9 @@ pub(crate) fn write_opencode_live_snapshot(provider: &Provider) -> Result<(), Ap
                     );
                 } else {
                     return Err(AppError::Message(format!(
-                            "OpenCode provider '{}' has invalid config structure for live config (must contain 'npm' or 'options')",
-                            provider.id
-                        )));
+                        "OpenCode provider '{}' has invalid config structure for live config (must contain 'npm' or 'options')",
+                        provider.id
+                    )));
                 }
             }
         }
@@ -904,9 +904,9 @@ pub(crate) fn write_openclaw_live_snapshot(provider: &Provider) -> Result<(), Ap
                     );
                 } else {
                     return Err(AppError::Message(format!(
-                            "OpenClaw provider '{}' has invalid config structure for live config (must contain 'baseUrl', 'api', or 'models')",
-                            provider.id
-                        )));
+                        "OpenClaw provider '{}' has invalid config structure for live config (must contain 'baseUrl', 'api', or 'models')",
+                        provider.id
+                    )));
                 }
             }
         }
@@ -1044,10 +1044,9 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             // Codex provider doesn't see an empty mapping table.
             if let Ok(Some(model_catalog)) =
                 crate::apps::codex::read_codex_model_catalog_simplified_from_live()
+                && let Some(obj) = result.as_object_mut()
             {
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("modelCatalog".to_string(), model_catalog);
-                }
+                obj.insert("modelCatalog".to_string(), model_catalog);
             }
             Ok(result)
         }
@@ -1620,10 +1619,14 @@ mod tests {
             .init_default_official_providers()
             .expect("seed official providers");
 
-        assert!(should_auto_import_default_config(&state, &AppType::Claude)
-            .expect("claude discovery policy"));
-        assert!(should_auto_import_default_config(&state, &AppType::Codex)
-            .expect("codex discovery policy"));
+        assert!(
+            should_auto_import_default_config(&state, &AppType::Claude)
+                .expect("claude discovery policy")
+        );
+        assert!(
+            should_auto_import_default_config(&state, &AppType::Codex)
+                .expect("codex discovery policy")
+        );
         assert!(
             !should_auto_import_default_config(&state, &AppType::ClaudeDesktop)
                 .expect("desktop discovery policy")
@@ -1644,8 +1647,10 @@ mod tests {
             .set_current_provider("claude", "claude-official")
             .expect("set current provider");
 
-        assert!(!should_auto_import_default_config(&state, &AppType::Claude)
-            .expect("managed discovery policy"));
+        assert!(
+            !should_auto_import_default_config(&state, &AppType::Claude)
+                .expect("managed discovery policy")
+        );
 
         let custom = Provider::with_id(
             "custom".to_string(),
@@ -1658,8 +1663,10 @@ mod tests {
             .save_provider("codex", &custom)
             .expect("save non-seed provider");
 
-        assert!(!should_auto_import_default_config(&state, &AppType::Codex)
-            .expect("non-seed discovery policy"));
+        assert!(
+            !should_auto_import_default_config(&state, &AppType::Codex)
+                .expect("non-seed discovery policy")
+        );
         assert!(
             !should_auto_import_default_config(&state, &AppType::OpenCode)
                 .expect("additive discovery policy")
@@ -1676,7 +1683,7 @@ mod tests {
         fn new() -> Self {
             let guard = crate::test_support::env_lock();
             let dir = tempfile::tempdir().expect("temp home");
-            std::env::set_var("OCHUB_TEST_HOME", dir.path());
+            crate::test_support::set_var("OCHUB_TEST_HOME", dir.path());
             crate::settings::reload_settings().expect("reload settings");
             Self {
                 _guard: guard,
@@ -1687,7 +1694,7 @@ mod tests {
 
     impl Drop for TestHome {
         fn drop(&mut self) {
-            std::env::remove_var("OCHUB_TEST_HOME");
+            crate::test_support::remove_var("OCHUB_TEST_HOME");
             crate::settings::reload_settings().ok();
         }
     }

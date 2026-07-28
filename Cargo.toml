@@ -9,7 +9,7 @@ members = [
 
 [workspace.package]
 version = "0.4.6"
-edition = "2021"
+edition = "2024"
 license = "GPL-3.0-or-later"
 authors = ["OcHub contributors"]
 repository = "https://github.com/OcHub-team/OcHub"

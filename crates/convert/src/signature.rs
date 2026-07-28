@@ -200,18 +200,16 @@ pub fn restore_thinking_blocks(body: &mut Value, store: &dyn SignatureStore) {
     let mut unrestored = false;
     for (idx, id) in lookups {
         let mut restored = false;
-        if let Some(payload) = store.get(&id) {
-            if let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(&payload) {
-                if let Some(content) = body
-                    .pointer_mut(&format!("/messages/{idx}/content"))
-                    .and_then(Value::as_array_mut)
-                {
-                    for (j, block) in blocks.into_iter().enumerate() {
-                        content.insert(j, block);
-                    }
-                    restored = true;
-                }
+        if let Some(payload) = store.get(&id)
+            && let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(&payload)
+            && let Some(content) = body
+                .pointer_mut(&format!("/messages/{idx}/content"))
+                .and_then(Value::as_array_mut)
+        {
+            for (j, block) in blocks.into_iter().enumerate() {
+                content.insert(j, block);
             }
+            restored = true;
         }
         if !restored {
             unrestored = true;
@@ -220,10 +218,8 @@ pub fn restore_thinking_blocks(body: &mut Value, store: &dyn SignatureStore) {
 
     // Safety net: a tool-use turn missing its thinking block would be rejected
     // with thinking enabled.
-    if unrestored {
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("thinking");
-        }
+    if unrestored && let Some(obj) = body.as_object_mut() {
+        obj.remove("thinking");
     }
 }
 

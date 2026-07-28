@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::application::{redact_json, Application, ApplicationError, ApplicationResult};
+use crate::application::{Application, ApplicationError, ApplicationResult, redact_json};
 use crate::services::env::checker::EnvConflict;
 
 impl Application {

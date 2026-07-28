@@ -14,7 +14,7 @@
 
 use std::process::Command;
 
-use gpui::{div, img, prelude::*, px, AnyElement, Context, ScrollHandle, SharedString, Window};
+use gpui::{AnyElement, Context, ScrollHandle, SharedString, Window, div, img, prelude::*, px};
 use ochub_core::services::UpdateCheckResult;
 use ochub_core::settings::{self, AppSettings};
 
@@ -263,13 +263,14 @@ impl AboutView {
         }
         // An update exists but this install cannot apply it itself: say why
         // here rather than offering a button that opens a browser instead.
-        if let Some(info) = &self.update.info {
-            if info.has_update && !info.can_self_install {
-                return SharedString::from(tf!(
-                    k::SETTINGS_UPDATE_MANUAL_ONLY,
-                    channel = info.install_channel.clone()
-                ));
-            }
+        if let Some(info) = &self.update.info
+            && info.has_update
+            && !info.can_self_install
+        {
+            return SharedString::from(tf!(
+                k::SETTINGS_UPDATE_MANUAL_ONLY,
+                channel = info.install_channel.clone()
+            ));
         }
         match &self.update.info {
             Some(info) if info.has_update => SharedString::from(tf!(

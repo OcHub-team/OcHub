@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::session_manager::{SessionMessage, SessionMeta};
 
-use super::utils::{extract_text, parse_timestamp_to_ms, truncate_summary, TITLE_MAX_CHARS};
+use super::utils::{TITLE_MAX_CHARS, extract_text, parse_timestamp_to_ms, truncate_summary};
 
 #[derive(Debug, Deserialize)]
 struct GrokSessionInfo {

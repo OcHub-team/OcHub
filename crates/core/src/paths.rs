@@ -56,10 +56,10 @@ fn derive_mcp_path_from_override(dir: &Path) -> Option<PathBuf> {
 
 /// Claude MCP config path; lives next to the override dir when set.
 pub fn get_claude_mcp_path() -> PathBuf {
-    if let Some(custom_dir) = crate::settings::get_claude_override_dir() {
-        if let Some(path) = derive_mcp_path_from_override(&custom_dir) {
-            return path;
-        }
+    if let Some(custom_dir) = crate::settings::get_claude_override_dir()
+        && let Some(path) = derive_mcp_path_from_override(&custom_dir)
+    {
+        return path;
     }
     get_default_claude_mcp_path()
 }
@@ -287,11 +287,11 @@ mod tests {
         let _guard = crate::test_support::env_lock();
         let temp = tempfile::tempdir().unwrap();
         let data = temp.path().join("data");
-        std::env::set_var("OCHUB_TEST_HOME", temp.path());
-        std::env::set_var("OCHUB_DATA_DIR", &data);
+        crate::test_support::set_var("OCHUB_TEST_HOME", temp.path());
+        crate::test_support::set_var("OCHUB_DATA_DIR", &data);
         assert_eq!(get_app_config_dir(), data);
-        std::env::remove_var("OCHUB_DATA_DIR");
-        std::env::remove_var("OCHUB_TEST_HOME");
+        crate::test_support::remove_var("OCHUB_DATA_DIR");
+        crate::test_support::remove_var("OCHUB_TEST_HOME");
     }
 
     #[test]

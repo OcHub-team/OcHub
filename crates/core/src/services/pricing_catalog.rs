@@ -5,23 +5,23 @@
 //! remain in `model_pricing` and always win during resolution.
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use chrono::Utc;
 use futures::StreamExt;
 use once_cell::sync::{Lazy, OnceCell};
-use reqwest::header::{ACCEPT, ETAG, IF_NONE_MATCH, USER_AGENT};
 use reqwest::StatusCode;
-use rusqlite::{params, OptionalExtension};
+use reqwest::header::{ACCEPT, ETAG, IF_NONE_MATCH, USER_AGENT};
+use rusqlite::{OptionalExtension, params};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use super::usage_stats::{find_model_pricing_row_for_requirements, model_pricing_candidates};
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 
 pub const LITELLM_PRICING_SOURCE_URL: &str =
@@ -225,22 +225,20 @@ impl Database {
         validate_snapshot(snapshot)?;
         let mut conn = lock_conn!(self.conn);
 
-        if only_if_newer {
-            if let Some(current) = pricing_catalog_meta_on_conn(&conn)? {
-                let current_count =
-                    conn.query_row("SELECT COUNT(*) FROM litellm_pricing_catalog", [], |row| {
-                        row.get::<_, i64>(0)
-                    })? as u32;
-                if current_count > 0
-                    && (current.source_revision == snapshot.source.revision
-                        || current.source_generated_at >= snapshot.source.generated_at)
-                {
-                    return Ok(PricingCatalogInstallOutcome {
-                        installed: false,
-                        entry_count: current_count,
-                        source_revision: current.source_revision,
-                    });
-                }
+        if only_if_newer && let Some(current) = pricing_catalog_meta_on_conn(&conn)? {
+            let current_count =
+                conn.query_row("SELECT COUNT(*) FROM litellm_pricing_catalog", [], |row| {
+                    row.get::<_, i64>(0)
+                })? as u32;
+            if current_count > 0
+                && (current.source_revision == snapshot.source.revision
+                    || current.source_generated_at >= snapshot.source.generated_at)
+            {
+                return Ok(PricingCatalogInstallOutcome {
+                    installed: false,
+                    entry_count: current_count,
+                    source_revision: current.source_revision,
+                });
             }
         }
 

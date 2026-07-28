@@ -1,5 +1,5 @@
 use crate::application::{Application, ApplicationError, ApplicationResult};
-use crate::db::import_ccswitch::{detect_source, DetectedSource, ImportReport};
+use crate::db::import_ccswitch::{DetectedSource, ImportReport, detect_source};
 
 impl Application {
     pub fn detect_ccswitch(&self) -> ApplicationResult<Option<DetectedSource>> {

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::usage::merge_messages_usage;
 
@@ -154,14 +154,14 @@ pub fn aggregate_messages_sse(text: &str) -> Option<Value> {
                 if let Some(u) = value.get("usage") {
                     merge_messages_usage(&mut usage, u);
                 }
-                if let Some(delta) = value.get("delta") {
-                    if let Some(obj) = message.as_mut().and_then(Value::as_object_mut) {
-                        if let Some(sr) = delta.get("stop_reason") {
-                            obj.insert("stop_reason".to_string(), sr.clone());
-                        }
-                        if let Some(ss) = delta.get("stop_sequence") {
-                            obj.insert("stop_sequence".to_string(), ss.clone());
-                        }
+                if let Some(delta) = value.get("delta")
+                    && let Some(obj) = message.as_mut().and_then(Value::as_object_mut)
+                {
+                    if let Some(sr) = delta.get("stop_reason") {
+                        obj.insert("stop_reason".to_string(), sr.clone());
+                    }
+                    if let Some(ss) = delta.get("stop_sequence") {
+                        obj.insert("stop_sequence".to_string(), ss.clone());
                     }
                 }
             }
@@ -221,10 +221,11 @@ pub fn aggregate_responses_sse(text: &str) -> Option<Value> {
         .and_then(Value::as_array)
         .map(|a| a.is_empty())
         .unwrap_or(true);
-    if empty && !items.is_empty() {
-        if let Some(obj) = response.as_object_mut() {
-            obj.insert("output".to_string(), Value::Array(items));
-        }
+    if empty
+        && !items.is_empty()
+        && let Some(obj) = response.as_object_mut()
+    {
+        obj.insert("output".to_string(), Value::Array(items));
     }
     Some(response)
 }

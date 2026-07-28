@@ -8,6 +8,7 @@
 //! All HOME-mutating tests across the crate should acquire this single lock so
 //! they never run concurrently with one another.
 
+use std::ffi::OsStr;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Acquire the global environment-mutation test lock.
@@ -20,4 +21,21 @@ pub(crate) fn env_lock() -> MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|err| err.into_inner())
+}
+
+/// Set a process-global env var from a test.
+///
+/// Rust 2024 made [`std::env::set_var`] unsafe: a concurrent reader in another
+/// thread is undefined behavior. Callers hold [`env_lock`] (or their module's
+/// own equivalent), which serializes the tests that mutate the environment, and
+/// the test binary starts no background thread that reads it — so the write is
+/// confined to the one thread doing it. Wrapping the two calls here keeps that
+/// argument in one place instead of at all ~40 call sites.
+pub(crate) fn set_var(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
+    unsafe { std::env::set_var(key, value) };
+}
+
+/// Remove a process-global env var from a test. Same reasoning as [`set_var`].
+pub(crate) fn remove_var(key: impl AsRef<OsStr>) {
+    unsafe { std::env::remove_var(key) };
 }

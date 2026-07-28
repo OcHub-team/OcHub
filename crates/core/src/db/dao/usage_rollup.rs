@@ -2,7 +2,7 @@
 //!
 //! Aggregates usage_logs into daily rollups and prunes old detail rows.
 
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use chrono::{Duration, Local, TimeZone};
 
@@ -95,7 +95,7 @@ fn compute_local_midnight_cutoff(
                 chrono::LocalResult::None => {
                     return Err(AppError::Database(
                         "rollup cutoff fell into DST gap".to_string(),
-                    ))
+                    ));
                 }
             }
         }

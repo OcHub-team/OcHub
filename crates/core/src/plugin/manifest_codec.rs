@@ -14,9 +14,9 @@ use serde_json::{Map, Value};
 use crate::app_id::AppId;
 use crate::model::ProviderMeta;
 use crate::provider_config::{
-    bool_val, set_bool, set_str, str_val, AppConfig, ConfigIssue, EncodeResult, FieldKind,
-    FormField, FormSection, FormValues, GridCellKind, GridColumn, Preset, PreviewFile,
-    SelectOption,
+    AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
+    GridCellKind, GridColumn, Preset, PreviewFile, SelectOption, bool_val, set_bool, set_str,
+    str_val,
 };
 
 use super::hooks::HookRegistry;
@@ -73,10 +73,10 @@ impl ManifestCodec {
     /// Build the store subtree for one mapped (non-passthrough) file.
     fn build_store(&self, file: &FileSpec, values: &FormValues) -> Value {
         // clear_when: an emptied store (form-level condition baked into encode).
-        if let Some(cond) = &file.clear_when {
-            if condition_matches(values, cond) {
-                return Value::Object(Map::new());
-            }
+        if let Some(cond) = &file.clear_when
+            && condition_matches(values, cond)
+        {
+            return Value::Object(Map::new());
         }
 
         let claimed = self.claimed_keys(&file.id);
@@ -87,10 +87,10 @@ impl ManifestCodec {
             if map.file != file.id {
                 continue;
             }
-            if let Some(cond) = &map.emit_when {
-                if !condition_matches(values, cond) {
-                    continue;
-                }
+            if let Some(cond) = &map.emit_when
+                && !condition_matches(values, cond)
+            {
+                continue;
             }
 
             match map.target() {
@@ -208,11 +208,11 @@ impl AppConfig for ManifestCodec {
         }
 
         // decode hook augments the mapped values.
-        if let Some(name) = &self.manifest.hooks.decode {
-            if let Some(hook) = self.hooks.decode(name) {
-                for (k, v) in hook(settings_config, meta) {
-                    values.insert(k, v);
-                }
+        if let Some(name) = &self.manifest.hooks.decode
+            && let Some(hook) = self.hooks.decode(name)
+        {
+            for (k, v) in hook(settings_config, meta) {
+                values.insert(k, v);
             }
         }
 
@@ -280,25 +280,24 @@ impl AppConfig for ManifestCodec {
         let mut issues = Vec::new();
 
         for rule in &self.manifest.validate {
-            if let Some(cond) = &rule.when {
-                if !condition_matches(values, cond) {
-                    continue;
-                }
+            if let Some(cond) = &rule.when
+                && !condition_matches(values, cond)
+            {
+                continue;
             }
             match rule.rule {
                 ValidateRule::Require => {
-                    if let Some(field) = &rule.field {
-                        if str_val(values, field).trim().is_empty() {
-                            issues.push(ConfigIssue::error(rule.message.clone()).for_field(field));
-                        }
+                    if let Some(field) = &rule.field
+                        && str_val(values, field).trim().is_empty()
+                    {
+                        issues.push(ConfigIssue::error(rule.message.clone()).for_field(field));
                     }
                 }
                 ValidateRule::WarnEmpty => {
-                    if let Some(field) = &rule.field {
-                        if str_val(values, field).trim().is_empty() {
-                            issues
-                                .push(ConfigIssue::warning(rule.message.clone()).for_field(field));
-                        }
+                    if let Some(field) = &rule.field
+                        && str_val(values, field).trim().is_empty()
+                    {
+                        issues.push(ConfigIssue::warning(rule.message.clone()).for_field(field));
                     }
                 }
                 ValidateRule::WarnWhitespaceOnly => {

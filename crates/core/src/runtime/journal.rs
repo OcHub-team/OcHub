@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::application::{redact_json, ApplicationError, ApplicationResult};
+use crate::application::{ApplicationError, ApplicationResult, redact_json};
 
 const JOURNAL_SCHEMA_VERSION: u32 = 1;
 const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;

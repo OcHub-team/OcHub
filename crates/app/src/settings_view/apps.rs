@@ -10,7 +10,7 @@
 
 use std::process::Command;
 
-use gpui::{prelude::*, AnyElement, Context, SharedString, Window};
+use gpui::{AnyElement, Context, SharedString, Window, prelude::*};
 use ochub_core::plugin::AppPlugin;
 use ochub_core::settings;
 

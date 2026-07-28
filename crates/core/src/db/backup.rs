@@ -7,13 +7,13 @@
 // services and are not called within ochub-core yet.
 #![allow(dead_code)]
 
-use super::{lock_conn, Database};
+use super::{Database, lock_conn};
 use crate::error::AppError;
 use crate::paths::get_app_config_dir;
 use chrono::{Local, Utc};
+use rusqlite::Connection;
 use rusqlite::backup::Backup;
 use rusqlite::types::ValueRef;
-use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;

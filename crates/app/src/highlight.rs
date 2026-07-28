@@ -93,11 +93,11 @@ impl Acc {
         if len == 0 {
             return;
         }
-        if let Some(last) = self.spans.last_mut() {
-            if last.1 == token {
-                last.0 += len;
-                return;
-            }
+        if let Some(last) = self.spans.last_mut()
+            && last.1 == token
+        {
+            last.0 += len;
+            return;
         }
         self.spans.push((len, token));
     }

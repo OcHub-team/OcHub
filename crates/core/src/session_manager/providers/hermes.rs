@@ -9,7 +9,7 @@ use crate::apps::hermes::get_hermes_dir;
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
-    extract_text, parse_timestamp_to_ms, read_head_tail_lines, truncate_summary, TITLE_MAX_CHARS,
+    TITLE_MAX_CHARS, extract_text, parse_timestamp_to_ms, read_head_tail_lines, truncate_summary,
 };
 
 const PROVIDER_ID: &str = "hermes";
@@ -169,16 +169,25 @@ fn row_to_json(row: &rusqlite::Row, columns: &[String]) -> Value {
     let mut map = serde_json::Map::new();
     for (i, col) in columns.iter().enumerate() {
         // Try string first, then integer, then float, then null
-        if let Ok(val) = row.get::<_, String>(i) {
-            map.insert(col.clone(), Value::String(val));
-        } else if let Ok(val) = row.get::<_, i64>(i) {
-            map.insert(col.clone(), Value::Number(val.into()));
-        } else if let Ok(val) = row.get::<_, f64>(i) {
-            if let Some(n) = serde_json::Number::from_f64(val) {
-                map.insert(col.clone(), Value::Number(n));
+        match row.get::<_, String>(i) {
+            Ok(val) => {
+                map.insert(col.clone(), Value::String(val));
             }
-        } else {
-            map.insert(col.clone(), Value::Null);
+            _ => match row.get::<_, i64>(i) {
+                Ok(val) => {
+                    map.insert(col.clone(), Value::Number(val.into()));
+                }
+                _ => match row.get::<_, f64>(i) {
+                    Ok(val) => {
+                        if let Some(n) = serde_json::Number::from_f64(val) {
+                            map.insert(col.clone(), Value::Number(n));
+                        }
+                    }
+                    _ => {
+                        map.insert(col.clone(), Value::Null);
+                    }
+                },
+            },
         }
     }
     Value::Object(map)
@@ -196,8 +205,7 @@ pub fn load_messages_sqlite(source: &str) -> Result<Vec<SessionMessage>, String>
     .map_err(|e| format!("Failed to open Hermes database: {e}"))?;
 
     // Try querying with common column names
-    let query =
-        "SELECT role, content, created_at FROM messages WHERE session_id = ?1 ORDER BY created_at ASC";
+    let query = "SELECT role, content, created_at FROM messages WHERE session_id = ?1 ORDER BY created_at ASC";
 
     let mut stmt = conn
         .prepare(query)

@@ -13,27 +13,27 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, relative, uniform_list, Anchor, Context,
-    Entity, FontWeight, HighlightStyle, ListAlignment, ListState, MouseButton, Pixels,
-    SharedString, StyledText, Task, Window,
+    Anchor, Context, Entity, FontWeight, HighlightStyle, ListAlignment, ListState, MouseButton,
+    Pixels, SharedString, StyledText, Task, Window, anchored, deferred, div, point, prelude::*, px,
+    relative, uniform_list,
 };
 use ochub_core::gateway::apply;
 use ochub_core::provider_config::{
-    self, bool_val, str_val, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues,
-    GridCellKind, Language, Severity,
+    self, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues, GridCellKind,
+    Language, Severity, bool_val, str_val,
 };
-use ochub_core::services::provider::ProviderService;
 use ochub_core::services::ConfigService;
+use ochub_core::services::provider::ProviderService;
 use ochub_core::{AppState, AppType, Provider, ProviderMeta, UsageResult};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::code_editor::CodeEditor;
 use crate::components;
 use crate::components::{BadgeTone, ButtonSize, ButtonTone};
-use crate::fold::{fold_regions, FoldRegion};
+use crate::fold::{FoldRegion, fold_regions};
 use crate::highlight::{self, Lang};
 use crate::i18n::{k, raw, t};
-use crate::icons::{icon, IconName};
+use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -604,16 +604,15 @@ impl ProviderEditor {
         self.station_gateway = None;
         // Seed the channel name from the station when the user has not typed
         // one yet; a name they wrote is never overwritten.
-        if self.name.read(cx).content().trim().is_empty() {
-            if let Some(option) = self
+        if self.name.read(cx).content().trim().is_empty()
+            && let Some(option) = self
                 .station_options
                 .iter()
                 .find(|option| option.route_id == route_id)
-            {
-                let name = option.name.clone();
-                self.name
-                    .update(cx, |input, cx| input.set_content(name, cx));
-            }
+        {
+            let name = option.name.clone();
+            self.name
+                .update(cx, |input, cx| input.set_content(name, cx));
         }
         self.refresh_station_gateway(cx);
         self.form_list_state.remeasure();
@@ -1037,19 +1036,19 @@ impl ProviderEditor {
         // the same gateway coordinates a save would embed. Until the gateway
         // info arrives the stale decoded values stay — a transient state the
         // arrival's `invalidate_preview` corrects.
-        if self.source == ProviderSource::Station {
-            if let Some(info) = &self.station_gateway {
-                let channel_id = self.station_channel_id(cx);
-                let channel_name = self.name.read(cx).content().trim().to_string();
-                provider_config::inject_station_endpoint(
-                    &mut self.values,
-                    self.app_type,
-                    &info.origin,
-                    &info.key,
-                    &channel_id,
-                    &channel_name,
-                );
-            }
+        if self.source == ProviderSource::Station
+            && let Some(info) = &self.station_gateway
+        {
+            let channel_id = self.station_channel_id(cx);
+            let channel_name = self.name.read(cx).content().trim().to_string();
+            provider_config::inject_station_endpoint(
+                &mut self.values,
+                self.app_type,
+                &info.origin,
+                &info.key,
+                &channel_id,
+                &channel_name,
+            );
         }
     }
 
@@ -1100,11 +1099,11 @@ impl ProviderEditor {
             .entry(field_id.clone())
             .or_default()
             .push(KvRow { id, key, value });
-        if let Some(rows) = self.kv_rows.get(&field_id) {
-            if let Some(row) = rows.last() {
-                Self::observe_preview_input(&row.key, cx);
-                Self::observe_preview_input(&row.value, cx);
-            }
+        if let Some(rows) = self.kv_rows.get(&field_id)
+            && let Some(row) = rows.last()
+        {
+            Self::observe_preview_input(&row.key, cx);
+            Self::observe_preview_input(&row.value, cx);
         }
         self.form_list_state.remeasure();
         self.invalidate_preview(cx);
@@ -1142,11 +1141,11 @@ impl ProviderEditor {
             .entry(field_id.clone())
             .or_default()
             .push(GridRow { id, cells, toggles });
-        if let Some(rows) = self.grid_rows.get(&field_id) {
-            if let Some(row) = rows.last() {
-                for input in row.cells.values() {
-                    Self::observe_preview_input(input, cx);
-                }
+        if let Some(rows) = self.grid_rows.get(&field_id)
+            && let Some(row) = rows.last()
+        {
+            for input in row.cells.values() {
+                Self::observe_preview_input(input, cx);
             }
         }
         self.form_list_state.remeasure();
@@ -1168,11 +1167,11 @@ impl ProviderEditor {
         col: String,
         cx: &mut Context<Self>,
     ) {
-        if let Some(rows) = self.grid_rows.get_mut(&field_id) {
-            if let Some(row) = rows.iter_mut().find(|r| r.id == row_id) {
-                let cur = row.toggles.get(&col).copied().unwrap_or(false);
-                row.toggles.insert(col, !cur);
-            }
+        if let Some(rows) = self.grid_rows.get_mut(&field_id)
+            && let Some(row) = rows.iter_mut().find(|r| r.id == row_id)
+        {
+            let cur = row.toggles.get(&col).copied().unwrap_or(false);
+            row.toggles.insert(col, !cur);
         }
         self.invalidate_preview(cx);
     }
@@ -1180,10 +1179,10 @@ impl ProviderEditor {
     fn columns_for(&self, field_id: &str) -> Vec<provider_config::GridColumn> {
         for section in self.schema.iter() {
             for field in &section.fields {
-                if field.id == field_id {
-                    if let FieldKind::ModelGrid { columns } = &field.kind {
-                        return columns.clone();
-                    }
+                if field.id == field_id
+                    && let FieldKind::ModelGrid { columns } = &field.kind
+                {
+                    return columns.clone();
                 }
             }
         }
@@ -2119,7 +2118,7 @@ impl ProviderEditor {
         column.into_any_element()
     }
 
-    fn render_kv(&self, field_id: &str, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_kv(&self, field_id: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut col = div().flex().flex_col().gap_2().w_full().min_w_0();
         if let Some(rows) = self.kv_rows.get(field_id) {
             for row in rows {
@@ -2172,7 +2171,7 @@ impl ProviderEditor {
         columns: &[provider_config::GridColumn],
         stack_grid: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         // Row-card list (docs/ui-overhaul.md §7.2): one card per mapping row
         // instead of a truncated table. Column slots: the first text column
         // (e.g. 角色) is fixed-width, the rest flex, toggles are pinned, and a
@@ -2569,7 +2568,7 @@ impl ProviderEditor {
         compact: bool,
         expanded_height: Pixels,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let file_count = self.preview_cache.files.len();
         let file_index = self.preview_active_file.min(file_count.saturating_sub(1));
         let document = self.preview_cache.files.get(file_index).cloned();
@@ -2813,7 +2812,7 @@ impl ProviderEditor {
     /// Stacked-mode collapsed bar: one line naming the files plus issue
     /// counts. Keeps narrow windows on a single scroll context until the
     /// preview is explicitly wanted.
-    fn render_preview_summary(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_preview_summary(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (errors, warnings) = self.preview_issue_counts();
         let files: SharedString = if self.preview_cache.files.is_empty() {
             t(k::PROVIDER_EDITOR_PREVIEW_SUMMARY_EMPTY)
@@ -3123,22 +3122,24 @@ impl ProviderEditor {
                             )
                             .child(targets),
                     )
-                    .child(components::modal_footer(vec![components::button(
-                        "convert-cancel",
-                        t(k::PROVIDER_EDITOR_CONVERT_CANCEL),
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.close_convert(cx);
-                    }))
-                    .into_any_element()])),
+                    .child(components::modal_footer(vec![
+                        components::button(
+                            "convert-cancel",
+                            t(k::PROVIDER_EDITOR_CONVERT_CANCEL),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.close_convert(cx);
+                        }))
+                        .into_any_element(),
+                    ])),
             )
             .into_any_element(),
         )
     }
 
-    fn render_identity(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_identity(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .flex()
             .flex_col()

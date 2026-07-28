@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::application::{Application, ApplicationResult, DoctorCheck, DoctorReport};
 
@@ -215,7 +215,7 @@ async fn check_dependency(program: &str) -> DoctorCheck {
                 &format!("dependency:{program}"),
                 format!("{program} version probe timed out after 3 seconds"),
                 Value::Null,
-            )
+            );
         }
     };
     match result {

@@ -12,13 +12,13 @@ use serde_json::Value;
 
 use crate::error::AppError;
 use crate::services::s3::{self, S3Credentials};
-use crate::settings::{update_s3_sync_status, S3SyncSettings, WebDavSyncStatus};
+use crate::settings::{S3SyncSettings, WebDavSyncStatus, update_s3_sync_status};
 
 use super::sync_protocol::{
-    apply_snapshot, build_local_snapshot, localized, persist_sync_success_best_effort, sha256_hex,
-    validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
-    RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES,
-    PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    ArtifactMeta, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION,
+    REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP, RemoteLayout, SyncManifest, apply_snapshot,
+    build_local_snapshot, localized, persist_sync_success_best_effort, sha256_hex,
+    validate_artifact_size_limit, validate_manifest_compat, verify_artifact,
 };
 
 // ─── Sync lock ───────────────────────────────────────────────

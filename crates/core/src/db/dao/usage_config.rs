@@ -5,7 +5,7 @@ use std::str::FromStr;
 use rusqlite::params;
 use rust_decimal::Decimal;
 
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 
 pub(crate) const PRICING_SOURCE_RESPONSE: &str = "response";

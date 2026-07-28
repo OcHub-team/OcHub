@@ -37,20 +37,20 @@ pub mod webdav_auto_sync;
 pub mod webdav_sync;
 
 pub use codex_history_migration::{
-    has_codex_official_history_unify_backup,
+    CodexHistoryProviderBucketMigrationOutcome, CodexOfficialHistoryRestoreOutcome,
+    CodexProviderTemplateBucketMigrationOutcome, has_codex_official_history_unify_backup,
     maybe_migrate_codex_official_history_to_unified_bucket,
     maybe_migrate_codex_provider_template_bucket,
     maybe_migrate_codex_third_party_history_provider_bucket,
-    restore_codex_official_history_from_backups, CodexHistoryProviderBucketMigrationOutcome,
-    CodexOfficialHistoryRestoreOutcome, CodexProviderTemplateBucketMigrationOutcome,
+    restore_codex_official_history_from_backups,
 };
 pub use config::ConfigService;
 pub use env::{
-    check_env_conflicts, delete_env_vars, restore_env_backup, restore_from_backup, BackupInfo,
-    EnvConflict,
+    BackupInfo, EnvConflict, check_env_conflicts, delete_env_vars, restore_env_backup,
+    restore_from_backup,
 };
 pub use mcp::McpService;
-pub use model_fetch::{build_models_url_candidates, fetch_models, FetchedModel};
+pub use model_fetch::{FetchedModel, build_models_url_candidates, fetch_models};
 pub use omo::OmoService;
 pub use pricing_catalog::{
     MissingPricingModel, PricingCatalogRefreshKind, PricingCatalogRefreshOutcome,
@@ -59,7 +59,7 @@ pub use pricing_catalog::{
 pub use provider::{ProviderService, ProviderSortUpdate, SwitchResult};
 pub use skill::SkillService;
 pub use speedtest::{EndpointLatency, SpeedtestService};
-pub use update::{latest_release_url, UpdateCheckResult};
+pub use update::{UpdateCheckResult, latest_release_url};
 pub use usage_cache::UsageCache;
 pub use usage_stats::{
     DailyStats, LogFilters, ModelStats, PaginatedLogs, ProviderLimitStatus, ProviderStats,

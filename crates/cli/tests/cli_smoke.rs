@@ -136,9 +136,11 @@ fn provider_add_supports_dotted_set_and_secret_file_without_leaking_secret() {
         ],
     );
     let add = json(&add);
-    assert!(!serde_json::to_string(&add)
-        .unwrap()
-        .contains("file-only-secret"));
+    assert!(
+        !serde_json::to_string(&add)
+            .unwrap()
+            .contains("file-only-secret")
+    );
 
     let show = json(&ochcli(
         home.path(),
@@ -197,9 +199,11 @@ spec:
     let first = json(&first);
     assert_eq!(first["data"]["summary"]["create"], 1);
     assert_eq!(first["data"]["summary"]["update"], 1);
-    assert!(!serde_json::to_string(&first)
-        .unwrap()
-        .contains("declarative-secret"));
+    assert!(
+        !serde_json::to_string(&first)
+            .unwrap()
+            .contains("declarative-secret")
+    );
 
     let mut second = Command::new(env!("CARGO_BIN_EXE_ochcli"));
     let second = second

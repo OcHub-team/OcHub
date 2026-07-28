@@ -16,8 +16,8 @@
 
 use serde_json::Value;
 
-use crate::model::ProviderMeta;
 use crate::AppType;
+use crate::model::ProviderMeta;
 
 mod claude;
 mod claude_desktop;

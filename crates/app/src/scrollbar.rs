@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use gpui::{
-    canvas, div, point, prelude::*, px, quad, size, App, BorderStyle, Bounds, Context, Corners,
-    Edges, ElementId, Hsla, IntoElement, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, RenderOnce, ScrollHandle, ScrollWheelEvent, Task, Window,
+    App, BorderStyle, Bounds, Context, Corners, Edges, ElementId, Hsla, IntoElement, ListState,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderOnce,
+    ScrollHandle, ScrollWheelEvent, Task, Window, canvas, div, point, prelude::*, px, quad, size,
 };
 
 use crate::theme;

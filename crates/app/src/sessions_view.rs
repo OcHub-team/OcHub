@@ -5,8 +5,8 @@
 //! section doesn't rescan every time.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::{
@@ -14,17 +14,17 @@ use chrono::{
 };
 use futures::StreamExt;
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, relative, Anchor, AnyElement, Context,
-    ElementId, Entity, FontWeight, ListAlignment, ListState, MouseButton, ScrollHandle,
-    SharedString, Task, Window,
+    Anchor, AnyElement, Context, ElementId, Entity, FontWeight, ListAlignment, ListState,
+    MouseButton, ScrollHandle, SharedString, Task, Window, anchored, deferred, div, point,
+    prelude::*, px, relative,
 };
+use ochub_core::AppState;
 use ochub_core::session_index::{SearchHit, SessionIndex};
 use ochub_core::session_manager::{self, SessionMessage, SessionMeta};
-use ochub_core::AppState;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
-use crate::icons::{icon, IconName};
+use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
@@ -325,11 +325,11 @@ impl SessionsView {
         // “跳至 X 页”回车提交。
         let jump = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
             let text = this.page_input.read(cx).content().trim().to_string();
-            if let Ok(target) = text.parse::<usize>() {
-                if target >= 1 {
-                    let last = this.total_pages().saturating_sub(1);
-                    this.set_page((target - 1).min(last), cx);
-                }
+            if let Ok(target) = text.parse::<usize>()
+                && target >= 1
+            {
+                let last = this.total_pages().saturating_sub(1);
+                this.set_page((target - 1).min(last), cx);
             }
         });
         this.page_input.update(cx, |input, _| {
@@ -1521,7 +1521,7 @@ impl SessionsView {
         idx: usize,
         session: &SessionMeta,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let title = Self::title_for(session);
         let provider = Self::app_label(&session.provider_id);
         let active_time = Self::active_time(session, false);
@@ -1662,7 +1662,7 @@ impl SessionsView {
         &self,
         endpoint: SessionRangeEndpoint,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.endpoint_datetime(endpoint, cx);
         let picker_id = match endpoint {
             SessionRangeEndpoint::Start => "sessions-start-datetime",
@@ -1703,7 +1703,7 @@ impl SessionsView {
         )
     }
 
-    fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let date_open = self.open_filter_popover == Some(SessionFilterPopover::Date);
         let start_picker_open = self.active_datetime_picker == Some(SessionRangeEndpoint::Start);
         let start_control = div()

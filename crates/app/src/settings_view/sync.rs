@@ -16,12 +16,12 @@
 
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, App, Context, Entity, SharedString, Window};
+use gpui::{App, Context, Entity, SharedString, Window, div, prelude::*};
 use ochub_core::db::Database;
 use ochub_core::settings::{self, S3SyncSettings, WebDavSyncSettings};
 
 use crate::components::{self, ButtonTone};
-use crate::i18n::{k, t, Key};
+use crate::i18n::{Key, k, t};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::text_input::{TextInput, TextInputEvent};

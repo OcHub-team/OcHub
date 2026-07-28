@@ -722,10 +722,10 @@ fn resolve_override_path(raw: &str) -> PathBuf {
         if let Some(home) = dirs::home_dir() {
             return home.join(stripped);
         }
-    } else if let Some(stripped) = raw.strip_prefix("~\\") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
+    } else if let Some(stripped) = raw.strip_prefix("~\\")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(stripped);
     }
     PathBuf::from(raw)
 }
@@ -1134,9 +1134,11 @@ mod tests {
 
         let enabled: AppSettings = serde_json::from_str(r#"{"trayResidentMode":true}"#).unwrap();
         assert!(enabled.tray_resident_mode);
-        assert!(serde_json::to_string(&enabled)
-            .unwrap()
-            .contains(r#""trayResidentMode":true"#));
+        assert!(
+            serde_json::to_string(&enabled)
+                .unwrap()
+                .contains(r#""trayResidentMode":true"#)
+        );
     }
 
     #[test]

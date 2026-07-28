@@ -292,7 +292,7 @@ pub fn parse_skill_source(raw: &str) -> ApplicationResult<DiscoverableSkill> {
                 _ => {
                     return Err(ApplicationError::InvalidInput(
                         "unsupported skill URL; use skills.sh or a GitHub tree URL".to_string(),
-                    ))
+                    ));
                 }
             }
         } else {

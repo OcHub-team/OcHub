@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use url::Url;
 
 use crate::application::{Application, ApplicationError, ApplicationResult, ProviderDetails};
 use crate::provider_config::FormValues;
 use crate::services::{
-    balance, model_fetch, ConfigService, ProviderService, ProviderSortUpdate, SpeedtestService,
+    ConfigService, ProviderService, ProviderSortUpdate, SpeedtestService, balance, model_fetch,
 };
 use crate::{AppId, AppType, Provider, UsageResult, UsageScript};
 

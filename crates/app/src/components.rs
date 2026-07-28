@@ -9,12 +9,12 @@ use std::rc::Rc;
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, Anchor, AnyElement, App, ElementId, Entity,
-    FontWeight, MouseButton, Rgba, ScrollHandle, SharedString, Window,
+    Anchor, AnyElement, App, ElementId, Entity, FontWeight, MouseButton, Rgba, ScrollHandle,
+    SharedString, Window, anchored, deferred, div, point, prelude::*, px,
 };
 
-use crate::i18n::{k, raw, t, Key};
-use crate::icons::{icon, IconName};
+use crate::i18n::{Key, k, raw, t};
+use crate::icons::{IconName, icon};
 use crate::scrollbar::VerticalScrollbar;
 use crate::text_input::TextInput;
 use crate::tf;
@@ -1602,10 +1602,10 @@ pub fn pagination_bar(
 
     let mut previous: Option<u32> = None;
     for number in numbers {
-        if let Some(prev) = previous {
-            if number > prev + 1 {
-                bar = bar.child(div().px_1().text_color(theme::muted()).text_sm().child("…"));
-            }
+        if let Some(prev) = previous
+            && number > prev + 1
+        {
+            bar = bar.child(div().px_1().text_color(theme::muted()).text_sm().child("…"));
         }
         previous = Some(number);
 

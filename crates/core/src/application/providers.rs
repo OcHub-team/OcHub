@@ -103,12 +103,11 @@ impl Application {
             })?;
         if !show_secrets {
             provider.settings_config = redact_json(&provider.settings_config);
-            if let Some(meta) = provider.meta.as_mut() {
-                if let Some(script) = meta.usage_script.as_mut() {
-                    script.api_key = script.api_key.as_ref().map(|_| "******".to_string());
-                    script.access_token =
-                        script.access_token.as_ref().map(|_| "******".to_string());
-                }
+            if let Some(meta) = provider.meta.as_mut()
+                && let Some(script) = meta.usage_script.as_mut()
+            {
+                script.api_key = script.api_key.as_ref().map(|_| "******".to_string());
+                script.access_token = script.access_token.as_ref().map(|_| "******".to_string());
             }
         }
         Ok(ProviderDetails {

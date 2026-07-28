@@ -1,5 +1,5 @@
-use crate::services::provider::LiveDrift;
 use crate::AppError;
+use crate::services::provider::LiveDrift;
 
 pub type ApplicationResult<T> = Result<T, ApplicationError>;
 

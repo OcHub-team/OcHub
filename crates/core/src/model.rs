@@ -298,12 +298,11 @@ impl ProviderMeta {
     }
 
     pub fn managed_account_id_for(&self, auth_provider: &str) -> Option<String> {
-        if let Some(binding) = self.auth_binding.as_ref() {
-            if binding.source == AuthBindingSource::ManagedAccount
-                && binding.auth_provider.as_deref() == Some(auth_provider)
-            {
-                return binding.account_id.clone();
-            }
+        if let Some(binding) = self.auth_binding.as_ref()
+            && binding.source == AuthBindingSource::ManagedAccount
+            && binding.auth_provider.as_deref() == Some(auth_provider)
+        {
+            return binding.account_id.clone();
         }
         if auth_provider == "github_copilot" {
             return self.github_account_id.clone();
@@ -384,10 +383,10 @@ impl Provider {
                 return String::new();
             };
             for key in keys {
-                if let Some(s) = env.get(key).and_then(|v| v.as_str()) {
-                    if !s.is_empty() {
-                        return s.to_string();
-                    }
+                if let Some(s) = env.get(key).and_then(|v| v.as_str())
+                    && !s.is_empty()
+                {
+                    return s.to_string();
                 }
             }
             String::new()

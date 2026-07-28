@@ -10,9 +10,9 @@
 use std::sync::Arc;
 
 use gpui::{
-    canvas, fill, linear_color_stop, linear_gradient, outline, point, px, size, App, BorderStyle,
-    Bounds, Hsla, IntoElement, PathBuilder, Pixels, RenderOnce, SharedString, Styled, TextRun,
-    Window,
+    App, BorderStyle, Bounds, Hsla, IntoElement, PathBuilder, Pixels, RenderOnce, SharedString,
+    Styled, TextRun, Window, canvas, fill, linear_color_stop, linear_gradient, outline, point, px,
+    size,
 };
 
 use crate::theme;

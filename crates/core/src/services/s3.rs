@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn ensure_content_length_within_limit_rejects_oversized() {
-        use reqwest::header::{HeaderMap, HeaderValue, CONTENT_LENGTH};
+        use reqwest::header::{CONTENT_LENGTH, HeaderMap, HeaderValue};
         let mut h = HeaderMap::new();
         h.insert(CONTENT_LENGTH, HeaderValue::from_static("2048"));
         assert!(ensure_content_length_within_limit(&h, 1024, "https://example.com").is_err());
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn ensure_content_length_within_limit_accepts_within_bounds() {
-        use reqwest::header::{HeaderMap, HeaderValue, CONTENT_LENGTH};
+        use reqwest::header::{CONTENT_LENGTH, HeaderMap, HeaderValue};
         let mut h = HeaderMap::new();
         h.insert(CONTENT_LENGTH, HeaderValue::from_static("512"));
         assert!(ensure_content_length_within_limit(&h, 1024, "https://example.com").is_ok());

@@ -266,27 +266,27 @@ impl McpService {
         let mut new_count = 0;
 
         // 如果有导入的服务器，保存到数据库
-        if count > 0 {
-            if let Some(servers) = &temp_config.mcp.servers {
-                let mut existing = state.db.get_all_mcp_servers()?;
-                for server in servers.values() {
-                    // 已存在：仅启用 Claude，不覆盖其他字段（与导入模块语义保持一致）
-                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
-                        let mut merged = existing_server.clone();
-                        merged.apps.claude = true;
-                        merged
-                    } else {
-                        // 真正的新服务器
-                        new_count += 1;
-                        server.clone()
-                    };
+        if count > 0
+            && let Some(servers) = &temp_config.mcp.servers
+        {
+            let mut existing = state.db.get_all_mcp_servers()?;
+            for server in servers.values() {
+                // 已存在：仅启用 Claude，不覆盖其他字段（与导入模块语义保持一致）
+                let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                    let mut merged = existing_server.clone();
+                    merged.apps.claude = true;
+                    merged
+                } else {
+                    // 真正的新服务器
+                    new_count += 1;
+                    server.clone()
+                };
 
-                    state.db.save_mcp_server(&to_save)?;
-                    existing.insert(to_save.id.clone(), to_save.clone());
+                state.db.save_mcp_server(&to_save)?;
+                existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
-                    // 显式编辑、启用/禁用或手动同步时再执行写回。
-                }
+                // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
+                // 显式编辑、启用/禁用或手动同步时再执行写回。
             }
         }
 
@@ -304,27 +304,27 @@ impl McpService {
         let mut new_count = 0;
 
         // 如果有导入的服务器，保存到数据库
-        if count > 0 {
-            if let Some(servers) = &temp_config.mcp.servers {
-                let mut existing = state.db.get_all_mcp_servers()?;
-                for server in servers.values() {
-                    // 已存在：仅启用 Codex，不覆盖其他字段（与导入模块语义保持一致）
-                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
-                        let mut merged = existing_server.clone();
-                        merged.apps.codex = true;
-                        merged
-                    } else {
-                        // 真正的新服务器
-                        new_count += 1;
-                        server.clone()
-                    };
+        if count > 0
+            && let Some(servers) = &temp_config.mcp.servers
+        {
+            let mut existing = state.db.get_all_mcp_servers()?;
+            for server in servers.values() {
+                // 已存在：仅启用 Codex，不覆盖其他字段（与导入模块语义保持一致）
+                let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                    let mut merged = existing_server.clone();
+                    merged.apps.codex = true;
+                    merged
+                } else {
+                    // 真正的新服务器
+                    new_count += 1;
+                    server.clone()
+                };
 
-                    state.db.save_mcp_server(&to_save)?;
-                    existing.insert(to_save.id.clone(), to_save.clone());
+                state.db.save_mcp_server(&to_save)?;
+                existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
-                    // 显式编辑、启用/禁用或手动同步时再执行写回。
-                }
+                // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
+                // 显式编辑、启用/禁用或手动同步时再执行写回。
             }
         }
 
@@ -342,27 +342,27 @@ impl McpService {
         let mut new_count = 0;
 
         // 如果有导入的服务器，保存到数据库
-        if count > 0 {
-            if let Some(servers) = &temp_config.mcp.servers {
-                let mut existing = state.db.get_all_mcp_servers()?;
-                for server in servers.values() {
-                    // 已存在：仅启用 OpenCode，不覆盖其他字段（与导入模块语义保持一致）
-                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
-                        let mut merged = existing_server.clone();
-                        merged.apps.opencode = true;
-                        merged
-                    } else {
-                        // 真正的新服务器
-                        new_count += 1;
-                        server.clone()
-                    };
+        if count > 0
+            && let Some(servers) = &temp_config.mcp.servers
+        {
+            let mut existing = state.db.get_all_mcp_servers()?;
+            for server in servers.values() {
+                // 已存在：仅启用 OpenCode，不覆盖其他字段（与导入模块语义保持一致）
+                let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                    let mut merged = existing_server.clone();
+                    merged.apps.opencode = true;
+                    merged
+                } else {
+                    // 真正的新服务器
+                    new_count += 1;
+                    server.clone()
+                };
 
-                    state.db.save_mcp_server(&to_save)?;
-                    existing.insert(to_save.id.clone(), to_save.clone());
+                state.db.save_mcp_server(&to_save)?;
+                existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
-                    // 显式编辑、启用/禁用或手动同步时再执行写回。
-                }
+                // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
+                // 显式编辑、启用/禁用或手动同步时再执行写回。
             }
         }
 
@@ -380,27 +380,27 @@ impl McpService {
         let mut new_count = 0;
 
         // 如果有导入的服务器，保存到数据库
-        if count > 0 {
-            if let Some(servers) = &temp_config.mcp.servers {
-                let mut existing = state.db.get_all_mcp_servers()?;
-                for server in servers.values() {
-                    // 已存在：仅启用 Hermes，不覆盖其他字段（与导入模块语义保持一致）
-                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
-                        let mut merged = existing_server.clone();
-                        merged.apps.hermes = true;
-                        merged
-                    } else {
-                        // 真正的新服务器
-                        new_count += 1;
-                        server.clone()
-                    };
+        if count > 0
+            && let Some(servers) = &temp_config.mcp.servers
+        {
+            let mut existing = state.db.get_all_mcp_servers()?;
+            for server in servers.values() {
+                // 已存在：仅启用 Hermes，不覆盖其他字段（与导入模块语义保持一致）
+                let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                    let mut merged = existing_server.clone();
+                    merged.apps.hermes = true;
+                    merged
+                } else {
+                    // 真正的新服务器
+                    new_count += 1;
+                    server.clone()
+                };
 
-                    state.db.save_mcp_server(&to_save)?;
-                    existing.insert(to_save.id.clone(), to_save.clone());
+                state.db.save_mcp_server(&to_save)?;
+                existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
-                    // 显式编辑、启用/禁用或手动同步时再执行写回。
-                }
+                // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
+                // 显式编辑、启用/禁用或手动同步时再执行写回。
             }
         }
 
@@ -413,21 +413,21 @@ impl McpService {
         let count = crate::mcp::import_from_grokbuild(&mut temp_config)?;
         let mut new_count = 0;
 
-        if count > 0 {
-            if let Some(servers) = &temp_config.mcp.servers {
-                let mut existing = state.db.get_all_mcp_servers()?;
-                for server in servers.values() {
-                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
-                        let mut merged = existing_server.clone();
-                        merged.apps.grokbuild = true;
-                        merged
-                    } else {
-                        new_count += 1;
-                        server.clone()
-                    };
-                    state.db.save_mcp_server(&to_save)?;
-                    existing.insert(to_save.id.clone(), to_save);
-                }
+        if count > 0
+            && let Some(servers) = &temp_config.mcp.servers
+        {
+            let mut existing = state.db.get_all_mcp_servers()?;
+            for server in servers.values() {
+                let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                    let mut merged = existing_server.clone();
+                    merged.apps.grokbuild = true;
+                    merged
+                } else {
+                    new_count += 1;
+                    server.clone()
+                };
+                state.db.save_mcp_server(&to_save)?;
+                existing.insert(to_save.id.clone(), to_save);
             }
         }
         Ok(new_count)

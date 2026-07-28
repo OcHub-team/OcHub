@@ -6,7 +6,7 @@
 //! the quit mode on keep-running, the locale install on language — rather than
 //! on every save the way the old `persist()` did.
 
-use gpui::{div, prelude::*, AnyElement, Context, PathPromptOptions, SharedString, Window};
+use gpui::{AnyElement, Context, PathPromptOptions, SharedString, Window, div, prelude::*};
 use ochub_core::app_store;
 use ochub_core::i18n::Locale;
 use ochub_core::settings;
@@ -651,10 +651,10 @@ impl SettingsView {
             let result = cx
                 .background_spawn(async move {
                     let result = app.db.import_from_ccswitch_source(&source);
-                    if result.is_ok() {
-                        if let Err(error) = app.db.set_ccswitch_import_decision("imported") {
-                            log::warn!("保存 cc-switch 导入选择失败: {error}");
-                        }
+                    if result.is_ok()
+                        && let Err(error) = app.db.set_ccswitch_import_decision("imported")
+                    {
+                        log::warn!("保存 cc-switch 导入选择失败: {error}");
                     }
                     result
                 })

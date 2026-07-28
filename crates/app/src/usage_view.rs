@@ -10,12 +10,12 @@ use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use gpui::{
-    anchored, canvas, deferred, div, ease_out_quint, point, prelude::*, px, relative, Anchor,
-    Animation, AnimationExt, Bounds, Context, ElementId, Entity, FontWeight, ListAlignment,
-    ListState, MouseButton, Pixels, Point, ScrollHandle, SharedString, Window,
+    Anchor, Animation, AnimationExt, Bounds, Context, ElementId, Entity, FontWeight, ListAlignment,
+    ListState, MouseButton, Pixels, Point, ScrollHandle, SharedString, Window, anchored, canvas,
+    deferred, div, ease_out_quint, point, prelude::*, px, relative,
 };
 use ochub_core::services::session_usage::{
-    get_data_source_breakdown, sync_claude_session_logs, DataSourceSummary, SessionSyncResult,
+    DataSourceSummary, SessionSyncResult, get_data_source_breakdown, sync_claude_session_logs,
 };
 use ochub_core::services::usage_stats::{
     DailyStats, LogFilters, ModelPricingInfo, ModelStats, ProviderStats, RequestLogDetail,
@@ -24,11 +24,11 @@ use ochub_core::services::usage_stats::{
 use ochub_core::services::{
     PricingCatalogRefreshKind, PricingCatalogRefreshOutcome, PricingCatalogStatus,
 };
-use ochub_core::{services, AppState, UsageSummary};
+use ochub_core::{AppState, UsageSummary, services};
 
-use crate::components::{self, format_local_timestamp, BadgeTone, ButtonSize, ButtonTone};
+use crate::components::{self, BadgeTone, ButtonSize, ButtonTone, format_local_timestamp};
 use crate::i18n::{k, raw, t};
-use crate::icons::{icon, IconName};
+use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::text_input::TextInput;
@@ -149,10 +149,10 @@ fn load_usage_data(
             .map(|stats| stats.provider_name)
             .collect::<Vec<_>>()
     };
-    if let Some(selected) = provider_filter {
-        if !provider_options.iter().any(|provider| provider == selected) {
-            provider_options.push(selected.to_string());
-        }
+    if let Some(selected) = provider_filter
+        && !provider_options.iter().any(|provider| provider == selected)
+    {
+        provider_options.push(selected.to_string());
     }
     provider_options.sort_by_key(|provider| provider.to_lowercase());
     provider_options.dedup();
@@ -174,10 +174,10 @@ fn load_usage_data(
             .map(|stats| stats.model)
             .collect::<Vec<_>>()
     };
-    if let Some(selected) = model_filter {
-        if !model_options.iter().any(|model| model == selected) {
-            model_options.push(selected.to_string());
-        }
+    if let Some(selected) = model_filter
+        && !model_options.iter().any(|model| model == selected)
+    {
+        model_options.push(selected.to_string());
     }
     model_options.sort_by_key(|model| model.to_lowercase());
     model_options.dedup();
@@ -448,11 +448,11 @@ impl UsageView {
         // “跳至 X 页”回车提交。
         let jump = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
             let text = input_value(&this.log_page_input, cx);
-            if let Ok(target) = text.parse::<u32>() {
-                if target >= 1 {
-                    let total_pages = this.log_total.div_ceil(this.log_page_size).max(1);
-                    this.set_log_page((target - 1).min(total_pages - 1), cx);
-                }
+            if let Ok(target) = text.parse::<u32>()
+                && target >= 1
+            {
+                let total_pages = this.log_total.div_ceil(this.log_page_size).max(1);
+                this.set_log_page((target - 1).min(total_pages - 1), cx);
             }
         });
         this.log_page_input.update(cx, |input, _| {
@@ -1287,7 +1287,7 @@ impl UsageView {
         &self,
         endpoint: RangeEndpoint,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.endpoint_datetime(endpoint, cx);
         let picker_id = match endpoint {
             RangeEndpoint::Start => "usage-start-datetime",
@@ -1333,7 +1333,7 @@ impl UsageView {
         &self,
         endpoint: RangeEndpoint,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.endpoint_datetime(endpoint, cx);
         let selected_date = selected.date_naive();
         let selected_hour = selected.hour();
@@ -1592,7 +1592,7 @@ impl UsageView {
             }))
     }
 
-    fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Not a `const`: the "all" label is a catalog lookup, and the status
         // codes below it are numbers rather than prose.
         let status_filters: [(Option<u16>, &'static str); 6] = [
@@ -2064,7 +2064,7 @@ impl UsageView {
         )
     }
 
-    fn render_data_sources(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_data_sources(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let sources =
             self.data_sources
                 .iter()
@@ -2141,7 +2141,7 @@ impl UsageView {
             )
     }
 
-    fn render_summary(&self) -> impl IntoElement {
+    fn render_summary(&self) -> impl IntoElement + use<> {
         let cards = self.summary.clone().map(|summary| {
             let cache_hit_rate = summary.cache_hit_rate * 100.0;
             div()
@@ -2198,7 +2198,7 @@ impl UsageView {
             .child(self.render_app_breakdown())
     }
 
-    fn render_app_breakdown(&self) -> impl IntoElement {
+    fn render_app_breakdown(&self) -> impl IntoElement + use<> {
         let max_tokens = self
             .summary_by_app
             .iter()
@@ -2291,7 +2291,7 @@ impl UsageView {
             .children(rows)
     }
 
-    fn render_trend(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_trend(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let values = self.trend_cache.values.clone();
         let hover_labels = self.trend_cache.hover_labels.clone();
         let value_count = values.len();
@@ -2448,7 +2448,7 @@ impl UsageView {
             )
     }
 
-    fn render_section_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_section_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let labels: Vec<&str> = UsageSection::all()
             .iter()
             .map(|(section, _)| section.label())
@@ -2467,7 +2467,7 @@ impl UsageView {
         })
     }
 
-    fn render_active_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_active_section(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         match self.section {
             UsageSection::Logs => self.render_logs(cx).into_any_element(),
             UsageSection::Providers => self.render_providers(cx).into_any_element(),
@@ -2475,7 +2475,7 @@ impl UsageView {
         }
     }
 
-    fn render_providers(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_providers(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let row_count = self.providers.len();
         let rows = self
             .providers
@@ -2538,7 +2538,7 @@ impl UsageView {
             .children(rows)
     }
 
-    fn render_models(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_models(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let row_count = self.models.len();
         let rows = self
             .models
@@ -2598,7 +2598,7 @@ impl UsageView {
             .children(rows)
     }
 
-    fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let total_pages = self.log_total.div_ceil(self.log_page_size).max(1);
         let page = self.log_page.min(total_pages - 1);
         let row_count = self.logs.len();
@@ -2865,7 +2865,7 @@ impl UsageView {
             })
     }
 
-    fn render_scope_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_scope_options(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let provider_chips = self
             .providers
             .iter()
@@ -2931,7 +2931,7 @@ impl UsageView {
             )
     }
 
-    fn render_pricing_config(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_pricing_config(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let row_count = self.pricing.len().min(12);
         let pricing_rows = self
             .pricing
@@ -3096,7 +3096,7 @@ impl UsageView {
             )
     }
 
-    fn render_pricing_catalog_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_pricing_catalog_status(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let revision = self
             .pricing_catalog
             .source_revision
@@ -3267,7 +3267,7 @@ impl UsageView {
         &self,
         app: &'static str,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let source = self
             .pricing_sources
             .get(app)
@@ -4066,8 +4066,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        auto_session_sync_due, format_local_timestamp, parse_local_timestamp, shifted_year_month,
-        AUTO_SESSION_SYNC_INTERVAL,
+        AUTO_SESSION_SYNC_INTERVAL, auto_session_sync_due, format_local_timestamp,
+        parse_local_timestamp, shifted_year_month,
     };
 
     #[test]

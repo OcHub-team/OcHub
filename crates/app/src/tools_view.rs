@@ -7,8 +7,8 @@ use std::process::Command;
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, App, Context, Entity, Focusable, FontWeight, ListAlignment, ListState,
-    SharedString, Window,
+    App, Context, Entity, Focusable, FontWeight, ListAlignment, ListState, SharedString, Window,
+    div, prelude::*, px,
 };
 use ochub_core::apps::{claude_desktop, claude_plugin, codex, hermes, openclaw, opencode};
 use ochub_core::services::OmoService;
@@ -16,7 +16,7 @@ use ochub_core::{AppError, AppState, AppType};
 use serde_json::Value;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
-use crate::i18n::{k, raw, t, Key};
+use crate::i18n::{Key, k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
 use crate::notifications::NotificationLevel;
@@ -1486,7 +1486,11 @@ impl ToolsView {
             .child(SharedString::from(text))
     }
 
-    fn render_config_row(&self, row: &ConfigRow, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_config_row(
+        &self,
+        row: &ConfigRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let app = row.app;
         components::card()
             .flex_row()
@@ -1551,7 +1555,7 @@ impl ToolsView {
 
     fn render_tool_version_row(
         version: &ochub_core::session_manager::ToolVersion,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let local = version
             .version
             .clone()
@@ -1610,7 +1614,7 @@ impl ToolsView {
 
     fn render_install_report_row(
         report: &ochub_core::session_manager::ToolInstallationReport,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         // Conflict and confirmation each flip a word in the middle of the
         // sentence, so the four readings are four catalog entries.
         let summary_key = match (report.is_conflict, report.needs_confirmation) {
@@ -1689,7 +1693,7 @@ impl ToolsView {
             .children(installs)
     }
 
-    fn render_env_conflict_row(conflict: &ochub_core::EnvConflict) -> impl IntoElement {
+    fn render_env_conflict_row(conflict: &ochub_core::EnvConflict) -> impl IntoElement + use<> {
         components::card()
             .gap_1()
             .p_3()
@@ -1711,7 +1715,11 @@ impl ToolsView {
             )
     }
 
-    fn render_backup_row(&self, backup: &BackupRow, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_backup_row(
+        &self,
+        backup: &BackupRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let rename_name = backup.filename.clone();
         let restore_target = ConfirmAction::RestoreDbBackup(backup.filename.clone());
         let delete_target = ConfirmAction::DeleteDbBackup(backup.filename.clone());

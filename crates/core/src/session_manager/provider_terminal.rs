@@ -81,18 +81,18 @@ fn extract_env_vars_from_config(
             _ => None,
         };
 
-        if let Some(key) = base_url_key {
-            if let Some(url_str) = env.get(key).and_then(|v| v.as_str()) {
-                env_vars.push((key.to_string(), url_str.to_string()));
-            }
+        if let Some(key) = base_url_key
+            && let Some(url_str) = env.get(key).and_then(|v| v.as_str())
+        {
+            env_vars.push((key.to_string(), url_str.to_string()));
         }
     }
 
     // Codex 使用 auth 字段转换为 OPENAI_API_KEY
-    if *app_type == AppType::Codex {
-        if let Some(auth) = obj.get("auth").and_then(|v| v.as_str()) {
-            env_vars.push(("OPENAI_API_KEY".to_string(), auth.to_string()));
-        }
+    if *app_type == AppType::Codex
+        && let Some(auth) = obj.get("auth").and_then(|v| v.as_str())
+    {
+        env_vars.push(("OPENAI_API_KEY".to_string(), auth.to_string()));
     }
 
     env_vars

@@ -2,11 +2,11 @@
 //!
 //! 提供使用量数据的聚合查询功能
 
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use crate::services::sql_helpers::fresh_input_sql;
 use chrono::{Local, NaiveDate, TimeZone, Timelike};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -2156,10 +2156,10 @@ pub(crate) fn find_model_pricing_row_for_requirements(
         .trim()
         .trim_end_matches(crate::apps::claude_desktop::ONE_M_CONTEXT_MARKER)
         .trim();
-    if !exact_manual_key.is_empty() {
-        if let Some(row) = query_model_pricing_exact(conn, exact_manual_key)? {
-            return Ok(Some(row));
-        }
+    if !exact_manual_key.is_empty()
+        && let Some(row) = query_model_pricing_exact(conn, exact_manual_key)?
+    {
+        return Ok(Some(row));
     }
 
     let candidates = model_pricing_candidates(model_id);
@@ -2174,10 +2174,10 @@ pub(crate) fn find_model_pricing_row_for_requirements(
     }
 
     for candidate in &candidates {
-        if should_try_pricing_prefix_match(candidate) {
-            if let Some(row) = query_model_pricing_prefix(conn, candidate)? {
-                return Ok(Some(row));
-            }
+        if should_try_pricing_prefix_match(candidate)
+            && let Some(row) = query_model_pricing_prefix(conn, candidate)?
+        {
+            return Ok(Some(row));
         }
     }
 
@@ -2188,10 +2188,10 @@ pub(crate) fn find_model_pricing_row_for_requirements(
         .trim()
         .trim_end_matches(crate::apps::claude_desktop::ONE_M_CONTEXT_MARKER)
         .trim();
-    if !exact_catalog_key.is_empty() {
-        if let Some(row) = query_catalog_pricing_exact(conn, exact_catalog_key)? {
-            return Ok(row.into_complete_tuple(needs_cache_read, needs_cache_creation));
-        }
+    if !exact_catalog_key.is_empty()
+        && let Some(row) = query_catalog_pricing_exact(conn, exact_catalog_key)?
+    {
+        return Ok(row.into_complete_tuple(needs_cache_read, needs_cache_creation));
     }
 
     // Prefer a direct LiteLLM model key (normally the first-party provider)
@@ -2458,10 +2458,10 @@ fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) -> boo
 }
 
 fn strip_known_model_namespace(model_id: &str) -> Option<String> {
-    if let Some(pos) = model_id.rfind("claude-") {
-        if pos > 0 {
-            return Some(model_id[pos..].to_string());
-        }
+    if let Some(pos) = model_id.rfind("claude-")
+        && pos > 0
+    {
+        return Some(model_id[pos..].to_string());
     }
 
     for marker in [
@@ -2557,10 +2557,10 @@ fn strip_model_date_suffix(model_id: &str) -> Option<String> {
 
 fn strip_reasoning_effort_suffix(model_id: &str) -> Option<String> {
     for suffix in ["-minimal", "-low", "-medium", "-high", "-xhigh"] {
-        if let Some(stripped) = model_id.strip_suffix(suffix) {
-            if !stripped.is_empty() {
-                return Some(stripped.to_string());
-            }
+        if let Some(stripped) = model_id.strip_suffix(suffix)
+            && !stripped.is_empty()
+        {
+            return Some(stripped.to_string());
         }
     }
     None
@@ -3157,7 +3157,9 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["req1", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000],
+                params![
+                    "req1", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000
+                ],
             )?;
             conn.execute(
                 "INSERT INTO usage_logs (
@@ -3165,7 +3167,9 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["req2", "p1", "claude", "claude-3", 200, 100, "0.02", 150, 200, 2000],
+                params![
+                    "req2", "p1", "claude", "claude-3", 200, 100, "0.02", 150, 200, 2000
+                ],
             )?;
         }
 
@@ -3426,8 +3430,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_usage_summary_includes_end_day_rollup_for_minute_precision_end_time(
-    ) -> Result<(), AppError> {
+    fn test_get_usage_summary_includes_end_day_rollup_for_minute_precision_end_time()
+    -> Result<(), AppError> {
         let db = Database::memory()?;
         let start = local_ts(2024, 1, 1, 0, 0, 0);
         let end = local_ts(2024, 1, 2, 23, 59, 0);
@@ -3625,15 +3629,21 @@ mod tests {
                 .sum::<u64>(),
             4
         );
-        assert!(provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_codex_session" && stat.request_count == 1));
-        assert!(!provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_gemini_session"));
-        assert!(!provider_stats
-            .iter()
-            .any(|stat| stat.provider_id == "_session"));
+        assert!(
+            provider_stats
+                .iter()
+                .any(|stat| stat.provider_id == "_codex_session" && stat.request_count == 1)
+        );
+        assert!(
+            !provider_stats
+                .iter()
+                .any(|stat| stat.provider_id == "_gemini_session")
+        );
+        assert!(
+            !provider_stats
+                .iter()
+                .any(|stat| stat.provider_id == "_session")
+        );
 
         let model_stats = db.get_model_stats(None, None, None, None, None)?;
         assert_eq!(
@@ -3895,7 +3905,9 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["old", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000],
+                params![
+                    "old", "p1", "claude", "claude-3", 100, 50, "0.01", 100, 200, 1000
+                ],
             )?;
             conn.execute(
                 "INSERT INTO usage_logs (
@@ -3903,7 +3915,9 @@ mod tests {
                     input_tokens, output_tokens, total_cost_usd,
                     latency_ms, status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params!["new", "p1", "claude", "claude-3", 200, 75, "0.02", 120, 200, 2000],
+                params![
+                    "new", "p1", "claude", "claude-3", 200, 75, "0.02", 120, 200, 2000
+                ],
             )?;
         }
 
@@ -4064,8 +4078,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_daily_trends_groups_ranges_longer_than_24_hours_by_local_day(
-    ) -> Result<(), AppError> {
+    fn test_get_daily_trends_groups_ranges_longer_than_24_hours_by_local_day()
+    -> Result<(), AppError> {
         let db = Database::memory()?;
         let start = local_ts(2024, 3, 1, 12, 0, 0);
         let end = local_ts(2024, 3, 3, 12, 0, 0);

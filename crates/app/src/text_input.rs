@@ -10,16 +10,16 @@ use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, size, App, Bounds, ClipboardItem, Context,
-    CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, ScrollHandle, ShapedLine, SharedString, Style, TextRun,
-    UTF16Selection, UnderlineStyle, Window,
+    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollHandle,
+    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
+    fill, point, prelude::*, px, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::i18n::{k, raw, t};
-use crate::icons::{icon, IconName};
+use crate::icons::{IconName, icon};
 use crate::theme;
 
 actions!(
@@ -1515,10 +1515,10 @@ impl Element for TextElement {
         )
         .ok();
 
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
         }
 
         self.input.update(cx, |input, _cx| {
@@ -2005,10 +2005,10 @@ impl Element for CodeElement {
             .ok();
         }
 
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
         }
 
         let lines = std::mem::take(&mut prepaint.lines);
@@ -2026,11 +2026,11 @@ impl Element for CodeElement {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{point, px, size, Bounds};
+    use gpui::{Bounds, point, px, size};
 
     use super::{
-        closest_match, code_visible_rows, display_offset, find_matches,
-        horizontal_scroll_for_caret, raw_offset_from_display, utf8_offset_from_utf16, CaretBlink,
+        CaretBlink, closest_match, code_visible_rows, display_offset, find_matches,
+        horizontal_scroll_for_caret, raw_offset_from_display, utf8_offset_from_utf16,
     };
 
     /// The composition caret arrives as a UTF-16 offset into the marked text.

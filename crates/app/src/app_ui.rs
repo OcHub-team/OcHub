@@ -9,25 +9,25 @@ use std::{
 };
 
 use gpui::{
-    div, point, prelude::*, px, AnyElement, App, Bounds, Context, Element, ElementId, Entity,
-    FontWeight, GlobalElementId, InspectorElementId, LayoutId, ListAlignment, ListState,
-    MouseButton, Pixels, ScrollHandle, SharedString, Window, WindowAppearance,
+    AnyElement, App, Bounds, Context, Element, ElementId, Entity, FontWeight, GlobalElementId,
+    InspectorElementId, LayoutId, ListAlignment, ListState, MouseButton, Pixels, ScrollHandle,
+    SharedString, Window, WindowAppearance, div, point, prelude::*, px,
 };
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
 use ochub_core::services::provider::{
-    self, drift, DriftConflict, DriftResolution, LiveDrift, ProviderService,
+    self, DriftConflict, DriftResolution, LiveDrift, ProviderService, drift,
 };
 use ochub_core::{AppState, AppType, Provider};
 
 use crate::about_view::AboutView;
-use crate::app_settings_view::{app_has_settings, AppSettingsEvent, AppSettingsView};
+use crate::app_settings_view::{AppSettingsEvent, AppSettingsView, app_has_settings};
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::gallery_view::GalleryView;
 use crate::gateway_view::GatewayView;
 use crate::i18n::{k, raw, t};
-use crate::icons::{icon, IconName};
+use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::mcp_view::McpView;
 use crate::notifications::{NotificationHost, NotificationLevel, ToastSource};
@@ -2155,11 +2155,12 @@ impl AppRoot {
             .get(target_position)
             .and_then(|slot| self.providers.get(*slot))
             .map(|provider| provider.id.clone());
-        if dropped_inside_list && target_position != dragged.source_position {
-            if let Some(target_id) = target_id {
-                self.reorder_provider(dragged.id.clone(), target_id, cx);
-                return;
-            }
+        if dropped_inside_list
+            && target_position != dragged.source_position
+            && let Some(target_id) = target_id
+        {
+            self.reorder_provider(dragged.id.clone(), target_id, cx);
+            return;
         }
         cx.notify();
     }
@@ -2387,10 +2388,10 @@ impl AppRoot {
             let result = cx
                 .background_spawn(async move {
                     let result = app.db.import_from_ccswitch_source(&source);
-                    if result.is_ok() {
-                        if let Err(error) = app.db.set_ccswitch_import_decision("imported") {
-                            log::warn!("保存 cc-switch 导入选择失败: {error}");
-                        }
+                    if result.is_ok()
+                        && let Err(error) = app.db.set_ccswitch_import_decision("imported")
+                    {
+                        log::warn!("保存 cc-switch 导入选择失败: {error}");
                     }
                     result
                 })
@@ -2504,27 +2505,31 @@ impl AppRoot {
     /// without, it stays the single acknowledgement it has always been.
     fn first_run_actions(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let Some(_) = self.ccswitch_import.as_ref() else {
-            return vec![components::button(
-                "first-run-confirm",
-                t(k::SHELL_FIRST_RUN_CONFIRM),
-                ButtonTone::Primary,
-                ButtonSize::Sm,
-            )
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.acknowledge_first_run(cx);
-            }))
-            .into_any_element()];
+            return vec![
+                components::button(
+                    "first-run-confirm",
+                    t(k::SHELL_FIRST_RUN_CONFIRM),
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.acknowledge_first_run(cx);
+                }))
+                .into_any_element(),
+            ];
         };
 
         if self.ccswitch_importing {
-            return vec![components::disabled_button(
-                "first-run-import-busy",
-                t(k::SHELL_FIRST_RUN_IMPORT_BUSY),
-                ButtonTone::Primary,
-                ButtonSize::Sm,
-                true,
-            )
-            .into_any_element()];
+            return vec![
+                components::disabled_button(
+                    "first-run-import-busy",
+                    t(k::SHELL_FIRST_RUN_IMPORT_BUSY),
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                    true,
+                )
+                .into_any_element(),
+            ];
         }
 
         vec![
@@ -2618,7 +2623,7 @@ impl AppRoot {
         app: AppType,
         appearance: WindowAppearance,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.selected_app == app && self.section == Section::Providers;
         let accent = Self::app_accent(app);
         div()
@@ -2678,7 +2683,7 @@ impl AppRoot {
         section: Section,
         appearance: WindowAppearance,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.section == section;
         let fg = if selected {
             theme::accent()
@@ -2764,7 +2769,7 @@ impl AppRoot {
 
     /// Empty chrome keeps the native traffic lights embedded in the sidebar
     /// while preserving a reliable drag target above the scrolling navigation.
-    fn render_sidebar_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("sidebar-window-drag-region")
             .w_full()
@@ -2778,7 +2783,7 @@ impl AppRoot {
 
     /// A shallow strip above page-header content makes the wider content pane
     /// draggable without covering its title or trailing actions.
-    fn render_content_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_content_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("content-window-drag-region")
             .absolute()
@@ -2796,7 +2801,7 @@ impl AppRoot {
         &self,
         appearance: WindowAppearance,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let navigation = div()
             .id("sidebar-navigation")
             .flex()
@@ -2953,7 +2958,7 @@ impl AppRoot {
         provider: &Provider,
         _window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let is_current = !self.selected_app.is_additive_mode() && provider.id == self.current;
         let is_gateway = provider.is_local_gateway();
         let id = provider.id.clone();
@@ -3255,7 +3260,7 @@ impl AppRoot {
     /// The "console" hero: a single prominent card that answers *which provider is
     /// live right now* for the selected app. Shown only in switch (non-additive) mode,
     /// above the list of switchable alternatives.
-    fn render_active_hero(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_active_hero(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = self.selected_app;
         let accent = Self::app_accent(app);
         let current = self.providers.iter().find(|p| p.id == self.current);
@@ -3444,7 +3449,7 @@ impl AppRoot {
     /// Shown when the app has no relay entry yet. Stations are applied from
     /// here — the relay page only builds them — so this doubles as the picker
     /// whenever there is something to pick.
-    fn render_gateway_cta(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_gateway_cta(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let stations: Vec<(String, SharedString)> = self
             .eligible_station_routes()
             .into_iter()
@@ -3562,7 +3567,7 @@ impl AppRoot {
             }))
     }
 
-    fn render_gateway_route_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_gateway_route_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = self.selected_app;
         let active_route_id = self
             .gateway_keys
@@ -3729,7 +3734,7 @@ impl AppRoot {
             }))
     }
 
-    fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = self.selected_app;
         let current_is_gateway = self
             .providers

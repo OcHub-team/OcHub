@@ -89,10 +89,10 @@ fn launch_ghostty(command: &str, cwd: Option<&str>) -> Result<(), String> {
         "--quit-after-last-window-closed=true".to_string(),
     ];
 
-    if let Some(dir) = cwd {
-        if !dir.trim().is_empty() {
-            args.push(format!("--working-directory={dir}"));
-        }
+    if let Some(dir) = cwd
+        && !dir.trim().is_empty()
+    {
+        args.push(format!("--working-directory={dir}"));
     }
 
     args.push("-e".to_string());

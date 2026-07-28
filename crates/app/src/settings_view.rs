@@ -42,14 +42,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui::{
-    div, point, prelude::*, px, Context, Entity, FontWeight, ListAlignment, ListState,
-    ScrollHandle, SharedString, Window,
+    Context, Entity, FontWeight, ListAlignment, ListState, ScrollHandle, SharedString, Window, div,
+    point, prelude::*, px,
 };
+use ochub_core::AppState;
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::plugin::{AppPlugin, ManifestLoadError};
 use ochub_core::session_index::{self, IndexStats, SessionIndex};
 use ochub_core::settings::{self, AppSettings};
-use ochub_core::AppState;
 
 use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{k, t};

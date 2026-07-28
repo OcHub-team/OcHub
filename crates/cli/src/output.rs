@@ -190,10 +190,10 @@ impl Output {
 }
 
 fn render_human(mut value: &Value, mut out: impl Write) -> io::Result<()> {
-    if let Value::Object(map) = value {
-        if map.len() == 1 {
-            value = map.values().next().unwrap_or(value);
-        }
+    if let Value::Object(map) = value
+        && map.len() == 1
+    {
+        value = map.values().next().unwrap_or(value);
     }
     match value {
         Value::Null => writeln!(out, "ok"),

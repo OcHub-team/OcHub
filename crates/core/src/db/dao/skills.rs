@@ -8,7 +8,7 @@
 
 use crate::db::legacy_json::SkillRepo;
 use crate::db::legacy_json::{InstalledSkill, SkillApps};
-use crate::db::{lock_conn, Database};
+use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use indexmap::IndexMap;
 use rusqlite::params;

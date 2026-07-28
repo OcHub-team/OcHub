@@ -27,8 +27,8 @@ use std::sync::{Arc, LazyLock};
 pub use capabilities::LiveConfigOps;
 pub use hooks::HookRegistry;
 pub use loader::{
-    load_and_register_user_plugins, manifest_load_errors, reload_user_plugins, user_plugins_dir,
-    ManifestLoadError,
+    ManifestLoadError, load_and_register_user_plugins, manifest_load_errors, reload_user_plugins,
+    user_plugins_dir,
 };
 pub use manifest::{AppManifest, ManifestError};
 pub use manifest_codec::ManifestCodec;
