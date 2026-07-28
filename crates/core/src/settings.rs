@@ -461,6 +461,24 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_terminal: Option<String>,
 
+    /// Index session transcripts so the Sessions panel can search their
+    /// contents, not just their titles.
+    ///
+    /// Off by default: switching it on reads every session file and spends
+    /// disk on the index, which should not happen behind the user's back on
+    /// first launch. The Sessions panel offers it where the cost is visible.
+    #[serde(default)]
+    pub session_index_enabled: bool,
+    /// Let the index return freed disk space on its own once enough has
+    /// accumulated. Off means space is only reclaimed on an explicit request.
+    #[serde(default = "default_true")]
+    pub session_index_auto_reclaim: bool,
+    /// When the index was switched off, in Unix milliseconds. Kept in settings
+    /// rather than in the index so it outlives the file it describes — it is
+    /// what decides when a long-disabled index is deleted outright.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_index_disabled_at: Option<i64>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_migrations: Option<LocalMigrations>,
 }
@@ -513,6 +531,9 @@ impl Default for AppSettings {
             backup_interval_hours: None,
             backup_retain_count: None,
             preferred_terminal: None,
+            session_index_enabled: false,
+            session_index_auto_reclaim: true,
+            session_index_disabled_at: None,
             local_migrations: None,
         }
     }

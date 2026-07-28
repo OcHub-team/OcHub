@@ -124,6 +124,21 @@ pub fn delete_session(
     session_id: &str,
     source_path: &str,
 ) -> Result<bool, String> {
+    let deleted = delete_session_inner(provider_id, session_id, source_path)?;
+    if deleted {
+        // Drop it from the search index in the same breath. Leaving it there
+        // would let search offer a hit that opens nothing — worse than not
+        // finding it at all. A no-op when the index is switched off.
+        crate::session_index::forget_session(source_path);
+    }
+    Ok(deleted)
+}
+
+fn delete_session_inner(
+    provider_id: &str,
+    session_id: &str,
+    source_path: &str,
+) -> Result<bool, String> {
     // SQLite sessions bypass the file-based deletion path
     if provider_id == "opencode" && source_path.starts_with("sqlite:") {
         return opencode::delete_session_sqlite(session_id, source_path);

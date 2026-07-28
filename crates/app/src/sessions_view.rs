@@ -4,17 +4,21 @@
 //! executor; scan results are cached for [`SCAN_TTL`] so re-entering the
 //! section doesn't rescan every time.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{
     Datelike, Duration as ChronoDuration, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike,
 };
+use futures::StreamExt;
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, Anchor, AnyElement, Context, ElementId, Entity,
-    FontWeight, ListAlignment, ListState, MouseButton, ScrollHandle, SharedString, Window,
+    anchored, deferred, div, point, prelude::*, px, relative, Anchor, AnyElement, Context,
+    ElementId, Entity, FontWeight, ListAlignment, ListState, MouseButton, ScrollHandle,
+    SharedString, Task, Window,
 };
+use ochub_core::session_index::{SearchHit, SessionIndex};
 use ochub_core::session_manager::{self, SessionMessage, SessionMeta};
 use ochub_core::AppState;
 
@@ -38,6 +42,50 @@ const SCAN_TTL: Duration = Duration::from_secs(30);
 /// characters. Keep the default layout bounded; users can still expand any
 /// individual message when they need the full text.
 const MESSAGE_PREVIEW_CHARS: usize = 3_000;
+
+/// How long typing has to pause before a full-text query runs. Long enough to
+/// swallow a typing burst, short enough that the results feel keystroke-driven:
+/// the search itself costs under a millisecond above three characters, and ~65 ms
+/// at its worst below that.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Upper bound on sessions returned by one full-text query. Far above what any
+/// useful search returns, and there only so a query like a single common
+/// character cannot pull the entire index into memory.
+const SEARCH_HIT_LIMIT: usize = 2_000;
+
+/// Time budget for one index maintenance slice, kept short enough to stay
+/// invisible even if it lands while the user is interacting with the list.
+const MAINTENANCE_BUDGET: Duration = Duration::from_millis(400);
+
+/// Smallest gap between two index progress updates. A sync walks every session
+/// on the machine, and repainting the panel once per session would cost more
+/// than the indexing itself; a counter is unreadable faster than this anyway.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(120);
+
+/// Progress of the background job that brings the index up to date.
+#[derive(Clone, PartialEq, Eq)]
+enum IndexSyncState {
+    Idle,
+    Syncing {
+        done: usize,
+        total: usize,
+        /// The index held nothing when this pass started, so search cannot
+        /// answer anything until it finishes. Drives the waiting page.
+        cold: bool,
+    },
+    Failed(SharedString),
+}
+
+/// What the background sync reports back.
+///
+/// [`Started`](SyncProgress::Started) arrives before any indexing work, because
+/// how much the index already covers decides whether this pass is worth waiting
+/// for or should stay a one-line hint above an otherwise usable list.
+enum SyncProgress {
+    Started { covered: usize },
+    Advanced { done: usize },
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SessionDateFilter {
@@ -132,6 +180,9 @@ struct SessionDetail {
     messages: Vec<PreparedSessionMessage>,
     stats: SessionStats,
     error: Option<SharedString>,
+    /// The message a search result pointed at, marked so the eye lands on it
+    /// after the transcript scrolls there.
+    focused_message: Option<usize>,
 }
 
 pub struct SessionsView {
@@ -176,6 +227,30 @@ pub struct SessionsView {
     page_input: Entity<TextInput>,
     range_start_input: Entity<TextInput>,
     range_end_input: Entity<TextInput>,
+    search_input: Entity<TextInput>,
+    /// Last content read off `search_input`, so cursor blinks and other
+    /// unrelated notifications do not re-run the search.
+    last_search_content: SharedString,
+    /// The query the list is currently filtered by, lowercased once here rather
+    /// than on every row of every frame.
+    query: String,
+    /// Transcript matches for [`Self::query`], keyed by session source path.
+    /// Empty while the index is off — the title match still applies.
+    content_hits: HashMap<String, SearchHit>,
+    /// Bumped per keystroke so a query that resolves out of order is discarded.
+    search_generation: u64,
+    /// Holds the debounce timer; dropping it cancels the pending search.
+    search_task: Option<Task<()>>,
+    searching: bool,
+    index_enabled: bool,
+    index_state: IndexSyncState,
+    /// Set once the user asks to browse past the first-build waiting page. The
+    /// build carries on behind the list.
+    index_wait_dismissed: bool,
+    /// Set to cancel an in-flight index sync when the user leaves or switches
+    /// the feature off.
+    index_cancel: Arc<AtomicBool>,
+    index_task: Option<Task<()>>,
 }
 
 impl SessionsView {
@@ -232,6 +307,18 @@ impl SessionsView {
                 .new(|cx| text_input(cx, t(k::SESSIONS_PAGINATION_PAGE_PLACEHOLDER)).compact()),
             range_start_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss")),
             range_end_input: cx.new(|cx| text_input(cx, "YYYY/MM/DD HH:mm:ss")),
+            search_input: cx.new(|cx| text_input(cx, t(k::SESSIONS_SEARCH_PLACEHOLDER))),
+            last_search_content: SharedString::default(),
+            query: String::new(),
+            content_hits: HashMap::new(),
+            search_generation: 0,
+            search_task: None,
+            searching: false,
+            index_enabled: ochub_core::settings::get_settings().session_index_enabled,
+            index_state: IndexSyncState::Idle,
+            index_wait_dismissed: false,
+            index_cancel: Arc::new(AtomicBool::new(false)),
+            index_task: None,
         };
         // Do not scan here: AppRoot eagerly constructs every section. The
         // shell calls `reload` when Sessions is actually selected.
@@ -254,6 +341,17 @@ impl SessionsView {
         this.range_start_input.update(cx, |input, _| {
             input.set_on_enter(move |window, cx| apply_start(&(), window, cx));
         });
+        // Narrow on titles as each keystroke lands, and queue the full-text
+        // query behind a debounce.
+        cx.observe(&this.search_input, |this, input, cx| {
+            let content = input.read(cx).content();
+            if content != this.last_search_content {
+                this.last_search_content = content.clone();
+                this.set_query(content.trim().to_string(), cx);
+            }
+        })
+        .detach();
+
         let apply_end = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
             this.apply_custom_range(cx);
         });
@@ -268,8 +366,12 @@ impl SessionsView {
     /// shows instantly with no IO at all.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.detail = None;
+        self.refresh_index_enabled(cx);
         let fresh = self.last_scan.is_some_and(|at| at.elapsed() < SCAN_TTL);
         if fresh || self.scanning {
+            // The list is still fresh, but the index may not be: a session
+            // touched since the last scan, or the feature only just switched on.
+            self.start_index_sync(cx);
             cx.notify();
             return;
         }
@@ -296,6 +398,7 @@ impl SessionsView {
                 this.scanning = false;
                 this.last_scan = Some(Instant::now());
                 this.rebuild_session_index();
+                this.start_index_sync(cx);
                 cx.notify();
             })
             .ok();
@@ -313,7 +416,301 @@ impl SessionsView {
             .as_deref()
             .is_none_or(|app| session.provider_id == app);
         let timestamp = session.last_active_at.or(session.created_at);
-        app_matches && self.date_filter.matches(timestamp)
+        app_matches && self.date_filter.matches(timestamp) && self.session_matches_query(session)
+    }
+
+    /// A session matches the query if its metadata does, or if the index found
+    /// the query in its transcript.
+    ///
+    /// The two are unioned rather than ranked: metadata matching costs nothing
+    /// and works with the index switched off, so it stays the floor the search
+    /// box always provides.
+    fn session_matches_query(&self, session: &SessionMeta) -> bool {
+        if self.query.is_empty() {
+            return true;
+        }
+        if session
+            .source_path
+            .as_deref()
+            .is_some_and(|path| self.content_hits.contains_key(path))
+        {
+            return true;
+        }
+        metadata_matches(session, &self.query)
+    }
+
+    fn content_hit_for(&self, session: &SessionMeta) -> Option<&SearchHit> {
+        if self.query.is_empty() {
+            return None;
+        }
+        self.content_hits.get(session.source_path.as_deref()?)
+    }
+
+    /// Apply a new query: narrow on metadata now, and schedule the full-text
+    /// pass for when typing pauses.
+    fn set_query(&mut self, query: String, cx: &mut Context<Self>) {
+        let query = query.to_lowercase();
+        if query == self.query {
+            return;
+        }
+        self.query = query;
+        self.page = 0;
+        // Drop the previous hits rather than keeping them until replacements
+        // arrive: they answer a query the user has already moved on from.
+        self.content_hits.clear();
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.rebuild_session_index();
+
+        if self.query.is_empty() || !self.index_enabled {
+            self.searching = false;
+            self.search_task = None;
+            cx.notify();
+            return;
+        }
+
+        self.searching = true;
+        let generation = self.search_generation;
+        let query = self.query.clone();
+        self.search_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_DEBOUNCE).await;
+            let hits = cx
+                .background_spawn(async move {
+                    SessionIndex::open().and_then(|index| index.search(&query, SEARCH_HIT_LIMIT))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                // A later keystroke has already superseded this query.
+                if this.search_generation != generation {
+                    return;
+                }
+                this.searching = false;
+                if let Ok(hits) = hits {
+                    this.content_hits = hits
+                        .into_iter()
+                        .map(|hit| (hit.source_path.clone(), hit))
+                        .collect();
+                }
+                this.rebuild_session_index();
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    /// Bring the index in line with the sessions just scanned, then reclaim any
+    /// space that has piled up.
+    ///
+    /// Runs after a scan because the scan already produced the session list the
+    /// sync needs, and because that is the moment the user is demonstrably
+    /// looking at this panel.
+    fn start_index_sync(&mut self, cx: &mut Context<Self>) {
+        if !self.index_enabled || self.sessions.is_empty() {
+            return;
+        }
+        if matches!(self.index_state, IndexSyncState::Syncing { .. }) {
+            return;
+        }
+
+        self.index_cancel = Arc::new(AtomicBool::new(false));
+        let cancel = self.index_cancel.clone();
+        let sessions = self.sessions.clone();
+        let auto_reclaim = ochub_core::settings::get_settings().session_index_auto_reclaim;
+        self.index_wait_dismissed = false;
+        self.index_state = IndexSyncState::Syncing {
+            done: 0,
+            total: sessions.len(),
+            cold: false,
+        };
+        cx.notify();
+
+        self.index_task = Some(cx.spawn(async move |this, cx| {
+            // An *async* channel, because this task runs on the foreground
+            // executor — `cx.spawn` schedules onto the main thread. A
+            // `std::sync::mpsc` receiver would park that thread rather than
+            // yield, and since the loop below has no other await point the whole
+            // sync would run inside one poll: the window would freeze until the
+            // last session was indexed, progress included.
+            let (tx, mut rx) = futures::channel::mpsc::unbounded::<SyncProgress>();
+            let worker = cx.background_spawn(async move {
+                let index = SessionIndex::open()?;
+                let covered = index
+                    .stats()
+                    .map(|stats| stats.sessions.max(0) as usize)
+                    .unwrap_or(0);
+                let _ = tx.unbounded_send(SyncProgress::Started { covered });
+
+                let mut last_sent: Option<Instant> = None;
+                let outcome = index.sync(
+                    &sessions,
+                    |done, total| {
+                        // Throttled: the callback fires once per session, and a
+                        // repaint each time would cost more than the indexing.
+                        // The final tick always goes through so the counter
+                        // lands on its total rather than stopping just short.
+                        let due = last_sent.is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL);
+                        if due || done == total {
+                            last_sent = Some(Instant::now());
+                            let _ = tx.unbounded_send(SyncProgress::Advanced { done });
+                        }
+                    },
+                    &cancel,
+                )?;
+                if auto_reclaim && !outcome.cancelled && index.needs_maintenance()? {
+                    index.maintain(MAINTENANCE_BUDGET)?;
+                }
+                Ok::<_, String>(outcome)
+            });
+
+            // Forward progress on the foreground so the panel can show it. Each
+            // `next().await` hands the main thread back to the run loop, so
+            // frames keep being drawn; the loop ends when the worker drops its
+            // sender.
+            while let Some(progress) = rx.next().await {
+                let updated = this
+                    .update(cx, |this, cx| {
+                        let IndexSyncState::Syncing { done, cold, .. } = &mut this.index_state
+                        else {
+                            return;
+                        };
+                        match progress {
+                            // Nothing indexed yet: search cannot answer anything
+                            // until this pass lands, which is what makes it worth
+                            // waiting on.
+                            SyncProgress::Started { covered } => *cold = covered == 0,
+                            SyncProgress::Advanced { done: reached } => *done = reached,
+                        }
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !updated {
+                    break;
+                }
+            }
+
+            let result = worker.await;
+            this.update(cx, |this, cx| {
+                this.index_state = match result {
+                    Ok(_) => IndexSyncState::Idle,
+                    Err(error) => IndexSyncState::Failed(SharedString::from(error)),
+                };
+                // A query typed while the index was still filling was answered
+                // against a partial index; re-run it now that it is complete.
+                if !this.query.is_empty() {
+                    let query = std::mem::take(&mut this.query);
+                    this.set_query(query, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn index_wait_progress(&self) -> Option<(usize, usize)> {
+        index_wait_progress(&self.index_state, self.index_wait_dismissed)
+    }
+
+    /// The first-build waiting page.
+    ///
+    /// The wait is deliberately not mandatory: the session list itself does not
+    /// depend on the index, so holding it back would be a cost with nothing
+    /// bought. The escape hatch dismisses the page and leaves the build running.
+    fn render_index_wait(&self, done: usize, total: usize, cx: &mut Context<Self>) -> AnyElement {
+        let fraction = if total == 0 {
+            0.
+        } else {
+            (done as f32 / total as f32).clamp(0., 1.)
+        };
+
+        layout::scroll_body(
+            "session-index-wait-body",
+            &self.empty_scroll,
+            layout::content_column().child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .w_full()
+                    .gap_2()
+                    .py_12()
+                    .child(icon(IconName::Refresh, theme::muted(), 26.))
+                    .child(
+                        div()
+                            .text_color(theme::subtext())
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t(k::SESSIONS_INDEX_WAIT_TITLE)),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(420.))
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child(t(k::SESSIONS_INDEX_WAIT_HINT)),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .w_full()
+                            .max_w(px(320.))
+                            .h(px(6.))
+                            .rounded_full()
+                            .bg(theme::inset())
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(fraction))
+                                    .rounded_full()
+                                    .bg(theme::accent()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .child(SharedString::from(tf!(
+                                k::SESSIONS_SEARCH_INDEXING,
+                                done = done.to_string(),
+                                total = total.to_string()
+                            ))),
+                    )
+                    .child(
+                        div().mt_2().child(
+                            components::button(
+                                "sessions-index-wait-skip",
+                                t(k::SESSIONS_INDEX_WAIT_SKIP),
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.index_wait_dismissed = true;
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                    ),
+            ),
+        )
+        .into_any_element()
+    }
+
+    /// Pick up an index setting changed elsewhere (the settings page), without
+    /// making the two views talk to each other directly.
+    fn refresh_index_enabled(&mut self, cx: &mut Context<Self>) {
+        let enabled = ochub_core::settings::get_settings().session_index_enabled;
+        if enabled == self.index_enabled {
+            return;
+        }
+        self.index_enabled = enabled;
+        if !enabled {
+            self.index_cancel.store(true, Ordering::Relaxed);
+            self.index_task = None;
+            self.index_state = IndexSyncState::Idle;
+            self.content_hits.clear();
+            self.rebuild_session_index();
+        }
+        cx.notify();
     }
 
     fn filtered_session_count(&self) -> usize {
@@ -404,6 +801,13 @@ impl SessionsView {
     fn clear_filters(&mut self, cx: &mut Context<Self>) {
         self.date_filter = SessionDateFilter::All;
         self.app_filter = None;
+        self.search_input
+            .update(cx, |input, cx| input.set_content("", cx));
+        self.last_search_content = SharedString::default();
+        self.query.clear();
+        self.content_hits.clear();
+        self.searching = false;
+        self.search_task = None;
         self.page = 0;
         self.open_filter_popover = None;
         self.active_datetime_picker = None;
@@ -682,7 +1086,9 @@ impl SessionsView {
 
     /// Load a session's full transcript (background — files can be MBs) and
     /// switch to the detail viewer when it arrives.
-    fn open_detail(&mut self, idx: usize, cx: &mut Context<Self>) {
+    /// Open a transcript, optionally scrolled to a specific message — the one a
+    /// search result matched.
+    fn open_detail_at(&mut self, idx: usize, focus: Option<usize>, cx: &mut Context<Self>) {
         if self.loading_detail.is_some() {
             return;
         }
@@ -703,12 +1109,20 @@ impl SessionsView {
             this.update(cx, |this, cx| {
                 this.loading_detail = None;
                 let detail = match loaded {
-                    Ok((messages, stats)) => SessionDetail {
-                        meta: session,
-                        messages,
-                        stats,
-                        error: None,
-                    },
+                    Ok((messages, stats)) => {
+                        // The index stores a position in the full transcript,
+                        // but the file may have been trimmed since; ignore a
+                        // target that no longer exists rather than scrolling
+                        // somewhere arbitrary.
+                        let focused_message = focus.filter(|&position| position < messages.len());
+                        SessionDetail {
+                            meta: session,
+                            messages,
+                            stats,
+                            error: None,
+                            focused_message,
+                        }
+                    }
                     Err(err) => SessionDetail {
                         meta: session,
                         messages: Vec::new(),
@@ -717,11 +1131,16 @@ impl SessionsView {
                             k::SESSIONS_DETAIL_ERROR_LOAD_FAILED,
                             error = err
                         ))),
+                        focused_message: None,
                     },
                 };
                 this.transcript_list_state.reset(detail.messages.len());
                 this.expanded_messages.clear();
+                let focused_message = detail.focused_message;
                 this.detail = Some(detail);
+                if let Some(position) = focused_message {
+                    this.transcript_list_state.scroll_to_reveal_item(position);
+                }
                 cx.notify();
             })
             .ok();
@@ -833,6 +1252,11 @@ impl SessionsView {
                 .map(|value| SharedString::from(value.format("%H:%M:%S").to_string()))
         });
         let is_trace = matches!(message.role.as_str(), "tool" | "system");
+        let is_focused = self
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.focused_message)
+            == Some(index);
 
         div()
             .w_full()
@@ -849,10 +1273,17 @@ impl SessionsView {
                     .py_3()
                     .rounded_lg()
                     .border_1()
-                    .border_color(if is_trace {
-                        theme::border()
-                    } else {
-                        accent.alpha(0.36)
+                    // The message a search result pointed at: the transcript
+                    // scrolls here, and this is what says "this one".
+                    .when(is_focused, |bubble| {
+                        bubble.border_2().border_color(theme::accent())
+                    })
+                    .when(!is_focused, |bubble| {
+                        bubble.border_color(if is_trace {
+                            theme::border()
+                        } else {
+                            accent.alpha(0.36)
+                        })
                     })
                     .bg(if is_trace {
                         theme::inset()
@@ -1095,6 +1526,11 @@ impl SessionsView {
         let provider = Self::app_label(&session.provider_id);
         let active_time = Self::active_time(session, false);
         let is_loading = self.loading_detail == Some(idx);
+        let hit = self.content_hit_for(session);
+        let snippet = hit.map(|hit| SharedString::from(hit.snippet.clone()));
+        // Clicking a session that matched on its transcript should land on the
+        // matching message, not the top of a thousand-message log.
+        let focus = hit.map(|hit| hit.ord);
 
         components::card()
             .flex_row()
@@ -1113,7 +1549,7 @@ impl SessionsView {
                     .flex_1()
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.open_detail(idx, cx);
+                        this.open_detail_at(idx, focus, cx);
                     }))
                     .child(
                         div()
@@ -1133,6 +1569,26 @@ impl SessionsView {
                                     .child(SharedString::from(title)),
                             ),
                     )
+                    .when_some(snippet, |s, snippet| {
+                        s.child(
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_1p5()
+                                .child(icon(IconName::Search, theme::accent(), 12.))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(theme::subtext())
+                                        .child(snippet),
+                                ),
+                        )
+                    })
                     .when_some(active_time, |s, time| {
                         s.child(
                             div()
@@ -1167,7 +1623,7 @@ impl SessionsView {
                         )
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                this.open_detail(idx, cx);
+                                this.open_detail_at(idx, focus, cx);
                             },
                         )),
                     )
@@ -1512,33 +1968,135 @@ impl SessionsView {
                 )
             });
 
-        let has_active_filters =
-            self.date_filter != SessionDateFilter::All || self.app_filter.is_some();
-        components::card().p_3().child(
+        let has_active_filters = self.date_filter != SessionDateFilter::All
+            || self.app_filter.is_some()
+            || !self.query.is_empty();
+
+        components::card()
+            .p_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(180.))
+                            .child(self.search_input.clone()),
+                    )
+                    .child(date_control)
+                    .child(app_control)
+                    .when(has_active_filters, |row| {
+                        row.child(
+                            components::button(
+                                "sessions-clear-filters",
+                                t(k::SESSIONS_FILTER_RESET),
+                                ButtonTone::Ghost,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.clear_filters(cx);
+                                },
+                            )),
+                        )
+                    }),
+            )
+            .when_some(self.render_search_hint(cx), |card, hint| card.child(hint))
+    }
+
+    /// The line under the search box that says how far the search reached.
+    ///
+    /// With the index off, a search still runs — over titles alone — so this is
+    /// where that limit is stated, along with the way out of it. Saying nothing
+    /// would leave the user to conclude the session simply is not there.
+    fn render_search_hint(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let (icon_name, tone, text): (IconName, gpui::Rgba, SharedString) = match &self.index_state
+        {
+            IndexSyncState::Failed(error) => (
+                IconName::Search,
+                theme::red(),
+                SharedString::from(tf!(
+                    k::SESSIONS_SEARCH_INDEX_FAILED,
+                    error = error.to_string()
+                )),
+            ),
+            IndexSyncState::Syncing { done, total, .. } => (
+                IconName::Refresh,
+                theme::muted(),
+                SharedString::from(tf!(
+                    k::SESSIONS_SEARCH_INDEXING,
+                    done = done.to_string(),
+                    total = total.to_string()
+                )),
+            ),
+            IndexSyncState::Idle => {
+                if self.index_enabled {
+                    if !self.searching {
+                        return None;
+                    }
+                    (IconName::Search, theme::muted(), t(k::SESSIONS_SEARCH_BUSY))
+                } else {
+                    // Only worth saying once the user is actually searching.
+                    if self.query.is_empty() {
+                        return None;
+                    }
+                    (
+                        IconName::Search,
+                        theme::muted(),
+                        t(k::SESSIONS_SEARCH_TITLES_ONLY),
+                    )
+                }
+            }
+        };
+
+        let enable = !self.index_enabled && matches!(self.index_state, IndexSyncState::Idle);
+        Some(
             div()
+                .pt_2()
                 .flex()
                 .flex_row()
                 .items_center()
-                .flex_wrap()
-                .gap_2()
-                .child(date_control)
-                .child(app_control)
-                .when(has_active_filters, |row| {
+                .gap_1p5()
+                .child(icon(icon_name, tone, 12.))
+                .child(div().text_xs().text_color(tone).child(text))
+                .when(enable, |row| {
                     row.child(
                         components::button(
-                            "sessions-clear-filters",
-                            t(k::SESSIONS_FILTER_RESET),
+                            "sessions-enable-index",
+                            t(k::SESSIONS_SEARCH_ENABLE_INDEX),
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
                         )
                         .on_click(cx.listener(
                             |this, _event, _window, cx| {
-                                this.clear_filters(cx);
+                                this.enable_index(cx);
                             },
                         )),
                     )
                 }),
         )
+    }
+
+    /// Switch the index on from the Sessions panel and start filling it.
+    fn enable_index(&mut self, cx: &mut Context<Self>) {
+        let mut settings = ochub_core::settings::get_settings();
+        settings.session_index_enabled = true;
+        settings.session_index_disabled_at = None;
+        if let Err(error) = ochub_core::settings::update_settings(settings) {
+            self.set_status(
+                tf!(k::SESSIONS_SEARCH_INDEX_FAILED, error = error.to_string()),
+                NotificationLevel::Error,
+            );
+            cx.notify();
+            return;
+        }
+        self.index_enabled = true;
+        self.start_index_sync(cx);
+        cx.notify();
     }
 
     fn render_pagination(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -1658,6 +2216,39 @@ fn text_input(cx: &mut Context<TextInput>, placeholder: impl Into<SharedString>)
     TextInput::new(cx, placeholder)
 }
 
+/// Progress to show on the waiting page, or `None` to render the list.
+///
+/// Only a *cold* build earns the page: until it finishes, search cannot answer
+/// anything, so there is something to wait for. An incremental pass leaves both
+/// the list and search working and stays the one-line hint under the search box
+/// instead — a routine resync must never take the panel away.
+fn index_wait_progress(state: &IndexSyncState, dismissed: bool) -> Option<(usize, usize)> {
+    if dismissed {
+        return None;
+    }
+    match state {
+        IndexSyncState::Syncing { done, total, cold } if *cold => Some((*done, *total)),
+        _ => None,
+    }
+}
+
+/// Whether a session matches on the metadata the scan already loaded.
+///
+/// This is the half of search that needs no index, so it is also what the
+/// search box falls back to when the index is switched off. `needle` is
+/// expected to be lowercase already — it is lowered once per query rather than
+/// once per session per frame.
+fn metadata_matches(session: &SessionMeta, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let contains = |value: &str| value.to_lowercase().contains(needle);
+    session.title.as_deref().is_some_and(contains)
+        || session.summary.as_deref().is_some_and(contains)
+        || session.project_dir.as_deref().is_some_and(contains)
+        || contains(&session.session_id)
+}
+
 fn parse_local_datetime(value: &str, end_of_day: bool) -> Option<chrono::DateTime<Local>> {
     let normalized = value.trim().replace('/', "-");
     for pattern in [
@@ -1689,14 +2280,17 @@ impl Render for SessionsView {
         let has_no_sessions = self.sessions.is_empty();
         let has_no_matches = !has_no_sessions && total == 0;
         let scanning = self.scanning;
-        let show_pagination = total > 0;
+        let index_wait = self.index_wait_progress();
+        let show_pagination = total > 0 && index_wait.is_none();
         let confirm = self.confirm_delete.and_then(|idx| {
             self.sessions
                 .get(idx)
                 .map(Self::title_for)
                 .map(|t| (idx, t))
         });
-        let body = if has_no_sessions {
+        let body = if let Some((done, indexed_total)) = index_wait {
+            self.render_index_wait(done, indexed_total, cx)
+        } else if has_no_sessions {
             layout::scroll_body(
                 "session-empty-body",
                 &self.empty_scroll,
@@ -1773,12 +2367,17 @@ impl Render for SessionsView {
                     })),
                 ),
             )
-            .child(
-                div()
-                    .px_6()
-                    .pt_6()
-                    .child(layout::content_column().child(self.render_filters(cx))),
-            )
+            // The filter row is hidden behind the waiting page: with the index
+            // still empty the search box could only answer on titles, which is
+            // exactly the half-answer the page exists to avoid.
+            .when(index_wait.is_none(), |page| {
+                page.child(
+                    div()
+                        .px_6()
+                        .pt_6()
+                        .child(layout::content_column().child(self.render_filters(cx))),
+                )
+            })
             .child(body)
             .when(show_pagination, |s| s.child(self.render_pagination(cx)))
             .when_some(confirm, |root, (idx, title)| {
@@ -1884,5 +2483,87 @@ mod tests {
         let (content, is_long) = SessionsView::message_content("hello", false);
         assert!(!is_long);
         assert_eq!(content.as_ref(), "hello");
+    }
+
+    fn session(title: Option<&str>, project_dir: Option<&str>) -> SessionMeta {
+        SessionMeta {
+            provider_id: "codex".to_string(),
+            session_id: "0f9c-ABCD".to_string(),
+            title: title.map(str::to_string),
+            summary: Some("A summary about caching".to_string()),
+            project_dir: project_dir.map(str::to_string),
+            created_at: Some(1),
+            last_active_at: Some(1),
+            source_path: Some("/tmp/session.jsonl".to_string()),
+            resume_command: None,
+        }
+    }
+
+    #[test]
+    fn metadata_search_covers_the_fields_a_scan_already_loaded() {
+        let session = session(Some("Refactor the RelayStation"), Some("/code/OcHub"));
+
+        assert!(metadata_matches(&session, "relaystation"));
+        assert!(
+            metadata_matches(&session, "caching"),
+            "summary should match"
+        );
+        assert!(
+            metadata_matches(&session, "ochub"),
+            "project dir should match"
+        );
+        assert!(
+            metadata_matches(&session, "0f9c"),
+            "session id should match"
+        );
+        assert!(!metadata_matches(&session, "nothing here"));
+    }
+
+    #[test]
+    fn an_empty_query_matches_every_session() {
+        // The filter runs on every row; a blank search box must not narrow it.
+        assert!(metadata_matches(&session(None, None), ""));
+    }
+
+    #[test]
+    fn only_a_cold_build_takes_over_the_panel() {
+        let cold = IndexSyncState::Syncing {
+            done: 12,
+            total: 400,
+            cold: true,
+        };
+        assert_eq!(index_wait_progress(&cold, false), Some((12, 400)));
+
+        // An incremental pass runs behind a working list and search.
+        let warm = IndexSyncState::Syncing {
+            done: 12,
+            total: 400,
+            cold: false,
+        };
+        assert_eq!(index_wait_progress(&warm, false), None);
+
+        assert_eq!(index_wait_progress(&IndexSyncState::Idle, false), None);
+        assert_eq!(
+            index_wait_progress(&IndexSyncState::Failed("boom".into()), false),
+            None,
+            "a failed sync should show its error over the list, not a wait"
+        );
+    }
+
+    #[test]
+    fn dismissing_the_wait_returns_the_list_while_the_build_runs_on() {
+        let cold = IndexSyncState::Syncing {
+            done: 12,
+            total: 400,
+            cold: true,
+        };
+        assert_eq!(index_wait_progress(&cold, true), None);
+    }
+
+    #[test]
+    fn metadata_search_tolerates_missing_fields() {
+        let session = session(None, None);
+        assert!(metadata_matches(&session, "caching"));
+        assert!(!metadata_matches(&session, "relaystation"));
     }
 }

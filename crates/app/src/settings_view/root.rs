@@ -111,6 +111,15 @@ impl SettingsView {
                 }
                 group.push(self.render_row(RowId::BackupInterval, cx));
                 group.push(self.render_row(RowId::BackupRetain, cx));
+                group.push(self.render_row(RowId::SessionIndex, cx));
+                if self.settings.session_index_enabled {
+                    group.push(self.render_row(RowId::SessionIndexReclaim, cx));
+                }
+                // Both act on a file, so neither exists without one.
+                if self.session_index_stats.is_some() {
+                    group.push(self.render_row(RowId::SessionIndexReclaimNow, cx));
+                    group.push(self.render_row(RowId::SessionIndexDelete, cx));
+                }
                 rows::group_block(t(k::SETTINGS_DATA_TITLE), t(k::SETTINGS_DATA_DESC), group)
             }
             4 => {
@@ -148,10 +157,16 @@ impl SettingsView {
         rows.extend([
             RowId::BackupInterval,
             RowId::BackupRetain,
-            RowId::SyncTarget,
-            RowId::SyncAuto,
-            RowId::SyncOpen,
+            RowId::SessionIndex,
         ]);
+        if self.settings.session_index_enabled {
+            rows.push(RowId::SessionIndexReclaim);
+        }
+        if self.session_index_stats.is_some() {
+            rows.push(RowId::SessionIndexReclaimNow);
+            rows.push(RowId::SessionIndexDelete);
+        }
+        rows.extend([RowId::SyncTarget, RowId::SyncAuto, RowId::SyncOpen]);
         rows
     }
 
@@ -339,6 +354,61 @@ impl SettingsView {
                     },
                 )
             }
+            RowId::SessionIndex => {
+                // The static description explains the feature; once an index
+                // exists, what the user actually needs to see is its cost.
+                let readout = self.session_index_stats.as_ref().map(|stats| {
+                    SharedString::from(tf!(
+                        k::SETTINGS_SESSION_INDEX_USAGE,
+                        size = components::format_bytes(stats.bytes),
+                        sessions = stats.sessions.to_string()
+                    ))
+                });
+                rows::switch(
+                    cx,
+                    row,
+                    self.settings.session_index_enabled,
+                    self.settings_busy,
+                    readout,
+                    |this, cx| this.toggle_session_index(cx),
+                )
+            }
+            RowId::SessionIndexReclaim => rows::switch(
+                cx,
+                row,
+                self.settings.session_index_auto_reclaim,
+                self.settings_busy,
+                None,
+                |this, cx| this.toggle_session_index_auto_reclaim(cx),
+            ),
+            RowId::SessionIndexReclaimNow => {
+                let reclaimable = self
+                    .session_index_stats
+                    .as_ref()
+                    .map(|stats| stats.reclaimable_bytes)
+                    .unwrap_or(0);
+                rows::act(
+                    cx,
+                    row,
+                    t(k::SETTINGS_SESSION_INDEX_RECLAIM_NOW_ACTION),
+                    ButtonTone::Neutral,
+                    self.session_index_busy || reclaimable == 0,
+                    Some(SharedString::from(tf!(
+                        k::SETTINGS_SESSION_INDEX_RECLAIMABLE,
+                        size = components::format_bytes(reclaimable)
+                    ))),
+                    |this, cx| this.reclaim_session_index(cx),
+                )
+            }
+            RowId::SessionIndexDelete => rows::act(
+                cx,
+                row,
+                t(k::SETTINGS_SESSION_INDEX_DELETE_ACTION),
+                ButtonTone::Danger,
+                self.session_index_busy,
+                None,
+                |this, cx| this.delete_session_index(cx),
+            ),
             RowId::SyncTarget => {
                 let options = [raw(k::SETTINGS_SYNC_TARGET_OFF), "WebDAV", "S3"];
                 let selected = match self.sync_target() {

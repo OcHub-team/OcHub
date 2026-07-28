@@ -29,6 +29,7 @@ pub mod plugin;
 pub mod provider_config;
 pub mod runtime;
 pub mod services;
+pub mod session_index;
 pub mod session_manager;
 pub mod settings;
 #[cfg(test)]

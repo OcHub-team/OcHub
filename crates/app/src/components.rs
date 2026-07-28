@@ -1851,6 +1851,24 @@ pub fn pagination(prev: AnyElement, label: impl Into<SharedString>, next: AnyEle
         .child(next)
 }
 
+/// Byte counts for humans. Binary units, one decimal place, so a size that
+/// grows steadily reads as growing rather than flickering between roundings.
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let value = bytes as f64;
+    if value >= GB {
+        format!("{:.1} GB", value / GB)
+    } else if value >= MB {
+        format!("{:.1} MB", value / MB)
+    } else if value >= KB {
+        format!("{:.1} KB", value / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::select_prefers_dropdown;

@@ -181,8 +181,26 @@ mod asset_path_tests {
 fn spawn_app_services(app: Arc<AppState>) {
     core_async::handle().spawn(async move {
         ochub_core::services::pricing_catalog::start_background_pricing_sync(app.db.clone());
+        expire_abandoned_session_index();
         app.gateway.maybe_autostart().await;
     });
+}
+
+/// Delete a session search index that has been switched off long enough that
+/// keeping it around no longer pays for the disk it holds.
+///
+/// The index survives being switched off so that switching it back on costs an
+/// incremental sync rather than a full rebuild. Past
+/// [`DISABLED_RETENTION_MS`](ochub_core::session_index::DISABLED_RETENTION_MS)
+/// that has stopped being a plausible bet, and the space is worth more.
+fn expire_abandoned_session_index() {
+    let settings = ochub_core::settings::get_settings();
+    if ochub_core::session_index::expire_disabled_index(
+        settings.session_index_enabled,
+        settings.session_index_disabled_at,
+    ) {
+        log::info!("removed a session search index left disabled past its retention window");
+    }
 }
 
 /// Whether this process was started by its login item rather than by the user.

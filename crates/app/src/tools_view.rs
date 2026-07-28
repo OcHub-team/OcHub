@@ -1740,7 +1740,7 @@ impl ToolsView {
                             .text_xs()
                             .child(SharedString::from(format!(
                                 "{} · {}",
-                                format_bytes(backup.size_bytes),
+                                components::format_bytes(backup.size_bytes),
                                 backup.created_at
                             ))),
                     ),
@@ -3164,22 +3164,6 @@ fn load_db_backup_rows() -> Result<Vec<BackupRow>, AppError> {
             })
         })
         .collect())
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-    let value = bytes as f64;
-    if value >= GB {
-        format!("{:.1} GB", value / GB)
-    } else if value >= MB {
-        format!("{:.1} MB", value / MB)
-    } else if value >= KB {
-        format!("{:.1} KB", value / KB)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 fn open_path(path: &Path) -> Result<(), AppError> {

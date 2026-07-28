@@ -47,6 +47,7 @@ use gpui::{
 };
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::plugin::{AppPlugin, ManifestLoadError};
+use ochub_core::session_index::{self, IndexStats, SessionIndex};
 use ochub_core::settings::{self, AppSettings};
 use ochub_core::AppState;
 
@@ -138,6 +139,11 @@ pub struct SettingsView {
     /// would be a permanently dead control.
     ccswitch_source: Option<DetectedSource>,
     ccswitch_busy: bool,
+    /// Size and contents of the session search index, or `None` when no index
+    /// file exists. Read in the background — it opens the database — and
+    /// re-read after anything that changes it.
+    session_index_stats: Option<IndexStats>,
+    session_index_busy: bool,
 }
 
 /// Root blocks when no search query is active. 关于 is its own section
@@ -145,6 +151,11 @@ pub struct SettingsView {
 const ROOT_BLOCK_COUNT: usize = 5;
 /// Apps sub-page blocks: enabled apps, manifest errors, user plugins.
 const APPS_BLOCK_COUNT: usize = 3;
+
+/// Time budget for a reclaim the user asked for by name. Far longer than the
+/// slice the background pass takes, because here waiting is the expectation:
+/// the button should finish the job rather than leave it half done.
+const MANUAL_MAINTENANCE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 impl SettingsView {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
@@ -173,6 +184,8 @@ impl SettingsView {
             status_level: None,
             ccswitch_source: None,
             ccswitch_busy: false,
+            session_index_stats: None,
+            session_index_busy: false,
         };
 
         // Filtering re-lays the list; ignore the notifications that carry no
@@ -189,7 +202,123 @@ impl SettingsView {
         .detach();
 
         this.detect_ccswitch_source(cx);
+        this.refresh_session_index_stats(cx);
         this
+    }
+
+    /// Re-read the index's size and contents.
+    ///
+    /// Reports `None` when there is no index file, which is what keeps the
+    /// reclaim and delete rows from existing with nothing to act on. Opening
+    /// the database is deliberately not done here — that would create the very
+    /// file whose absence is being tested.
+    fn refresh_session_index_stats(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let stats = cx
+                .background_spawn(async {
+                    session_index::index_exists()
+                        .then(|| SessionIndex::open().and_then(|index| index.stats()).ok())
+                        .flatten()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.session_index_stats = stats;
+                this.root_list.reset(this.root_block_count());
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Turn the index on or off.
+    ///
+    /// Switching off keeps the file: flipping back on then costs an incremental
+    /// sync instead of a full rebuild. The timestamp recorded here is what lets
+    /// a long-abandoned index be cleaned up at startup, and the rows below make
+    /// the space it occupies visible in the meantime.
+    fn toggle_session_index(&mut self, cx: &mut Context<Self>) {
+        let enabling = !self.settings.session_index_enabled;
+        let disabled_at = (!enabling).then(|| chrono::Utc::now().timestamp_millis());
+        self.write_then(
+            move |settings| {
+                settings.session_index_enabled = enabling;
+                settings.session_index_disabled_at = disabled_at;
+            },
+            |this, cx| this.refresh_session_index_stats(cx),
+            cx,
+        );
+    }
+
+    fn toggle_session_index_auto_reclaim(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.settings.session_index_auto_reclaim;
+        self.write(
+            move |settings| settings.session_index_auto_reclaim = enabled,
+            cx,
+        );
+    }
+
+    /// Return the index's free pages to the filesystem now, rather than waiting
+    /// for the threshold that normally triggers it.
+    fn reclaim_session_index(&mut self, cx: &mut Context<Self>) {
+        if self.session_index_busy {
+            return;
+        }
+        self.session_index_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async {
+                    SessionIndex::open().and_then(|index| index.maintain(MANUAL_MAINTENANCE_BUDGET))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.session_index_busy = false;
+                match result {
+                    Ok(outcome) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::SETTINGS_SESSION_INDEX_RECLAIMED,
+                            size = components::format_bytes(outcome.reclaimed_bytes)
+                        ),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(NotificationLevel::Error, error, cx),
+                }
+                this.refresh_session_index_stats(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Delete the index outright.
+    ///
+    /// Safe in a way most delete actions are not: the index holds no original
+    /// data, so the cost is a rebuild, not a loss.
+    fn delete_session_index(&mut self, cx: &mut Context<Self>) {
+        if self.session_index_busy {
+            return;
+        }
+        self.session_index_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_spawn(async {
+                SessionIndex::delete_files(&session_index::default_index_path());
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.session_index_busy = false;
+                this.set_status(
+                    NotificationLevel::Success,
+                    t(k::SETTINGS_SESSION_INDEX_DELETED),
+                    cx,
+                );
+                this.refresh_session_index_stats(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn detect_ccswitch_source(&mut self, cx: &mut Context<Self>) {
