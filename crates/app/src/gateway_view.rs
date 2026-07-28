@@ -250,15 +250,22 @@ struct EndpointEditor {
     existing_channels: HashMap<Dialect, GatewayChannel>,
     enabled_dialects: HashSet<Dialect>,
     base_url: Entity<TextInput>,
-    models: HashMap<Dialect, DialectModelsEditor>,
+    models: EndpointModelsEditor,
     fetched_models: Vec<String>,
-    open_model_picker: Option<Dialect>,
+    model_picker_open: bool,
     probe: ProbeState,
     model_fetch: ModelFetchState,
     test: EndpointTestState,
 }
 
-struct DialectModelsEditor {
+/// One model list per endpoint, shared by every interface it exposes.
+///
+/// The list is not per-interface because nothing can fill three lists apart:
+/// discovery is a single OpenAI-style `GET /v1/models` against the endpoint,
+/// so a per-dialect split only ever produced three identical copies — and
+/// three identical copies make the router's dialect preference try an
+/// interface the upstream does not serve the model on before failing over.
+struct EndpointModelsEditor {
     selected: Vec<String>,
     manual_input: Entity<TextInput>,
     scroll_handle: ScrollHandle,
@@ -366,12 +373,10 @@ impl GatewayView {
                 ));
             }
             for endpoint in &editor.endpoints {
-                for models in endpoint.models.values() {
-                    placeholders.push((
-                        models.manual_input.clone(),
-                        t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER),
-                    ));
-                }
+                placeholders.push((
+                    endpoint.models.manual_input.clone(),
+                    t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER),
+                ));
             }
         }
         for (input, placeholder) in placeholders {
@@ -744,18 +749,14 @@ impl GatewayView {
         }) else {
             return;
         };
-        if endpoint.enabled_dialects.remove(&dialect) {
-            if endpoint.open_model_picker == Some(dialect) {
-                endpoint.open_model_picker = None;
-            }
-        } else {
+        if !endpoint.enabled_dialects.remove(&dialect) {
             endpoint.enabled_dialects.insert(dialect);
         }
         endpoint.probe = ProbeState::Idle;
         cx.notify();
     }
 
-    fn toggle_model_picker(&mut self, endpoint_id: &str, dialect: Dialect, cx: &mut Context<Self>) {
+    fn toggle_model_picker(&mut self, endpoint_id: &str, cx: &mut Context<Self>) {
         let Some(endpoint) = self.editor.as_mut().and_then(|editor| {
             editor
                 .endpoints
@@ -764,21 +765,11 @@ impl GatewayView {
         }) else {
             return;
         };
-        endpoint.open_model_picker = if endpoint.open_model_picker == Some(dialect) {
-            None
-        } else {
-            Some(dialect)
-        };
+        endpoint.model_picker_open = !endpoint.model_picker_open;
         cx.notify();
     }
 
-    fn toggle_endpoint_model(
-        &mut self,
-        endpoint_id: &str,
-        dialect: Dialect,
-        model: &str,
-        cx: &mut Context<Self>,
-    ) {
+    fn toggle_endpoint_model(&mut self, endpoint_id: &str, model: &str, cx: &mut Context<Self>) {
         let Some(models) = self
             .editor
             .as_mut()
@@ -788,7 +779,7 @@ impl GatewayView {
                     .iter_mut()
                     .find(|endpoint| endpoint.id == endpoint_id)
             })
-            .and_then(|endpoint| endpoint.models.get_mut(&dialect))
+            .map(|endpoint| &mut endpoint.models)
         else {
             return;
         };
@@ -805,12 +796,7 @@ impl GatewayView {
         cx.notify();
     }
 
-    fn add_manual_endpoint_models(
-        &mut self,
-        endpoint_id: &str,
-        dialect: Dialect,
-        cx: &mut Context<Self>,
-    ) {
+    fn add_manual_endpoint_models(&mut self, endpoint_id: &str, cx: &mut Context<Self>) {
         let Some(input) = self
             .editor
             .as_ref()
@@ -820,8 +806,7 @@ impl GatewayView {
                     .iter()
                     .find(|endpoint| endpoint.id == endpoint_id)
             })
-            .and_then(|endpoint| endpoint.models.get(&dialect))
-            .map(|models| models.manual_input.clone())
+            .map(|endpoint| endpoint.models.manual_input.clone())
         else {
             return;
         };
@@ -829,17 +814,13 @@ impl GatewayView {
         if additions.is_empty() {
             return;
         }
-        if let Some(models) = self
-            .editor
-            .as_mut()
-            .and_then(|editor| {
-                editor
-                    .endpoints
-                    .iter_mut()
-                    .find(|endpoint| endpoint.id == endpoint_id)
-            })
-            .and_then(|endpoint| endpoint.models.get_mut(&dialect))
-        {
+        if let Some(endpoint) = self.editor.as_mut().and_then(|editor| {
+            editor
+                .endpoints
+                .iter_mut()
+                .find(|endpoint| endpoint.id == endpoint_id)
+        }) {
+            let models = &mut endpoint.models;
             models.selected.extend(additions);
             models.selected = normalized_models(std::mem::take(&mut models.selected));
         }
@@ -847,12 +828,7 @@ impl GatewayView {
         cx.notify();
     }
 
-    fn add_all_fetched_models(
-        &mut self,
-        endpoint_id: &str,
-        dialect: Dialect,
-        cx: &mut Context<Self>,
-    ) {
+    fn add_all_fetched_models(&mut self, endpoint_id: &str, cx: &mut Context<Self>) {
         let Some(endpoint) = self.editor.as_mut().and_then(|editor| {
             editor
                 .endpoints
@@ -862,34 +838,22 @@ impl GatewayView {
             return;
         };
         let fetched = endpoint.fetched_models.clone();
-        let Some(models) = endpoint.models.get_mut(&dialect) else {
-            return;
-        };
+        let models = &mut endpoint.models;
         models.selected.extend(fetched);
         models.selected = normalized_models(std::mem::take(&mut models.selected));
         cx.notify();
     }
 
-    fn clear_endpoint_models(
-        &mut self,
-        endpoint_id: &str,
-        dialect: Dialect,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(models) = self
-            .editor
-            .as_mut()
-            .and_then(|editor| {
-                editor
-                    .endpoints
-                    .iter_mut()
-                    .find(|endpoint| endpoint.id == endpoint_id)
-            })
-            .and_then(|endpoint| endpoint.models.get_mut(&dialect))
-        else {
+    fn clear_endpoint_models(&mut self, endpoint_id: &str, cx: &mut Context<Self>) {
+        let Some(endpoint) = self.editor.as_mut().and_then(|editor| {
+            editor
+                .endpoints
+                .iter_mut()
+                .find(|endpoint| endpoint.id == endpoint_id)
+        }) else {
             return;
         };
-        models.selected.clear();
+        endpoint.models.selected.clear();
         cx.notify();
     }
 
@@ -1034,11 +998,7 @@ impl GatewayView {
                 channel.name = name.clone();
                 channel.base_url = base_url.clone();
                 channel.api_key = api_key.clone();
-                channel.models = endpoint
-                    .models
-                    .get(&dialect)
-                    .map(|models| models.selected.clone())
-                    .unwrap_or_default();
+                channel.models = endpoint.models.selected.clone();
                 channel.priority = endpoint_index as i32 * 10;
                 channel.enabled = endpoint.enabled_dialects.contains(&dialect);
                 stale_channel_ids.remove(&channel.id);
@@ -1456,12 +1416,8 @@ impl GatewayView {
                     Ok(fetched) => {
                         let fetched = normalized_models(fetched);
                         let fetched_count = fetched.len();
-                        let selected = endpoint
-                            .models
-                            .values()
-                            .flat_map(|models| models.selected.iter().cloned())
-                            .collect::<Vec<_>>();
-                        endpoint.fetched_models = merged_model_options(&fetched, &selected);
+                        endpoint.fetched_models =
+                            merged_model_options(&fetched, &endpoint.models.selected);
                         endpoint.model_fetch = ModelFetchState::Fetched(fetched_count);
                     }
                     Err(error) => {
@@ -1961,13 +1917,10 @@ impl GatewayView {
     fn render_endpoint_model_picker(
         &self,
         endpoint: &EndpointEditor,
-        dialect: Dialect,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let Some(models) = endpoint.models.get(&dialect) else {
-            return div().into_any_element();
-        };
-        let open = endpoint.open_model_picker == Some(dialect);
+        let models = &endpoint.models;
+        let open = endpoint.model_picker_open;
         let options = merged_model_options(&endpoint.fetched_models, &models.selected);
         let selected_count = models.selected.len();
         let summary: SharedString = if selected_count == 0 {
@@ -1982,9 +1935,8 @@ impl GatewayView {
         let endpoint_id_for_toggle = endpoint.id.clone();
         let trigger = div()
             .id(SharedString::from(format!(
-                "station-model-picker-{}-{}",
-                endpoint.id,
-                dialect.as_str()
+                "station-model-picker-{}",
+                endpoint.id
             )))
             .role(gpui::Role::Button)
             .aria_label(summary.clone())
@@ -2020,7 +1972,7 @@ impl GatewayView {
             })
             .child(icon(IconName::ChevronDown, theme::muted(), 13.))
             .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.toggle_model_picker(&endpoint_id_for_toggle, dialect, cx);
+                this.toggle_model_picker(&endpoint_id_for_toggle, cx);
             }));
 
         let endpoint_id_for_all = endpoint.id.clone();
@@ -2057,9 +2009,8 @@ impl GatewayView {
                             .child(if endpoint.fetched_models.is_empty() {
                                 components::disabled_button(
                                     SharedString::from(format!(
-                                        "station-models-all-{}-{}",
-                                        endpoint.id,
-                                        dialect.as_str()
+                                        "station-models-all-{}",
+                                        endpoint.id
                                     )),
                                     t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_ADD_ALL),
                                     ButtonTone::Ghost,
@@ -2069,9 +2020,8 @@ impl GatewayView {
                             } else {
                                 components::button(
                                     SharedString::from(format!(
-                                        "station-models-all-{}-{}",
-                                        endpoint.id,
-                                        dialect.as_str()
+                                        "station-models-all-{}",
+                                        endpoint.id
                                     )),
                                     t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_ADD_ALL),
                                     ButtonTone::Ghost,
@@ -2079,20 +2029,15 @@ impl GatewayView {
                                 )
                                 .on_click(cx.listener(
                                     move |this, _event, _window, cx| {
-                                        this.add_all_fetched_models(
-                                            &endpoint_id_for_all,
-                                            dialect,
-                                            cx,
-                                        );
+                                        this.add_all_fetched_models(&endpoint_id_for_all, cx);
                                     },
                                 ))
                             })
                             .child(if selected_count == 0 {
                                 components::disabled_button(
                                     SharedString::from(format!(
-                                        "station-models-clear-{}-{}",
-                                        endpoint.id,
-                                        dialect.as_str()
+                                        "station-models-clear-{}",
+                                        endpoint.id
                                     )),
                                     t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_CLEAR),
                                     ButtonTone::Ghost,
@@ -2102,9 +2047,8 @@ impl GatewayView {
                             } else {
                                 components::button(
                                     SharedString::from(format!(
-                                        "station-models-clear-{}-{}",
-                                        endpoint.id,
-                                        dialect.as_str()
+                                        "station-models-clear-{}",
+                                        endpoint.id
                                     )),
                                     t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_CLEAR),
                                     ButtonTone::Ghost,
@@ -2112,11 +2056,7 @@ impl GatewayView {
                                 )
                                 .on_click(cx.listener(
                                     move |this, _event, _window, cx| {
-                                        this.clear_endpoint_models(
-                                            &endpoint_id_for_clear,
-                                            dialect,
-                                            cx,
-                                        );
+                                        this.clear_endpoint_models(&endpoint_id_for_clear, cx);
                                     },
                                 ))
                             }),
@@ -2143,9 +2083,8 @@ impl GatewayView {
             let contained_scroll = models.scroll_handle.clone();
             let mut option_list = div()
                 .id(SharedString::from(format!(
-                    "station-model-options-{}-{}",
-                    endpoint.id,
-                    dialect.as_str()
+                    "station-model-options-{}",
+                    endpoint.id
                 )))
                 .flex()
                 .flex_col()
@@ -2185,9 +2124,8 @@ impl GatewayView {
                 option_list = option_list.child(
                     div()
                         .id(SharedString::from(format!(
-                            "station-model-option-{}-{}-{option_index}",
-                            endpoint.id,
-                            dialect.as_str()
+                            "station-model-option-{}-{option_index}",
+                            endpoint.id
                         )))
                         .role(gpui::Role::Button)
                         .aria_label(SharedString::from(model.clone()))
@@ -2215,7 +2153,7 @@ impl GatewayView {
                         .child(check)
                         .child(div().min_w_0().flex_1().truncate().child(model))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.toggle_endpoint_model(&endpoint_id, dialect, &model_for_click, cx);
+                            this.toggle_endpoint_model(&endpoint_id, &model_for_click, cx);
                         })),
                 );
             }
@@ -2248,26 +2186,19 @@ impl GatewayView {
                 )
                 .child(
                     components::button(
-                        SharedString::from(format!(
-                            "station-models-manual-add-{}-{}",
-                            endpoint.id,
-                            dialect.as_str()
-                        )),
+                        SharedString::from(format!("station-models-manual-add-{}", endpoint.id)),
                         t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_ADD),
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.add_manual_endpoint_models(&endpoint_id_for_manual, dialect, cx);
+                        this.add_manual_endpoint_models(&endpoint_id_for_manual, cx);
                     })),
                 ),
         );
 
         components::field(
-            SharedString::from(tf!(
-                k::GATEWAY_EDITOR_ENDPOINT_MODELS_LABEL,
-                protocol = dialect_label(dialect)
-            )),
+            t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_LABEL),
             false,
             Some(t(k::GATEWAY_EDITOR_ENDPOINT_MODELS_HELP)),
             div()
@@ -2345,11 +2276,7 @@ impl GatewayView {
             })
             .collect();
 
-        let model_fields: Vec<gpui::AnyElement> = Dialect::ALL
-            .into_iter()
-            .filter(|dialect| endpoint.enabled_dialects.contains(dialect))
-            .map(|dialect| self.render_endpoint_model_picker(endpoint, dialect, cx))
-            .collect();
+        let model_field = self.render_endpoint_model_picker(endpoint, cx);
 
         let probe_help: SharedString = match endpoint.probe {
             ProbeState::Idle => t(k::GATEWAY_EDITOR_DIALECT_HELP_IDLE),
@@ -2537,7 +2464,7 @@ impl GatewayView {
                     .gap_2()
                     .children(dialect_controls),
             ))
-            .children(model_fields)
+            .child(model_field)
             .into_any_element()
     }
 
@@ -3130,24 +3057,11 @@ fn endpoint_editor(
             .flat_map(|channel| channel.models.iter().cloned())
             .collect(),
     );
-    let models = Dialect::ALL
-        .into_iter()
-        .map(|dialect| {
-            let selected = existing_channels
-                .get(&dialect)
-                .map(|channel| normalized_models(channel.models.clone()))
-                .unwrap_or_default();
-            (
-                dialect,
-                DialectModelsEditor {
-                    selected,
-                    manual_input: cx
-                        .new(|cx| TextInput::new(cx, t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER))),
-                    scroll_handle: ScrollHandle::new(),
-                },
-            )
-        })
-        .collect();
+    let models = EndpointModelsEditor {
+        selected: collapse_channel_models(&existing_channels),
+        manual_input: cx.new(|cx| TextInput::new(cx, t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER))),
+        scroll_handle: ScrollHandle::new(),
+    };
     EndpointEditor {
         id,
         existing_channels,
@@ -3155,7 +3069,7 @@ fn endpoint_editor(
         base_url: cx.new(|cx| text_input(cx, "https://api.example.com", &base_url)),
         models,
         fetched_models: known_models,
-        open_model_picker: None,
+        model_picker_open: false,
         probe: ProbeState::Idle,
         model_fetch: ModelFetchState::Idle,
         test: EndpointTestState::Idle,
@@ -3172,6 +3086,36 @@ fn normalized_models(models: Vec<String>) -> Vec<String> {
     }
     normalized.sort();
     normalized
+}
+
+/// Collapse the per-interface model lists a station was stored with into the
+/// single list the editor now edits.
+///
+/// Configs written before the lists merged — and imports that fill only one
+/// interface — can disagree between dialects. An empty list means "no
+/// restriction", so one unrestricted interface leaves the whole endpoint
+/// unrestricted; otherwise the union keeps every model that routed before.
+/// Widening is the safe direction here: the alternative silently stops routing
+/// a model the station was serving. Disabled interfaces are ignored because
+/// their lists do not reach the router, unless that would leave nothing to
+/// collapse.
+fn collapse_channel_models(channels: &HashMap<Dialect, GatewayChannel>) -> Vec<String> {
+    let mut considered: Vec<&GatewayChannel> = channels
+        .values()
+        .filter(|channel| channel.enabled)
+        .collect();
+    if considered.is_empty() {
+        considered = channels.values().collect();
+    }
+    if considered.iter().any(|channel| channel.models.is_empty()) {
+        return Vec::new();
+    }
+    normalized_models(
+        considered
+            .into_iter()
+            .flat_map(|channel| channel.models.iter().cloned())
+            .collect(),
+    )
 }
 
 fn merged_model_options(fetched: &[String], selected: &[String]) -> Vec<String> {
@@ -3219,7 +3163,32 @@ crate::notifications::impl_status_toasts_leveled!(GatewayView);
 
 #[cfg(test)]
 mod tests {
-    use super::{merged_model_options, normalized_models, parse_models};
+    use super::{
+        Dialect, GatewayChannel, HashMap, collapse_channel_models, merged_model_options,
+        normalized_models, parse_models,
+    };
+
+    fn channel(dialect: Dialect, enabled: bool, models: &[&str]) -> (Dialect, GatewayChannel) {
+        (
+            dialect,
+            GatewayChannel {
+                id: format!("channel-{}", dialect.as_str()),
+                endpoint_id: Some("endpoint".into()),
+                name: "station".into(),
+                dialect,
+                base_url: "https://api.example.com".into(),
+                api_key: "sk-test".into(),
+                path_override: None,
+                models: models.iter().map(|model| model.to_string()).collect(),
+                model_override: None,
+                priority: 0,
+                weight: 1,
+                enabled,
+                extra_headers: Vec::new(),
+                imported_from: None,
+            },
+        )
+    }
 
     #[test]
     fn manual_model_list_accepts_lines_and_commas_without_duplicates() {
@@ -3250,6 +3219,45 @@ mod tests {
                 &["custom-model".to_string(), "model-b".to_string()],
             ),
             vec!["custom-model".to_string(), "model-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn per_dialect_lists_collapse_to_their_union() {
+        let channels: HashMap<Dialect, GatewayChannel> = [
+            channel(Dialect::Messages, true, &["claude-sonnet-4-6"]),
+            channel(Dialect::Chat, true, &["gpt-5.5", "claude-sonnet-4-6"]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            collapse_channel_models(&channels),
+            vec!["claude-sonnet-4-6".to_string(), "gpt-5.5".to_string()]
+        );
+    }
+
+    #[test]
+    fn one_unrestricted_interface_leaves_the_endpoint_unrestricted() {
+        let channels: HashMap<Dialect, GatewayChannel> = [
+            channel(Dialect::Messages, true, &["claude-sonnet-4-6"]),
+            channel(Dialect::Chat, true, &[]),
+        ]
+        .into_iter()
+        .collect();
+        assert!(collapse_channel_models(&channels).is_empty());
+    }
+
+    #[test]
+    fn a_disabled_interface_does_not_widen_the_collapsed_list() {
+        let channels: HashMap<Dialect, GatewayChannel> = [
+            channel(Dialect::Messages, true, &["claude-sonnet-4-6"]),
+            channel(Dialect::Chat, false, &[]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            collapse_channel_models(&channels),
+            vec!["claude-sonnet-4-6".to_string()]
         );
     }
 }
