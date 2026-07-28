@@ -37,6 +37,12 @@ MCP サーバーとスキルは複数アプリへ配布できますが、同期�
 
 </Steps>
 
+<OcHubStepsVisual
+  locale="ja"
+  labels="MCP サーバーを開く|アプリからインポートする|検出されたサーバーを確認する|選択したアプリへ同期する"
+  visuals="mcp-nav|mcp-import|mcp-import|result"
+/>
+
 インポートはアプリ内の未知の設定を自動削除しません。一部失敗した場合は対象が表示されます。
 
 ## MCP を手動追加する
@@ -65,6 +71,12 @@ SSE の例：
 保存前に少なくとも 1 つの対象アプリを選びます。JSON はオブジェクトである必要があります。
 コマンド、引数、環境変数などは各ツールの形式へ変換されます。
 
+<OcHubStepsVisual
+  locale="ja"
+  labels="MCP サーバーを開く|サーバーを追加|名前と JSON を入力|対象アプリを選択|サーバーを保存"
+  visuals="mcp-nav|mcp-add|mcp-fields|mcp-targets|mcp-save"
+/>
+
 <Aside type="caution" title="コマンドの提供元を確認する">
 
 stdio MCP は `command` をローカルで実行します。信頼できるパッケージだけを同期し、
@@ -78,6 +90,12 @@ stdio MCP は `command` をローカルで実行します。信頼できるパ�
 2. 複数変更した後に**アプリへ同期**を選びます。
 3. 対象 CLI を再起動します。
 4. 表示されない場合、アプリの有効状態、設定ディレクトリ、対応する転送方式を確認します。
+
+<OcHubStepsVisual
+  locale="ja"
+  labels="カードでアプリを選ぶ|変更を同期|対象 CLI を再起動|サーバー表示を確認"
+  visuals="mcp-targets|mcp-sync|mcp-result|mcp-result"
+/>
 
 OcHub から MCP を削除した後は、もう一度同期して管理対象の実設定を更新します。削除は
 元に戻せないため、必要なら JSON をコピーしておきます。
@@ -93,6 +111,12 @@ OcHub から MCP を削除した後は、もう一度同期して管理対象の
 5. 「インストール済み」でスキルと提供元を確認します。
 
 </Steps>
+
+<OcHubStepsVisual
+  locale="ja"
+  labels="スキルの検索を開く|用途を検索する|対象アプリを選ぶ|スキルをインストールする|インストール元を確認する"
+  visuals="skills-nav|skill-search|skill-targets|skill-install|skill-result"
+/>
 
 ## リポジトリから探す
 

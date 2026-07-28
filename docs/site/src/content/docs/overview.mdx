@@ -9,6 +9,18 @@ OcHub is a native desktop control center for AI coding tools. It lets you switch
 model providers, manage shared capabilities, and run a local gateway from one place —
 without a browser shell or webview.
 
+## A useful mental model
+
+Think of OcHub as three layers:
+
+1. **Apps** are the tools you actually run, such as Claude Code or Codex.
+2. **Connections** describe how one app authenticates and reaches an API.
+3. **Model providers** are optional shared upstreams behind OcHub's local
+   gateway.
+
+Start with an app and a direct connection. Add the gateway layer only when you
+need shared routing, interface conversion, or fallback.
+
 ## What OcHub manages
 
 OcHub manages **Claude Code, Claude Desktop, Codex, Grok Build, OpenCode,

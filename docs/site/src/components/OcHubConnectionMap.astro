@@ -1,0 +1,337 @@
+---
+import { Icon } from "astro-icon/components";
+
+type Locale = "en" | "zh" | "ja";
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = "en" } = Astro.props;
+
+const copy = {
+  en: {
+    start: "Start here",
+    choose: "Choose the AI tool you want OcHub to manage",
+    direct: "Direct connection",
+    directHint: "Best for a first setup or one endpoint per tool",
+    directFlow: "Tool writes provider settings directly",
+    gateway: "Model provider",
+    gatewayHint: "Best for shared upstreams, mapping, conversion, and fallback",
+    gatewayFlow: "Requests pass through the local OcHub gateway",
+    provider: "API provider",
+    result: "Finish by sending one real request from the target CLI",
+    caption: "Choose a direct connection or an OcHub model provider based on the request path you need.",
+  },
+  zh: {
+    start: "从这里开始",
+    choose: "先选择要由 OcHub 管理的 AI 工具",
+    direct: "直接连接",
+    directHint: "适合第一次配置，或每个工具分别使用一个上游",
+    directFlow: "工具直接读取并使用供应商配置",
+    gateway: "模型供应商",
+    gatewayHint: "适合共用上游、模型映射、接口转换和故障转移",
+    gatewayFlow: "请求先经过 OcHub 本地网关",
+    provider: "API 供应商",
+    result: "最后必须从目标 CLI 发起一次真实请求",
+    caption: "根据需要的请求路径，在直接连接与 OcHub 模型供应商之间选择。",
+  },
+  ja: {
+    start: "ここから開始",
+    choose: "OcHub で管理する AI ツールを選びます",
+    direct: "直接接続",
+    directHint: "初回設定や、ツールごとに 1 つの上流を使う場合に最適",
+    directFlow: "ツールがプロバイダー設定を直接使用",
+    gateway: "モデルプロバイダー",
+    gatewayHint: "上流共有、モデル変換、プロトコル変換、フォールバック向け",
+    gatewayFlow: "リクエストは OcHub のローカルゲートウェイを通過",
+    provider: "API プロバイダー",
+    result: "最後に対象 CLI から実リクエストを 1 回送信します",
+    caption: "必要なリクエスト経路に応じて、直接接続または OcHub モデルプロバイダーを選びます。",
+  },
+} satisfies Record<Locale, Record<string, string>>;
+
+const t = copy[locale];
+---
+
+<figure class="connection-map" role="img" aria-label={t.caption}>
+  <div class="map-start">
+    <span class="map-kicker">{t.start}</span>
+    <span class="map-tool"><Icon name="ph:terminal-window" /></span>
+    <strong>{t.choose}</strong>
+  </div>
+
+  <div class="map-fork" aria-hidden="true"><i></i><span></span><i></i></div>
+
+  <div class="map-paths">
+    <section class="map-path">
+      <header>
+        <span><Icon name="ph:plugs-connected" /></span>
+        <div>
+          <strong>{t.direct}</strong>
+          <p>{t.directHint}</p>
+        </div>
+      </header>
+      <div class="map-flow">
+        <b><Icon name="ph:terminal-window" /></b>
+        <i><Icon name="ph:arrow-right" /></i>
+        <b class="is-provider"><Icon name="ph:cloud" /></b>
+      </div>
+      <p>{t.directFlow}</p>
+    </section>
+
+    <section class="map-path is-gateway">
+      <header>
+        <span><Icon name="ph:arrows-left-right" /></span>
+        <div>
+          <strong>{t.gateway}</strong>
+          <p>{t.gatewayHint}</p>
+        </div>
+      </header>
+      <div class="map-flow">
+        <b><Icon name="ph:terminal-window" /></b>
+        <i><Icon name="ph:arrow-right" /></i>
+        <b class="is-ochub">O</b>
+        <i><Icon name="ph:arrow-right" /></i>
+        <b class="is-provider"><Icon name="ph:cloud" /></b>
+      </div>
+      <p>{t.gatewayFlow}</p>
+    </section>
+  </div>
+
+  <div class="map-result">
+    <Icon name="ph:check-circle" />
+    <strong>{t.result}</strong>
+  </div>
+
+  <figcaption>{t.caption}</figcaption>
+</figure>
+
+<style>
+  .connection-map {
+    --map-bg: var(--nb-card);
+    --map-panel: var(--nb-background);
+    --map-text: var(--nb-foreground);
+    --map-muted: var(--nb-muted-foreground);
+    --map-border: var(--nb-border);
+    --map-blue: var(--nb-primary);
+    --map-blue-soft: var(--nb-info-muted);
+    width: min(46rem, calc(100vw - 2rem));
+    margin: 1.75rem 0 2rem 50%;
+    padding: 1.1rem;
+    color: var(--map-text);
+    background:
+      linear-gradient(var(--map-bg), var(--map-bg)) padding-box,
+      linear-gradient(135deg, var(--nb-border-strong), var(--map-border)) border-box;
+    border: 1px solid transparent;
+    border-radius: 0.9rem;
+    box-shadow: var(--nb-shadow-lg);
+    transform: translateX(-50%);
+  }
+
+  .map-start {
+    display: grid;
+    grid-template-columns: auto 2.7rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.25rem 0.35rem;
+  }
+
+  .map-kicker {
+    color: var(--map-blue);
+    font-size: 0.7rem;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .map-tool,
+  .map-path header > span,
+  .map-flow b {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .map-tool {
+    width: 2.7rem;
+    height: 2.7rem;
+    color: var(--nb-primary-foreground);
+    background: var(--map-blue);
+    border-radius: 0.65rem;
+  }
+
+  .map-tool :global(svg) {
+    width: 1.3rem;
+    height: 1.3rem;
+  }
+
+  .map-start strong {
+    font-size: 1rem;
+  }
+
+  .map-fork {
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr;
+    height: 2.2rem;
+    margin: 0 12%;
+  }
+
+  .map-fork i {
+    border-bottom: 1px solid var(--map-border);
+  }
+
+  .map-fork i:first-child {
+    border-right: 1px solid var(--map-border);
+  }
+
+  .map-fork i:last-child {
+    border-left: 1px solid var(--map-border);
+  }
+
+  .map-fork span {
+    background: var(--map-border);
+  }
+
+  .map-paths {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.8rem;
+  }
+
+  .map-path {
+    padding: 0.9rem;
+    background: var(--map-panel);
+    border: 1px solid var(--map-border);
+    border-radius: 0.65rem;
+  }
+
+  .map-path.is-gateway {
+    border-color: color-mix(in srgb, var(--map-blue) 42%, var(--map-border));
+  }
+
+  .map-path header {
+    display: flex;
+    gap: 0.65rem;
+  }
+
+  .map-path header > span {
+    width: 2rem;
+    height: 2rem;
+    flex: none;
+    color: var(--map-blue);
+    background: var(--map-blue-soft);
+    border-radius: 0.5rem;
+  }
+
+  .map-path header > span :global(svg) {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .map-path header div {
+    min-width: 0;
+  }
+
+  .map-path header strong {
+    font-size: 0.88rem;
+  }
+
+  .map-path p {
+    margin: 0.18rem 0 0;
+    color: var(--map-muted);
+    font-size: 0.69rem;
+    line-height: 1.45;
+  }
+
+  .map-flow {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0.9rem 0 0.55rem;
+  }
+
+  .map-flow b {
+    width: 2.15rem;
+    height: 2.15rem;
+    color: var(--map-text);
+    background: var(--nb-muted);
+    border-radius: 0.5rem;
+  }
+
+  .map-flow b.is-ochub {
+    color: var(--nb-primary-foreground);
+    background: var(--map-blue);
+    font-weight: 800;
+  }
+
+  .map-flow b.is-provider {
+    color: var(--nb-success);
+    background: var(--nb-success-muted);
+  }
+
+  .map-flow b :global(svg) {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+
+  .map-flow i {
+    display: inline-flex;
+    color: var(--map-muted);
+  }
+
+  .map-flow i :global(svg) {
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+
+  .map-result {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+    padding: 0.65rem;
+    color: var(--nb-success);
+    background: var(--nb-success-muted);
+    border-radius: 0.55rem;
+    font-size: 0.75rem;
+  }
+
+  .map-result :global(svg) {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+
+  figcaption {
+    margin-top: 0.65rem;
+    color: var(--map-muted);
+    font-size: 0.72rem;
+    text-align: center;
+  }
+
+  @media (max-width: 640px) {
+    .connection-map {
+      width: 100%;
+      margin-left: 0;
+      transform: none;
+    }
+
+    .map-start {
+      grid-template-columns: 2.7rem 1fr;
+    }
+
+    .map-kicker {
+      grid-column: 1 / -1;
+    }
+
+    .map-fork {
+      display: none;
+    }
+
+    .map-paths {
+      grid-template-columns: 1fr;
+      margin-top: 0.9rem;
+    }
+  }
+</style>

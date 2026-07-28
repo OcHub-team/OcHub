@@ -1,0 +1,607 @@
+---
+import { Icon } from "astro-icon/components";
+
+type Locale = "en" | "zh" | "ja";
+
+interface Props {
+  locale?: Locale;
+  visual: string;
+  app?: string;
+}
+
+const { locale = "en", visual, app = "Claude Code" } = Astro.props;
+
+const copy = {
+  en: {
+    apps: "Apps", tools: "Tools", network: "Network", system: "System",
+    providers: "Model providers", mcp: "MCP servers", skills: "Skills",
+    sessions: "Sessions", usage: "Usage", settings: "Settings", theme: "Theme",
+    advanced: "Advanced tools", about: "About", appSettings: "App settings",
+    add: "Add connection", save: "Save", cancel: "Cancel", direct: "Direct connection",
+    shared: "Model provider", name: "Name", endpoint: "Base URL", key: "API key",
+    tests: "Connection checks", test: "Test URL", models: "Fetch models",
+    balance: "Check balance", files: "Files to be written", current: "Current",
+    switch: "Switch", import: "Import from app", sync: "Sync to apps",
+    discover: "Discover", installed: "Installed", search: "Search skills",
+    range: "Last 7 days", filter: "All apps", view: "View", messages: "messages",
+    totalCost: "Total cost", requests: "Total requests", tokens: "Actual tokens",
+    cache: "Cache hit rate", general: "General", appsPlugins: "Apps and plugins",
+    display: "Display mode", systemMode: "Follow system", light: "Always light",
+    dark: "Always dark", apply: "Apply", remote: "Remote sync",
+    data: "Data and backups",
+    upload: "Upload local snapshot", restore: "Restore", success: "Completed",
+    addProvider: "Add model provider", detect: "Detect", pricing: "Model pricing",
+    otherTools: "Connect other tools", importExisting: "Import from an existing config",
+    endpointTest: "HTTP latency test", apiAddress: "API address",
+    endpointNumber: "API address 1", websiteOptional: "Website (optional)",
+    modelsLabel: "Models", modelsUnrestricted: "Any model",
+    modelsConfigured: "39 models configured",
+    edit: "Edit", duplicate: "Copy", remove: "Delete",
+    defaultModel: "Default model",
+    connectionId: "Connection ID (optional)", websiteUrl: "Website URL", category: "Category",
+    relayMode: "Model provider mode",
+    relayModeHint: "Pick a model provider to route this app through.",
+    manageProviders: "Manage model providers",
+    copyToApp: "Copy to app", errorCount: "1 error", warningCount: "1 warning",
+  },
+  zh: {
+    apps: "应用", tools: "工具", network: "网络", system: "系统",
+    providers: "模型供应商", mcp: "MCP 服务器", skills: "技能",
+    sessions: "会话", usage: "用量", settings: "设置", theme: "主题",
+    advanced: "高级工具", about: "关于", appSettings: "应用设置",
+    add: "添加连接", save: "保存", cancel: "取消", direct: "直接连接",
+    shared: "模型供应商", name: "名称", endpoint: "Base URL", key: "API Key",
+    tests: "连接检查", test: "测试 URL", models: "拉取模型",
+    balance: "查询余额", files: "将写入的文件", current: "当前",
+    switch: "切换", import: "从应用导入", sync: "同步到应用",
+    discover: "发现", installed: "已安装", search: "搜索技能",
+    range: "最近 7 天", filter: "全部应用", view: "查看", messages: "条消息",
+    totalCost: "总成本", requests: "总请求数", tokens: "真实 Token",
+    cache: "缓存命中", general: "通用", appsPlugins: "应用与插件",
+    display: "显示模式", systemMode: "跟随系统", light: "固定浅色",
+    dark: "固定深色", apply: "应用", remote: "远端同步",
+    data: "数据与备份",
+    upload: "上传本地快照", restore: "恢复", success: "操作完成",
+    addProvider: "添加模型供应商", detect: "检测", pricing: "模型定价",
+    otherTools: "其他工具接入", importExisting: "从现有配置导入",
+    endpointTest: "HTTP 延迟测试", apiAddress: "API 地址",
+    endpointNumber: "API 地址 1", websiteOptional: "官网（可选）",
+    modelsLabel: "模型", modelsUnrestricted: "不限制模型",
+    modelsConfigured: "已配置 39 个模型",
+    edit: "编辑", duplicate: "复制", remove: "删除",
+    defaultModel: "默认模型",
+    connectionId: "连接 ID（可选）", websiteUrl: "网站 URL", category: "分类",
+    relayMode: "模型供应商模式",
+    relayModeHint: "选择一个模型供应商，本应用的请求将经它转发。",
+    manageProviders: "管理模型供应商",
+    copyToApp: "复制到应用", errorCount: "1 个错误", warningCount: "1 个警告",
+  },
+  ja: {
+    apps: "アプリ", tools: "ツール", network: "ネットワーク", system: "システム",
+    providers: "モデルプロバイダー", mcp: "MCP サーバー", skills: "スキル",
+    sessions: "セッション", usage: "使用量", settings: "設定", theme: "テーマ",
+    advanced: "高度なツール", about: "情報", appSettings: "アプリ設定",
+    add: "接続を追加", save: "保存", cancel: "キャンセル", direct: "直接接続",
+    shared: "モデルプロバイダー", name: "名前", endpoint: "Base URL", key: "API キー",
+    tests: "接続確認", test: "URL をテスト", models: "モデルを取得",
+    balance: "残高を確認", files: "書き込むファイル", current: "現在",
+    switch: "切り替え", import: "アプリからインポート", sync: "アプリへ同期",
+    discover: "探す", installed: "インストール済み", search: "スキルを検索",
+    range: "過去 7 日", filter: "すべてのアプリ", view: "表示", messages: "件",
+    totalCost: "総コスト", requests: "総リクエスト", tokens: "実トークン",
+    cache: "キャッシュヒット", general: "一般", appsPlugins: "アプリとプラグイン",
+    display: "表示モード", systemMode: "システムに従う", light: "常にライト",
+    dark: "常にダーク", apply: "適用", remote: "リモート同期",
+    data: "データとバックアップ",
+    upload: "ローカルをアップロード", restore: "復元", success: "完了",
+    addProvider: "モデルプロバイダーを追加", detect: "検出", pricing: "モデル価格",
+    otherTools: "他のツールから接続", importExisting: "既存の設定からインポート",
+    endpointTest: "HTTP 遅延テスト", apiAddress: "API アドレス",
+    endpointNumber: "API アドレス 1", websiteOptional: "公式サイト（任意）",
+    modelsLabel: "モデル", modelsUnrestricted: "モデルを制限しない",
+    modelsConfigured: "設定済みモデル 39 件",
+    edit: "編集", duplicate: "コピー", remove: "削除",
+    defaultModel: "デフォルトモデル",
+    connectionId: "接続 ID（任意）", websiteUrl: "Web サイト URL", category: "カテゴリー",
+    relayMode: "モデルプロバイダーモード",
+    relayModeHint: "モデルプロバイダーを選ぶと、このアプリのリクエストがそこを経由します。",
+    manageProviders: "モデルプロバイダーを管理",
+    copyToApp: "アプリにコピー", errorCount: "エラー 1 件", warningCount: "警告 1 件",
+  },
+} satisfies Record<Locale, Record<string, string>>;
+
+const t = copy[locale];
+const is = (...names: string[]) => names.includes(visual);
+const connectionEditing = is("source", "identity", "fields", "tests", "preview", "save", "model");
+
+// Sample model shown in the connection editor's default-model field, matched
+// to the app the walkthrough is about.
+const editorSampleModel =
+  app === "Codex" ? "gpt-5-codex" : app === "Grok Build" ? "grok-4.5" : "claude-sonnet-4-6";
+
+const page =
+  is("provider-nav", "provider-add", "provider-fields", "detect", "provider-model", "model-provider-card") ? "providers" :
+  is("mcp-nav", "mcp-import", "mcp-add", "mcp-fields", "mcp-targets", "mcp-save", "mcp-sync", "mcp-result") ? "mcp" :
+  is("skills-nav", "skill-search", "skill-targets", "skill-install", "skill-result") ? "skills" :
+  is("sessions-nav", "session-list", "session-detail") ? "sessions" :
+  is("usage-nav", "usage-summary", "usage-filter", "request-detail", "pricing", "pricing-save") ? "usage" :
+  is("theme-nav", "theme-mode", "theme-card") ? "theme" :
+  is("settings-nav", "apps-settings") ? "settings" :
+  is("sync", "restore", "backup-create", "backup-result", "backup-restore", "sync-fields", "sync-test", "sync-save", "sync-upload", "sync-status", "sync-stop", "sync-restore", "sync-result") ? "sync" : "connections";
+
+const pageTitle =
+  page === "providers" ? t.providers :
+  page === "mcp" ? t.mcp :
+  page === "skills" ? t.skills :
+  page === "sessions" ? t.sessions :
+  page === "usage" ? t.usage :
+  page === "theme" ? t.theme :
+  page === "settings" ? t.settings :
+  page === "sync" ? t.settings : app;
+
+const navTarget = (name: string) =>
+  (name === "app" && visual === "sidebar-app") ||
+  (name === "providers" && visual === "provider-nav") ||
+  (name === "mcp" && visual === "mcp-nav") ||
+  (name === "skills" && visual === "skills-nav") ||
+  (name === "sessions" && visual === "sessions-nav") ||
+  (name === "usage" && visual === "usage-nav") ||
+  (name === "settings" && visual === "settings-nav") ||
+  (name === "theme" && visual === "theme-nav");
+---
+
+<div class="full-screen" aria-hidden="true">
+  <div class="window-bar">
+    <i></i><i></i><i></i>
+    <b><Icon name="ph:desktop" /></b>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <small>{t.apps}</small>
+      <b class:list={{ target: navTarget("app"), selected: page === "connections" }}>
+        <Icon name="ph:robot" />{app}
+      </b>
+      <b><Icon name="ph:sparkle" />Claude Desktop</b>
+      <b><Icon name="ph:terminal-window" />Codex</b>
+      <b><Icon name="ph:circle-notch" />Grok Build</b>
+      <b><Icon name="ph:square" />OpenCode</b>
+      <small>{t.network}</small>
+      <b class:list={{ target: navTarget("providers"), selected: page === "providers" }}>
+        <Icon name="ph:cloud" />{t.providers}
+      </b>
+      <small>{t.tools}</small>
+      <b class:list={{ target: navTarget("mcp"), selected: page === "mcp" }}>
+        <Icon name="ph:squares-four" />{t.mcp}
+      </b>
+      <b class:list={{ target: navTarget("skills"), selected: page === "skills" }}>
+        <Icon name="ph:pencil-simple" />{t.skills}
+      </b>
+      <b class:list={{ target: navTarget("sessions"), selected: page === "sessions" }}>
+        <Icon name="ph:chats-circle" />{t.sessions}
+      </b>
+      <b class:list={{ target: navTarget("usage"), selected: page === "usage" }}>
+        <Icon name="ph:chart-bar" />{t.usage}
+      </b>
+      <b><Icon name="ph:wrench" />{t.advanced}</b>
+      <small>{t.system}</small>
+      <b class:list={{ target: navTarget("settings"), selected: page === "settings" || page === "sync" }}>
+        <Icon name="ph:gear-six" />{t.settings}
+      </b>
+      <b class:list={{ target: navTarget("theme"), selected: page === "theme" }}>
+        <Icon name="ph:palette" />{t.theme}
+      </b>
+      <b><Icon name="ph:info" />{t.about}</b>
+    </aside>
+
+    <main class="workspace">
+      <header class="page-header">
+        <div><strong>{connectionEditing ? t.add : pageTitle}</strong><span>{connectionEditing ? `${t.apps}: ${app}` : page === "connections" ? `${t.current} · ${t.direct}` : "OcHub"}</span></div>
+        {connectionEditing && <><em>{t.errorCount}</em><em>{t.warningCount}</em><button>{t.copyToApp}</button><button class:list={["primary", { target: is("save") }]}>{t.save}</button><button>{t.cancel}</button></>}
+        {page === "providers" && <><button>{t.otherTools}</button><button>{t.importExisting}</button></>}
+        {!connectionEditing && (page === "connections" || page === "providers") && (
+          <button class:list={{ target: is("toolbar-add", "provider-add") }}>
+            <Icon name="ph:plus" />{page === "providers" ? t.addProvider : t.add}
+          </button>
+        )}
+        {!connectionEditing && page === "connections" && <button><Icon name="ph:gear-six" />{t.appSettings}</button>}
+      </header>
+
+      {page === "connections" && (
+        connectionEditing ? (
+          <div class="editor-grid">
+            <section class="form-pane">
+              <small>{t.direct}</small>
+              <div class:list={["segmented", { target: is("source") }]}>
+                <b>{t.direct}</b><span>{t.shared}</span>
+              </div>
+              <label class:list={{ target: is("identity") }}>{t.name}<i>Work account</i></label>
+              <label>{t.connectionId}<i>work-account</i></label>
+              <div class="two-fields"><label>{t.websiteUrl}<i>https://example.com</i></label><label>{t.category}<i>third_party</i></label></div>
+              <label class:list={{ target: is("fields") }}>{t.endpoint}<i>https://api.example.com</i></label>
+              <label class:list={{ target: is("fields") }}>{t.key}<i>••••••••••••••••</i></label>
+              <label class:list={{ target: is("model") }}>{t.defaultModel}<i>{editorSampleModel}</i></label>
+              <div class:list={["actions", { target: is("tests") }]}>
+                <button>{t.test}</button><button>{t.models}</button><button>{t.balance}</button>
+              </div>
+            </section>
+            <aside class:list={["file-preview", { target: is("preview") }]}>
+              <strong>{t.files}</strong><small>~/.claude/settings.json</small>
+              <div class="tabs"><b>JSON</b><span>{t.edit}</span></div>
+              <pre>{`{\n  "env": {\n    "ANTHROPIC_BASE_URL":\n      "https://api.example.com"\n  }\n}`}</pre>
+            </aside>
+          </div>
+        ) : visual === "model-provider-switch" ? (
+          <div class="connection-list">
+            <div class="relay-panel">
+              <div class="relay-panel-head">
+                <span class="avatar"><Icon name="ph:stack" /></span>
+                <div><strong>{t.relayMode}</strong><small>{t.relayModeHint}</small></div>
+                <button>{t.manageProviders}</button>
+              </div>
+              <div class="relay-row">
+                <strong>Krill</strong>
+                <button class="primary target">{t.switch}</button>
+              </div>
+            </div>
+            <strong class="section-label">{t.direct}</strong>
+            <div class="connection-card"><i class="drag-dots">⋮</i><span class="avatar"><Icon name="ph:robot" /></span><div><strong>Work account</strong><small>https://api.example.com</small></div><button>{t.edit}</button><button>{t.duplicate}</button><button>{t.remove}</button><button class="primary">{t.switch}</button></div>
+          </div>
+        ) : (
+          <div class="connection-list">
+            <div class="current-label">{t.current} · {t.direct}</div>
+            <div class:list={["connection-card current-card", { target: is("connection-card") }]}>
+              <span class="avatar"><Icon name="ph:robot" /></span>
+              <div><small>{t.current} · {t.direct}</small><strong>Claude-Blank</strong></div>
+              <button>{t.edit}</button>
+            </div>
+            <strong class="section-label">{t.direct}</strong>
+            <div class:list={["connection-card", { target: is("connection-add", "connection-switch", "connection-copy", "connection-remove") }]}>
+              <i class="drag-dots">⋮</i><span class="avatar"><Icon name="ph:robot" /></span>
+              <div><strong>Work account</strong><small>https://api.example.com</small></div>
+              <button>{t.edit}</button><button class:list={{ target: is("connection-copy") }}>{t.duplicate}</button><button class:list={{ target: is("connection-remove") }}>{t.remove}</button><button class:list={["primary", { target: is("connection-add", "connection-switch") }]}>{t.switch}</button>
+            </div>
+            <div class="connection-card"><i class="drag-dots">⋮</i><span class="avatar"><Icon name="ph:robot" /></span><div><strong>Backup</strong><small>https://backup.example.com</small></div><button>{t.edit}</button><button>{t.duplicate}</button><button>{t.remove}</button><button class="primary">{t.switch}</button></div>
+          </div>
+        )
+      )}
+
+      {page === "providers" && (
+        is("provider-fields", "detect", "provider-model") ? (
+          <div class="provider-editor">
+            <div class="form-section-header"><strong>{t.addProvider}</strong><span><button>{t.cancel} Esc</button><button class="primary">{t.save} ⌘S</button></span></div>
+            <div class:list={["provider-top-fields", { target: is("provider-fields") }]}>
+              <label>{t.name}<i>Krill</i></label>
+              <label>{t.websiteOptional}<i>https://example.com</i></label>
+              <label>{t.key}<i>••••••••••••</i></label>
+            </div>
+            <section>
+              <strong>{t.endpointNumber}</strong>
+              <label>{t.apiAddress}<i>https://api.example.com</i></label>
+              <div class:list={["actions", { target: is("detect") }]}><button>{t.endpointTest}</button><button>{t.detect}</button><button>{t.models}</button></div>
+              <p class="helper-line"></p>
+              <div class="chips"><b>Anthropic Messages</b><b>OpenAI Responses</b><b>OpenAI Chat</b></div>
+              <label class:list={{ target: is("provider-model") }}>{t.modelsLabel}<i>{t.modelsUnrestricted}</i></label>
+            </section>
+          </div>
+        ) : (
+          <div class="provider-list">
+            <div class:list={["provider-item", { target: is("model-provider-card") }]}>
+              <span class="avatar"><Icon name="ph:stack" /></span><div><strong>Krill</strong><span class="chips"><b>Anthropic Messages</b><b>OpenAI Responses</b><b>OpenAI Chat</b></span><small>https://api.example.com · {t.modelsConfigured}</small></div><i class="switch-control"></i><button>{t.edit}</button><button>{t.remove}</button>
+            </div>
+          </div>
+        )
+      )}
+
+      {page === "mcp" && (
+        is("mcp-add", "mcp-fields", "mcp-targets", "mcp-save") ? (
+          <div class="mcp-editor">
+            <button class:list={{ target: is("mcp-add") }}>← Back</button>
+            <label class:list={{ target: is("mcp-fields") }}>{t.name}<i>filesystem</i></label>
+            <label>Description<i>Local filesystem access</i></label>
+            <div class:list={["mcp-targets", { target: is("mcp-targets") }]}><span>Claude Code<i></i></span><span>Codex<i></i></span><span>Grok Build<i></i></span><span>OpenCode<i></i></span></div>
+            <label class:list={{ target: is("mcp-fields") }}>Server JSON<pre>{`{\n  "type": "stdio",\n  "command": "npx",\n  "args": ["-y", "server"]\n}`}</pre></label>
+            <div class="actions"><button class:list={["primary", { target: is("mcp-save") }]}>{t.save}</button><button>{t.cancel}</button></div>
+          </div>
+        ) : (
+          <div class="catalog-page">
+            <div class="toolbar-row">
+              <button class:list={{ target: is("mcp-add") }}><Icon name="ph:plus" />Add</button>
+              <button class:list={{ target: is("mcp-import") }}>{t.import}</button>
+              <button class:list={{ target: is("mcp-sync") }}>{t.sync}</button>
+            </div>
+            <div class:list={["catalog-card mcp-card", { target: is("mcp-import", "mcp-result") }]}>
+              <div><strong>@modelcontextprotocol/server-memory</strong><small>npx -y @modelcontextprotocol/server-memory</small><small>Apps · Claude Code, Codex</small></div><button>Edit</button><button>Delete</button>
+              <div class="mcp-card-targets"><span>Claude Code<i></i></span><span>Codex<i></i></span><span>Grok Build<i></i></span><span>OpenCode<i></i></span></div>
+            </div>
+            <div class:list={["catalog-card mcp-card", { target: is("mcp-sync") }]}><div><strong>filesystem</strong><small>npx -y server-filesystem</small><small>Apps · OpenCode</small></div><button>Edit</button><button>Delete</button><div class="mcp-card-targets"><span>Claude Code<i></i></span><span>Codex<i></i></span><span>OpenCode<i></i></span></div></div>
+          </div>
+        )
+      )}
+
+      {page === "skills" && (
+        <div class="catalog-page">
+          <div class="tabs-line"><b>{t.installed} (36)</b><span>{t.discover}</span></div>
+          {is("skill-search", "skill-targets", "skill-install", "skill-result") ? (
+            <>
+              <div class="skills-discover-row"><div class="tabs-line"><b>Marketplace</b><span>Repository</span></div><div class:list={["segmented three", { target: is("skill-targets") }]}><b>Claude Code</b><span>Codex</span><span>OpenCode</span></div></div>
+              <label class:list={["search-field", { target: is("skill-search") }]}><Icon name="ph:magnifying-glass" /><span>{t.search}</span><button>Search</button></label>
+              <div class:list={["catalog-card", { target: is("skill-install", "skill-result") }]}><span class="avatar"><Icon name="ph:file-pdf" /></span><div><strong>PDF tools</strong><small>openai/skills · Marketplace</small></div><button class="primary">Install</button></div>
+            </>
+          ) : (
+            <>
+              <div class="skill-metrics"><span><small>Installed</small><strong>36</strong></span><span><small>Remote sources</small><strong>24</strong></span><span><small>Update status</small><strong>Latest</strong></span></div>
+              <label class="search-field"><Icon name="ph:magnifying-glass" /><span>Search installed skills</span><button>Check updates</button></label>
+              <div class="catalog-card skill-card"><div><strong>adapt</strong><small>pbakaus/impeccable@main</small><p>Adapt designs to work across different screen sizes and contexts.</p></div><button>Repository</button><button>Directory</button><button>Uninstall</button></div>
+            </>
+          )}
+        </div>
+      )}
+
+      {page === "sessions" && (
+        <div class="data-page">
+          {is("session-detail") ? (
+            <div class="session-detail target"><div class="form-section-header"><span><button>← Back</button><strong>Refactor API client</strong></span><small>Claude Code · 10:42–11:08</small></div><div class="message user"><b>User</b><p>Update the API client and keep compatibility.</p></div><div class="message assistant"><b>Assistant</b><p>I inspected the current implementation and updated the request path.</p></div><div class="message tool"><b>Tool</b><pre>{`Read src/client.rs\nEdited 3 files`}</pre></div></div>
+          ) : (
+            <>
+              <div class:list={["session-filters", { target: is("session-list") }]}><label class="search-field"><Icon name="ph:magnifying-glass" /><span>Search sessions</span></label><button>{t.range}</button><button>{t.filter}</button><button><Icon name="ph:arrows-clockwise" /></button></div>
+              <div class:list={["session-card", { target: is("session-list") }]}><span class="avatar"><Icon name="ph:terminal-window" /></span><div><strong>Refactor API client</strong><small>12 {t.messages} · 10:42–11:08</small></div><button>{t.view}</button></div>
+              <div class="session-card"><span class="avatar"><Icon name="ph:terminal-window" /></span><div><strong>Update documentation</strong><small>8 {t.messages} · 09:18–09:34</small></div><button>{t.view}</button></div>
+            </>
+          )}
+        </div>
+      )}
+
+      {page === "usage" && (
+        <div class="data-page">
+          <div class:list={["filters", { target: is("usage-filter") }]}><button>{t.range}</button><button>Provider</button><button>Model</button></div>
+          <div class="usage-sources"><strong>Sources</strong><span>Codex sessions · 11,813</span><span>Claude sessions · 12,566</span><span>Provider requests · 4</span><button>Sync sessions</button></div>
+          <div class:list={["metrics", { target: is("usage-summary") }]}><span><small>{t.totalCost}</small><strong>$12.48</strong></span><span><small>{t.requests}</small><strong>248</strong></span><span><small>{t.tokens}</small><strong>1.2M</strong></span><span><small>{t.cache}</small><strong>68%</strong></span></div>
+          {is("request-detail", "pricing", "pricing-save") ? (
+            <div class="usage-grid"><section><strong>Provider statistics</strong><p></p><p></p><p></p><div class="bars"><i></i><i></i><i></i><i></i><i></i><i></i></div></section><aside class="target"><strong>{is("pricing", "pricing-save") ? t.pricing : "claude-sonnet-4"}</strong><span>{t.tokens}<b>8,420 → 1,206</b></span><span>{t.totalCost}<b>$0.084</b></span><span>TTFT<b>620 ms</b></span>{is("pricing-save") && <button class="primary">{t.save}</button>}</aside></div>
+          ) : (
+            <div class="usage-empty"><strong>By app</strong><Icon name="ph:stack" /><b>No usage yet</b><small>No usage in the current filters.</small></div>
+          )}
+        </div>
+      )}
+
+      {page === "settings" && (
+        <div class="settings-page">
+          <div class="settings-search">Search settings</div>
+          <strong>{t.general}</strong><small>Language and session terminal.</small>
+          <section>
+            <div class="settings-row"><div><strong>Language</strong><small>Application language</small></div><span class="segmented three"><b>System</b><i>中文</i><i>English</i></span></div>
+            <div class="settings-row"><div><strong>Preferred terminal</strong><small>Terminal used to open sessions</small></div><button>Ghostty⌄</button></div>
+          </section>
+          <strong>Startup and window</strong>
+          <section>
+            <div class="settings-row"><div><strong>Launch at login</strong><small>Start OcHub after login</small></div><i class="switch-control"></i></div>
+            <div class="settings-row"><div><strong>Start without showing the window</strong><small>Keep only the system-menu entry</small></div><i class="switch-control"></i></div>
+            <div class:list={["settings-row", { target: is("apps-settings") }]}><div><strong>{t.appsPlugins}</strong><small>Choose sidebar apps and reload user plugins</small></div><button>Manage apps →</button></div>
+          </section>
+        </div>
+      )}
+
+      {page === "theme" && (
+        <div class="theme-page">
+          <div class="theme-heading"><div><strong>{t.display}</strong><small>Each theme contains light and dark variants.</small></div><button>Import theme</button></div>
+          <section class="theme-mode-card"><div><strong>Theme appearance</strong><small>Choose how OcHub follows system appearance.</small></div><div class:list={["segmented three", { target: is("theme-mode") }]}><b>{t.systemMode}</b><span>{t.light}</span><span>{t.dark}</span></div></section>
+          <strong>Theme library</strong>
+          <div class="theme-grid">
+            <div class:list={["theme-item", { target: is("theme-card") }]}><div class="theme-banner"><i></i><i></i><i></i></div><span><strong>OcHub</strong><small>Warm neutral surfaces with a clear blue accent.</small></span><div class="actions"><button class="primary">{t.apply}</button><button>Duplicate</button><button>Export</button></div></div>
+            <div class="theme-item"><div class="theme-banner orange"><i></i><i></i><i></i></div><span><strong>Ember Orange</strong><small>Ivory surfaces and ember accents.</small></span><div class="actions"><button class="primary">{t.apply}</button><button>Duplicate</button><button>Export</button></div></div>
+          </div>
+        </div>
+      )}
+
+      {page === "sync" && (
+        is("backup-create", "backup-result", "backup-restore") ? (
+          <div class="sync-page">
+            <strong>{t.data}</strong><small>Database directory and local backup policy.</small>
+            <section>
+              <div class="settings-row"><div><strong>Data directory</strong><small>~/.ochub</small></div><button>Change…</button></div>
+              <div class:list={["settings-row", { target: is("backup-create") }]}><div><strong>Database backups</strong><small>7 recoverable snapshots</small></div><button>Create backup</button></div>
+              <div class="settings-row"><div><strong>Automatic backup interval</strong><small>Create a snapshot every 24 hours</small></div><span class="segmented"><b>12 h</b><i>24 h</i></span></div>
+              <div class:list={["sync-status", { target: is("backup-result", "backup-restore") }]}><Icon name="ph:database" /><div><strong>backup-2026-07-29</strong><small>2026-07-29 10:42 · 18 MB</small></div><button>{t.restore}</button></div>
+            </section>
+          </div>
+        ) : (
+          <div class="sync-page">
+            <strong>Sync</strong><small>Synchronize the local database and managed skills to one remote target.</small>
+            <section>
+              <div class:list={["settings-row", { target: is("sync-fields", "sync-test", "sync-save") }]}><div><strong>Sync target</strong><small>Only one remote target can be enabled.</small></div><span class="segmented three"><b>Off</b><i>WebDAV</i><i>S3</i></span></div>
+              <div class="settings-row"><div><strong>Automatic sync</strong><small>Queue uploads after database changes.</small></div><i class="switch-control off"></i></div>
+              <div class:list={["settings-row", { target: is("sync-upload", "sync-status", "sync-stop", "sync-restore", "sync-result") }]}><div><strong>Sync settings</strong><small>Not configured</small></div><button>Open →</button></div>
+            </section>
+          </div>
+        )
+      )}
+
+      {is("result", "welcome", "import") && (
+        <div class="result-overlay target"><Icon name="ph:check-circle" /><strong>{t.success}</strong><span>{pageTitle}</span></div>
+      )}
+    </main>
+  </div>
+</div>
+
+<style>
+  .full-screen { overflow: hidden; color: var(--nb-foreground); background: var(--nb-background); border: 1px solid var(--nb-border); border-radius: 0.55rem; font-size: 0.54rem; box-shadow: 0 0.6rem 1.4rem color-mix(in srgb, var(--nb-foreground) 8%, transparent); }
+  .window-bar { display: flex; height: 1.45rem; align-items: center; gap: 0.25rem; padding: 0 0.5rem; background: var(--nb-muted); border-bottom: 1px solid var(--nb-border); }
+  .window-bar > i { width: 0.36rem; height: 0.36rem; background: var(--nb-muted-foreground); border-radius: 50%; opacity: 0.55; }
+  .window-bar strong { margin-left: 0.3rem; font-size: 0.58rem; }
+  .window-bar span { display: flex; margin-left: auto; gap: 0.45rem; color: var(--nb-muted-foreground); }
+  .window-bar :global(svg) { width: 0.66rem; height: 0.66rem; }
+  .app-shell { display: grid; grid-template-columns: 8.2rem minmax(0, 1fr); min-height: 22rem; }
+  .sidebar { display: flex; flex-direction: column; gap: 0.12rem; padding: 0.45rem; background: var(--nb-panel); border-right: 1px solid var(--nb-border); }
+  .sidebar small { margin: 0.38rem 0.3rem 0.12rem; color: var(--nb-muted-foreground); font-size: 0.46rem; text-transform: uppercase; }
+  .sidebar b { display: flex; align-items: center; gap: 0.32rem; padding: 0.34rem; border-radius: 0.28rem; font-weight: 550; }
+  .sidebar b.selected { background: var(--nb-muted); }
+  .sidebar :global(svg) { width: 0.68rem; height: 0.68rem; flex: none; }
+  .workspace { position: relative; min-width: 0; background: var(--nb-background); }
+  .page-header { display: flex; min-height: 3rem; align-items: center; gap: 0.4rem; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--nb-border); }
+  .page-header > div { display: flex; flex: 1; flex-direction: column; }
+  .page-header strong { font-size: 0.82rem; }
+  .page-header span { color: var(--nb-muted-foreground); }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 0.22rem; padding: 0.34rem 0.48rem; color: var(--nb-foreground); background: var(--nb-muted); border: 1px solid var(--nb-border); border-radius: 0.28rem; font: inherit; font-weight: 650; }
+  button.primary { color: var(--nb-primary-foreground); background: var(--nb-primary); }
+  button :global(svg) { width: 0.6rem; height: 0.6rem; }
+  .target { position: relative; z-index: 1; outline: 2px solid color-mix(in srgb, var(--nb-primary) 88%, white 12%); outline-offset: 2px; box-shadow: 0 0 0 5px color-mix(in srgb, var(--nb-primary) 16%, transparent), 0 0 1.4rem color-mix(in srgb, var(--nb-primary) 22%, transparent); }
+  .target::after { position: absolute; z-index: 5; top: -0.42rem; right: -0.42rem; width: 0.78rem; height: 0.78rem; content: ""; background: var(--nb-primary); border: 2px solid var(--nb-background); border-radius: 50%; box-shadow: 0 0 0 1px var(--nb-primary); }
+  .editor-grid, .provider-editor { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 0.65rem; padding: 0.65rem; }
+  .form-pane, .provider-editor > section, .provider-editor > aside, .file-preview { display: flex; flex-direction: column; gap: 0.48rem; min-width: 0; }
+  .segmented { display: grid; grid-template-columns: 1fr 1fr; padding: 0.14rem; background: var(--nb-muted); border-radius: 0.3rem; }
+  .segmented.three { grid-template-columns: repeat(3, 1fr); }
+  .segmented > * { padding: 0.34rem; text-align: center; font-style: normal; }
+  .segmented b { background: var(--nb-card); border-radius: 0.24rem; }
+  label { display: flex; flex-direction: column; gap: 0.18rem; color: var(--nb-muted-foreground); }
+  label i { display: flex; min-height: 1.5rem; align-items: center; padding: 0 0.42rem; color: var(--nb-foreground); background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.28rem; font-style: normal; }
+  .actions, .toolbar-row, .filters { display: flex; flex-wrap: wrap; gap: 0.32rem; }
+  .file-preview, .provider-editor > aside { padding: 0.55rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .file-preview > small { color: var(--nb-muted-foreground); }
+  .tabs, .tabs-line { display: flex; gap: 0.55rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--nb-border); }
+  pre { margin: 0; padding: 0.5rem; color: var(--nb-muted-foreground); background: var(--nb-muted); border-radius: 0.28rem; font-size: 0.48rem; line-height: 1.55; }
+  .connection-list, .provider-list, .catalog-page, .data-page, .theme-page, .sync-page { display: flex; flex-direction: column; gap: 0.55rem; padding: 0.7rem; }
+  .connection-card, .provider-item, .catalog-card, .session-card, .sync-status { display: flex; align-items: center; gap: 0.48rem; padding: 0.55rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.36rem; }
+  .avatar { display: flex; width: 1.55rem; height: 1.55rem; flex: none; align-items: center; justify-content: center; color: var(--nb-primary); background: var(--nb-info-muted); border-radius: 0.36rem; }
+  .avatar :global(svg) { width: 0.82rem; height: 0.82rem; }
+  .connection-card > div, .provider-item > div, .catalog-card > div, .session-card > div, .sync-status > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+  .connection-card small, .provider-item small, .catalog-card small, .session-card small, .sync-status small { color: var(--nb-muted-foreground); }
+  em { padding: 0.18rem 0.35rem; color: var(--nb-success); background: var(--nb-success-muted); border-radius: 999px; font-style: normal; }
+  .chips { display: flex; gap: 0.3rem; }
+  .chips b { padding: 0.2rem 0.35rem; color: var(--nb-primary); background: var(--nb-info-muted); border-radius: 999px; }
+  .provider-editor aside p { height: 1.5rem; margin: 0; background: var(--nb-muted); border-radius: 0.25rem; }
+  .app-toggles { display: grid !important; grid-template-columns: auto auto; flex: none !important; gap: 0.24rem 0.4rem; align-items: center; }
+  .app-toggles i, .settings-row > i { width: 1.25rem; height: 0.72rem; background: var(--nb-primary); border-radius: 999px; }
+  .search-field { display: flex; flex-direction: row; min-height: 1.7rem; align-items: center; gap: 0.35rem; padding: 0 0.48rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.3rem; }
+  .search-field :global(svg) { width: 0.68rem; height: 0.68rem; }
+  .session-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 0.35rem; }
+  .session-detail { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.6rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .message { padding: 0.45rem; background: var(--nb-muted); border-radius: 0.3rem; }
+  .message p { margin: 0.2rem 0 0; }
+  .message.tool { margin-left: 1.2rem; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.35rem; }
+  .metrics span { display: flex; flex-direction: column; padding: 0.48rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.3rem; }
+  .metrics small { color: var(--nb-muted-foreground); }
+  .metrics strong { font-size: 0.72rem; }
+  .usage-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 0.5rem; }
+  .usage-grid > * { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .usage-grid p { height: 0.35rem; margin: 0; background: var(--nb-muted); border-radius: 999px; }
+  .usage-grid aside span { display: flex; justify-content: space-between; color: var(--nb-muted-foreground); }
+  .usage-grid aside b { color: var(--nb-foreground); }
+  .bars { display: flex; height: 3.2rem; align-items: end; gap: 0.28rem; }
+  .bars i { width: 100%; background: var(--nb-primary); border-radius: 0.15rem 0.15rem 0 0; opacity: 0.65; }
+  .bars i:nth-child(1) { height: 30%; } .bars i:nth-child(2) { height: 55%; } .bars i:nth-child(3) { height: 42%; } .bars i:nth-child(4) { height: 82%; } .bars i:nth-child(5) { height: 65%; } .bars i:nth-child(6) { height: 92%; }
+  .settings-page { display: grid; grid-template-columns: 7rem 1fr; min-height: 17rem; }
+  .settings-page > aside { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.55rem; border-right: 1px solid var(--nb-border); }
+  .settings-page > aside b { padding: 0.38rem; border-radius: 0.25rem; }
+  .settings-page > section { display: flex; flex-direction: column; gap: 0.55rem; padding: 0.7rem; }
+  .settings-page p { height: 0.4rem; margin: 0; background: var(--nb-muted); border-radius: 999px; }
+  .settings-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.3rem; }
+  .theme-item { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.5rem; padding: 0.55rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .theme-item > div { display: flex; }
+  .theme-item i { width: 0.6rem; height: 2.1rem; background: var(--nb-background); border: 1px solid var(--nb-border); }
+  .theme-item i:nth-child(2) { background: var(--nb-primary); } .theme-item i:nth-child(3) { background: var(--nb-foreground); }
+  .theme-item span { display: flex; flex-direction: column; }
+  .theme-item small { color: var(--nb-muted-foreground); }
+  .sync-status { margin-top: 0.3rem; }
+  .result-overlay { position: absolute; right: 1rem; bottom: 1rem; display: flex; min-width: 9rem; align-items: center; gap: 0.45rem; padding: 0.65rem; color: var(--nb-success); background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.4rem; box-shadow: var(--nb-shadow); }
+  .result-overlay :global(svg) { width: 1rem; height: 1rem; }
+  .result-overlay span { margin-left: auto; color: var(--nb-muted-foreground); }
+
+  /* Measured against the fixed QA app at 1124 × 768. */
+  .full-screen { font-size: 0.57rem; }
+  .window-bar { height: 1.75rem; background: var(--nb-panel); border-bottom: 0; }
+  .window-bar b { display: flex; width: 2.9rem; height: 1rem; align-items: center; justify-content: center; margin-left: 0.2rem; color: white; background: var(--nb-primary); border-radius: 999px; }
+  .window-bar b :global(svg) { width: 0.65rem; height: 0.65rem; }
+  .app-shell { grid-template-columns: 9.4rem minmax(0, 1fr); min-height: 28rem; }
+  .sidebar { gap: 0.07rem; padding: 0.35rem 0.45rem 0.55rem; }
+  .sidebar small { margin-top: 0.24rem; }
+  .sidebar b { min-height: 1.15rem; padding: 0.22rem 0.34rem; }
+  .sidebar b.selected { color: var(--nb-primary); background: color-mix(in srgb, var(--nb-primary) 14%, var(--nb-card)); }
+  .page-header { min-height: 3.55rem; padding: 0.62rem 0.85rem; }
+  .page-header strong { font-size: 0.92rem; }
+  .page-header button.primary,
+  .page-header button.target { color: var(--nb-primary-foreground); background: var(--nb-primary); }
+  .page-header > em { color: var(--nb-danger-foreground); background: var(--nb-danger-muted); }
+  .page-header > em:nth-of-type(2) { color: var(--nb-warning-foreground); background: var(--nb-warning-muted); }
+  .editor-grid { grid-template-columns: 1.25fr 0.95fr; gap: 0.7rem; padding: 0.85rem; }
+  .form-pane { gap: 0.52rem; }
+  .two-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem; }
+  .current-label, .section-label { color: var(--nb-muted-foreground); font-size: 0.52rem; }
+  .current-card { min-height: 3.8rem; border-color: color-mix(in srgb, var(--nb-primary) 70%, var(--nb-border)); }
+  .current-card > div small { color: var(--nb-primary); }
+  .connection-card { min-height: 2.65rem; }
+  .drag-dots { color: var(--nb-muted-foreground); font-style: normal; font-size: 0.8rem; }
+  .connection-card button { padding-inline: 0.42rem; }
+  .connection-card button:nth-last-child(2) { color: var(--nb-danger); background: var(--nb-danger-muted); }
+  .provider-editor { display: flex; flex-direction: column; gap: 0.7rem; padding: 0.8rem; }
+  .form-section-header { display: flex; align-items: center; justify-content: space-between; }
+  .form-section-header span { display: flex; gap: 0.35rem; }
+  .provider-top-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.55rem; }
+  .provider-editor > section { padding: 0.65rem; background: var(--nb-muted); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .helper-line { width: 58%; height: 0.35rem; margin: 0; background: var(--nb-border); border-radius: 999px; }
+  .provider-item { min-height: 4rem; align-items: flex-start; }
+  .provider-item > div { gap: 0.22rem; }
+  .provider-item .chips { flex-wrap: wrap; }
+  .relay-panel { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.6rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.36rem; }
+  .relay-panel-head { display: flex; align-items: center; gap: 0.48rem; }
+  .relay-panel-head > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 0.12rem; }
+  .relay-panel-head small { color: var(--nb-muted-foreground); }
+  .relay-row { display: flex; align-items: center; justify-content: space-between; gap: 0.48rem; padding: 0.45rem 0.55rem; background: var(--nb-muted); border-radius: 0.3rem; }
+  .switch-control { display: inline-block; width: 1.5rem; height: 0.82rem; flex: none; background: var(--nb-primary); border-radius: 999px; }
+  .switch-control::before { display: block; width: 0.62rem; height: 0.62rem; margin: 0.1rem 0.12rem 0.1rem auto; content: ""; background: white; border-radius: 50%; }
+  .switch-control.off { background: var(--nb-muted); }
+  .mcp-editor { display: flex; flex-direction: column; gap: 0.55rem; padding: 0.75rem 1.8rem; }
+  .mcp-editor > button { align-self: flex-end; }
+  .mcp-editor pre { min-height: 8rem; color: var(--nb-foreground); background: var(--nb-card); border: 1px solid var(--nb-border); }
+  .mcp-targets, .mcp-card-targets { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+  .mcp-targets span, .mcp-card-targets span { display: flex; align-items: center; gap: 0.25rem; color: var(--nb-muted-foreground); }
+  .mcp-targets i, .mcp-card-targets i { width: 1.25rem; height: 0.72rem; background: var(--nb-muted); border-radius: 999px; }
+  .mcp-card { display: grid; grid-template-columns: 1fr auto auto; align-items: start; }
+  .mcp-card-targets { grid-column: 1 / -1; }
+  .skill-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+  .skill-metrics span { display: flex; min-height: 3.4rem; flex-direction: column; padding: 0.55rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .skill-metrics small { color: var(--nb-muted-foreground); }
+  .skill-metrics strong { margin-top: 0.3rem; font-size: 0.9rem; }
+  .skills-discover-row { display: flex; justify-content: space-between; gap: 1rem; }
+  .skill-card { align-items: flex-start; }
+  .skill-card p { margin: 0.3rem 0 0; color: var(--nb-muted-foreground); }
+  .usage-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0.5rem; background: var(--nb-muted); border-radius: 0.35rem; }
+  .usage-sources span { padding: 0.25rem 0.4rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.25rem; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .metrics span { min-height: 2.5rem; }
+  .usage-empty { display: flex; min-height: 8rem; flex-direction: column; align-items: center; justify-content: center; gap: 0.3rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .usage-empty > strong { align-self: stretch; margin-bottom: auto; padding: 0.55rem; border-bottom: 1px solid var(--nb-border); }
+  .usage-empty :global(svg) { width: 1rem; height: 1rem; color: var(--nb-muted-foreground); }
+  .usage-empty small { color: var(--nb-muted-foreground); }
+  .settings-page { display: flex; min-height: 20rem; flex-direction: column; gap: 0.55rem; padding: 0.8rem 1.8rem; }
+  .settings-page > section, .sync-page > section { display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .settings-search { align-self: flex-end; min-width: 8rem; padding: 0.4rem; color: var(--nb-muted-foreground); background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.3rem; }
+  .settings-row { min-height: 2.75rem; border: 0; border-bottom: 1px solid var(--nb-border); border-radius: 0; }
+  .settings-row:last-child { border-bottom: 0; }
+  .settings-row > div { display: flex; flex-direction: column; gap: 0.12rem; }
+  .settings-row small { color: var(--nb-muted-foreground); }
+  .settings-row .segmented { min-width: 8rem; }
+  .theme-page { gap: 0.7rem; padding: 0.8rem; }
+  .theme-heading, .theme-mode-card { display: flex; align-items: center; justify-content: space-between; gap: 0.7rem; }
+  .theme-heading > div, .theme-mode-card > div:first-child { display: flex; flex-direction: column; }
+  .theme-heading small, .theme-mode-card small { color: var(--nb-muted-foreground); }
+  .theme-mode-card { padding: 0.65rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.35rem; }
+  .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+  .theme-item { display: flex; align-items: stretch; flex-direction: column; gap: 0; padding: 0; overflow: hidden; }
+  .theme-banner { display: flex !important; height: 3.2rem; align-items: end; gap: 0.25rem; padding: 0.4rem; background: linear-gradient(115deg, var(--nb-card) 0 49%, #171717 50% 100%); }
+  .theme-banner i { width: 32%; height: 0.35rem; background: var(--nb-primary) !important; border: 0; border-radius: 999px; }
+  .theme-banner.orange i { background: #e76816 !important; }
+  .theme-item > span { padding: 0.5rem; }
+  .theme-item > .actions { padding: 0 0.5rem 0.5rem; }
+  .sync-page { min-height: 20rem; padding: 0.9rem 1.8rem; }
+  .sync-page > small { color: var(--nb-muted-foreground); }
+  .sync-page > section { margin-top: 0.4rem; }
+
+  @media (max-width: 640px) {
+    .full-screen {
+      width: 142.86%;
+      zoom: 0.7;
+    }
+  }
+</style>

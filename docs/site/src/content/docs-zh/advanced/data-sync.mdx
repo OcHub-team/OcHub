@@ -35,6 +35,12 @@ OcHub 的连接、MCP、技能仓库、设置和部分用量数据保存在本�
 3. 恢复前确认备份名称；OcHub 会先为当前数据库再创建一份安全备份。
 4. 恢复完成后重启应用，检查连接、MCP、技能和设置。
 
+<OcHubStepsVisual
+  locale="zh"
+  labels="打开数据库备份|创建快照|命名并核对快照|带安全备份恢复"
+  visuals="settings-nav|backup-create|backup-result|backup-restore"
+/>
+
 删除备份不可撤销。至少保留一份不在本机数据目录内的已验证副本。
 
 ## 选择远端目标
@@ -74,6 +80,12 @@ Endpoint；Cloudflare R2 通常使用它提供的 Endpoint，并把区域设为 
 4. 保存成功后执行“上传本地快照”。
 5. 检查状态区域中的最近同步时间和最近错误。
 
+<OcHubStepsVisual
+  locale="zh"
+  labels="填写远端信息|测试但不保存|保存同步目标|上传本地快照|检查最近同步"
+  visuals="sync-fields|sync-test|sync-save|sync-upload|sync-status"
+/>
+
 开启“自动同步”后，数据库变化会排队上传。它不是实时双向合并；多台设备同时修改可能让
 后上传的快照覆盖先前版本。
 
@@ -86,6 +98,12 @@ Endpoint；Cloudflare R2 通常使用它提供的 Endpoint，并把区域设为 
 3. 确认还原操作。
 4. OcHub 会先备份当前本地数据，再覆盖数据库。
 5. 完成后重启应用并抽查关键配置。
+
+<OcHubStepsVisual
+  locale="zh"
+  labels="停止其他设备修改|核对目标与配置档|确认远端恢复|保留安全备份|重启并检查"
+  visuals="sync-stop|sync-status|sync-restore|backup-result|sync-result"
+/>
 
 如果远端恢复失败且本地安全备份已经创建，先解决连接问题，不要重复执行多次恢复。
 

@@ -12,6 +12,19 @@ sidebar:
 OcHub's core workflow is simple: choose an AI tool, then decide whether it
 should connect **directly to a provider** or go through OcHub's **local gateway**. On your first run, complete only one of these paths.
 
+<OcHubConnectionMap locale="en" />
+
+## What success looks like
+
+Your first setup is complete when all three statements are true:
+
+1. The target app page shows the intended connection as **Current**.
+2. A newly opened CLI process can send one real request successfully.
+3. You know how to switch back to official login or the previous connection.
+
+Do not configure MCP, skills, pricing, sync, or routing rules until this small
+loop works.
+
 ## Before you begin
 
 - Quit cc-switch so the two apps do not write the same tool configuration at
@@ -53,6 +66,12 @@ corresponding AI tool. OcHub never writes back to `~/.cc-switch/`.
    OpenCode, OpenClaw, Hermes, Grok Build, or Claude Desktop.
 
 </Steps>
+
+<OcHubStepsVisual
+  locale="en"
+  labels="Review the welcome notice|Choose whether to import|Select managed apps|Open the first app page"
+  visuals="welcome|import|apps-settings|sidebar-app"
+/>
 
 ## The main areas
 

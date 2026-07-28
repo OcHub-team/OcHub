@@ -9,6 +9,8 @@ sidebar:
 OcHub 为每个应用分别保存连接。Claude Code 中的连接不会自动出现在 Codex 中，但可以
 使用“复制到应用”转换为目标工具的格式。
 
+<OcHubAppFigure locale="zh" screen="connections" />
+
 ## 自动发现已有配置
 
 打开应用页面时，OcHub 会尝试读取该工具当前的实时配置：
@@ -29,6 +31,12 @@ OcHub 为每个应用分别保存连接。Claude Code 中的连接不会自动�
 | 切换 | 立即把它设为当前连接 |
 | 从工具移除 | 保留 OcHub 数据，只移除工具侧配置 |
 | 删除 | 从 OcHub 永久删除连接 |
+
+<OcHubStepsVisual
+  locale="zh"
+  labels="打开连接|编辑连接字段|添加到工具|切换为当前连接|复制到其他应用|谨慎移除或删除"
+  visuals="connection-card|fields|connection-add|connection-switch|connection-copy|connection-remove"
+/>
 
 删除前如果该连接仍是当前项，先切换到其他项。
 

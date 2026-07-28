@@ -10,6 +10,17 @@ A direct connection writes the connection's settings to the selected AI tool, an
 the tool calls that provider without passing through the OcHub gateway. It is the
 best way to get started.
 
+<OcHubAppFigure locale="en" screen="editor" />
+
+## Use this path when
+
+- You are configuring OcHub for the first time.
+- One tool should call one provider endpoint directly.
+- You want to keep using the tool's official account login.
+
+If several tools should share routing, model aliases, or a backup upstream, use
+[a model provider](/getting-started/relay) instead.
+
 ## Add a connection
 
 <Steps>
@@ -42,6 +53,13 @@ best way to get started.
    written to the tool depends on the action offered by that app page.
 
 </Steps>
+
+<OcHubStepsVisual
+  locale="en"
+  app="Claude Code"
+  labels="Choose the target app|Open the connection editor|Choose direct or model-provider mode|Enter the endpoint and key|Run the available checks|Review the generated files|Save the connection"
+  visuals="sidebar-app|toolbar-add|source|fields|tests|preview|save"
+/>
 
 <Aside type="caution" title="Keep real keys out of docs and screenshots">
 

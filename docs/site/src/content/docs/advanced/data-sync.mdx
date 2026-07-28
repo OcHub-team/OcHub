@@ -39,6 +39,12 @@ Open **Advanced tools → Database backups**:
    current database.
 4. Restart and inspect connections, MCP, skills, and settings after restoration.
 
+<OcHubStepsVisual
+  locale="en"
+  labels="Open Database backups|Create a snapshot|Name and verify it|Restore with a safety backup"
+  visuals="settings-nav|backup-create|backup-result|backup-restore"
+/>
+
 Deleting a backup cannot be undone. Keep at least one verified copy outside the
 active OcHub data directory.
 
@@ -82,6 +88,12 @@ Devices must use the same target, remote directory, and profile to share data.
 4. After saving, select **Upload local snapshot**.
 5. Check the most recent sync time and error status.
 
+<OcHubStepsVisual
+  locale="en"
+  labels="Enter remote details|Test without saving|Save the target|Upload a snapshot|Check last sync"
+  visuals="sync-fields|sync-test|sync-save|sync-upload|sync-status"
+/>
+
 With Automatic sync enabled, database changes queue an upload. This is not
 real-time bidirectional merging: simultaneous edits on multiple devices can
 cause the later snapshot to overwrite the earlier one.
@@ -95,6 +107,12 @@ Restore from remote downloads a snapshot and replaces the local database:
 3. Confirm the restore.
 4. OcHub backs up local data before replacing it.
 5. Restart and inspect critical configuration.
+
+<OcHubStepsVisual
+  locale="en"
+  labels="Stop edits on other devices|Verify target and profile|Confirm restore|Keep the safety backup|Restart and inspect"
+  visuals="sync-stop|sync-status|sync-restore|backup-result|sync-result"
+/>
 
 If the remote restore fails after the safety backup was created, fix the
 connection instead of repeatedly starting another restore.

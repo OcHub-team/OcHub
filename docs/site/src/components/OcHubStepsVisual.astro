@@ -1,0 +1,1215 @@
+---
+import { Icon } from "astro-icon/components";
+import OcHubStepScreen from "./OcHubStepScreen.astro";
+
+type Locale = "en" | "zh" | "ja";
+
+interface Props {
+  locale?: Locale;
+  labels: string;
+  visuals: string;
+  app?: string;
+}
+
+const {
+  locale = "en",
+  labels,
+  visuals,
+  app = "Claude Code",
+} = Astro.props;
+
+const stepLabels = labels.split("|").map((label) => label.trim());
+const stepVisuals = visuals.split("|").map((visual) => visual.trim());
+
+if (stepLabels.length !== stepVisuals.length) {
+  throw new Error(
+    `OcHubStepsVisual requires equal labels and visuals (${stepLabels.length} labels, ${stepVisuals.length} visuals).`,
+  );
+}
+
+const copy = {
+  en: {
+    figure: "Illustrated walkthrough",
+    apps: "Apps",
+    providers: "Model providers",
+    add: "Add connection",
+    addProvider: "Add model provider",
+    direct: "Direct connection",
+    shared: "Model provider",
+    name: "Name",
+    endpoint: "Base URL",
+    key: "API key",
+    test: "Test URL",
+    models: "Fetch models",
+    balance: "Check balance",
+    files: "Files to be written",
+    save: "Save",
+    detect: "Detect",
+    defaultModel: "Default model",
+    current: "Current",
+    switch: "Switch",
+    import: "Import from app",
+    search: "Search skills",
+    price: "Model pricing",
+    welcome: "Welcome to OcHub",
+    continue: "Import and start",
+    appSettings: "Apps and plugins",
+    sessions: "Sessions",
+    usage: "Usage",
+    settings: "Settings",
+    theme: "Theme",
+    range: "Last 7 days",
+    filter: "Filter",
+    view: "View",
+    requests: "Requests",
+    tokens: "Tokens",
+    cost: "Cost",
+    apply: "Apply",
+    system: "Follow system",
+    light: "Always light",
+    dark: "Always dark",
+    upload: "Upload local snapshot",
+    restore: "Restore",
+    path: "Where",
+    action: "What to do",
+    done: "Done when",
+    note: "Watch for",
+    preview: "Generated preview",
+    caption: "Follow each screen in order. The blue outline marks the exact control or result.",
+  },
+  zh: {
+    figure: "逐步界面示意",
+    apps: "应用",
+    providers: "模型供应商",
+    add: "添加连接",
+    addProvider: "添加模型供应商",
+    direct: "直接连接",
+    shared: "模型供应商",
+    name: "名称",
+    endpoint: "Base URL",
+    key: "API Key",
+    test: "测试 URL",
+    models: "拉取模型",
+    balance: "查询余额",
+    files: "将写入的文件",
+    save: "保存",
+    detect: "检测",
+    defaultModel: "默认模型",
+    current: "当前",
+    switch: "切换",
+    import: "从应用导入",
+    search: "搜索技能",
+    price: "模型定价",
+    welcome: "欢迎使用 OcHub",
+    continue: "导入并开始",
+    appSettings: "应用与插件",
+    sessions: "会话",
+    usage: "用量",
+    settings: "设置",
+    theme: "主题",
+    range: "最近 7 天",
+    filter: "筛选",
+    view: "查看",
+    requests: "请求数",
+    tokens: "Token",
+    cost: "成本",
+    apply: "应用",
+    system: "跟随系统",
+    light: "固定浅色",
+    dark: "固定深色",
+    upload: "上传本地快照",
+    restore: "恢复",
+    path: "位置",
+    action: "怎么操作",
+    done: "完成标志",
+    note: "注意",
+    preview: "生成预览",
+    caption: "按顺序对照操作；蓝色描边表示当前步骤需要操作或确认的区域。",
+  },
+  ja: {
+    figure: "手順ごとの画面",
+    apps: "アプリ",
+    providers: "モデルプロバイダー",
+    add: "接続を追加",
+    addProvider: "モデルプロバイダーを追加",
+    direct: "直接接続",
+    shared: "モデルプロバイダー",
+    name: "名前",
+    endpoint: "Base URL",
+    key: "API キー",
+    test: "URL をテスト",
+    models: "モデルを取得",
+    balance: "残高を確認",
+    files: "書き込むファイル",
+    save: "保存",
+    detect: "検出",
+    defaultModel: "デフォルトモデル",
+    current: "現在",
+    switch: "切り替え",
+    import: "アプリからインポート",
+    search: "スキルを検索",
+    price: "モデル価格",
+    welcome: "OcHub へようこそ",
+    continue: "インポートして開始",
+    appSettings: "アプリとプラグイン",
+    sessions: "セッション",
+    usage: "使用量",
+    settings: "設定",
+    theme: "テーマ",
+    range: "過去 7 日",
+    filter: "絞り込み",
+    view: "表示",
+    requests: "リクエスト",
+    tokens: "トークン",
+    cost: "コスト",
+    apply: "適用",
+    system: "システムに従う",
+    light: "常にライト",
+    dark: "常にダーク",
+    upload: "ローカルをアップロード",
+    restore: "復元",
+    path: "場所",
+    action: "操作",
+    done: "完了の目安",
+    note: "注意",
+    preview: "生成プレビュー",
+    caption: "順番に画面を確認してください。青い枠が操作または確認する場所です。",
+  },
+} satisfies Record<Locale, Record<string, string>>;
+
+const t = copy[locale];
+
+const is = (visual: string, ...names: string[]) => names.includes(visual);
+
+type Guide = { path: string; action: string; done: string; note?: string };
+
+const guides: Record<Locale, Record<string, Guide>> = {
+  en: {
+    "sidebar-app": { path: `Sidebar → Apps → ${app}`, action: "Open the tool whose live configuration you want to manage.", done: "Its connection list and current state appear.", note: "Connections belong to one app; copying is a separate action." },
+    "provider-nav": { path: "Sidebar → Model providers", action: "Open the shared upstream-provider workspace.", done: "Provider cards and their on/off state appear." },
+    "mcp-nav": { path: "Sidebar → MCP servers", action: "Open the shared MCP catalog.", done: "Saved servers and their target apps appear." },
+    "skills-nav": { path: "Sidebar → Skills", action: "Open Installed or Discover for the task you need.", done: "The skill list and source filters appear." },
+    "sessions-nav": { path: "Sidebar → Sessions", action: "Open local conversation history.", done: "Sessions from supported tools are scanned and listed." },
+    "usage-nav": { path: "Sidebar → Usage", action: "Open request, token, latency, and cost analysis.", done: "Summary cards and the current time range appear." },
+    "settings-nav": { path: "Sidebar → Settings", action: "Open device-wide application settings.", done: "Settings categories appear.", note: "These settings differ from the App settings button." },
+    "theme-nav": { path: "Sidebar → Theme", action: "Open the theme library.", done: "Display mode and theme cards appear." },
+    "toolbar-add": { path: "Page header → Add", action: "Start a new entry from the current page.", done: "A blank editor opens.", note: "Edit an auto-detected entry instead when it already represents the same configuration." },
+    "provider-add": { path: "Model providers → Add", action: "Create a reusable upstream provider.", done: "The provider editor opens." },
+    source: { path: "Editor → Connection type", action: "Choose Direct connection or Model provider before entering fields.", done: "The fields change to match the selected source.", note: "Changing the source later can replace source-specific values." },
+    identity: { path: "Editor → Name", action: "Enter a name that distinguishes purpose, account, or environment.", done: "The name appears in previews and switch menus." },
+    fields: { path: "Editor → Connection information", action: "Enter the provider endpoint and credential required by its documentation.", done: "Required-field warnings disappear.", note: "Do not paste real keys into documentation or shared screenshots." },
+    tests: { path: "Editor → Check actions", action: "Test the URL, then fetch models or check balance when supported.", done: "The editor shows a response or discovered models.", note: "A fast HTTP response does not prove that the key and selected model are valid." },
+    preview: { path: "Editor → Files to be written", action: "Expand the preview and verify every destination and generated field.", done: "The file content matches the tool and intended connection.", note: "Resolve missing fields before saving; an empty preview is not a successful write." },
+    save: { path: "Editor header or footer → Save", action: "Save only after checks and preview are complete.", done: "The entry returns to the list without validation errors." },
+    detect: { path: "Provider editor → Detect", action: "Probe the endpoint for supported interfaces and model-list behavior.", done: "Supported protocol chips and detection results appear." },
+    model: { path: "Editor → Model settings", action: "Choose defaults or restrictions that exist on the upstream service.", done: "The selected model is shown in the generated preview." },
+    "provider-model": { path: "Provider editor → Models", action: "Leave the model list, default model, and reasoning budgets empty on first use.", done: "The Models field shows Any model." },
+    "provider-card": { path: "Connection list → Card", action: "Open the card menu for edit, copy, reorder, or removal.", done: "The selected action applies to the intended card.", note: "Delete is permanent; Remove from tool keeps OcHub data." },
+    "provider-switch": { path: "Connection card → Switch", action: "Make this connection the live configuration.", done: "The card is marked Current and the target tool file is updated." },
+    "station-card": { path: "Model providers → Provider card", action: "Review the card's on/off toggle, interface chips, and model summary; open Edit to make changes.", done: "The card matches what you saved.", note: "Delete is permanent. A provider in use by an app cannot be deleted; the dialog lists the affected apps." },
+    "station-switch": { path: "App page → Model provider mode", action: "Open the target app page and select Switch next to the provider under Model provider mode.", done: "The provider is marked Current and its button reads In use; the app configuration now points at the local gateway." },
+    welcome: { path: "First launch → Welcome", action: "Review detected tools and choose how to begin.", done: "OcHub advances to import or the main workspace." },
+    import: { path: "First launch → Import", action: "Import existing local configuration instead of recreating it.", done: "Imported items appear for review." },
+    "apps-settings": { path: "Settings → Apps and plugins", action: "Enable only the apps that should appear or receive managed data.", done: "The sidebar and target-app toggles match your setup.", note: "At least one app must remain enabled." },
+    "mcp-import": { path: "MCP servers → Import / Sync", action: "Scan existing servers, review targets, then sync the shared store.", done: "Each enabled app reports a successful sync." },
+    "skill-search": { path: "Skills → Discover", action: "Search by use case or browse a repository.", done: "Matching skill cards show their source and target apps." },
+    pricing: { path: "Usage → Model pricing", action: "Match logged model IDs and enter overrides only when the catalog is insufficient.", done: "Request details show the intended pricing model and cost." },
+    "session-list": { path: "Sessions → Filters and cards", action: "Choose app and time range, then open the intended conversation.", done: "The title, message counts, and time span match the session you need." },
+    "usage-summary": { path: "Usage → Summary", action: "Read totals within the active filters before comparing trends.", done: "Cost, requests, tokens, and cache metrics share the same range." },
+    "usage-filter": { path: "Usage → Filters / statistics", action: "Narrow the page by time, provider, model, or status.", done: "All charts, tables, and logs reflect the same selection." },
+    "request-detail": { path: "Usage or Sessions → Detail", action: "Inspect model identity, tokens, cost, status, and latency together.", done: "The detail explains the aggregate or conversation entry you selected." },
+    "theme-mode": { path: "Theme → Display mode", action: "Choose system, light, or dark behavior.", done: "The preview uses the requested appearance." },
+    "theme-card": { path: "Theme → Theme card", action: "Preview the light and dark variants, then apply the card.", done: "The full application changes to the selected theme." },
+    sync: { path: "Data and backups → Remote sync", action: "Test, save, and upload in that order.", done: "The latest sync time updates without an error.", note: "Testing does not save the fields." },
+    restore: { path: "Data and backups → Restore", action: "Verify the snapshot and confirm replacement of local data.", done: "OcHub creates a safety backup and completes the restore.", note: "Stop edits on other devices before restoring." },
+    result: { path: "Result", action: "Review the resulting card, status, or generated data.", done: "The expected item is visible without an error." },
+  },
+  zh: {
+    "sidebar-app": { path: `左侧栏 → 应用 → ${app}`, action: "打开需要配置的工具，先确认当前连接和已识别配置。", done: "页面显示该工具的连接列表与当前状态。", note: "连接按应用分别保存；跨应用使用需要执行“复制到应用”。" },
+    "provider-nav": { path: "左侧栏 → 模型供应商", action: "进入可被多个工具复用的上游供应商页面。", done: "页面显示供应商卡片和启停状态。" },
+    "mcp-nav": { path: "左侧栏 → MCP 服务器", action: "进入 OcHub 统一保存的 MCP 列表。", done: "页面显示服务器及其目标应用。" },
+    "skills-nav": { path: "左侧栏 → 技能", action: "根据任务进入“已安装”或“发现”。", done: "页面显示技能列表、来源和筛选条件。" },
+    "sessions-nav": { path: "左侧栏 → 会话", action: "打开本地 CLI 会话历史。", done: "受支持工具的会话被扫描并列出。" },
+    "usage-nav": { path: "左侧栏 → 用量", action: "查看请求、Token、延迟和成本分析。", done: "页面显示当前时间范围和汇总卡片。" },
+    "settings-nav": { path: "左侧栏 → 设置", action: "打开对整台设备生效的 OcHub 设置。", done: "页面显示各个设置分类。", note: "这里不同于应用页面右上角的“应用设置”。" },
+    "theme-nav": { path: "左侧栏 → 主题", action: "打开主题库。", done: "页面显示外观模式和主题卡片。" },
+    "toolbar-add": { path: "页面标题栏 → 新增", action: "从当前页面创建一条新记录。", done: "空白编辑器打开。", note: "如果已经自动识别到同一配置，应优先编辑识别结果，避免重复创建。" },
+    "provider-add": { path: "模型供应商 → 新增", action: "创建可复用的上游供应商。", done: "供应商编辑器打开。" },
+    source: { path: "编辑器 → 连接类型", action: "填写字段前选择“直接连接”或“模型供应商”。", done: "表单切换为与来源匹配的字段。", note: "之后再切换来源，可能替换来源专属字段。" },
+    identity: { path: "编辑器 → 名称", action: "使用能区分用途、账号或环境的名称。", done: "名称出现在预览和快速切换菜单中。" },
+    fields: { path: "编辑器 → 连接信息", action: "按供应商文档填写 API 地址和凭据。", done: "必填字段警告消失。", note: "不要把真实密钥写进文档、录屏或共享截图。" },
+    tests: { path: "编辑器 → 检查操作", action: "先测试 URL；上游支持时再拉取模型或查询余额。", done: "编辑器显示响应结果或发现的模型。", note: "HTTP 能返回不代表密钥与所选模型一定可用。" },
+    preview: { path: "编辑器 → 将写入的文件", action: "展开预览，逐一核对目标路径和生成字段。", done: "文件内容与目标工具及连接用途一致。", note: "预览为空不是成功；先补齐名称和连接信息。" },
+    save: { path: "编辑器标题栏或底部 → 保存", action: "完成检查和预览后再保存。", done: "无校验错误地返回列表，并能看到新记录。" },
+    detect: { path: "供应商编辑器 → 检测", action: "探测地址支持的接口和模型列表能力。", done: "页面显示接口标签与检测结果。" },
+    model: { path: "编辑器 → 模型设置", action: "选择上游真实存在的默认模型或模型限制。", done: "生成预览中出现所选模型。" },
+    "provider-model": { path: "供应商编辑器 → 模型", action: "首次使用保持模型列表为空，不设置默认模型、模型例外或思考预算。", done: "“模型”一栏显示“不限制模型”。" },
+    "provider-card": { path: "连接列表 → 卡片", action: "从卡片菜单执行编辑、复制、排序或移除。", done: "操作只作用于预期卡片。", note: "“删除”不可撤销；“从工具移除”仍会保留 OcHub 数据。" },
+    "provider-switch": { path: "连接卡片 → 切换", action: "把这条连接设为工具的实时配置。", done: "卡片显示“当前”，目标工具文件完成更新。" },
+    "station-card": { path: "模型供应商 → 供应商卡片", action: "核对卡片上的启停开关、接口标签和模型摘要；需要修改时点“编辑”。", done: "卡片内容与保存的配置一致。", note: "“删除”不可撤销；正被应用使用的供应商无法删除，对话框会列出受影响的应用。" },
+    "station-switch": { path: "应用页面 → 模型供应商模式", action: "打开目标应用页面，在“模型供应商模式”区域点击该供应商的“切换”。", done: "该供应商标记为“当前”、按钮变为“使用中”，应用配置指向本地网关。" },
+    welcome: { path: "首次启动 → 欢迎页", action: "检查已识别工具并选择开始方式。", done: "进入导入流程或主界面。" },
+    import: { path: "首次启动 → 导入", action: "导入本机已有配置，避免逐条重建。", done: "导入记录出现在复核列表中。" },
+    "apps-settings": { path: "设置 → 应用与插件", action: "只启用需要显示或接收管理数据的应用。", done: "侧栏和目标应用开关符合实际使用情况。", note: "至少保留一个应用启用。" },
+    "mcp-import": { path: "MCP 服务器 → 导入／同步", action: "扫描已有服务器，核对目标应用后再同步。", done: "每个启用的应用都显示同步成功。" },
+    "skill-search": { path: "技能 → 发现", action: "按用途搜索，或从仓库浏览技能。", done: "结果卡片显示来源与安装目标。" },
+    pricing: { path: "用量 → 模型定价", action: "让日志模型 ID 与目录匹配；只有目录不足时才手工覆盖。", done: "请求详情显示预期计价模型和成本。" },
+    "session-list": { path: "会话 → 筛选器与卡片", action: "先选应用和时间，再打开目标会话。", done: "标题、消息数和时间跨度与目标会话一致。" },
+    "usage-summary": { path: "用量 → 汇总", action: "比较趋势前，先确认四项指标使用同一筛选范围。", done: "成本、请求、Token 和缓存指标范围一致。" },
+    "usage-filter": { path: "用量 → 筛选／统计", action: "按时间、Provider、模型或状态逐级缩小范围。", done: "图表、统计表和请求日志同步更新。" },
+    "request-detail": { path: "用量或会话 → 详情", action: "同时核对模型、Token、成本、状态和延迟。", done: "详情能够解释刚才选择的汇总项或会话记录。" },
+    "theme-mode": { path: "主题 → 显示模式", action: "选择跟随系统、固定浅色或固定深色。", done: "预览切换到目标外观。" },
+    "theme-card": { path: "主题 → 主题卡片", action: "检查浅色和深色变体，再点击应用。", done: "整个应用使用所选主题。" },
+    sync: { path: "数据与备份 → 远端同步", action: "按“测试、保存、上传”的顺序操作。", done: "最近同步时间更新且没有错误。", note: "测试连接不会保存刚填写的字段。" },
+    restore: { path: "数据与备份 → 恢复", action: "核对快照后确认替换本地数据。", done: "OcHub 创建安全备份并完成恢复。", note: "恢复前停止其他设备上的修改。" },
+    result: { path: "操作结果", action: "检查生成的卡片、状态或数据。", done: "目标内容可见且没有错误。" },
+  },
+  ja: {
+    "sidebar-app": { path: `サイドバー → アプリ → ${app}`, action: "設定するツールを開き、現在の接続と検出済み設定を確認します。", done: "接続一覧と現在の状態が表示されます。", note: "接続はアプリ別です。別アプリでは「アプリへコピー」を使います。" },
+    "provider-nav": { path: "サイドバー → モデルプロバイダー", action: "複数ツールで共有できる上流プロバイダーを開きます。", done: "プロバイダーカードと状態が表示されます。" },
+    "mcp-nav": { path: "サイドバー → MCP サーバー", action: "OcHub が共有管理する MCP 一覧を開きます。", done: "サーバーと対象アプリが表示されます。" },
+    "skills-nav": { path: "サイドバー → スキル", action: "目的に応じて「インストール済み」または「探す」を開きます。", done: "スキル、提供元、フィルターが表示されます。" },
+    "sessions-nav": { path: "サイドバー → セッション", action: "ローカル CLI の会話履歴を開きます。", done: "対応ツールのセッションがスキャンされます。" },
+    "usage-nav": { path: "サイドバー → 使用量", action: "リクエスト、トークン、遅延、コストを確認します。", done: "現在の期間と集計カードが表示されます。" },
+    "settings-nav": { path: "サイドバー → 設定", action: "端末全体に適用される OcHub 設定を開きます。", done: "設定カテゴリが表示されます。", note: "アプリ画面右上の「アプリ設定」とは異なります。" },
+    "theme-nav": { path: "サイドバー → テーマ", action: "テーマライブラリを開きます。", done: "表示モードとテーマカードが表示されます。" },
+    "toolbar-add": { path: "ページ上部 → 追加", action: "現在のページで新しい項目を作成します。", done: "空のエディターが開きます。", note: "同じ設定が検出済みなら、重複作成せず検出結果を編集します。" },
+    "provider-add": { path: "モデルプロバイダー → 追加", action: "再利用可能な上流プロバイダーを作成します。", done: "プロバイダーエディターが開きます。" },
+    source: { path: "エディター → 接続タイプ", action: "項目入力前に直接接続またはモデルプロバイダーを選びます。", done: "選択した接続元に合う項目へ切り替わります。", note: "後から切り替えると接続元固有の値が置き換わる場合があります。" },
+    identity: { path: "エディター → 名前", action: "用途、アカウント、環境を区別できる名前を付けます。", done: "プレビューと切り替えメニューに名前が表示されます。" },
+    fields: { path: "エディター → 接続情報", action: "プロバイダー文書に従って API URL と認証情報を入力します。", done: "必須項目の警告が消えます。", note: "実キーを文書や共有画像へ含めないでください。" },
+    tests: { path: "エディター → 確認操作", action: "URL をテストし、対応時はモデル取得や残高確認も行います。", done: "応答または検出モデルが表示されます。", note: "HTTP 応答だけではキーとモデルの有効性は確認できません。" },
+    preview: { path: "エディター → 書き込むファイル", action: "展開して保存先と生成項目を一つずつ確認します。", done: "内容が対象ツールと接続目的に一致します。", note: "空のプレビューは成功ではありません。必須情報を補ってください。" },
+    save: { path: "エディター上部または下部 → 保存", action: "確認とプレビューを終えてから保存します。", done: "検証エラーなく一覧へ戻り、新しい項目が表示されます。" },
+    detect: { path: "プロバイダーエディター → 検出", action: "対応インターフェースとモデル一覧機能を調べます。", done: "プロトコルタグと検出結果が表示されます。" },
+    model: { path: "エディター → モデル設定", action: "上流に存在するデフォルトモデルまたは制限を選びます。", done: "生成プレビューに選択モデルが表示されます。" },
+    "provider-model": { path: "プロバイダーエディター → モデル", action: "初回はモデルリストを空のままにし、既定モデル、例外、思考予算は設定しません。", done: "「モデル」欄に「モデルを制限しない」と表示されます。" },
+    "provider-card": { path: "接続一覧 → カード", action: "カードメニューから編集、コピー、並べ替え、削除を行います。", done: "意図したカードだけに操作が適用されます。", note: "「削除」は元に戻せません。「ツールから削除」は OcHub データを残します。" },
+    "provider-switch": { path: "接続カード → 切り替え", action: "この接続をツールの実設定にします。", done: "カードが「現在」になり、対象ファイルが更新されます。" },
+    "station-card": { path: "モデルプロバイダー → プロバイダーカード", action: "カードのオン／オフ、インターフェースタグ、モデル概要を確認し、変更は「編集」から行います。", done: "カード内容が保存した設定と一致します。", note: "「削除」は元に戻せません。アプリが使用中のプロバイダーは削除できず、ダイアログに対象アプリが表示されます。" },
+    "station-switch": { path: "アプリ画面 → モデルプロバイダーモード", action: "対象アプリ画面を開き、「モデルプロバイダーモード」でそのプロバイダーの「切り替え」を選びます。", done: "プロバイダーに「使用中」が表示され、アプリ設定がローカルゲートウェイを指します。" },
+    welcome: { path: "初回起動 → ようこそ", action: "検出されたツールを確認し、開始方法を選びます。", done: "インポートまたはメイン画面へ進みます。" },
+    import: { path: "初回起動 → インポート", action: "既存設定を取り込み、手作業での再作成を避けます。", done: "取り込んだ項目が確認一覧に表示されます。" },
+    "apps-settings": { path: "設定 → アプリとプラグイン", action: "表示または管理対象にするアプリだけを有効にします。", done: "サイドバーと対象アプリの状態が運用に一致します。", note: "少なくとも 1 アプリを有効にします。" },
+    "mcp-import": { path: "MCP サーバー → インポート／同期", action: "既存サーバーを検出し、対象を確認して同期します。", done: "有効な各アプリで同期成功が表示されます。" },
+    "skill-search": { path: "スキル → 探す", action: "用途で検索するか、リポジトリを参照します。", done: "結果カードに提供元と対象アプリが表示されます。" },
+    pricing: { path: "使用量 → モデル価格", action: "ログのモデル ID を合わせ、カタログ不足時だけ上書きします。", done: "リクエスト詳細に意図した課金モデルとコストが表示されます。" },
+    "session-list": { path: "セッション → フィルターとカード", action: "アプリと期間を選び、対象の会話を開きます。", done: "タイトル、件数、期間が対象セッションと一致します。" },
+    "usage-summary": { path: "使用量 → サマリー", action: "比較前に 4 指標が同じ範囲を使っているか確認します。", done: "コスト、件数、トークン、キャッシュの範囲が一致します。" },
+    "usage-filter": { path: "使用量 → フィルター／統計", action: "期間、Provider、モデル、状態で段階的に絞ります。", done: "グラフ、表、ログが同じ条件へ更新されます。" },
+    "request-detail": { path: "使用量またはセッション → 詳細", action: "モデル、トークン、コスト、状態、遅延をまとめて確認します。", done: "選択した集計または会話項目を説明できる情報が表示されます。" },
+    "theme-mode": { path: "テーマ → 表示モード", action: "システム、ライト、ダークの動作を選びます。", done: "プレビューが目的の外観へ変わります。" },
+    "theme-card": { path: "テーマ → テーマカード", action: "ライト／ダークを確認してから適用します。", done: "アプリ全体が選択テーマへ変わります。" },
+    sync: { path: "データとバックアップ → リモート同期", action: "テスト、保存、アップロードの順に実行します。", done: "最終同期時刻がエラーなしで更新されます。", note: "接続テストは入力項目を保存しません。" },
+    restore: { path: "データとバックアップ → 復元", action: "スナップショットを確認し、ローカル置換を確定します。", done: "安全バックアップ作成後に復元が完了します。", note: "復元前に他端末での編集を止めます。" },
+    result: { path: "操作結果", action: "生成されたカード、状態、データを確認します。", done: "目的の内容がエラーなく表示されます。" },
+  },
+};
+
+const guideAliases: Record<string, string> = {
+  "provider-fields": "fields",
+  "model-provider-card": "station-card",
+  "model-provider-switch": "station-switch",
+  "connection-card": "provider-card",
+  "connection-add": "provider-switch",
+  "connection-switch": "provider-switch",
+  "connection-copy": "provider-card",
+  "connection-remove": "provider-card",
+  "mcp-add": "toolbar-add",
+  "mcp-fields": "fields",
+  "mcp-targets": "apps-settings",
+  "mcp-save": "save",
+  "mcp-sync": "mcp-import",
+  "mcp-result": "result",
+  "skill-targets": "apps-settings",
+  "skill-install": "save",
+  "skill-result": "result",
+  "session-detail": "request-detail",
+  "pricing-save": "save",
+  "backup-create": "save",
+  "backup-result": "result",
+  "backup-restore": "restore",
+  "sync-fields": "fields",
+  "sync-test": "tests",
+  "sync-save": "save",
+  "sync-upload": "sync",
+  "sync-status": "sync",
+  "sync-stop": "result",
+  "sync-restore": "restore",
+  "sync-result": "result",
+};
+
+const guideFor = (visual: string): Guide =>
+  guides[locale][visual] ??
+  guides[locale][guideAliases[visual]] ??
+  guides[locale].result ??
+  guides.en.result;
+---
+
+<figure class="steps-visual" aria-label={t.figure}>
+  <div class="steps-heading">
+    <Icon name="ph:cursor-click" />
+    <strong>{t.figure}</strong>
+    <span>{t.caption}</span>
+  </div>
+
+  <div class="steps-grid">
+    {stepLabels.map((label, index) => {
+      const visual = stepVisuals[index];
+      const guide = guideFor(visual);
+      return (
+        <section class="step-panel">
+          <header>
+            <span>{index + 1}</span>
+            <div>
+              <small>STEP {String(index + 1).padStart(2, "0")}</small>
+              <strong>{label}</strong>
+            </div>
+          </header>
+
+          <div class="step-layout">
+            <aside class="step-guide">
+              <dl>
+                <div>
+                  <dt><Icon name="ph:map-pin" />{t.path}</dt>
+                  <dd>{guide.path}</dd>
+                </div>
+                <div>
+                  <dt><Icon name="ph:cursor-click" />{t.action}</dt>
+                  <dd>{guide.action}</dd>
+                </div>
+                <div>
+                  <dt><Icon name="ph:check-circle" />{t.done}</dt>
+                  <dd>{guide.done}</dd>
+                </div>
+                {guide.note && (
+                  <div class="is-note">
+                    <dt><Icon name="ph:warning" />{t.note}</dt>
+                    <dd>{guide.note}</dd>
+                  </div>
+                )}
+              </dl>
+            </aside>
+
+            <div class:list={["step-scene", `is-${visual}`]} aria-hidden="true">
+              <OcHubStepScreen locale={locale} visual={visual} app={app} />
+              {false && (<div class="legacy-scene">
+              <div class="scene-bar"><i></i><i></i><i></i><span>OcHub</span></div>
+
+            {is(visual, "sidebar-app", "provider-nav", "mcp-nav", "skills-nav", "sessions-nav", "usage-nav", "settings-nav", "theme-nav") ? (
+              <div class="scene-shell">
+                <aside>
+                  <small>{is(visual, "provider-nav") ? t.providers : t.apps}</small>
+                  <b class:list={{ target: is(visual, "sidebar-app") }}>
+                    <Icon name="ph:robot" /> {app}
+                  </b>
+                  <b class:list={{ target: is(visual, "provider-nav") }}>
+                    <Icon name="ph:cloud" /> {t.providers}
+                  </b>
+                  <b class:list={{ target: is(visual, "mcp-nav") }}>
+                    <Icon name="ph:squares-four" /> MCP
+                  </b>
+                  <b class:list={{ target: is(visual, "skills-nav") }}>
+                    <Icon name="ph:pencil-simple" /> Skills
+                  </b>
+                  <b class:list={{ target: is(visual, "sessions-nav") }}>
+                    <Icon name="ph:chats-circle" /> {t.sessions}
+                  </b>
+                  <b class:list={{ target: is(visual, "usage-nav") }}>
+                    <Icon name="ph:chart-bar" /> {t.usage}
+                  </b>
+                  <b class:list={{ target: is(visual, "settings-nav") }}>
+                    <Icon name="ph:gear-six" /> {t.settings}
+                  </b>
+                  <b class:list={{ target: is(visual, "theme-nav") }}>
+                    <Icon name="ph:palette" /> {t.theme}
+                  </b>
+                </aside>
+                <main><i></i><i></i><i></i></main>
+              </div>
+            ) : is(visual, "toolbar-add", "provider-add", "save") ? (
+              <div class="scene-toolbar">
+                <div><strong>{is(visual, "provider-add") ? t.providers : app}</strong><span></span></div>
+                <b class:list={{ target: visual !== "save" }}>
+                  <Icon name="ph:plus" /> {is(visual, "provider-add") ? t.addProvider : t.add}
+                </b>
+                <b class:list={{ target: visual === "save" }}>{t.save}</b>
+              </div>
+            ) : visual === "source" ? (
+              <div class="scene-form">
+                <small>{t.direct}</small>
+                <div class="scene-segment target"><b>{t.direct}</b><span>{t.shared}</span></div>
+                <label>{t.name}<i></i></label>
+              </div>
+            ) : is(visual, "identity", "fields") ? (
+              <div class="scene-form">
+                <label class:list={{ target: visual === "identity" }}>{t.name}<i></i></label>
+                <label class:list={{ target: visual === "fields" }}>{t.endpoint}<i>https://api.example.com</i></label>
+                <label class:list={{ target: visual === "fields" }}>{t.key}<i>••••••••••••</i></label>
+              </div>
+            ) : visual === "tests" ? (
+              <div class="scene-form">
+                <label>{t.endpoint}<i>https://api.example.com</i></label>
+                <div class="scene-actions target"><b>{t.test}</b><b>{t.models}</b><b>{t.balance}</b></div>
+              </div>
+            ) : visual === "preview" ? (
+              <div class="scene-preview">
+                <div><label>{t.name}<i></i></label><label>{t.endpoint}<i></i></label></div>
+                <aside class="target"><strong>{t.files}</strong><span>settings.json</span><pre>{`{\n  "env": {…}\n}`}</pre></aside>
+              </div>
+            ) : visual === "detect" ? (
+              <div class="scene-form">
+                <label>{t.endpoint}<i>https://api.example.com</i></label>
+                <div class="scene-actions target"><b>{t.test}</b><b>{t.detect}</b><b>{t.models}</b></div>
+                <div class="scene-chips"><span>Anthropic</span><span>Responses</span><span>Chat</span></div>
+              </div>
+            ) : visual === "model" ? (
+              <div class="scene-form">
+                <div class="scene-chips"><span>Anthropic</span><span>Responses</span></div>
+                <label class="target">{t.defaultModel}<i>—</i></label>
+                <label><span></span><i></i></label>
+              </div>
+            ) : visual === "provider-card" ? (
+              <div class="scene-card target">
+                <Icon name="ph:stack" />
+                <div><strong>Demo</strong><span>Anthropic · Responses · Chat</span></div>
+                <i></i>
+              </div>
+            ) : visual === "provider-switch" ? (
+              <div class="scene-card">
+                <Icon name="ph:stack" />
+                <div><strong>Demo</strong><span>{t.current}</span></div>
+                <b class="target">{t.switch}</b>
+              </div>
+            ) : is(visual, "welcome", "import", "apps-settings") ? (
+              <div class="scene-dialog">
+                <strong>{visual === "apps-settings" ? t.appSettings : t.welcome}</strong>
+                <p></p><p></p>
+                {visual === "apps-settings" ? (
+                  <div class="scene-list target"><span>Claude Code</span><i></i><span>Codex</span><i></i></div>
+                ) : (
+                  <div class:list={["scene-actions", { target: visual === "import" }]}>
+                    <b>{t.continue}</b><b>Skip</b>
+                  </div>
+                )}
+              </div>
+            ) : visual === "mcp-import" ? (
+              <div class="scene-dialog">
+                <strong>MCP</strong><p></p>
+                <div class="scene-actions target"><b>{t.import}</b><b>JSON</b></div>
+                <div class="scene-list"><span>filesystem</span><i></i></div>
+              </div>
+            ) : visual === "skill-search" ? (
+              <div class="scene-form">
+                <label class="target">{t.search}<i>Search…</i></label>
+                <div class="scene-card"><Icon name="ph:pencil-simple" /><div><strong>Example skill</strong><span>Repository</span></div></div>
+              </div>
+            ) : visual === "pricing" ? (
+              <div class="scene-form">
+                <strong>{t.price}</strong>
+                <label class="target">Model ID<i>model-name</i></label>
+                <div class="scene-prices target"><i>$ 0.00</i><i>$ 0.00</i><i>$ 0.00</i><i>$ 0.00</i></div>
+              </div>
+            ) : visual === "session-list" ? (
+              <div class="scene-data">
+                <div class="scene-filter target"><b>{app}</b><b>{t.range}</b></div>
+                <div class="scene-row target"><i></i><span><strong>Refactor API client</strong><small>12 messages · 10:42</small></span><b>{t.view}</b></div>
+                <div class="scene-row"><i></i><span><strong>Update documentation</strong><small>8 messages · 09:18</small></span></div>
+              </div>
+            ) : visual === "usage-summary" ? (
+              <div class="scene-data">
+                <div class="scene-filter"><b>{t.range}</b><b>{t.filter}</b></div>
+                <div class="scene-metrics target">
+                  <span><small>{t.cost}</small><strong>$12.48</strong></span>
+                  <span><small>{t.requests}</small><strong>248</strong></span>
+                  <span><small>{t.tokens}</small><strong>1.2M</strong></span>
+                </div>
+                <div class="scene-chart"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              </div>
+            ) : visual === "usage-filter" ? (
+              <div class="scene-data">
+                <div class="scene-filter target"><b>{t.range}</b><b>Provider</b><b>Model</b></div>
+                <div class="scene-row target"><i></i><span><strong>Anthropic</strong><small>claude-sonnet · 87%</small></span><b>142</b></div>
+                <div class="scene-row"><i></i><span><strong>OpenAI</strong><small>gpt-5 · 13%</small></span><b>21</b></div>
+              </div>
+            ) : visual === "request-detail" ? (
+              <div class="scene-detail target">
+                <strong>claude-sonnet-4</strong>
+                <div><span>{t.tokens}<b>8,420 → 1,206</b></span><span>{t.cost}<b>$0.084</b></span></div>
+                <div><span>TTFT<b>620 ms</b></span><span>Status<b>200</b></span></div>
+                <pre>request_id  req_••••••</pre>
+              </div>
+            ) : visual === "theme-mode" ? (
+              <div class="scene-theme">
+                <strong>{t.theme}</strong>
+                <div class="scene-segment target"><b>{t.system}</b><span>{t.light}</span><span>{t.dark}</span></div>
+                <div class="theme-preview"></div>
+              </div>
+            ) : visual === "theme-card" ? (
+              <div class="scene-theme">
+                <strong>{t.theme}</strong>
+                <div class="theme-card target"><div><i></i><i></i><i></i></div><span><b>OcHub</b><small>Light · Dark</small></span><button>{t.apply}</button></div>
+              </div>
+            ) : visual === "sync" ? (
+              <div class="scene-form">
+                <label>WebDAV / S3<i>https://sync.example.com</i></label>
+                <div class="scene-actions target"><b>{t.test}</b><b>{t.save}</b><b>{t.upload}</b></div>
+                <div class="scene-card"><Icon name="ph:cloud-check" /><div><strong>2026-07-29 10:42</strong><span>{t.preview}</span></div></div>
+              </div>
+            ) : visual === "restore" ? (
+              <div class="scene-dialog target">
+                <strong>{t.restore}</strong><p></p><p></p>
+                <div class="scene-actions"><b>{t.restore}</b><b>Cancel</b></div>
+              </div>
+            ) : (
+              <div class="scene-generic">
+                <Icon name="ph:check-circle" />
+                <strong>{label}</strong>
+                <span>{t.preview}</span>
+              </div>
+            )}
+              </div>)}
+            </div>
+          </div>
+        </section>
+      );
+    })}
+  </div>
+</figure>
+
+<style>
+  .steps-visual {
+    width: min(50rem, calc(100vw - 2rem));
+    margin: 1.5rem 0 2rem 50%;
+    padding: 1rem;
+    color: var(--nb-foreground);
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.85rem;
+    box-shadow: var(--nb-shadow);
+    transform: translateX(-50%);
+  }
+
+  .steps-heading {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.9rem;
+  }
+
+  .steps-heading :global(svg) {
+    width: 1rem;
+    height: 1rem;
+    color: var(--nb-primary);
+  }
+
+  .steps-heading strong {
+    font-size: 0.82rem;
+  }
+
+  .steps-heading span {
+    color: var(--nb-muted-foreground);
+    font-size: 0.72rem;
+    text-align: right;
+  }
+
+  .steps-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .step-panel {
+    overflow: hidden;
+    background: var(--nb-background);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.75rem;
+  }
+
+  .step-panel > header {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-height: 3.5rem;
+    padding: 0.6rem 0.75rem;
+    background: color-mix(in srgb, var(--nb-muted) 60%, var(--nb-card));
+    border-bottom: 1px solid var(--nb-border);
+  }
+
+  .step-panel > header span {
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--nb-primary-foreground);
+    background: var(--nb-primary);
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 750;
+  }
+
+  .step-panel > header div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+
+  .step-panel > header small {
+    color: var(--nb-muted-foreground);
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  .step-panel > header strong {
+    font-size: 0.9rem;
+  }
+
+  .step-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .step-guide {
+    order: 2;
+    padding: 0.85rem;
+    background: color-mix(in srgb, var(--nb-panel) 64%, var(--nb-background));
+    border-top: 1px solid var(--nb-border);
+  }
+
+  .step-guide dl {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.8rem;
+    margin: 0;
+  }
+
+  .step-guide dl > div {
+    padding-right: 0.8rem;
+    border-right: 1px solid color-mix(in srgb, var(--nb-border) 70%, transparent);
+  }
+
+  .step-guide dl > div:last-child {
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .step-guide dt {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.22rem;
+    color: var(--nb-primary);
+    font-size: 0.62rem;
+    font-weight: 750;
+  }
+
+  .step-guide dt :global(svg) {
+    width: 0.78rem;
+    height: 0.78rem;
+  }
+
+  .step-guide dd {
+    margin: 0;
+    color: var(--nb-foreground);
+    font-size: 0.72rem;
+    line-height: 1.55;
+  }
+
+  .step-guide .is-note {
+    grid-column: 1 / -1;
+    padding: 0.55rem;
+    color: var(--nb-warning-foreground);
+    background: var(--nb-warning-muted);
+    border: 1px solid color-mix(in srgb, var(--nb-warning) 35%, var(--nb-border));
+    border-radius: 0.4rem;
+  }
+
+  .step-guide .is-note dt {
+    color: var(--nb-warning-foreground);
+  }
+
+  .step-scene {
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+    color: var(--nb-foreground);
+    background: var(--nb-background);
+    font-size: 0.62rem;
+  }
+
+  .step-scene {
+    order: 1;
+    padding: 0.75rem;
+    background: color-mix(in srgb, var(--nb-muted) 42%, var(--nb-background));
+  }
+
+  .legacy-scene {
+    display: none;
+  }
+
+  .scene-bar {
+    display: flex;
+    gap: 0.25rem;
+    height: 1.25rem;
+    align-items: center;
+    padding: 0 0.45rem;
+    background: var(--nb-muted);
+    border-bottom: 1px solid var(--nb-border);
+  }
+
+  .scene-bar span {
+    margin-left: auto;
+    color: var(--nb-muted-foreground);
+    font-size: 0.54rem;
+    font-style: normal;
+    font-weight: 700;
+  }
+
+  .scene-bar i {
+    width: 0.36rem;
+    height: 0.36rem;
+    background: var(--nb-muted-foreground);
+    border-radius: 50%;
+    opacity: 0.5;
+  }
+
+  .target {
+    position: relative;
+    outline: 2px solid color-mix(in srgb, var(--nb-primary) 75%, transparent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--nb-primary) 12%, transparent);
+  }
+
+  .scene-shell {
+    display: grid;
+    grid-template-columns: 7.6rem 1fr;
+    min-height: 13.75rem;
+  }
+
+  .scene-shell aside {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.45rem;
+    background: var(--nb-panel);
+    border-right: 1px solid var(--nb-border);
+  }
+
+  .scene-shell small {
+    margin: 0.15rem 0.25rem;
+    color: var(--nb-muted-foreground);
+  }
+
+  .scene-shell b {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.35rem;
+    border-radius: 0.3rem;
+    font-weight: 550;
+  }
+
+  .scene-shell b.target {
+    background: var(--nb-info-muted);
+  }
+
+  .scene-shell b :global(svg) {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+
+  .scene-shell main {
+    padding: 1rem;
+  }
+
+  .scene-shell main i,
+  .scene-dialog p {
+    display: block;
+    height: 0.5rem;
+    margin-bottom: 0.55rem;
+    background: var(--nb-muted);
+    border-radius: 999px;
+  }
+
+  .scene-shell main i:nth-child(2) { width: 72%; }
+  .scene-shell main i:nth-child(3) { width: 45%; }
+
+  .scene-toolbar {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    padding: 1rem;
+  }
+
+  .scene-toolbar div {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .scene-toolbar div strong { font-size: 0.85rem; }
+  .scene-toolbar div span { width: 45%; height: 0.45rem; background: var(--nb-muted); }
+
+  .scene-toolbar > b,
+  .scene-actions b,
+  .scene-card > b {
+    padding: 0.4rem 0.55rem;
+    background: var(--nb-muted);
+    border-radius: 0.35rem;
+    white-space: nowrap;
+  }
+
+  .scene-toolbar > b.target,
+  .scene-actions.target b,
+  .scene-card > b.target {
+    color: var(--nb-primary-foreground);
+    background: var(--nb-primary);
+  }
+
+  .scene-toolbar :global(svg) { width: 0.7rem; height: 0.7rem; }
+
+  .scene-form,
+  .scene-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.85rem;
+  }
+
+  .scene-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    color: var(--nb-muted-foreground);
+  }
+
+  .scene-form label i {
+    display: flex;
+    min-height: 1.55rem;
+    align-items: center;
+    padding: 0 0.45rem;
+    color: var(--nb-muted-foreground);
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.3rem;
+    font-style: normal;
+  }
+
+  .scene-segment {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 0.15rem;
+    background: var(--nb-muted);
+    border-radius: 0.35rem;
+  }
+
+  .scene-segment > * {
+    padding: 0.35rem;
+    text-align: center;
+  }
+
+  .scene-segment b {
+    background: var(--nb-card);
+    border-radius: 0.25rem;
+  }
+
+  .scene-actions,
+  .scene-chips,
+  .scene-prices {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+  }
+
+  .scene-actions b {
+    font-size: 0.58rem;
+  }
+
+  .scene-chips span {
+    padding: 0.25rem 0.4rem;
+    color: var(--nb-primary);
+    background: var(--nb-info-muted);
+    border-radius: 999px;
+  }
+
+  .scene-preview {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    padding: 0.7rem;
+  }
+
+  .scene-preview > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .scene-preview label {
+    color: var(--nb-muted-foreground);
+  }
+
+  .scene-preview label i {
+    display: block;
+    height: 1.45rem;
+    margin-top: 0.2rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.3rem;
+  }
+
+  .scene-preview aside {
+    padding: 0.55rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.35rem;
+  }
+
+  .scene-preview aside span {
+    display: block;
+    margin: 0.3rem 0;
+    color: var(--nb-muted-foreground);
+  }
+
+  .scene-preview pre {
+    margin: 0;
+    padding: 0.4rem;
+    color: var(--nb-muted-foreground);
+    background: var(--nb-muted);
+    border-radius: 0.25rem;
+    font-size: 0.55rem;
+  }
+
+  .scene-card {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 1rem;
+    padding: 0.7rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.4rem;
+  }
+
+  .scene-card > :global(svg) {
+    width: 1rem;
+    height: 1rem;
+    color: var(--nb-primary);
+  }
+
+  .scene-card div {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .scene-card div span { color: var(--nb-muted-foreground); }
+  .scene-card > i { width: 1.7rem; height: 0.95rem; background: var(--nb-primary); border-radius: 999px; }
+
+  .scene-dialog {
+    margin: 0.7rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.45rem;
+  }
+
+  .scene-dialog p { margin: 0; }
+  .scene-dialog p:nth-child(3) { width: 68%; }
+
+  .scene-list {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.4rem;
+    align-items: center;
+    padding: 0.45rem;
+    background: var(--nb-muted);
+    border-radius: 0.35rem;
+  }
+
+  .scene-list i {
+    width: 1.6rem;
+    height: 0.9rem;
+    background: var(--nb-primary);
+    border-radius: 999px;
+  }
+
+  .scene-prices {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .scene-prices i {
+    padding: 0.4rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.3rem;
+    font-style: normal;
+  }
+
+  .scene-data,
+  .scene-theme {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.75rem;
+  }
+
+  .scene-filter {
+    display: flex;
+    gap: 0.3rem;
+  }
+
+  .scene-filter b {
+    padding: 0.35rem 0.45rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.3rem;
+    font-weight: 550;
+  }
+
+  .scene-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.5rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.35rem;
+  }
+
+  .scene-row > i {
+    width: 1.35rem;
+    height: 1.35rem;
+    flex: none;
+    background: var(--nb-info-muted);
+    border-radius: 0.35rem;
+  }
+
+  .scene-row > span {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .scene-row small { color: var(--nb-muted-foreground); }
+  .scene-row > b { color: var(--nb-primary); }
+
+  .scene-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.35rem;
+  }
+
+  .scene-metrics span {
+    display: flex;
+    flex-direction: column;
+    padding: 0.5rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.35rem;
+  }
+
+  .scene-metrics small { color: var(--nb-muted-foreground); }
+  .scene-chart { display: flex; height: 3.2rem; align-items: end; gap: 0.25rem; }
+  .scene-chart i { width: 100%; background: var(--nb-primary); border-radius: 0.2rem 0.2rem 0 0; opacity: 0.65; }
+  .scene-chart i:nth-child(1) { height: 28%; }
+  .scene-chart i:nth-child(2) { height: 46%; }
+  .scene-chart i:nth-child(3) { height: 39%; }
+  .scene-chart i:nth-child(4) { height: 78%; }
+  .scene-chart i:nth-child(5) { height: 61%; }
+  .scene-chart i:nth-child(6) { height: 92%; }
+
+  .scene-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    margin: 0.75rem;
+    padding: 0.7rem;
+    background: var(--nb-card);
+    border: 1px solid var(--nb-border);
+    border-radius: 0.4rem;
+  }
+
+  .scene-detail > div { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+  .scene-detail span { display: flex; flex-direction: column; color: var(--nb-muted-foreground); }
+  .scene-detail span b { color: var(--nb-foreground); }
+  .scene-detail pre { margin: 0; padding: 0.4rem; background: var(--nb-muted); border-radius: 0.25rem; font-size: 0.55rem; }
+
+  .scene-theme > .scene-segment { grid-template-columns: repeat(3, 1fr); }
+  .theme-preview { height: 4.8rem; background: linear-gradient(135deg, var(--nb-panel) 0 34%, var(--nb-card) 34% 70%, var(--nb-primary) 70%); border: 1px solid var(--nb-border); border-radius: 0.4rem; }
+  .theme-card { display: grid; grid-template-columns: auto 1fr auto; gap: 0.55rem; align-items: center; padding: 0.6rem; background: var(--nb-card); border: 1px solid var(--nb-border); border-radius: 0.4rem; }
+  .theme-card > div { display: flex; }
+  .theme-card i { width: 0.7rem; height: 2.4rem; }
+  .theme-card i:nth-child(1) { background: var(--nb-background); border: 1px solid var(--nb-border); }
+  .theme-card i:nth-child(2) { background: var(--nb-primary); }
+  .theme-card i:nth-child(3) { background: var(--nb-foreground); }
+  .theme-card span { display: flex; flex-direction: column; }
+  .theme-card small { color: var(--nb-muted-foreground); }
+  .theme-card button { padding: 0.35rem 0.5rem; color: var(--nb-primary-foreground); background: var(--nb-primary); border: 0; border-radius: 0.3rem; font: inherit; }
+
+  .scene-generic {
+    display: flex;
+    height: 13.5rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    color: var(--nb-success);
+  }
+
+  .scene-generic :global(svg) { width: 1.5rem; height: 1.5rem; }
+  .scene-generic span { color: var(--nb-muted-foreground); }
+
+  @media (max-width: 640px) {
+    .steps-visual {
+      width: 100%;
+      margin-left: 0;
+      transform: none;
+    }
+
+    .steps-heading {
+      grid-template-columns: auto 1fr;
+    }
+
+    .steps-heading span {
+      grid-column: 1 / -1;
+      text-align: left;
+    }
+
+    .step-layout {
+      display: flex;
+    }
+
+    .step-guide {
+      border-top: 1px solid var(--nb-border);
+    }
+
+    .step-guide dl {
+      grid-template-columns: 1fr;
+    }
+
+    .step-guide dl > div {
+      padding-right: 0;
+      padding-bottom: 0.65rem;
+      border-right: 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--nb-border) 70%, transparent);
+    }
+
+    .step-guide dl > div:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+
+    .step-guide .is-note {
+      grid-column: auto;
+    }
+  }
+</style>

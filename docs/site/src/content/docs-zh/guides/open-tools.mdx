@@ -41,6 +41,13 @@ Grok Build 以一个当前模型配置工作。新增连接时可以从预设开
 
 </Steps>
 
+<OcHubStepsVisual
+  locale="zh"
+  app="Grok Build"
+  labels="定义配置名称|填写上游模型|填写 Base URL|选择 API Key 或环境变量鉴权|选择匹配的 API Backend|设置上下文窗口|检查 config.toml 并切换"
+  visuals="identity|model|fields|fields|source|model|preview"
+/>
+
 如果环境变量模式在 OcHub 测试成功、Grok Build 却鉴权失败，通常是两个进程继承的环境不同。
 从同一个终端启动 Grok Build，或把变量写入它实际读取的启动环境。
 

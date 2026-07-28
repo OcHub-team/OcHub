@@ -89,6 +89,12 @@ OcHub 不维护一套自己的内置价格；模型 ID、价格或计价来源�
 
 </Steps>
 
+<OcHubStepsVisual
+  locale="zh"
+  labels="从用量页面打开模型定价|填写准确的计价模型 ID|添加便于识别的显示名|填写四项 Token 价格|保存价格覆盖|刷新并检查一条请求"
+  visuals="usage-nav|pricing|pricing|pricing|pricing-save|usage-nav"
+/>
+
 保存手动覆盖后，OcHub 会尝试为该模型回填历史中 Token 大于 0、但总成本仍为 0 的请求。
 已经存在非零成本的历史记录不会因为改价而全部重算，因此改价前后可能出现两个历史口径。
 

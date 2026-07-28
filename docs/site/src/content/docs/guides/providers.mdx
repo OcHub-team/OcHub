@@ -10,6 +10,8 @@ OcHub stores connections separately for each app. A Claude Code connection does 
 automatically appear in Codex, but **Copy to app** can regenerate it in the
 target tool's format.
 
+<OcHubAppFigure locale="en" screen="connections" />
+
 ## Discover existing configuration
 
 When you open an app page, OcHub reads the tool's current live configuration:
@@ -32,6 +34,12 @@ When you open an app page, OcHub reads the tool's current live configuration:
 | Switch | Make it the live connection immediately |
 | Remove from tool | Keep OcHub data while removing the live tool entry |
 | Delete | Permanently remove the connection from OcHub |
+
+<OcHubStepsVisual
+  locale="en"
+  labels="Open a connection|Edit its fields|Add it to the tool|Switch it live|Copy it to another app|Remove or delete carefully"
+  visuals="connection-card|fields|connection-add|connection-switch|connection-copy|connection-remove"
+/>
 
 If a connection is current, switch to another one before deleting it.
 

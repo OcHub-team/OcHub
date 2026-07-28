@@ -37,6 +37,12 @@ MCP 服务器与技能都可以分发到多个应用，但同步方式不同：
 
 </Steps>
 
+<OcHubStepsVisual
+  locale="zh"
+  labels="打开 MCP 服务器|从应用导入|检查新发现的服务器|同步到已选择的应用"
+  visuals="mcp-nav|mcp-import|mcp-import|result"
+/>
+
 导入不会自动删除应用里的未知配置。出现部分失败时，状态栏会列出失败项。
 
 ## MCP：手动新增
@@ -65,6 +71,12 @@ SSE 服务器示例：
 保存前至少选择一个目标应用。JSON 必须是对象，命令、参数、环境变量等字段会按目标工具的
 格式转换。
 
+<OcHubStepsVisual
+  locale="zh"
+  labels="打开 MCP 服务器|新增服务器|填写名称与 JSON|选择目标应用|保存服务器"
+  visuals="mcp-nav|mcp-add|mcp-fields|mcp-targets|mcp-save"
+/>
+
 <Aside type="caution" title="确认命令来源">
 
 stdio MCP 会在本机执行 `command`。只同步你信任的包和命令，并在终端中确认相应命令位于
@@ -78,6 +90,12 @@ stdio MCP 会在本机执行 `command`。只同步你信任的包和命令，并
 2. 完成多项调整后点击“同步到应用”。
 3. 重启目标 CLI，让它重新读取 MCP 配置。
 4. 如果目标应用没有出现服务器，检查应用是否已启用、配置目录是否正确，以及服务器 JSON 是否符合该工具支持的传输方式。
+
+<OcHubStepsVisual
+  locale="zh"
+  labels="在卡片选择应用|同步全部变更|重启目标 CLI|确认服务器出现"
+  visuals="mcp-targets|mcp-sync|mcp-result|mcp-result"
+/>
 
 删除 OcHub 中的 MCP 服务器后，再次同步会更新由 OcHub 管理的目标配置。删除不可撤销，
 操作前可先复制 JSON。
@@ -93,6 +111,12 @@ stdio MCP 会在本机执行 `command`。只同步你信任的包和命令，并
 5. 回到“已安装”，确认技能及其来源。
 
 </Steps>
+
+<OcHubStepsVisual
+  locale="zh"
+  labels="打开技能发现|搜索使用场景|选择目标应用|安装技能|确认已安装来源"
+  visuals="skills-nav|skill-search|skill-targets|skill-install|skill-result"
+/>
 
 ## 技能：从仓库发现
 

@@ -12,6 +12,18 @@ sidebar:
 OcHub 的核心工作很简单：选择一个 AI 工具，再决定让它**直接连接供应商**，还是先经过
 OcHub 的**本地网关**。第一次使用时，先只完成其中一条路径。
 
+<OcHubConnectionMap locale="zh" />
+
+## 怎样算首次配置成功
+
+同时满足下面三点，才算完成第一次配置：
+
+1. 目标应用页面把预期连接显示为“当前连接”。
+2. 重新打开的 CLI 能成功发起一条真实请求。
+3. 你知道如何切回官方登录或之前使用的连接。
+
+在这个最小闭环跑通前，先不要继续配置 MCP、技能、定价、同步或复杂路由。
+
 ## 开始前
 
 - 退出正在运行的 cc-switch，避免两个程序同时写入工具配置。
@@ -41,6 +53,12 @@ OcHub 自己的数据保存在 `~/.ochub/`。当你执行“添加到工具”�
 4. **回到应用页面。** 从左侧“应用”分组选择 Claude Code、Codex、OpenCode、OpenClaw、Hermes 或 Claude Desktop。
 
 </Steps>
+
+<OcHubStepsVisual
+  locale="zh"
+  labels="阅读欢迎提示|决定是否导入|选择要管理的应用|打开第一个应用页面"
+  visuals="welcome|import|apps-settings|sidebar-app"
+/>
 
 ## 认识主界面
 

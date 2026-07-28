@@ -99,6 +99,12 @@ setup makes Pricing model equal the provider's priced model ID.
 
 </Steps>
 
+<OcHubStepsVisual
+  locale="en"
+  labels="Open model pricing from Usage|Enter the exact pricing model ID|Add a readable display name|Enter the four token rates|Save the override|Refresh and inspect one request"
+  visuals="usage-nav|pricing|pricing|pricing|pricing-save|usage-nav"
+/>
+
 After a manual override is saved, OcHub attempts to backfill historical
 requests for that model whose token count is nonzero but total cost is still 0.
 Existing nonzero historical costs are not all recalculated, so a price change

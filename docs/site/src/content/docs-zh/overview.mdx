@@ -8,6 +8,17 @@ sidebar:
 OcHub 是面向 AI 编程工具的原生桌面控制中心。切换模型供应商、管理共享能力、运行本地网关，
 都在一个地方完成——不依赖浏览器外壳，也不用 webview。
 
+## 先建立一个简单模型
+
+可以把 OcHub 理解成三层：
+
+1. **应用**是你真正运行的工具，例如 Claude Code 或 Codex。
+2. **连接**描述某个应用如何鉴权并访问 API。
+3. **模型供应商**是可选的共享上游，位于 OcHub 本地网关之后。
+
+先从“一个应用 + 一个直接连接”开始。只有需要共享路由、接口转换或故障转移时，才增加
+本地网关这一层。
+
 ## OcHub 管理什么
 
 OcHub 管理 **Claude Code、Claude Desktop、Codex、Grok Build、OpenCode、OpenClaw 和 Hermes**。

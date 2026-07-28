@@ -1,0 +1,1139 @@
+---
+import { Icon } from "astro-icon/components";
+
+type Locale = "en" | "zh" | "ja";
+type Screen = "connections" | "editor" | "providers";
+
+interface Props {
+  locale?: Locale;
+  screen?: Screen;
+  app?: string;
+  currentName?: string;
+  connectionName?: string;
+  endpoint?: string;
+}
+
+const {
+  locale = "en",
+  screen = "connections",
+  app = "Claude Code",
+  currentName,
+  connectionName,
+  endpoint = "https://api.example.com/claude",
+} = Astro.props;
+
+const copy = {
+  en: {
+    apps: "Apps",
+    tools: "Tools",
+    network: "Network",
+    system: "System",
+    mcp: "MCP servers",
+    skills: "Skills",
+    usage: "Usage",
+    sessions: "Sessions",
+    advanced: "Advanced tools",
+    providers: "Model providers",
+    themes: "Themes",
+    generalSettings: "Settings",
+    about: "About",
+    newConnection: "Add connection",
+    targetApp: "Target app: Claude Code",
+    copyToApp: "Copy to app",
+    save: "Save",
+    cancel: "Cancel",
+    source: "Source",
+    sourceHint: "Choose a model provider to reuse its model, or enter a direct endpoint and key.",
+    directSource: "Direct connection",
+    providerSource: "Model provider",
+    name: "Name",
+    namePlaceholder: "Connection name",
+    connectionId: "Connection ID (optional)",
+    connectionIdPlaceholder: "Optional connection ID",
+    website: "Website URL",
+    category: "Category",
+    note: "Notes",
+    endpointAuth: "Endpoint and authentication",
+    files: "Files to be written",
+    previewError: "Error  Base URL is required.",
+    previewWarning: "Warning  API key has not been entered.",
+    modelProvidersTitle: "Model providers",
+    modelProvidersHint: "Manage upstream providers once, then apply them to enabled AI tools.",
+    connectOther: "Connect other tools",
+    importExisting: "Import from an existing config",
+    addProvider: "Add model provider",
+    providerMeta: "3 models configured · 1 model mapping · thinking parameters passed through",
+    enabled: "Enabled",
+    status: "Current: Direct connection · 2 direct connections",
+    add: "Add connection",
+    settings: "App settings",
+    current: "Current",
+    directBadge: "Direct",
+    direct: "Direct connections",
+    edit: "Edit",
+    duplicate: "Copy",
+    remove: "Delete",
+    switch: "Switch",
+    caption: "OcHub connection page, rendered from reusable web components.",
+    editorCaption: "OcHub connection editor with its generated-file preview.",
+    providersCaption: "OcHub model provider page with interface status and controls.",
+    currentFallback: "Official account",
+    connectionFallback: "Example API",
+  },
+  zh: {
+    apps: "应用",
+    tools: "工具",
+    network: "网络",
+    system: "系统",
+    mcp: "MCP 服务器",
+    skills: "技能",
+    usage: "用量",
+    sessions: "会话",
+    advanced: "高级工具",
+    providers: "模型供应商",
+    themes: "主题",
+    generalSettings: "设置",
+    about: "关于",
+    newConnection: "新增连接",
+    targetApp: "目标应用：Claude Code",
+    copyToApp: "复制到应用",
+    save: "保存",
+    cancel: "取消",
+    source: "来源",
+    sourceHint: "选择模型供应商后无需填写地址与密钥，只需配置要使用的模型。",
+    directSource: "直接连接",
+    providerSource: "模型供应商",
+    name: "名称",
+    namePlaceholder: "连接名称",
+    connectionId: "连接 ID（可选）",
+    connectionIdPlaceholder: "可选连接 ID",
+    website: "网站 URL",
+    category: "分类",
+    note: "备注",
+    endpointAuth: "端点与鉴权",
+    files: "将写入的文件",
+    previewError: "错误  Base URL 不能为空。",
+    previewWarning: "警告  尚未填写 API Key。",
+    modelProvidersTitle: "模型供应商",
+    modelProvidersHint: "集中管理模型供应商，一键应用到已启用的 AI 工具。",
+    connectOther: "其他工具接入",
+    importExisting: "从现有配置导入",
+    addProvider: "添加模型供应商",
+    providerMeta: "已配置 3 个模型 · 1 条模型映射 · 思考参数原样传递",
+    enabled: "已启用",
+    status: "当前：直接连接 · 2 个直接连接",
+    add: "添加连接",
+    settings: "应用设置",
+    current: "当前连接",
+    directBadge: "直接连接",
+    direct: "直接连接",
+    edit: "编辑",
+    duplicate: "复制",
+    remove: "删除",
+    switch: "切换",
+    caption: "使用可复用网页组件绘制的 OcHub 连接页面。",
+    editorCaption: "OcHub 连接编辑器及实时生成的文件预览。",
+    providersCaption: "包含接口状态和操作入口的 OcHub 模型供应商页面。",
+    currentFallback: "官方账号",
+    connectionFallback: "示例 API",
+  },
+  ja: {
+    apps: "アプリ",
+    tools: "ツール",
+    network: "ネットワーク",
+    system: "システム",
+    mcp: "MCP サーバー",
+    skills: "スキル",
+    usage: "使用量",
+    sessions: "セッション",
+    advanced: "高度なツール",
+    providers: "モデルプロバイダー",
+    themes: "テーマ",
+    generalSettings: "設定",
+    about: "情報",
+    newConnection: "接続を追加",
+    targetApp: "対象アプリ：Claude Code",
+    copyToApp: "アプリへコピー",
+    save: "保存",
+    cancel: "キャンセル",
+    source: "接続元",
+    sourceHint: "モデルプロバイダーを選ぶか、直接接続のアドレスとキーを入力します。",
+    directSource: "直接接続",
+    providerSource: "モデルプロバイダー",
+    name: "名前",
+    namePlaceholder: "接続名",
+    connectionId: "接続 ID（任意）",
+    connectionIdPlaceholder: "任意の接続 ID",
+    website: "Web サイト URL",
+    category: "カテゴリー",
+    note: "メモ",
+    endpointAuth: "エンドポイントと認証",
+    files: "書き込むファイル",
+    previewError: "エラー  Base URL は必須です。",
+    previewWarning: "警告  API キーが未入力です。",
+    modelProvidersTitle: "モデルプロバイダー",
+    modelProvidersHint: "上流を一元管理し、有効な AI ツールへ適用します。",
+    connectOther: "他のツールから接続",
+    importExisting: "既存の設定からインポート",
+    addProvider: "モデルプロバイダーを追加",
+    providerMeta: "設定済みモデル 3 件 · モデルマッピング 1 件 · 思考パラメーターをそのまま渡す",
+    enabled: "有効",
+    status: "現在：直接接続 · 直接接続 2 件",
+    add: "接続を追加",
+    settings: "アプリ設定",
+    current: "現在",
+    directBadge: "直接接続",
+    direct: "直接接続",
+    edit: "編集",
+    duplicate: "コピー",
+    remove: "削除",
+    switch: "切り替え",
+    caption: "再利用可能な Web コンポーネントで描画した OcHub の接続画面。",
+    editorCaption: "生成ファイルのプレビューを備えた OcHub 接続エディター。",
+    providersCaption: "インターフェース状態と操作を表示する OcHub モデルプロバイダー画面。",
+    currentFallback: "公式アカウント",
+    connectionFallback: "サンプル API",
+  },
+} satisfies Record<Locale, Record<string, string>>;
+
+const t = copy[locale];
+const activeName = currentName ?? t.currentFallback;
+const exampleName = connectionName ?? t.connectionFallback;
+const figureCaption =
+  screen === "editor"
+    ? t.editorCaption
+    : screen === "providers"
+      ? t.providersCaption
+      : t.caption;
+const connectionRows = [
+  { name: exampleName, endpoint },
+  { name: locale === "zh" ? "团队网关" : locale === "ja" ? "チームゲートウェイ" : "Team gateway", endpoint: "https://gateway.example.com" },
+  { name: locale === "zh" ? "开发环境" : locale === "ja" ? "開発環境" : "Development", endpoint: "http://127.0.0.1:8080" },
+];
+
+const appItems = [
+  { name: "Claude Code", icon: "ph:robot", tone: "coral" },
+  { name: "Claude Desktop", icon: "ph:sparkle", tone: "orange" },
+  { name: "Codex", icon: "ph:terminal-window", tone: "dark" },
+  { name: "Grok Build", icon: "ph:planet", tone: "dark" },
+  { name: "OpenCode", icon: "ph:square-half", tone: "dark" },
+];
+---
+
+<figure
+  class="ochub-figure"
+  role="img"
+  aria-label={figureCaption}
+  data-locale={locale}
+  data-screen={screen}
+>
+  <div class="ochub-window" aria-hidden="true">
+    <aside class="ochub-sidebar">
+      <div class="ochub-traffic-lights">
+        <i></i><i></i><i></i>
+      </div>
+      <nav class="ochub-nav">
+        <p>{t.apps}</p>
+        {appItems.map((item, index) => (
+          <span class:list={["ochub-nav-item", { "is-selected": index === 0 && screen !== "providers" }]}>
+            <i class:list={["ochub-nav-icon", `is-${item.tone}`]}>
+              <Icon name={item.icon} />
+            </i>
+            {item.name}
+          </span>
+        ))}
+
+        <p>{t.tools}</p>
+        <span class="ochub-nav-item"><Icon name="ph:squares-four" />{t.mcp}</span>
+        <span class="ochub-nav-item"><Icon name="ph:pencil-simple" />{t.skills}</span>
+        <span class="ochub-nav-item"><Icon name="ph:chart-bar" />{t.usage}</span>
+        <span class="ochub-nav-item"><Icon name="ph:clock" />{t.sessions}</span>
+        <span class="ochub-nav-item"><Icon name="ph:share-network" />{t.advanced}</span>
+
+        <p>{t.network}</p>
+        <span class:list={["ochub-nav-item", { "is-selected": screen === "providers" }]}><Icon name="ph:cloud" />{t.providers}</span>
+
+        <p>{t.system}</p>
+        <span class="ochub-nav-item"><Icon name="ph:palette" />{t.themes}</span>
+        <span class="ochub-nav-item"><Icon name="ph:gear-six" />{t.generalSettings}</span>
+        <span class="ochub-nav-item"><Icon name="ph:info" />{t.about}</span>
+      </nav>
+    </aside>
+
+    {screen === "connections" ? (
+      <main class="ochub-main">
+        <header class="ochub-toolbar">
+          <div class="ochub-heading">
+            <strong>{app}</strong>
+            <span>{t.status}</span>
+          </div>
+          <div class="ochub-toolbar-actions">
+            <span class="ochub-button ochub-button-primary">
+              <Icon name="ph:plus" />
+              {t.add}
+            </span>
+            <span class="ochub-button">
+              <Icon name="ph:gear-six" />
+              {t.settings}
+            </span>
+          </div>
+        </header>
+
+        <div class="ochub-content">
+          <section class="ochub-current-card">
+            <span class="ochub-app-icon ochub-app-icon-large">
+              <Icon name="ph:robot" />
+            </span>
+            <div class="ochub-card-copy">
+              <div class="ochub-badges">
+                <span class="ochub-badge ochub-badge-blue">{t.current}</span>
+                <span class="ochub-badge ochub-badge-green">{t.directBadge}</span>
+              </div>
+              <strong>{activeName}</strong>
+              <span class="ochub-cloud"><Icon name="ph:cloud" /> —</span>
+            </div>
+            <span class="ochub-button ochub-card-action">{t.edit}</span>
+          </section>
+
+          <p class="ochub-section-label">{t.direct}</p>
+
+          <div class="ochub-provider-list">
+            {connectionRows.map((connection) => (
+              <section class="ochub-provider-card">
+                <span class="ochub-drag"><Icon name="ph:dots-six-vertical" /></span>
+                <span class="ochub-app-icon"><Icon name="ph:robot" /></span>
+                <div class="ochub-card-copy">
+                  <strong>{connection.name}</strong>
+                  <span class="ochub-endpoint">{connection.endpoint}</span>
+                </div>
+                <div class="ochub-card-actions">
+                  <span class="ochub-button">{t.edit}</span>
+                  <span class="ochub-button">{t.duplicate}</span>
+                  <span class="ochub-button ochub-button-danger">{t.remove}</span>
+                  <span class="ochub-button ochub-button-primary">{t.switch}</span>
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      </main>
+    ) : screen === "editor" ? (
+      <main class="ochub-main">
+        <header class="ochub-toolbar">
+          <div class="ochub-heading">
+            <strong>{t.newConnection}</strong>
+            <span>{t.targetApp}</span>
+          </div>
+          <div class="ochub-toolbar-actions">
+            <span class="ochub-button">{t.copyToApp}</span>
+            <span class="ochub-button ochub-button-primary">{t.save}</span>
+            <span class="ochub-button">{t.cancel}</span>
+          </div>
+        </header>
+
+        <div class="ochub-editor">
+          <div class="ochub-form">
+            <div class="ochub-form-intro">
+              <strong>{t.source}</strong>
+              <span>{t.sourceHint}</span>
+            </div>
+            <div class="ochub-segmented">
+              <span class="is-active">{t.directSource}</span>
+              <span>{t.providerSource}</span>
+            </div>
+            <label><span>{t.name} *</span><i>{t.namePlaceholder}</i></label>
+            <label><span>{t.connectionId}</span><i>{t.connectionIdPlaceholder}</i></label>
+            <label><span>{t.website}</span><i>https://example.com</i></label>
+            <label><span>{t.category}</span><i>aggregator / official / third_party</i></label>
+            <label class="is-textarea"><span>{t.note}</span><i>{t.note}</i></label>
+            <h3>{t.endpointAuth}</h3>
+          </div>
+          <aside class="ochub-preview">
+            <div class="ochub-preview-title">
+              <strong>{t.files}</strong>
+              <span>~/.claude/settings.json</span>
+            </div>
+            <div class="ochub-preview-tabs"><b>JSON</b><span>{t.edit}</span></div>
+            <p class="is-error">{t.previewError}</p>
+            <p class="is-warning">{t.previewWarning}</p>
+            <pre>{`{\n  "env": {}\n}`}</pre>
+          </aside>
+        </div>
+      </main>
+    ) : (
+      <main class="ochub-main">
+        <header class="ochub-toolbar">
+          <div class="ochub-heading">
+            <strong>{t.modelProvidersTitle}</strong>
+            <span>{t.modelProvidersHint}</span>
+          </div>
+          <div class="ochub-toolbar-actions">
+            <span class="ochub-button">{t.connectOther}</span>
+            <span class="ochub-button">{t.importExisting}</span>
+            <span class="ochub-button ochub-button-primary">{t.addProvider}</span>
+          </div>
+        </header>
+
+        <div class="ochub-content">
+          <section class="ochub-model-provider">
+            <div class="ochub-provider-copy">
+              <div class="ochub-provider-title">
+                <Icon name="ph:stack" />
+                <strong>Demo</strong>
+                <span class="ochub-interface is-anthropic">Anthropic Messages</span>
+                <span class="ochub-interface is-responses">OpenAI Responses</span>
+                <span class="ochub-interface is-chat">OpenAI Chat</span>
+              </div>
+              <span>https://api.example.com</span>
+              <span>{t.providerMeta}</span>
+            </div>
+            <span class="ochub-toggle" title={t.enabled}><i></i></span>
+            <span class="ochub-button">{t.edit}</span>
+            <span class="ochub-button ochub-button-danger">{t.remove}</span>
+          </section>
+        </div>
+      </main>
+    )}
+  </div>
+  <figcaption>{figureCaption}</figcaption>
+</figure>
+
+<style>
+  .ochub-figure {
+    --ochub-bg: #fcfcfb;
+    --ochub-surface: #fffefc;
+    --ochub-inset: #f1f1ed;
+    --ochub-hover: #eeeeea;
+    --ochub-text: #222019;
+    --ochub-muted: #76756f;
+    --ochub-border: #e7e6e2;
+    --ochub-border-strong: #d6d5d0;
+    --ochub-blue: #2563dd;
+    --ochub-blue-soft: #e1ebfc;
+    --ochub-blue-text: #fbfcff;
+    --ochub-green: #237a49;
+    --ochub-green-soft: #dff2e6;
+    --ochub-red: #b73e36;
+    --ochub-red-soft: #f6e1dd;
+    width: min(50rem, calc(100vw - 2rem));
+    margin: 1.75rem 0 2rem 50%;
+    transform: translateX(-50%);
+  }
+
+  :global([data-mode="dark"]) .ochub-figure {
+    --ochub-bg: #151613;
+    --ochub-surface: #22231f;
+    --ochub-inset: #191a17;
+    --ochub-hover: #2d2e29;
+    --ochub-text: #f1f0e8;
+    --ochub-muted: #96958d;
+    --ochub-border: #383933;
+    --ochub-border-strong: #6e6f64;
+    --ochub-blue: #3568c8;
+    --ochub-blue-soft: #203455;
+    --ochub-blue-text: #fcfdff;
+    --ochub-green: #69c98c;
+    --ochub-green-soft: #183829;
+    --ochub-red: #ff8078;
+    --ochub-red-soft: #442422;
+  }
+
+  .ochub-window {
+    display: grid;
+    grid-template-columns: 10.75rem minmax(0, 1fr);
+    min-height: 31rem;
+    overflow: hidden;
+    color: var(--ochub-text);
+    background: var(--ochub-bg);
+    border: 1px solid var(--ochub-border-strong);
+    border-radius: 0.75rem;
+    box-shadow:
+      0 12px 30px oklch(0 0 0 / 0.08),
+      0 2px 5px oklch(0 0 0 / 0.05);
+    font-family:
+      "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.75rem;
+    line-height: 1.25;
+  }
+
+  .ochub-sidebar {
+    min-width: 0;
+    color: var(--ochub-text);
+    background: color-mix(in srgb, var(--ochub-inset) 88%, var(--ochub-border));
+    border-right: 1px solid var(--ochub-border);
+  }
+
+  .ochub-traffic-lights {
+    display: flex;
+    gap: 0.4rem;
+    height: 2.8rem;
+    align-items: center;
+    padding: 0 0.8rem;
+  }
+
+  .ochub-traffic-lights i {
+    width: 0.68rem;
+    height: 0.68rem;
+    background: color-mix(in srgb, var(--ochub-muted) 45%, transparent);
+    border-radius: 50%;
+  }
+
+  .ochub-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    padding: 0 0.45rem 0.75rem;
+  }
+
+  .ochub-nav p {
+    margin: 0.58rem 0.35rem 0.25rem;
+    font-size: 0.64rem;
+    font-weight: 700;
+  }
+
+  .ochub-nav-item {
+    display: flex;
+    min-width: 0;
+    height: 1.72rem;
+    align-items: center;
+    gap: 0.55rem;
+    overflow: hidden;
+    padding: 0 0.42rem;
+    border-radius: 0.38rem;
+    font-size: 0.71rem;
+    font-weight: 520;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ochub-nav-item.is-selected {
+    background: var(--ochub-blue-soft);
+  }
+
+  .ochub-nav-item > :global(svg) {
+    width: 0.85rem;
+    height: 0.85rem;
+    flex: none;
+  }
+
+  .ochub-nav-icon {
+    display: inline-flex;
+    width: 1.35rem;
+    height: 1.35rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: #fffaf6;
+    background: #262722;
+    border-radius: 0.34rem;
+  }
+
+  .ochub-nav-icon.is-coral {
+    background: #df7659;
+  }
+
+  .ochub-nav-icon.is-orange {
+    background: #ca6245;
+  }
+
+  .ochub-nav-icon :global(svg) {
+    width: 0.82rem;
+    height: 0.82rem;
+  }
+
+  .ochub-main {
+    min-width: 0;
+  }
+
+  .ochub-toolbar {
+    display: flex;
+    min-height: 5.25rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.15rem 1.35rem;
+    background: var(--ochub-surface);
+    border-bottom: 1px solid var(--ochub-border);
+  }
+
+  .ochub-heading {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .ochub-heading strong {
+    font-size: 1.2rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+
+  .ochub-heading span,
+  .ochub-endpoint,
+  .ochub-cloud {
+    overflow: hidden;
+    color: var(--ochub-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ochub-toolbar-actions,
+  .ochub-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .ochub-button {
+    display: inline-flex;
+    min-height: 1.9rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.65rem;
+    color: var(--ochub-text);
+    background: var(--ochub-hover);
+    border-radius: 0.4rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .ochub-button :global(svg) {
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+
+  .ochub-button-primary {
+    color: var(--ochub-blue-text);
+    background: var(--ochub-blue);
+  }
+
+  .ochub-button-danger {
+    color: var(--ochub-red);
+    background: var(--ochub-red-soft);
+  }
+
+  .ochub-content {
+    padding: 1.1rem 1.15rem 1.25rem;
+  }
+
+  .ochub-current-card,
+  .ochub-provider-card {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    background: var(--ochub-surface);
+    border: 1px solid var(--ochub-border);
+    border-radius: 0.45rem;
+  }
+
+  .ochub-current-card {
+    min-height: 6.3rem;
+    gap: 0.9rem;
+    padding: 1rem;
+    border-color: color-mix(in srgb, var(--ochub-blue) 65%, var(--ochub-border));
+  }
+
+  .ochub-provider-card {
+    min-height: 3.8rem;
+  }
+
+  .ochub-app-icon {
+    display: inline-flex;
+    width: 1.9rem;
+    height: 1.9rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--ochub-muted);
+    background: var(--ochub-hover);
+    border-radius: 0.4rem;
+  }
+
+  .ochub-app-icon-large {
+    width: 2.8rem;
+    height: 2.8rem;
+    color: #fffaf6;
+    background: #df7659;
+    border-radius: 0.55rem;
+  }
+
+  .ochub-app-icon :global(svg) {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .ochub-app-icon-large :global(svg) {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .ochub-card-copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .ochub-card-copy strong {
+    overflow: hidden;
+    font-size: 0.86rem;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ochub-badges {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .ochub-badge {
+    width: fit-content;
+    padding: 0.14rem 0.4rem;
+    border-radius: 999px;
+    font-size: 0.65rem;
+    font-weight: 650;
+  }
+
+  .ochub-badge-blue {
+    color: var(--ochub-blue);
+    background: var(--ochub-blue-soft);
+  }
+
+  .ochub-badge-green {
+    color: var(--ochub-green);
+    background: var(--ochub-green-soft);
+  }
+
+  .ochub-cloud {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .ochub-cloud :global(svg) {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+
+  .ochub-section-label {
+    margin: 1rem 0 0.65rem;
+    color: var(--ochub-muted);
+    font-size: 0.72rem;
+    font-weight: 650;
+  }
+
+  .ochub-provider-list {
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .ochub-drag {
+    display: inline-flex;
+    width: 2.3rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--ochub-muted);
+  }
+
+  .ochub-drag :global(svg) {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
+  .ochub-provider-card > .ochub-app-icon {
+    margin-right: 0.75rem;
+  }
+
+  .ochub-provider-card > .ochub-card-copy {
+    padding: 0.75rem 0;
+  }
+
+  .ochub-provider-card > .ochub-card-actions {
+    padding: 0.75rem;
+  }
+
+  .ochub-card-action {
+    margin-left: auto;
+  }
+
+  .ochub-editor {
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(15rem, 0.92fr);
+    gap: 0.8rem;
+    padding: 1rem 1.15rem 1.25rem;
+  }
+
+  .ochub-form {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .ochub-form-intro {
+    display: flex;
+    flex-direction: column;
+    gap: 0.24rem;
+  }
+
+  .ochub-form-intro strong,
+  .ochub-form h3 {
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+
+  .ochub-form-intro span {
+    color: var(--ochub-muted);
+    font-size: 0.66rem;
+  }
+
+  .ochub-segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 0.18rem;
+    background: var(--ochub-inset);
+    border-radius: 0.42rem;
+  }
+
+  .ochub-segmented span {
+    padding: 0.38rem 0.5rem;
+    color: var(--ochub-muted);
+    text-align: center;
+  }
+
+  .ochub-segmented .is-active {
+    color: var(--ochub-text);
+    background: var(--ochub-surface);
+    border-radius: 0.34rem;
+    box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
+    font-weight: 650;
+  }
+
+  .ochub-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    color: var(--ochub-muted);
+    font-size: 0.68rem;
+    font-style: normal;
+  }
+
+  .ochub-form label i {
+    display: flex;
+    min-height: 2rem;
+    align-items: center;
+    padding: 0 0.65rem;
+    color: var(--ochub-muted);
+    background: var(--ochub-surface);
+    border: 1px solid var(--ochub-border);
+    border-radius: 0.42rem;
+    font-style: normal;
+  }
+
+  .ochub-form label.is-textarea i {
+    min-height: 3.9rem;
+    align-items: flex-start;
+    padding-top: 0.55rem;
+  }
+
+  .ochub-form h3 {
+    margin: 0.4rem 0 0;
+  }
+
+  .ochub-preview {
+    min-width: 0;
+    min-height: 22.5rem;
+    overflow: hidden;
+    background: var(--ochub-surface);
+    border: 1px solid var(--ochub-border);
+    border-radius: 0.5rem;
+  }
+
+  .ochub-preview-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--ochub-border);
+  }
+
+  .ochub-preview-title span {
+    overflow: hidden;
+    color: var(--ochub-muted);
+    font-size: 0.66rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ochub-preview-tabs {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid var(--ochub-border);
+  }
+
+  .ochub-preview-tabs b {
+    padding: 0.2rem 0.45rem;
+    background: var(--ochub-hover);
+    border-radius: 999px;
+  }
+
+  .ochub-preview p {
+    margin: 0.5rem 0.6rem 0;
+    padding: 0.45rem 0.55rem;
+    border-radius: 0.3rem;
+    font-size: 0.67rem;
+  }
+
+  .ochub-preview .is-error {
+    color: var(--ochub-red);
+    background: var(--ochub-red-soft);
+  }
+
+  .ochub-preview .is-warning {
+    color: #8a5a09;
+    background: #f5ecd4;
+  }
+
+  :global([data-mode="dark"]) .ochub-preview .is-warning {
+    color: #e8b65a;
+    background: #3c301b;
+  }
+
+  .ochub-preview pre {
+    margin: 0;
+    padding: 0.75rem;
+    color: var(--ochub-muted);
+    background: transparent;
+    border: 0;
+    font-size: 0.68rem;
+  }
+
+  .ochub-model-provider {
+    display: flex;
+    min-height: 6.4rem;
+    align-items: flex-start;
+    gap: 0.55rem;
+    padding: 0.9rem;
+    background: var(--ochub-surface);
+    border: 1px solid var(--ochub-border);
+    border-radius: 0.5rem;
+  }
+
+  .ochub-provider-copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.42rem;
+    color: var(--ochub-muted);
+    font-size: 0.69rem;
+  }
+
+  .ochub-provider-title {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--ochub-text);
+  }
+
+  .ochub-provider-title > :global(svg) {
+    width: 1rem;
+    height: 1rem;
+    color: var(--ochub-blue);
+  }
+
+  .ochub-provider-title strong {
+    margin-right: 0.12rem;
+    font-size: 0.85rem;
+  }
+
+  .ochub-interface {
+    padding: 0.2rem 0.42rem;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    white-space: nowrap;
+  }
+
+  .ochub-interface.is-anthropic {
+    color: #6b55a2;
+    background: #ebe6f5;
+  }
+
+  .ochub-interface.is-responses {
+    color: #2d776d;
+    background: #e0efec;
+  }
+
+  .ochub-interface.is-chat {
+    color: var(--ochub-muted);
+    background: var(--ochub-hover);
+  }
+
+  .ochub-toggle {
+    display: flex;
+    width: 2.25rem;
+    height: 1.28rem;
+    flex: none;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0.13rem;
+    background: var(--ochub-blue);
+    border-radius: 999px;
+  }
+
+  .ochub-toggle i {
+    width: 1.02rem;
+    height: 1.02rem;
+    background: var(--ochub-blue-text);
+    border-radius: 50%;
+  }
+
+  figcaption {
+    margin-top: 0.55rem;
+    color: var(--nb-muted-foreground);
+    font-size: 0.75rem;
+    text-align: center;
+  }
+
+  @media (max-width: 640px) {
+    .ochub-figure {
+      width: 100%;
+      margin-left: 0;
+      transform: none;
+    }
+
+    .ochub-window {
+      grid-template-columns: 4.25rem minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .ochub-nav {
+      padding-inline: 0.35rem;
+    }
+
+    .ochub-nav p {
+      margin-inline: auto;
+      font-size: 0;
+    }
+
+    .ochub-nav p::after {
+      content: "·";
+      color: var(--ochub-muted);
+      font-size: 0.7rem;
+    }
+
+    .ochub-nav-item {
+      justify-content: center;
+      padding: 0;
+      font-size: 0;
+    }
+
+    .ochub-nav-item > :global(svg) {
+      width: 1rem;
+      height: 1rem;
+    }
+
+    .ochub-nav-icon {
+      width: 1.5rem;
+      height: 1.5rem;
+    }
+
+    .ochub-toolbar {
+      min-height: auto;
+      align-items: flex-start;
+      padding: 0.9rem;
+    }
+
+    .ochub-toolbar-actions .ochub-button:not(.ochub-button-primary) {
+      width: 1.9rem;
+      padding-inline: 0;
+      font-size: 0;
+    }
+
+    .ochub-content {
+      padding: 0.9rem;
+    }
+
+    .ochub-current-card {
+      min-height: 5rem;
+      padding: 0.75rem;
+    }
+
+    .ochub-provider-card {
+      align-items: stretch;
+      flex-wrap: wrap;
+      padding-top: 0.65rem;
+    }
+
+    .ochub-drag {
+      width: 1.8rem;
+    }
+
+    .ochub-provider-card > .ochub-card-copy {
+      min-width: calc(100% - 5.2rem);
+      padding: 0 0.65rem 0.65rem 0;
+    }
+
+    .ochub-provider-card > .ochub-card-actions {
+      width: 100%;
+      justify-content: flex-end;
+      padding: 0.55rem 0.65rem;
+      border-top: 1px solid var(--ochub-border);
+    }
+
+    .ochub-editor {
+      grid-template-columns: 1fr;
+    }
+
+    .ochub-preview {
+      min-height: 14rem;
+    }
+
+    .ochub-model-provider {
+      flex-wrap: wrap;
+    }
+
+    .ochub-provider-copy {
+      min-width: calc(100% - 3rem);
+    }
+
+    .ochub-provider-title {
+      flex-wrap: wrap;
+    }
+
+    .ochub-model-provider > .ochub-button {
+      margin-left: auto;
+    }
+
+    .ochub-card-actions .ochub-button:nth-child(2),
+    .ochub-card-actions .ochub-button:nth-child(3) {
+      display: none;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .ochub-heading span {
+      max-width: 10rem;
+    }
+
+    .ochub-toolbar-actions .ochub-button-primary {
+      width: 1.9rem;
+      padding-inline: 0;
+      font-size: 0;
+    }
+
+    .ochub-current-card .ochub-app-icon-large {
+      width: 2.35rem;
+      height: 2.35rem;
+    }
+
+  }
+</style>

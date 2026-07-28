@@ -36,8 +36,8 @@ request.
 
 ## The address is reachable but requests fail
 
-URL tests and connectivity checks may treat any HTTP response as reachable.
-Then check:
+The Test URL and HTTP latency test checks may treat any HTTP response as
+reachable. Then check:
 
 - Whether the key belongs to that endpoint.
 - Whether the model exists on that interface.
@@ -50,7 +50,8 @@ Then check:
 
 - Confirm the card is enabled.
 - Confirm that the model provider was applied to the app instead of only saved.
-- Use connectivity checks to separate local-gateway and upstream failures.
+- Use the provider editor's HTTP latency test and Fetch models to separate
+  local-gateway and upstream failures.
 - Temporarily switch to a verified direct connection to prove the CLI still
   works.
 

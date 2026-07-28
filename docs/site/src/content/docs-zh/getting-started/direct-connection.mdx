@@ -9,6 +9,17 @@ sidebar:
 直接连接会把连接配置写入指定 AI 工具，由该工具直接请求上游供应商，不经过 OcHub
 本地网关。这是最适合第一次上手的方式。
 
+<OcHubAppFigure locale="zh" screen="editor" />
+
+## 什么时候使用直接连接
+
+- 第一次配置 OcHub。
+- 一个工具只需要直接请求一个供应商地址。
+- 希望继续使用工具自身的官方账号登录。
+
+如果多个工具需要共用路由、模型别名或备用上游，请改用
+[模型供应商](/zh/getting-started/relay)。
+
 ## 新增连接
 
 <Steps>
@@ -28,6 +39,13 @@ sidebar:
 7. **保存。** 保存只把连接加入 OcHub；是否立即写入目标工具，取决于当前页面提供的操作。
 
 </Steps>
+
+<OcHubStepsVisual
+  locale="zh"
+  app="Claude Code"
+  labels="选择目标应用|打开连接编辑器|选择直接连接或模型供应商|填写地址和密钥|执行可用检查|检查生成文件|保存连接"
+  visuals="sidebar-app|toolbar-add|source|fields|tests|preview|save"
+/>
 
 <Aside type="caution" title="不要把真实密钥写进文档或截图">
 

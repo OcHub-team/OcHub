@@ -34,6 +34,12 @@ sidebar:
 3. 復元前に名前を確認します。OcHub は現在のデータベースも安全バックアップします。
 4. 復元後に再起動し、接続、MCP、スキル、設定を確認します。
 
+<OcHubStepsVisual
+  locale="ja"
+  labels="DB バックアップを開く|スナップショットを作成|名前と内容を確認|安全バックアップ付きで復元"
+  visuals="settings-nav|backup-create|backup-result|backup-restore"
+/>
+
 削除は元に戻せません。少なくとも 1 つは使用中のデータディレクトリ外へ保管してください。
 
 ## リモート保存先を選ぶ
@@ -74,6 +80,12 @@ Access Key ID、Secret Access Key、Region、Bucket を入力します。AWS S3 
 4. 保存後に**ローカルスナップショットをアップロード**します。
 5. 最終同期時刻とエラーを確認します。
 
+<OcHubStepsVisual
+  locale="ja"
+  labels="リモート情報を入力|保存せずテスト|保存先を保存|スナップショットをアップロード|最終同期を確認"
+  visuals="sync-fields|sync-test|sync-save|sync-upload|sync-status"
+/>
+
 自動同期はデータベース変更後にアップロードをキューします。リアルタイムの双方向マージでは
 ないため、複数端末で同時編集すると後のスナップショットが前を上書きする可能性があります。
 
@@ -84,6 +96,12 @@ Access Key ID、Secret Access Key、Region、Bucket を入力します。AWS S3 
 3. 復元を確定します。
 4. OcHub がローカルをバックアップしてから置き換えます。
 5. 再起動して重要な設定を確認します。
+
+<OcHubStepsVisual
+  locale="ja"
+  labels="他端末の編集を止める|保存先とプロファイルを確認|復元を確定|安全バックアップを保持|再起動して確認"
+  visuals="sync-stop|sync-status|sync-restore|backup-result|sync-result"
+/>
 
 安全バックアップ作成後に復元が失敗した場合は、繰り返す前に接続問題を解決してください。
 

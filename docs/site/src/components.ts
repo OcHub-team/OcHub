@@ -11,12 +11,18 @@ import { CardGrid } from "./components/ui/card-grid";
 import { PackageManagers } from "./components/ui/package-managers";
 import { Step, Steps } from "./components/ui/steps";
 import { Tabs, TabItem } from "./components/ui/tabs";
+import OcHubAppFigure from "./components/OcHubAppFigure.astro";
+import OcHubConnectionMap from "./components/OcHubConnectionMap.astro";
+import OcHubStepsVisual from "./components/OcHubStepsVisual.astro";
 
 export const components = {
   Aside,
   Card,
   CardGrid,
   PackageManagers,
+  OcHubAppFigure,
+  OcHubConnectionMap,
+  OcHubStepsVisual,
   Render,
   Step,
   Steps,

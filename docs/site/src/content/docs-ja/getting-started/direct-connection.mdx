@@ -9,6 +9,17 @@ sidebar:
 直接接続では、接続の設定を指定した AI ツールへ書き込み、そのツールが OcHub
 ゲートウェイを経由せずにプロバイダーへ接続します。初回利用に最も適した方法です。
 
+<OcHubAppFigure locale="ja" screen="editor" />
+
+## 直接接続を使う場面
+
+- OcHub を初めて設定する。
+- 1 つのツールから 1 つのプロバイダーへ直接接続する。
+- ツール自身の公式アカウントログインを使い続ける。
+
+複数ツールでルーティング、モデル別名、予備の上流を共有する場合は、
+[モデルプロバイダー](/ja/getting-started/relay)を使用します。
+
 ## 接続を追加する
 
 <Steps>
@@ -36,6 +47,13 @@ sidebar:
    そのアプリページに表示される操作によって異なります。
 
 </Steps>
+
+<OcHubStepsVisual
+  locale="ja"
+  app="Claude Code"
+  labels="対象アプリを選ぶ|接続エディターを開く|直接接続かモデルプロバイダーを選ぶ|アドレスとキーを入力する|利用可能なチェックを実行する|生成ファイルを確認する|接続を保存する"
+  visuals="sidebar-app|toolbar-add|source|fields|tests|preview|save"
+/>
 
 <Aside type="caution" title="実際のキーを文書やスクリーンショットへ載せない">
 
