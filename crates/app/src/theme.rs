@@ -82,10 +82,10 @@ impl<'de> Deserialize<'de> for ThemeColor {
 #[serde(rename_all = "camelCase")]
 pub enum ThemeWindowBackground {
     /// Render against a fully opaque native window.
-    #[default]
     Opaque,
     /// Use the platform's background blur. The exact blur radius and material
     /// remain system-controlled.
+    #[default]
     Blurred,
 }
 
@@ -112,7 +112,7 @@ pub struct ThemeEffects {
 
 impl ThemeEffects {
     pub const DEFAULT: Self = Self {
-        window_background: ThemeWindowBackground::Opaque,
+        window_background: ThemeWindowBackground::Blurred,
         sidebar_opacity: DEFAULT_SIDEBAR_OPACITY_PERCENT,
         content_opacity: DEFAULT_CONTENT_OPACITY_PERCENT,
     };

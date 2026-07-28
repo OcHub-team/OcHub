@@ -68,8 +68,8 @@ impl<'de> Deserialize<'de> for ThemeColor {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ThemeWindowBackground {
-    #[default]
     Opaque,
+    #[default]
     Blurred,
 }
 
@@ -86,7 +86,7 @@ pub struct ThemeEffects {
 
 impl ThemeEffects {
     pub const DEFAULT: Self = Self {
-        window_background: ThemeWindowBackground::Opaque,
+        window_background: ThemeWindowBackground::Blurred,
         sidebar_opacity: DEFAULT_SIDEBAR_OPACITY_PERCENT,
         content_opacity: DEFAULT_CONTENT_OPACITY_PERCENT,
     };
