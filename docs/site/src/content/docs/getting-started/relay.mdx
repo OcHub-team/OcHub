@@ -1,24 +1,24 @@
 ---
-title: Configure a relay station
-description: Create a local relay upstream, switch a CLI onto it, and verify that requests pass through OcHub.
+title: Configure a model provider
+description: Create a local gateway upstream, switch a CLI onto it, and verify that requests pass through OcHub.
 audience: human
 sidebar:
   order: 2
 ---
 
-Relay mode points a tool at OcHub's local gateway, which then sends requests to
+Model provider mode points a tool at OcHub's local gateway, which then sends requests to
 the active upstream. You can switch upstreams without repeatedly rewriting tool
 configuration, while centralizing protocol conversion, model mapping, and usage
 tracking.
 
-## Create a relay station
+## Create a model provider
 
 <Steps>
 
-1. **Open Relay stations.** If compatible local configuration already contains
+1. **Open Model providers.** If compatible local configuration already contains
    an API key, try **Import from existing configuration** first.
 
-2. **Add a station.** Enter a name, upstream API origin, and access key. The
+2. **Add a model provider.** Enter a name, upstream API origin, and access key. The
    origin does not need to end in `/v1`; the page shows the normalized request
    target.
 
@@ -34,31 +34,31 @@ tracking.
    request will succeed.
 
 6. **Switch a tool onto it.** Open the target app page (Codex, Claude Code, …)
-   and select **Switch** on the station under **Relay mode**. Its live
+   and select **Switch** on the entry under **Model provider mode**. Its live
    configuration will then point to the local gateway.
 
 </Steps>
 
-## Switch relay stations
+## Switch model providers
 
-Stations are switched from the app page as well:
+Model providers are switched from the app page as well:
 
-1. In the Relay mode section, choose an enabled station.
+1. In the Model provider mode section, choose an enabled model provider.
 2. Switching now updates only the local route instead of repeatedly rewriting
    tool configuration.
-3. Current relay shows the upstream, default model, or number of model mappings
+3. Active model provider shows the upstream, default model, or number of model mappings
    in use.
 
 ## Verify the request path
 
 - Start the target CLI and make a short request.
-- In **Usage → Request logs**, find an entry whose source is Relay station
+- In **Usage → Request logs**, find an entry whose source is Model provider
   request.
 - Open it and verify the request model, pricing model, provider, status, and
   latency.
 
 If the tool cannot connect, first confirm that OcHub is still running, then
-check that the station is enabled.
+check that the model provider is enabled.
 
 ## Connect another local tool
 
@@ -75,10 +75,10 @@ listener to the public internet.
 
 ## Disconnect or restore direct mode
 
-- Under Current connections on the Relay stations page, use **Disconnect** to
-  remove an app's relation to the station.
-- A station in use cannot be deleted; switch or disconnect affected apps first.
-- Disabling a station in use immediately breaks those tool requests, and the
+- Under Current connections on the Model providers page, use **Disconnect** to
+  remove an app's relation to the model provider.
+- A model provider in use cannot be deleted; switch or disconnect affected apps first.
+- Disabling a model provider in use immediately breaks those tool requests, and the
   confirmation lists the affected apps.
 - To return to direct mode, switch to a direct connection on the app page.
 

@@ -6,33 +6,33 @@ sidebar:
   order: 5
 ---
 
-Claude Code と Claude Desktop はどちらも「現在のプロバイダーを切り替える」方式です。
+Claude Code と Claude Desktop はどちらも「現在の接続を切り替える」方式です。
 実設定は 1 つの現在接続を指します。同じ Claude エコシステムでも、OcHub が管理できる
 機能は異なります。
 
 | 機能 | Claude Code | Claude Desktop |
 | --- | --- | --- |
 | 直接接続と公式ログイン | 対応 | 対応 |
-| リレーステーション | 対応 | 対応 |
+| モデルプロバイダー | 対応 | 対応 |
 | MCP 管理 | 対応 | 非対応 |
 | スキル配布 | 対応 | 非対応 |
 | Claude プラグイン連携 | 対応 | 対象外 |
 | セッション読み取り | 対応 | 主なセッション元ではない |
 
 ターミナル中心なら Claude Code を先に設定します。デスクトップクライアントでサードパーティー
-接続が必要な場合だけ Claude Desktop を別に設定します。プロバイダーは自動共有されません。
+接続が必要な場合だけ Claude Desktop を別に設定します。接続は自動共有されません。
 
 ## Claude Code の直接接続
 
 <Steps>
 
-1. **Claude Code を開きます。** アプリ一覧から選び、**プロバイダーを追加**します。
+1. **Claude Code を開きます。** アプリ一覧から選び、**接続を追加**します。
 
 2. **エンドポイントを入力します。** プロバイダーの Anthropic 互換 Base URL を使います。
    Claude Code はその後に `/v1/messages` を要求するため、通常の Base URL に完全な
    Messages パスを重ねないでください。
 
-3. **認証変数を選びます。** サードパーティーリレーは通常
+3. **認証変数を選びます。** サードパーティーのサービスは通常
    `ANTHROPIC_AUTH_TOKEN`（Bearer）、Anthropic 公式キーは通常
    `ANTHROPIC_API_KEY`（x-api-key）です。上流の要求するヘッダーを優先します。
 
@@ -84,7 +84,7 @@ OcHub は Claude Code の各役割を `ANTHROPIC_DEFAULT_*_MODEL` へ書き込�
 
 ## 公式ログインを使う
 
-Claude Code ですでにログイン済みなら、公式ログインのプロバイダーを追加します。
+Claude Code ですでにログイン済みなら、公式ログインの接続を追加します。
 サードパーティー URL やキーを書かず、Claude Code 自身のアカウント状態を利用します。
 
 - サブスクリプションとサードパーティー API を切り替える。
@@ -150,5 +150,5 @@ Claude Code の既定は `~/.claude` です。仕事用と個人用、マウン�
 | MCP がない | Claude トグル、ディレクトリ、JSON | 再同期して再起動 |
 | 既存設定消失の危険 | プレビュー、ドリフト警告 | キャンセル、バックアップ、比較 |
 
-コピーや設定ドリフトは[プロバイダー管理](/ja/guides/providers)、共有機能は
+コピーや設定ドリフトは[接続を管理する](/ja/guides/providers)、共有機能は
 [MCP とスキル](/ja/guides/mcp-skills)を参照してください。

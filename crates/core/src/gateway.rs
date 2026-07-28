@@ -1,4 +1,4 @@
-//! Local relay gateway (中转网关).
+//! Local gateway fronting the configured model providers (模型供应商网关).
 //!
 //! A standing loopback HTTP server that mimics relay-station semantics
 //! entirely locally:

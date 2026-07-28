@@ -149,7 +149,7 @@ const EN_STRINGS = {
   closeSidebar: "Close sidebar",
   openNavigation: "Open navigation",
   tagline:
-    "A native desktop control center for AI coding tools. Switch providers, manage shared capabilities, and run a local relay from one place.",
+    "A native desktop control center for AI coding tools. Switch model providers, manage shared capabilities, and run a local gateway from one place.",
   overviewTitle: "Overview",
   overviewBlurb: "What OcHub manages",
   installTitle: "Install",
@@ -185,7 +185,7 @@ export const UI_STRINGS = {
     closeSidebar: "サイドバーを閉じる",
     openNavigation: "ナビゲーションを開く",
     tagline:
-      "AI コーディングツールのためのネイティブデスクトップ管理センター。プロバイダーの切り替え、共有機能の管理、ローカルリレーの実行を一か所で。",
+      "AI コーディングツールのためのネイティブデスクトップ管理センター。モデルプロバイダーの切り替え、共有機能の管理、ローカルゲートウェイの実行を一か所で。",
     overviewTitle: "概要",
     overviewBlurb: "OcHub が管理するもの",
     installTitle: "インストール",
@@ -218,7 +218,7 @@ export const UI_STRINGS = {
     closeSidebar: "关闭侧边栏",
     openNavigation: "打开导航",
     tagline:
-      "面向 AI 编程工具的原生桌面控制中心。切换服务商、管理共享能力、运行本地中转，都在一个地方完成。",
+      "面向 AI 编程工具的原生桌面控制中心。切换模型供应商、管理共享能力、运行本地网关，都在一个地方完成。",
     overviewTitle: "概述",
     overviewBlurb: "OcHub 管理什么",
     installTitle: "安装",

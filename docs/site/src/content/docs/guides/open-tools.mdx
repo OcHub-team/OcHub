@@ -6,18 +6,18 @@ sidebar:
   order: 7
 ---
 
-All four tools support provider management, but their write modes and shared
+All four tools support connection management, but their write modes and shared
 capabilities differ.
 
 | App | Write mode | MCP | Skills | Default directory |
 | --- | --- | --- | --- | --- |
-| Grok Build | Current-provider switching | Yes | No | `~/.grok` |
-| OpenCode | Multiple providers coexist | Yes | Yes | `~/.config/opencode` |
-| OpenClaw | Multiple providers coexist | No | No | `~/.openclaw` |
-| Hermes | Multiple providers coexist | Yes | Yes | `~/.hermes` |
+| Grok Build | Current-connection switching | Yes | No | `~/.grok` |
+| OpenCode | Multiple connections coexist | Yes | Yes | `~/.config/opencode` |
+| OpenClaw | Multiple connections coexist | No | No | `~/.openclaw` |
+| Hermes | Multiple connections coexist | Yes | Yes | `~/.hermes` |
 
-In coexistence mode, OcHub writes several providers into one tool
-configuration. Remove from tool deletes only that provider, not the others.
+In coexistence mode, OcHub writes several connections into one tool
+configuration. Remove from tool deletes only that entry, not the others.
 
 ## Grok Build
 
@@ -58,7 +58,7 @@ terminal or define the variable in the environment Grok Build actually reads.
 OpenCode stores providers under `provider.<id>` in `opencode.json`, so every
 Provider ID must be unique. Editing one provider preserves the others.
 
-### Add an OpenCode provider
+### Add an OpenCode connection
 
 1. Enter a stable ID such as `openrouter` or `company_ai`.
 2. Choose an AI SDK package that matches the upstream:
@@ -83,19 +83,19 @@ Option extensions parse booleans and numbers as literals. They can express
 ### OMO configuration
 
 Advanced tools can read and disable OMO / OMO Slim. Disabling deletes the
-corresponding file and clears current markers on related providers:
+corresponding file and clears current markers on related connections:
 
 1. Read OMO or OMO Slim first.
 2. Back up the OpenCode directory.
 3. Disable only when it is no longer needed.
-4. Return to the OpenCode page and verify the current provider.
+4. Return to the OpenCode page and verify the current connection.
 
 ## OpenClaw
 
 OpenClaw providers live under `models.providers.<id>` in `openclaw.json`. It
 keeps several providers, but OcHub does not manage OpenClaw MCP or skills.
 
-### Configure provider and models
+### Configure the connection and models
 
 1. Choose the actual upstream protocol:
 
@@ -138,7 +138,7 @@ only what a task needs and run a controlled test afterward.
 Hermes may be disabled by default. Enable it under **Settings → Apps and
 plugins** before opening its page.
 
-### Configure a custom provider
+### Configure a custom connection
 
 1. Choose an API mode:
 
@@ -183,12 +183,12 @@ For each app:
 
 | Problem | Common cause |
 | --- | --- |
-| Provider missing | It was saved but not added, or the directory is wrong |
-| One provider replaced another | Duplicate Provider ID in a coexistence app |
+| Connection missing | It was saved but not added, or the directory is wrong |
+| One connection replaced another | Duplicate Provider ID in a coexistence app |
 | 401 | Key, environment variable, or launch environment mismatch |
 | 404 / body error | Wrong backend, protocol, or API mode |
 | Model appears but fails | Model ID, context limit, or permission mismatch |
 | Advanced save fails | Incorrect JSON/YAML node type |
 
 For copy, deletion, and configuration drift, see
-[Manage providers](/guides/providers).
+[Manage connections](/guides/providers).

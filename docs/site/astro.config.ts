@@ -10,7 +10,7 @@ const nimbusConfig = defineNimbusConfig({
   site: "https://docs.ochub.org",
   title: "OcHub",
   description:
-    "A native desktop control center for AI coding tools. Switch providers, manage shared capabilities, and run a local relay from one place.",
+    "A native desktop control center for AI coding tools. Switch model providers, manage shared capabilities, and run a local gateway from one place.",
   // Site-wide default only. Pages carry their own locale — see
   // src/lib/i18n.ts, which drives <html lang> and hreflang per page.
   locale: "en",

@@ -1,6 +1,6 @@
 ---
 title: Migrate from cc-switch
-description: Import providers, MCP, skills, and history safely while preserving a rollback path.
+description: Import connections, MCP, skills, and history safely while preserving a rollback path.
 audience: human
 sidebar:
   order: 8
@@ -24,7 +24,7 @@ OcHub recognizes two cc-switch storage generations:
 | Legacy JSON | `~/.cc-switch/config.json` | Used by earlier releases |
 
 The database takes precedence when both exist. It can bring across recognized
-providers and endpoints, MCP servers, skills and repositories, settings, model
+connections and endpoints, MCP servers, skills and repositories, settings, model
 pricing, usage history, and profiles. The legacy JSON imports the supported
 configuration it actually contains.
 
@@ -35,7 +35,7 @@ OcHub deliberately excludes:
 - App types or fields OcHub does not recognize.
 - cc-switch data-directory redirection.
 
-After migration, compare providers, MCP, skills, pricing, and critical settings
+After migration, compare connections, MCP, skills, pricing, and critical settings
 instead of only comparing file sizes.
 
 ## Prepare for migration
@@ -47,7 +47,7 @@ Choose a time with no active AI sessions:
 3. Back up all of `~/.cc-switch/`.
 4. If OcHub already contains data, create a snapshot under **Advanced tools →
    Database backups**.
-5. Record one known-good provider and model for each tool.
+5. Record one known-good connection and model for each tool.
 6. Pause WebDAV / S3 automatic sync so unverified imported data is not uploaded.
 
 <Aside type="caution" title="Do not let two managers write at once">
@@ -64,7 +64,7 @@ copying anything.
 
 <Steps>
 
-1. **Review the inventory.** Check the path and provider and MCP counts.
+1. **Review the inventory.** Check the path and connection and MCP counts.
 
 2. **Choose Import and start.** Nothing is copied until you confirm. Skip does
    not change cc-switch.
@@ -72,7 +72,7 @@ copying anything.
 3. **Wait for completion.** Do not launch target CLIs or close OcHub while the
    import runs.
 
-4. **Inspect app pages.** Providers should appear under the correct apps.
+4. **Inspect app pages.** Connections should appear under the correct apps.
 
 5. **Verify OcHub data first.** Review names, endpoints, models, MCP, and skills
    before switching live tools.
@@ -85,9 +85,9 @@ If you skipped the first-launch prompt, manual import remains available.
 
 Open **Settings → Data and backups → Import from cc-switch**:
 
-1. Review the detected path and provider and MCP counts.
+1. Review the detected path and connection and MCP counts.
 2. Select Import and read the overwrite warning.
-3. OcHub creates a database snapshot before importing when providers already
+3. OcHub creates a database snapshot before importing when connections already
    exist.
 4. cc-switch records replace OcHub records with the same ID; different IDs are
    merged.
@@ -103,18 +103,18 @@ as long-term bidirectional sync.
 - **Different ID, same name:** both may remain and require manual cleanup.
 - **Manual pricing with the same ID:** imported pricing may replace the existing
   override; the LiteLLM catalog is not imported.
-- **Existing OcHub providers:** a snapshot is created first.
+- **Existing OcHub connections:** a snapshot is created first.
 - **Unknown fields or newer tables:** supported content continues to import
   while unknown content is skipped or warned about.
 
-If you have already edited the same provider in OcHub, duplicate it under a new
+If you have already edited the same connection in OcHub, duplicate it under a new
 ID or make a database backup before importing.
 
 ## Validate after migration
 
-### 1. Providers
+### 1. Connections
 
-- Each provider belongs to the correct app.
+- Each connection belongs to the correct app.
 - Base URLs do not repeat `/v1` or a full request path.
 - Keys and authentication modes match.
 - Imported does not get mistaken for Current.
@@ -148,7 +148,7 @@ ID or make a database backup before importing.
 Use one app as a pilot:
 
 1. Back up its live directory.
-2. Switch to one verified provider in OcHub.
+2. Switch to one verified connection in OcHub.
 3. Restart the CLI.
 4. Send a short request.
 5. Check model, status, and usage.
@@ -157,7 +157,7 @@ Use one app as a pilot:
 ## Roll back a problem
 
 For a single affected tool, stop switching, return to a known-good official
-login or provider, restore its directory backup if needed, and compare the live
+login or connection, restore its directory backup if needed, and compare the live
 file with OcHub's preview.
 
 For an incorrect overall import:
@@ -176,8 +176,8 @@ still matter.
 
 Wait until:
 
-- All required providers can be edited and previewed in OcHub.
-- At least one direct connection and required relay station have passed a real
+- All required connections can be edited and previewed in OcHub.
+- At least one direct connection and required model provider have passed a real
   request.
 - MCP and skills are synced to intended apps.
 - Sessions, usage, and pricing look correct.

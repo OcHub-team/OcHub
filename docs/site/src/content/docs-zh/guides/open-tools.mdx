@@ -6,22 +6,22 @@ sidebar:
   order: 7
 ---
 
-这四个工具都能管理供应商，但写入方式和共享能力不同。先根据下表确认 OcHub 会修改什么。
+这四个工具都能管理连接，但写入方式和共享能力不同。先根据下表确认 OcHub 会修改什么。
 
 | 应用 | 写入模式 | MCP | 技能 | 默认配置目录 |
 | --- | --- | --- | --- | --- |
-| Grok Build | 当前供应商切换 | 支持 | 不支持 | `~/.grok` |
-| OpenCode | 多供应商共存 | 支持 | 支持 | `~/.config/opencode` |
-| OpenClaw | 多供应商共存 | 不支持 | 不支持 | `~/.openclaw` |
-| Hermes | 多供应商共存 | 支持 | 支持 | `~/.hermes` |
+| Grok Build | 当前连接切换 | 支持 | 不支持 | `~/.grok` |
+| OpenCode | 多连接共存 | 支持 | 支持 | `~/.config/opencode` |
+| OpenClaw | 多连接共存 | 不支持 | 不支持 | `~/.openclaw` |
+| Hermes | 多连接共存 | 支持 | 支持 | `~/.hermes` |
 
-“当前供应商切换”表示工具侧主要保存当前连接；“多供应商共存”表示 OcHub 会把多个 Provider
-都写入同一份工具配置。多供应商模式下，“从工具移除”只移除选中的 Provider，不会清空其他
+“当前连接切换”表示工具侧主要保存当前连接；“多连接共存”表示 OcHub 会把多个 Provider
+都写入同一份工具配置。多连接共存模式下，“从工具移除”只移除选中的 Provider，不会清空其他
 Provider。
 
 ## Grok Build
 
-Grok Build 以一个当前模型配置工作。新增供应商时可以从预设开始，也可以手工填写。
+Grok Build 以一个当前模型配置工作。新增连接时可以从预设开始，也可以手工填写。
 
 <Steps>
 
@@ -46,7 +46,7 @@ Grok Build 以一个当前模型配置工作。新增供应商时可以从预设
 
 ## OpenCode
 
-OpenCode 把每个供应商写在 `opencode.json` 的 `provider.<id>` 下，因此 Provider ID 必须唯一。
+OpenCode 把每个连接写在 `opencode.json` 的 `provider.<id>` 下，因此 Provider ID 必须唯一。
 OcHub 编辑其中一项时会保留同文件里的其他 Provider。
 
 ### 新增 OpenCode Provider
@@ -74,7 +74,7 @@ OcHub 编辑其中一项时会保留同文件里的其他 Provider。
 ### OMO 配置
 
 OcHub 的**高级工具**可以读取并禁用 OMO / OMO Slim。禁用会删除对应配置文件并清除相关
-供应商的当前标记，因此：
+连接的当前标记，因此：
 
 1. 先点击“读取 OMO”或“读取 OMO Slim”确认状态。
 2. 备份 OpenCode 配置目录。
@@ -174,10 +174,10 @@ Hermes 默认可能未在应用列表中启用。先到**设置 → 应用与插
 | 问题 | 常见原因 |
 | --- | --- |
 | Provider 没出现在工具里 | 保存后未“添加到工具”，或配置目录不对 |
-| 一个 Provider 覆盖了另一个 | 多供应商应用使用了重复 Provider ID |
+| 一个 Provider 覆盖了另一个 | 多连接共存应用使用了重复 Provider ID |
 | 401 | API Key、环境变量或进程启动环境不一致 |
 | 404 / 请求体错误 | API Backend、API 协议或 API 模式选错 |
 | 模型列表可见但调用失败 | 模型 ID、上下文或上游权限不匹配 |
 | 高级字段保存失败 | JSON/YAML 节点类型不正确 |
 
-通用的复制、删除和配置漂移处理请阅读[管理供应商](/zh/guides/providers)。
+通用的复制、删除和配置漂移处理请阅读[管理连接](/zh/guides/providers)。

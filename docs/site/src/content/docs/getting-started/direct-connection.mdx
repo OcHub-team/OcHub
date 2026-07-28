@@ -1,16 +1,16 @@
 ---
 title: Configure a direct connection
-description: Add a provider, write it to a target tool, and make your first safe switch.
+description: Add a connection, write it to a target tool, and make your first safe switch.
 audience: human
 sidebar:
   order: 1
 ---
 
-A direct connection writes provider configuration to the selected AI tool, and
-the tool calls that provider without passing through the OcHub relay. It is the
+A direct connection writes the connection's settings to the selected AI tool, and
+the tool calls that provider without passing through the OcHub gateway. It is the
 best way to get started.
 
-## Add a provider
+## Add a connection
 
 <Steps>
 
@@ -26,7 +26,7 @@ best way to get started.
    endpoint.”
 
 4. **Enter connection details.** Use the endpoint and key documented by the
-   provider. The relay editor handles `/v1` itself; for a direct connection,
+   provider. The model provider editor handles `/v1` itself; for a direct connection,
    rely on the generated file preview shown by the page.
 
 5. **Run available checks.** Try **Test URL**, **Fetch models**, or **Check
@@ -38,7 +38,7 @@ best way to get started.
    destination path and important fields. If the preview is empty, complete the
    name and connection details first.
 
-7. **Save.** Saving adds the provider to OcHub. Whether it is immediately
+7. **Save.** Saving adds the connection to OcHub. Whether it is immediately
    written to the tool depends on the action offered by that app page.
 
 </Steps>
@@ -54,13 +54,13 @@ replace keys, access tokens, and authenticated URL parameters with placeholders.
 
 | Action | Meaning |
 | --- | --- |
-| Add to tool | Add the provider to the tool configuration without necessarily making it current |
-| Switch | Write or select the provider and make it the current connection |
-| Remove from tool | Remove the live tool entry while keeping the provider in OcHub |
-| Delete | Permanently remove the provider from OcHub |
+| Add to tool | Add the connection to the tool configuration without necessarily making it current |
+| Switch | Write or select the connection and make it current |
+| Remove from tool | Remove the live tool entry while keeping the connection in OcHub |
+| Delete | Permanently remove the connection from OcHub |
 
 After a successful switch, **Current connection** at the top of the page shows
-the new provider and its card is marked Current.
+the new connection and its card is marked Current.
 
 ## Verify the change
 
@@ -88,7 +88,7 @@ switch again.
 
 ## Roll back
 
-- To use another provider, select **Switch** on its card.
+- To use another connection, select **Switch** on its card.
 - To restore the tool's own account state, switch to an Official login
   provider.
 - To stop OcHub from managing the tool, disable it in **Settings → Apps and

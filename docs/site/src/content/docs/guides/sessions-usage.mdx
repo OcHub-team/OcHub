@@ -58,7 +58,7 @@ least two buckets.
 
 OcHub can combine:
 
-- Relay station requests
+- Model provider requests
 - Claude sessions
 - Codex database or session files
 - OpenCode sessions
@@ -66,7 +66,7 @@ OcHub can combine:
 - Legacy local requests
 - Manually synchronized sessions
 
-Only requests that pass through the local relay consistently include
+Only requests that pass through the local gateway consistently include
 gateway-level status, latency, and request IDs. Session-file imports are limited
 to fields the individual CLI recorded.
 
@@ -84,7 +84,7 @@ Under Model pricing:
 6. Save, refresh, and confirm the pricing model and cost on a request detail.
 
 Manual overrides always win and are never changed by catalog sync. The model ID
-must match the logs. When aliases or relay mappings are common, response-model
+must match the logs. When aliases or gateway mappings are common, response-model
 pricing is often a better default. Missing models are grouped into one notice
 instead of producing repeated dialogs.
 

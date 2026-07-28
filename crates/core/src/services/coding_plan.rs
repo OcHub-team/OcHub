@@ -682,7 +682,7 @@ pub async fn get_coding_plan_quota(
                 success: false,
                 tiers: vec![],
                 extra_usage: None,
-                // 域名未命中已知套餐供应商（如第三方中转站）：给出明确错误而非静默失败
+                // 域名未命中已知套餐供应商（如第三方模型供应商）：给出明确错误而非静默失败
                 error: Some("Unknown coding plan provider".to_string()),
                 queried_at: None,
             });

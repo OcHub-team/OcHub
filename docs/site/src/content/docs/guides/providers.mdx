@@ -1,12 +1,12 @@
 ---
-title: Manage providers
+title: Manage connections
 description: Manage the full connection lifecycle and understand app-specific behavior.
 audience: human
 sidebar:
   order: 1
 ---
 
-OcHub stores providers separately for each app. A Claude Code provider does not
+OcHub stores connections separately for each app. A Claude Code connection does not
 automatically appear in Codex, but **Copy to app** can regenerate it in the
 target tool's format.
 
@@ -15,25 +15,25 @@ target tool's format.
 When you open an app page, OcHub reads the tool's current live configuration:
 
 - Recognized connections appear under Direct connections.
-- Providers already present in the tool but not currently selected are marked
+- Connections already present in the tool but not currently selected are marked
   Added.
 - The active connection is marked Current.
 - If a custom field cannot be represented completely, inspect the write preview
   before saving so it is not lost.
 
-## Everyday provider actions
+## Everyday connection actions
 
 | Action | Use it for |
 | --- | --- |
 | Edit | Change endpoints, keys, models, notes, or advanced fields |
 | Drag to reorder | Change list and system-menu order |
-| Copy to app | Regenerate a new provider in another app's format |
-| Add to tool | Preload a provider without changing the current connection |
+| Copy to app | Regenerate a new connection in another app's format |
+| Add to tool | Preload a connection without making it current |
 | Switch | Make it the live connection immediately |
 | Remove from tool | Keep OcHub data while removing the live tool entry |
-| Delete | Permanently remove the provider from OcHub |
+| Delete | Permanently remove the connection from OcHub |
 
-If a provider is current, switch to another connection before deleting it.
+If a connection is current, switch to another one before deleting it.
 
 ## Official login
 
@@ -45,8 +45,8 @@ tool's own login state. Use it when:
   service.
 - You want to preserve native subscription and account features.
 
-When **Keep current OAuth for third-party providers** is enabled for Codex,
-switching to a third-party provider does not overwrite `auth.json`. This setting
+When **Keep current OAuth for third parties** is enabled for Codex,
+switching to a third-party connection does not overwrite `auth.json`. This setting
 is specific to Codex.
 
 ## App-specific settings
@@ -69,10 +69,10 @@ read. Restart OcHub and the target tool after saving it.
 
 - **Test URL** measures the latency of an HTTP response.
 - **Fetch models** requests the model list with the current endpoint and key.
-- **Check balance** works only for providers that implement a compatible
-  balance endpoint.
+- **Check balance** works only for upstream services that implement a
+  compatible balance endpoint.
 - **Files to be written** shows generated content and destination paths.
-- **Common configuration** merges an app-level shared snippet into providers
+- **Common configuration** merges an app-level shared snippet into connections
   that enable it.
 
 A successful test does not prove that a model can be called. A real request
@@ -99,6 +99,6 @@ Do not let OcHub, cc-switch, and a manual editor write the same file at once.
 | Codex | [OAuth, Responses, reasoning, and session history](/guides/codex) |
 | Grok Build / OpenCode / OpenClaw / Hermes | [Protocols, model lists, and app-specific files](/guides/open-tools) |
 
-To bring in providers from an older manager, use
+To bring in connections from an older manager, use
 [Migrate from cc-switch](/guides/migration) instead of copying every entry by
 hand.

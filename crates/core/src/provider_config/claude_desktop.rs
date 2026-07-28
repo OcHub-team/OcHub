@@ -66,7 +66,7 @@ impl AppConfig for ClaudeDesktopConfig {
                             placeholder: "https://gateway.example.com".into(),
                         },
                     )
-                    .help("原生 Anthropic Messages 端点；跨格式服务请在 OcHub 中转页面配置。")
+                    .help("原生 Anthropic Messages 端点；跨格式服务请在 OcHub 模型供应商页面配置。")
                     .required(),
                     FormField::new(
                         "auth_field",
@@ -102,7 +102,7 @@ impl AppConfig for ClaudeDesktopConfig {
                     },
                 )
                 .help(
-                    "这里只接受对应角色的 Claude-safe 模型名；任意模型映射请在 OcHub 中转页面配置。",
+                    "这里只接受对应角色的 Claude-safe 模型名；任意模型映射请在 OcHub 模型供应商页面配置。",
                 )],
             ),
         ]
@@ -238,7 +238,7 @@ impl AppConfig for ClaudeDesktopConfig {
                 .trim();
             if !model.is_empty() && model != route_id {
                 issues.push(ConfigIssue::error(format!(
-                    "{route_id} 不能映射到 {model}；请在 OcHub 中转页面配置模型映射。"
+                    "{route_id} 不能映射到 {model}；请在 OcHub 模型供应商页面配置模型映射。"
                 )));
             }
         }

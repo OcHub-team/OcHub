@@ -16,7 +16,7 @@
 "usage.confirm.delete.title" = "Delete manual price override"
 "usage.data_source.codex_db" = "Codex database"
 "usage.data_source.codex_session" = "Codex sessions"
-"usage.data_source.gateway" = "Relay requests"
+"usage.data_source.gateway" = "Model provider requests"
 "usage.data_source.gemini_session" = "Gemini sessions"
 "usage.data_source.opencode_session" = "OpenCode sessions"
 "usage.data_source.proxy" = "Legacy local requests"

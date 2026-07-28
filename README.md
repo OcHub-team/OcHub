@@ -45,7 +45,7 @@ or sharing the same setup across several clients quickly turns into repeated
 config-file editing.
 
 OcHub brings that work into one fast, native desktop app. Use it as a simple
-provider switcher, or place its local relay between your tools and upstream
+connection switcher, or place its local gateway between your tools and upstream
 APIs for centralized routing, compatibility conversion, failover, and usage
 tracking.
 
@@ -56,9 +56,9 @@ OpenCode, OpenClaw, and Hermes**.
 
 | | Capability | What it gives you |
 | --- | --- | --- |
-| 🔌 | **Provider management** | Discover, import, edit, test, and switch direct API connections without hand-editing client configs |
-| ↗️ | **Local relay** | Give multiple clients one local endpoint, then control upstreams and routing centrally |
-| 🔀 | **Smart routing** | Map model names and reasoning levels, retry compatible interfaces, switch to backup stations, and monitor health |
+| 🔌 | **Connection management** | Discover, import, edit, test, and switch direct API connections without hand-editing client configs |
+| ↗️ | **Model providers** | Give multiple clients one local endpoint, then control upstreams and routing centrally |
+| 🔀 | **Smart routing** | Map model names and reasoning levels, retry compatible interfaces, switch to backup providers, and monitor health |
 | 🧩 | **MCP & skills** | Keep reusable MCP servers and skills together, then distribute them to the tools that need them |
 | 📊 | **Sessions & usage** | Browse local CLI sessions and understand tokens, cache, latency, requests, and estimated cost |
 | 🔄 | **Sync & backup** | Protect your setup with snapshots and keep OcHub data in sync through supported remote storage |
@@ -67,16 +67,16 @@ OpenCode, OpenClaw, and Hermes**.
 
 ### Direct connection
 
-Choose a tool, add an API provider, test it, and switch. OcHub writes the
+Choose a tool, add an API connection, test it, and switch. OcHub writes the
 client's native configuration, so the tool keeps working normally after OcHub
 is closed.
 
 **Best for:** a straightforward endpoint change, a tool's official login, or a
-small setup with independent providers.
+small setup with independent connections.
 
-### Relay station
+### Model provider mode
 
-Point supported clients at OcHub's loopback gateway. The relay can translate
+Point supported clients at OcHub's loopback gateway. The gateway can translate
 between supported API dialects and apply model aliases, reasoning mappings,
 interface retries, health checks, and failover before a request reaches its
 upstream.

@@ -253,7 +253,7 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 14. Gateway 渠道表（本地中转网关的上游渠道）
+        // 14. Gateway 渠道表（本地网关的上游模型供应商渠道）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS gateway_channels (
                 id TEXT PRIMARY KEY,
@@ -561,7 +561,7 @@ impl Database {
                                 [],
                             )
                             .map_err(|e| {
-                                AppError::Database(format!("为中转渠道添加端点分组失败: {e}"))
+                                AppError::Database(format!("为模型供应商渠道添加端点分组失败: {e}"))
                             })?;
                         }
                         if Self::table_exists(conn, "gateway_routes")?
@@ -572,7 +572,7 @@ impl Database {
                                 [],
                             )
                             .map_err(|e| {
-                                AppError::Database(format!("为中转添加官网地址失败: {e}"))
+                                AppError::Database(format!("为模型供应商添加官网地址失败: {e}"))
                             })?;
                         }
                         Self::set_user_version(conn, 8)?;
@@ -586,7 +586,9 @@ impl Database {
                                 [],
                             )
                             .map_err(|e| {
-                                AppError::Database(format!("为应用中转绑定添加模型策略失败: {e}"))
+                                AppError::Database(format!(
+                                    "为应用模型供应商绑定添加模型策略失败: {e}"
+                                ))
                             })?;
                         }
                         Self::set_user_version(conn, 9)?;
@@ -1460,7 +1462,7 @@ impl Database {
     fn remove_legacy_repaired_model_pricing(conn: &Connection) -> Result<(), AppError> {
         let pricing_fixes = [
             // 2026-06-10 全量核价（厂商官方 list 价；CNY 按 ~7.14 折算）
-            // GLM 4.6/4.7：旧值是中转/OpenRouter 折扣价，统一到 Z.ai 官方（与 glm-5/5.1 一致）
+            // GLM 4.6/4.7：旧值是第三方/OpenRouter 折扣价，统一到 Z.ai 官方（与 glm-5/5.1 一致）
             (
                 "glm-4.7", "GLM-4.7", "0.6", "2.2", "0.11", "0", "0.39", "1.75", "0.04", "0",
             ),
