@@ -2240,6 +2240,44 @@ impl AppRoot {
         cx.notify();
     }
 
+    /// Duplicate a provider in place. No confirmation step and no editor: the
+    /// copy is inert (not current, not in any live config), so the undo is the
+    /// delete button on the card that just appeared.
+    fn do_duplicate(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.provider_action_in_flight {
+            return;
+        }
+        self.provider_action_in_flight = true;
+        let app = self.app.clone();
+        let app_type = self.selected_app;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    ProviderService::duplicate(&app, app_type, &id)
+                        .map(|provider| provider.name)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(name) => {
+                        this.notify_success(tf!(k::SHELL_PROVIDER_DUPLICATED, name = name), cx)
+                    }
+                    Err(error) => {
+                        this.notify_error(t(k::SHELL_PROVIDER_DUPLICATE_FAILED), error, cx)
+                    }
+                }
+                this.reload(cx);
+                shell_menu::refresh(&this.app, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn acknowledge_first_run(&mut self, cx: &mut Context<Self>) {
         self.show_first_run_notice = false;
         cx.notify();
@@ -2898,6 +2936,7 @@ impl AppRoot {
         let is_gateway = provider.is_local_gateway();
         let id = provider.id.clone();
         let edit_id = id.clone();
+        let duplicate_id = id.clone();
         let delete_target = ProviderDeleteTarget {
             id: id.clone(),
             name: self.provider_name(provider),
@@ -3120,6 +3159,24 @@ impl AppRoot {
                             },
                         )),
                     )
+                    .when(!is_gateway, |row| {
+                        row.child(
+                            components::action_button(
+                                SharedString::from(format!("duplicate-{}", provider.id)),
+                                t(k::SHELL_ACTION_DUPLICATE),
+                                false,
+                            )
+                            .aria_label(SharedString::from(tf!(
+                                k::SHELL_ACTION_DUPLICATE_ARIA,
+                                name = provider_name
+                            )))
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    this.do_duplicate(duplicate_id.clone(), cx);
+                                },
+                            )),
+                        )
+                    })
                     .when(!is_gateway, |row| {
                         row.child(
                             components::action_button_tone(

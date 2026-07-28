@@ -254,6 +254,44 @@ impl ProviderService {
         Ok(true)
     }
 
+    /// Duplicate a provider: same configuration, `-copy` suffixed name, fresh id.
+    ///
+    /// The copy is a draft. It never reaches the live config and never becomes
+    /// the current provider, so the button cannot change which provider a tool
+    /// is talking to. It inherits the source's `sort_index` and gets a newer
+    /// `created_at`, which is what makes the list — ordered by `sort_index`,
+    /// then `created_at` — render it directly below its source.
+    pub fn duplicate(state: &AppState, app_type: AppType, id: &str) -> Result<Provider, AppError> {
+        let providers = state.db.get_all_providers(app_type.as_str())?;
+        let source = providers.get(id).ok_or_else(|| {
+            AppError::Message(format!(
+                "供应商「{}」在应用「{}」中不存在",
+                id,
+                app_type.as_str()
+            ))
+        })?;
+
+        let mut copy = source.clone();
+        copy.name = next_copy_label(&source.name, |candidate| {
+            providers.values().any(|other| other.name == candidate)
+        });
+        // In additive mode the id is the provider key written into the tool's
+        // own config, so the copy needs a readable key of its own; elsewhere the
+        // id is opaque and a fresh uuid is all it has to be.
+        copy.id = if app_type.is_additive_mode() {
+            next_copy_label(&source.id, |candidate| providers.contains_key(candidate))
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+        copy.created_at = Some(chrono::Utc::now().timestamp_millis());
+        if app_type.is_additive_mode() {
+            Self::set_provider_live_config_managed(&mut copy, false);
+        }
+
+        state.db.save_provider(app_type.as_str(), &copy)?;
+        Ok(copy)
+    }
+
     /// Update a provider
     pub fn update(
         state: &AppState,
@@ -1368,6 +1406,23 @@ impl ProviderService {
     }
 }
 
+/// `base` → `base-copy`, falling back to `base-copy-2`, `-3`… while `taken`
+/// says the candidate is already in use.
+///
+/// Used for both the name and — in additive mode — the id of a duplicate, so
+/// duplicating the same provider twice cannot silently overwrite the first copy
+/// or leave two cards spelled identically.
+fn next_copy_label(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    let first = format!("{base}-copy");
+    if !taken(&first) {
+        return first;
+    }
+    (2u32..)
+        .map(|nth| format!("{base}-copy-{nth}"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or(first)
+}
+
 /// Normalize Claude model keys in a JSON value
 ///
 /// Reads old key (ANTHROPIC_SMALL_FAST_MODEL), writes new keys (DEFAULT_*), and deletes old key.
@@ -1447,4 +1502,98 @@ pub struct ProviderSortUpdate {
     pub id: String,
     #[serde(rename = "sortIndex")]
     pub sort_index: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn state() -> AppState {
+        AppState::new(Arc::new(Database::memory().expect("memory db")))
+    }
+
+    fn claude_provider(id: &str, name: &str) -> Provider {
+        Provider::with_id(
+            id.to_string(),
+            name.to_string(),
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://alpha.example" } }),
+            Some("https://alpha.example".to_string()),
+        )
+    }
+
+    #[test]
+    fn duplicate_copies_the_configuration_under_a_copy_suffixed_name() {
+        let state = state();
+        let mut source = claude_provider("alpha", "Alpha");
+        source.sort_index = Some(3);
+        source.notes = Some("keep me".to_string());
+        state.db.save_provider("claude", &source).expect("save");
+
+        let copy = ProviderService::duplicate(&state, AppType::Claude, "alpha").expect("duplicate");
+
+        assert_eq!(copy.name, "Alpha-copy");
+        assert_ne!(copy.id, "alpha", "a copy must not overwrite its source");
+        assert_eq!(copy.settings_config, source.settings_config);
+        assert_eq!(copy.website_url, source.website_url);
+        assert_eq!(copy.notes, source.notes);
+        // Same slot, newer timestamp: that is what puts the copy directly below
+        // its source in the list.
+        assert_eq!(copy.sort_index, Some(3));
+        assert!(copy.created_at > source.created_at);
+
+        // The copy is inert: nothing became current just because it was made.
+        assert_eq!(
+            state.db.get_current_provider("claude").expect("current"),
+            None
+        );
+        assert_eq!(state.db.get_all_providers("claude").expect("list").len(), 2);
+    }
+
+    #[test]
+    fn duplicating_twice_yields_two_distinct_copies() {
+        let state = state();
+        state
+            .db
+            .save_provider("claude", &claude_provider("alpha", "Alpha"))
+            .expect("save");
+
+        ProviderService::duplicate(&state, AppType::Claude, "alpha").expect("first copy");
+        let second = ProviderService::duplicate(&state, AppType::Claude, "alpha").expect("second");
+
+        assert_eq!(second.name, "Alpha-copy-2");
+        let providers = state.db.get_all_providers("claude").expect("list");
+        assert_eq!(providers.len(), 3);
+    }
+
+    #[test]
+    fn an_additive_copy_gets_a_readable_key_and_stays_out_of_the_tool_config() {
+        let state = state();
+        let mut source = Provider::with_id(
+            "myco".to_string(),
+            "MyCo".to_string(),
+            json!({ "npm": "@ai-sdk/openai-compatible" }),
+            None,
+        );
+        ProviderService::set_provider_live_config_managed(&mut source, true);
+        state.db.save_provider("opencode", &source).expect("save");
+
+        let copy =
+            ProviderService::duplicate(&state, AppType::OpenCode, "myco").expect("duplicate");
+
+        assert_eq!(copy.id, "myco-copy");
+        assert_eq!(
+            ProviderService::provider_live_config_managed(&copy),
+            Some(false),
+            "a fresh copy must not claim to be in the tool config"
+        );
+    }
+
+    #[test]
+    fn duplicating_an_unknown_provider_is_an_error() {
+        let state = state();
+        assert!(ProviderService::duplicate(&state, AppType::Claude, "ghost").is_err());
+    }
 }
