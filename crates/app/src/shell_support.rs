@@ -53,14 +53,10 @@ fn system_info() -> String {
 /// Install a panic hook that writes a crash report before the default hook runs.
 /// Call once, as early as possible in `main`.
 pub fn setup_panic_hook() {
-    // Ensure a backtrace is captured even in release builds.
-    if std::env::var("RUST_BACKTRACE").is_err() {
-        // SAFETY: the doc comment above is the contract — `main` calls this
-        // before it builds the async runtime or spawns any service thread, so
-        // this process is still single-threaded here.
-        unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
-    }
-
+    // The report below captures its own backtrace with `force_capture`, which
+    // ignores RUST_BACKTRACE, so this hook does not need the variable set. It
+    // used to set it here; all that bought was a second copy of the trace from
+    // the default hook we forward to.
     let default_hook = panic::take_hook();
 
     panic::set_hook(Box::new(move |panic_info| {

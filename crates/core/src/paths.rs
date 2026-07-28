@@ -4,6 +4,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -78,8 +79,52 @@ pub fn get_claude_settings_path() -> PathBuf {
     settings
 }
 
+/// Process-local data directory, set once by a CLI's `--data-dir` flag.
+static DATA_DIR_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Point this process's path resolution at `path`.
+///
+/// The CLI entry points call this instead of writing `OCHUB_DATA_DIR` into
+/// their own environment. Rust 2024 made that write `unsafe` — a thread reading
+/// the environment while another rewrites it is UB — and both binaries are
+/// `#[tokio::main]`, so the runtime's worker threads already exist by the time
+/// `main` runs. A lock the process owns has no such window, and unlike
+/// [`crate::app_store::set_app_config_dir_to_store`] it does not persist
+/// anything, which matches what a per-invocation flag means.
+///
+/// Reading `OCHUB_DATA_DIR` from the environment stays supported: clap resolves
+/// the flag from it, and [`get_app_config_dir`] still falls back to it for the
+/// GUI, which takes no such flag.
+pub fn set_data_dir_override(path: impl Into<PathBuf>) {
+    let mut slot = DATA_DIR_OVERRIDE
+        .write()
+        .unwrap_or_else(|err| err.into_inner());
+    *slot = Some(path.into());
+}
+
+fn data_dir_override() -> Option<PathBuf> {
+    DATA_DIR_OVERRIDE
+        .read()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+}
+
+/// Drop the override again. Only tests need this — a CLI sets the flag once and
+/// keeps it for the rest of the run — but without it a test that sets the
+/// override would redirect every test that runs after it.
+#[cfg(test)]
+fn clear_data_dir_override() {
+    let mut slot = DATA_DIR_OVERRIDE
+        .write()
+        .unwrap_or_else(|err| err.into_inner());
+    *slot = None;
+}
+
 /// App config directory (`~/.ochub`, or the store override).
 pub fn get_app_config_dir() -> PathBuf {
+    if let Some(path) = data_dir_override() {
+        return path;
+    }
     if let Ok(path) = std::env::var("OCHUB_DATA_DIR") {
         let trimmed = path.trim();
         if !trimmed.is_empty() {
@@ -292,6 +337,26 @@ mod tests {
         assert_eq!(get_app_config_dir(), data);
         crate::test_support::remove_var("OCHUB_DATA_DIR");
         crate::test_support::remove_var("OCHUB_TEST_HOME");
+    }
+
+    /// `--data-dir` reaches path resolution through the process-local override,
+    /// which has to beat `OCHUB_DATA_DIR` — otherwise a stale exported variable
+    /// would silently win over the flag the user just typed.
+    #[test]
+    fn the_data_dir_override_beats_the_environment() {
+        let _guard = crate::test_support::env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let from_env = temp.path().join("env");
+        let from_flag = temp.path().join("flag");
+        crate::test_support::set_var("OCHUB_DATA_DIR", &from_env);
+        assert_eq!(get_app_config_dir(), from_env);
+
+        set_data_dir_override(&from_flag);
+        assert_eq!(get_app_config_dir(), from_flag);
+
+        clear_data_dir_override();
+        assert_eq!(get_app_config_dir(), from_env);
+        crate::test_support::remove_var("OCHUB_DATA_DIR");
     }
 
     #[test]
