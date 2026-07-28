@@ -124,6 +124,23 @@ fn display_offset(raw: &str, masked: bool, raw_offset: usize) -> usize {
     }
 }
 
+/// Byte offset into `text` for a UTF-16 offset measured from its start.
+/// Saturates at `text.len()` and always lands on a character boundary, so the
+/// result is safe to slice with even when the platform hands us an offset that
+/// overruns the string or splits a surrogate pair.
+fn utf8_offset_from_utf16(text: &str, utf16_offset: usize) -> usize {
+    let mut utf8_offset = 0;
+    let mut utf16_count = 0;
+    for ch in text.chars() {
+        if utf16_count >= utf16_offset {
+            break;
+        }
+        utf16_count += ch.len_utf16();
+        utf8_offset += ch.len_utf8();
+    }
+    utf8_offset
+}
+
 fn raw_offset_from_display(raw: &str, masked: bool, display_offset: usize) -> usize {
     if !masked {
         let mut offset = display_offset.min(raw.len());
@@ -1071,16 +1088,7 @@ impl TextInput {
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-        for ch in self.content.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-        utf8_offset
+        utf8_offset_from_utf16(&self.content, offset)
     }
 
     fn offset_to_utf16(&self, offset: usize) -> usize {
@@ -1215,10 +1223,19 @@ impl EntityInputHandler for TextInput {
         } else {
             self.marked_range = None;
         }
+        // The platform reports the composition caret relative to the marked
+        // text, not to the whole field, so both endpoints are measured inside
+        // `new_text` and rebased onto `range.start`. Converting them against
+        // `self.content` (or adding `range.end` to the end offset) yields
+        // offsets past the end of the value — or in the middle of a multi-byte
+        // character — which survive an unmark and panic the next time the
+        // selection is sliced.
         self.selected_range = new_selected_range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .map(|range_utf16| {
+                range.start + utf8_offset_from_utf16(new_text, range_utf16.start)
+                    ..range.start + utf8_offset_from_utf16(new_text, range_utf16.end)
+            })
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
         self.selection_reversed = false;
@@ -2013,8 +2030,24 @@ mod tests {
 
     use super::{
         closest_match, code_visible_rows, display_offset, find_matches,
-        horizontal_scroll_for_caret, raw_offset_from_display, CaretBlink,
+        horizontal_scroll_for_caret, raw_offset_from_display, utf8_offset_from_utf16, CaretBlink,
     };
+
+    /// The composition caret arrives as a UTF-16 offset into the marked text.
+    /// Measuring it there (rather than against the whole field) is what keeps
+    /// the resulting selection inside the value after an IME switch.
+    #[test]
+    fn composition_caret_stays_inside_the_marked_text() {
+        assert_eq!(utf8_offset_from_utf16("ni", 2), 2);
+        assert_eq!(utf8_offset_from_utf16("你好", 1), 3);
+        // Emoji outside the BMP: a caret between the surrogates snaps to the
+        // character boundary instead of splitting it.
+        assert_eq!(utf8_offset_from_utf16("😀", 1), 4);
+        assert_eq!(utf8_offset_from_utf16("😀", 2), 4);
+        // An offset past the end saturates rather than overrunning the string.
+        assert_eq!(utf8_offset_from_utf16("ni", 9), 2);
+        assert_eq!(utf8_offset_from_utf16("", 3), 0);
+    }
 
     #[test]
     fn code_mode_shapes_only_viewport_rows_with_small_overdraw() {
