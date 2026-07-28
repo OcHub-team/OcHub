@@ -119,5 +119,6 @@
 "shell.sidebar.nav.tools" = "高度なツール"
 "shell.sidebar.nav.usage" = "使用量"
 "shell.sidebar.open.aria" = "{name} を開く"
+"shell.sidebar.update.badge_aria" = "{name} を開く（新バージョン {version}）"
 "shell.warnings.separator" = "、"
 "shell.warnings.summary" = "警告 {count} 件：{details}"

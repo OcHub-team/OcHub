@@ -119,5 +119,6 @@
 "shell.sidebar.nav.tools" = "Advanced tools"
 "shell.sidebar.nav.usage" = "Usage"
 "shell.sidebar.open.aria" = "Open {name}"
+"shell.sidebar.update.badge_aria" = "Open {name} (new version {version})"
 "shell.warnings.separator" = "; "
 "shell.warnings.summary" = "{count} warnings: {details}"

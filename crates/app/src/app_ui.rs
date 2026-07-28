@@ -182,6 +182,10 @@ pub struct AppRoot {
     /// dropped inside the provider list.
     provider_drag_state: Option<ProviderDragState>,
     sidebar_scroll_handle: ScrollHandle,
+    /// Version of an available update, once a check has found one. Marks 关于 in
+    /// the sidebar, and unlike the one-shot toast it persists for as long as the
+    /// update does — the dot is the affordance a user comes back to.
+    available_update: Option<SharedString>,
 }
 
 /// Cached row plan for the virtualized provider list. It is replaced only when
@@ -663,6 +667,55 @@ impl AppRoot {
         }
     }
 
+    /// The badge state to start with, before this process has checked anything.
+    ///
+    /// Checks are gated to one a day, so a launch usually performs none at all —
+    /// without seeding, restarting the app would hide a pending update until the
+    /// gate reopened. `skipped_update_version` is the newest release any earlier
+    /// check announced, and comparing it against the running build is what
+    /// retires the badge once that version is installed.
+    fn seeded_badge(announced: Option<String>) -> Option<SharedString> {
+        announced
+            .filter(|version| ochub_core::services::update::is_newer_than_current(version))
+            .map(SharedString::from)
+    }
+
+    /// The version a badge should advertise, or `None` when a check found
+    /// nothing to install. A release that reports no version still gets a
+    /// badge — knowing *that* an update exists is the actionable part.
+    fn badge_version(info: &ochub_core::services::UpdateCheckResult) -> Option<SharedString> {
+        info.has_update.then(|| {
+            info.latest_version
+                .clone()
+                .map(SharedString::from)
+                .unwrap_or_else(|| SharedString::from(raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION)))
+        })
+    }
+
+    fn set_available_update(&mut self, version: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.available_update != version {
+            self.available_update = version;
+            cx.notify();
+        }
+    }
+
+    /// Mirror the About page's manual check into the badge.
+    ///
+    /// Observed rather than pushed so that both outcomes land: finding an
+    /// update lights the badge, and a check that comes back up to date (the
+    /// state right after installing) clears it. A page that has not checked
+    /// reports `None` and must not clear what the background poll found.
+    fn observe_about_update_checks(&self, cx: &mut Context<Self>) {
+        cx.observe(&self.about_view, |this, about, cx| {
+            let Some(info) = about.read(cx).last_update_check() else {
+                return;
+            };
+            let badge = Self::badge_version(&info);
+            this.set_available_update(badge, cx);
+        })
+        .detach();
+    }
+
     /// Poll for a new release in the background, at most once a day.
     ///
     /// The first check is delayed so it competes with nothing at launch, and
@@ -701,6 +754,7 @@ impl AppRoot {
                                 settings.skipped_update_version.as_deref(),
                             );
                             let latest = info.latest_version.clone();
+                            let badge = Self::badge_version(&info);
                             // Record before announcing: a failure to draw the
                             // toast must not turn into a check every hour.
                             let _ = ochub_core::settings::mutate_settings(|settings| {
@@ -709,12 +763,16 @@ impl AppRoot {
                                     settings.skipped_update_version = latest.clone();
                                 }
                             });
-                            if notify {
-                                let version = info.latest_version.clone().unwrap_or_else(|| {
-                                    raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION).to_string()
-                                });
-                                if this
-                                    .update(cx, |this, cx| {
+                            let version = info.latest_version.clone().unwrap_or_else(|| {
+                                raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION).to_string()
+                            });
+                            // The badge is set on every check, not only when a
+                            // toast goes out: the announcement is once per
+                            // version, the badge lasts as long as the update.
+                            if this
+                                .update(cx, |this, cx| {
+                                    this.set_available_update(badge, cx);
+                                    if notify {
                                         this.notifications.update(cx, |host, cx| {
                                             host.info(
                                                 tf!(
@@ -725,12 +783,12 @@ impl AppRoot {
                                                 cx,
                                             );
                                         });
-                                    })
-                                    .is_err()
-                                {
-                                    // The window is gone; so is the loop's point.
-                                    return;
-                                }
+                                    }
+                                })
+                                .is_err()
+                            {
+                                // The window is gone; so is the loop's point.
+                                return;
                             }
                         }
                         // Offline is the common case here, so this stays a log
@@ -805,6 +863,9 @@ impl AppRoot {
             provider_list_state: ListState::new(0, ListAlignment::Top, px(512.)),
             provider_drag_state: None,
             sidebar_scroll_handle: ScrollHandle::new(),
+            available_update: Self::seeded_badge(
+                ochub_core::settings::get_settings().skipped_update_version,
+            ),
         };
         cx.subscribe(
             &this.app_settings_view,
@@ -841,6 +902,7 @@ impl AppRoot {
         })
         .detach();
         this.connect_toast_sources(cx);
+        this.observe_about_update_checks(cx);
         this.reload(cx);
         if show_first_run_notice {
             this.detect_pending_ccswitch_import(cx);
@@ -2563,13 +2625,23 @@ impl AppRoot {
         } else {
             theme::sidebar_glass_muted(appearance)
         };
+        // An available update is marked on 关于 rather than announced in its own
+        // row: that row is already the destination, so the dot needs no second
+        // affordance and the sidebar's resting layout is untouched.
+        let pending_update = (section == Section::About)
+            .then(|| self.available_update.clone())
+            .flatten();
         div()
             .id(id)
             .role(gpui::Role::Button)
-            .aria_label(SharedString::from(tf!(
-                k::SHELL_SIDEBAR_OPEN_ARIA,
-                name = label
-            )))
+            .aria_label(match &pending_update {
+                Some(version) => SharedString::from(tf!(
+                    k::SHELL_SIDEBAR_UPDATE_BADGE_ARIA,
+                    name = label,
+                    version = version
+                )),
+                None => SharedString::from(tf!(k::SHELL_SIDEBAR_OPEN_ARIA, name = label)),
+            })
             .aria_selected(selected)
             .flex()
             .flex_row()
@@ -2601,7 +2673,19 @@ impl AppRoot {
                     .h(px(20.))
                     .child(icon(Self::section_icon(section), fg, 15.)),
             )
-            .child(label)
+            // Wrapped so the dot keeps its place when a translated label is
+            // long enough to need truncating.
+            .child(div().flex_1().min_w_0().truncate().child(label))
+            .when_some(pending_update, |row, _version| {
+                row.child(
+                    div()
+                        .w(px(7.))
+                        .h(px(7.))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(theme::accent()),
+                )
+            })
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.select_section(section, cx);
             }))
@@ -3842,6 +3926,64 @@ impl Render for AppRoot {
                         .child(components::modal_footer(self.first_run_actions(cx))),
                 ))
             })
+    }
+}
+
+#[cfg(test)]
+mod update_badge_tests {
+    use super::AppRoot;
+    use ochub_core::services::UpdateCheckResult;
+
+    fn result(has_update: bool, latest: Option<&str>) -> UpdateCheckResult {
+        UpdateCheckResult {
+            current_version: "0.4.0".to_string(),
+            latest_version: latest.map(ToString::to_string),
+            has_update,
+            release_url: String::new(),
+            release_notes: None,
+            published_at: None,
+            install_channel: "macos-app".to_string(),
+            can_self_install: true,
+        }
+    }
+
+    #[test]
+    fn a_pending_update_is_badged_with_its_version() {
+        assert_eq!(
+            AppRoot::badge_version(&result(true, Some("0.4.1"))).as_deref(),
+            Some("0.4.1")
+        );
+    }
+
+    #[test]
+    fn being_up_to_date_shows_no_badge() {
+        assert!(AppRoot::badge_version(&result(false, Some("0.4.0"))).is_none());
+        // A check that came back up to date must clear the badge even when the
+        // release it saw has no parseable version.
+        assert!(AppRoot::badge_version(&result(false, None)).is_none());
+    }
+
+    #[test]
+    fn a_previously_announced_update_is_badged_before_any_check_runs() {
+        // The daily gate means most launches check nothing; the badge has to
+        // survive a restart on the strength of what was already announced.
+        assert_eq!(
+            AppRoot::seeded_badge(Some("99.0.0".to_string())).as_deref(),
+            Some("99.0.0")
+        );
+    }
+
+    #[test]
+    fn an_announcement_already_installed_is_not_badged() {
+        assert!(AppRoot::seeded_badge(Some("0.0.1".to_string())).is_none());
+        assert!(AppRoot::seeded_badge(None).is_none());
+    }
+
+    #[test]
+    fn an_update_without_a_version_still_badges() {
+        // Knowing that something is installable is the actionable part; the
+        // label falls back to the localized placeholder rather than hiding.
+        assert!(AppRoot::badge_version(&result(true, None)).is_some());
     }
 }
 

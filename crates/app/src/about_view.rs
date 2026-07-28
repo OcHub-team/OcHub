@@ -291,6 +291,14 @@ impl AboutView {
         }
     }
 
+    /// The result of the most recent manual check, or `None` if this page has
+    /// not checked yet. The shell mirrors it into the sidebar badge, and the
+    /// `None` case is what stops an untouched page from clearing a badge the
+    /// background poll raised.
+    pub(crate) fn last_update_check(&self) -> Option<UpdateCheckResult> {
+        self.update.info.clone()
+    }
+
     fn check_updates(&mut self, cx: &mut Context<Self>) {
         if self.update.checking {
             return;

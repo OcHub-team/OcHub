@@ -120,5 +120,6 @@
 "shell.sidebar.nav.tools" = "高级工具"
 "shell.sidebar.nav.usage" = "用量"
 "shell.sidebar.open.aria" = "打开 {name}"
+"shell.sidebar.update.badge_aria" = "打开 {name}（有新版本 {version}）"
 "shell.warnings.separator" = "；"
 "shell.warnings.summary" = "{count} 条警告：{details}"
