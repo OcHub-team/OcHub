@@ -16,7 +16,7 @@
 "usage.confirm.delete.title" = "手動料金の上書きを削除"
 "usage.data_source.codex_db" = "Codex データベース"
 "usage.data_source.codex_session" = "Codex セッション"
-"usage.data_source.gateway" = "中継リクエスト"
+"usage.data_source.gateway" = "モデルプロバイダー経由のリクエスト"
 "usage.data_source.gemini_session" = "Gemini セッション"
 "usage.data_source.opencode_session" = "OpenCode セッション"
 "usage.data_source.proxy" = "旧バージョンのローカルリクエスト"

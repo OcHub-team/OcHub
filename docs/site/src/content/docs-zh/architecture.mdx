@@ -6,15 +6,15 @@ sidebar:
   hidden: true
 ---
 
-OcHub 是一个围绕 GPUI 和本地中转网关构建的 Rust 工作区。
+OcHub 是一个围绕 GPUI 和本地网关构建的 Rust 工作区。
 
 ## Crate 划分
 
 | Crate | 职责 |
 | --- | --- |
-| `ochub-core` | 领域模型、SQLite 存储、供应商切换、客户端配置写入、同步、MCP、技能、会话、用量与鉴权 |
+| `ochub-core` | 领域模型、SQLite 存储、连接切换、客户端配置写入、同步、MCP、技能、会话、用量与鉴权 |
 | `ochub-convert` | 受支持 API 方言之间的请求与响应转换 |
-| `ochub-app` | 承载 core 与中转网关的 GPUI 原生桌面应用 |
+| `ochub-app` | 承载 core 与网关的 GPUI 原生桌面应用 |
 | `ochcli` | 无界面 CLI 与本地 daemon IPC |
 
 ## 平台相关

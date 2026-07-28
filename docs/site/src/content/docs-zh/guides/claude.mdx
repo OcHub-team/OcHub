@@ -6,30 +6,30 @@ sidebar:
   order: 5
 ---
 
-Claude Code 与 Claude Desktop 都采用“当前供应商切换”模式：切换后，工具的实时配置只指向
+Claude Code 与 Claude Desktop 都采用“当前连接切换”模式：切换后，工具的实时配置只指向
 当前连接。两者共享 Claude 生态，但 OcHub 能管理的范围不同。
 
 | 能力 | Claude Code | Claude Desktop |
 | --- | --- | --- |
 | 直接连接与官方登录 | 支持 | 支持 |
-| 中转 | 支持 | 支持 |
+| 模型供应商 | 支持 | 支持 |
 | MCP 管理 | 支持 | 不支持 |
 | 技能分发 | 支持 | 不支持 |
 | Claude 插件集成 | 支持 | 不适用 |
 | 会话读取 | 支持 | 不作为主要会话来源 |
 
 如果主要在终端中编程，先配置 Claude Code；如果只需要桌面客户端使用第三方接口，再单独配置
-Claude Desktop。两个应用的供应商不会自动互相复制。
+Claude Desktop。两个应用的连接不会自动互相复制。
 
 ## 配置 Claude Code 直接连接
 
 <Steps>
 
-1. **打开 Claude Code。** 在左侧应用列表中选择 **Claude Code**，点击“新增供应商”。
+1. **打开 Claude Code。** 在左侧应用列表中选择 **Claude Code**，点击“新增连接”。
 
 2. **填写端点。** Base URL 填写供应商给出的 Anthropic 兼容地址。Claude Code 会在地址后请求 `/v1/messages`，不要把完整的消息接口重复拼到普通 Base URL 中。
 
-3. **选择鉴权变量。** 第三方中转通常选择 `ANTHROPIC_AUTH_TOKEN（Bearer）`；Anthropic 官方密钥通常选择 `ANTHROPIC_API_KEY（x-api-key）`。以供应商文档要求的请求头为准。
+3. **选择鉴权变量。** 第三方模型供应商通常选择 `ANTHROPIC_AUTH_TOKEN（Bearer）`；Anthropic 官方密钥通常选择 `ANTHROPIC_API_KEY（x-api-key）`。以供应商文档要求的请求头为准。
 
 4. **填写 API Key。** OcHub 只会把密钥写入上一步选中的变量，并移除另一种互斥鉴权变量，避免同一请求携带两套凭据。
 
@@ -37,7 +37,7 @@ Claude Desktop。两个应用的供应商不会自动互相复制。
 
 6. **查看写入预览。** 展开“将写入的文件”，确认目标是 Claude 配置目录中的 `settings.json`，且未意外覆盖 hooks、permissions、statusline 等原有字段。
 
-7. **保存并切换。** 保存只把供应商加入 OcHub；点击“切换”后才会把它设为 Claude Code 当前连接。
+7. **保存并切换。** 保存只把连接加入 OcHub；点击“切换”后才会把它设为 Claude Code 当前连接。
 
 8. **重开终端验证。** 退出正在运行的 Claude Code 会话，新开终端发起一条短请求，再到 OcHub 的“用量”或目标供应商后台核对请求。
 
@@ -75,7 +75,7 @@ haiku 不支持这一标记。只有上游明确支持相应模型和上下文�
 
 ## 使用官方登录
 
-Claude Code 已经完成官方账号登录时，可以新增“官方登录”供应商。它不会写入第三方 Base URL
+Claude Code 已经完成官方账号登录时，可以新增“官方登录”连接。它不会写入第三方 Base URL
 或 API Key，而是沿用 Claude Code 自己的登录状态。
 
 适合在以下情况使用：
@@ -121,7 +121,7 @@ Claude Code 的**应用设置**提供“Claude 插件集成”。开启后，OcH
 Claude Desktop 的连接与 Claude Code 分开管理：
 
 1. 打开 **Claude Desktop** 应用页。
-2. 新增第三方供应商，填写 Base URL 与 API Key；或选择官方登录。
+2. 新增第三方连接，填写 Base URL 与 API Key；或选择官方登录。
 3. 展开写入预览，确认目标位于 Claude Desktop 配置目录。
 4. 保存并切换。
 5. 完全退出 Claude Desktop 后重新打开，发起一条短请求。
@@ -159,5 +159,5 @@ Claude Code 默认使用 `~/.claude`。在应用页右上角进入**应用设置
 - 需要的 MCP 与技能只分发到预期应用。
 - 自定义目录与写入预览中的路径一致。
 
-继续阅读[管理供应商](/zh/guides/providers)了解复制和配置漂移，或阅读
+继续阅读[管理连接](/zh/guides/providers)了解复制和配置漂移，或阅读
 [管理 MCP 与技能](/zh/guides/mcp-skills)完成共享能力配置。

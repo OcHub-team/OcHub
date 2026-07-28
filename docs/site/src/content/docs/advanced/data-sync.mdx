@@ -6,7 +6,7 @@ sidebar:
   order: 1
 ---
 
-Providers, MCP servers, skill repositories, settings, and some usage data live
+Connections, MCP servers, skill repositories, settings, and some usage data live
 in the local OcHub database. Remote sync uploads the database and managed-skill
 snapshot; it does not copy every AI tool's full live configuration directory.
 
@@ -26,7 +26,7 @@ Under Data and backups, configure:
 - **Automatic backup interval**: how often to create a local database snapshot.
 - **Backups to keep**: older snapshots beyond this limit are pruned.
 
-Use a shorter interval while frequently changing providers or sync settings.
+Use a shorter interval while frequently changing connections or sync settings.
 Lower retention when disk space is limited.
 
 ## Manual backup and restore
@@ -37,7 +37,7 @@ Open **Advanced tools → Database backups**:
 2. Rename the snapshot to record its purpose and date.
 3. Before restoring, verify the name. OcHub first makes a safety backup of the
    current database.
-4. Restart and inspect providers, MCP, skills, and settings after restoration.
+4. Restart and inspect connections, MCP, skills, and settings after restoration.
 
 Deleting a backup cannot be undone. Keep at least one verified copy outside the
 active OcHub data directory.

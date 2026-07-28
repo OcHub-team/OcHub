@@ -70,19 +70,19 @@ impl AppConfig for CodexConfig {
                             placeholder: "https://api.example.com/v1".into(),
                         },
                     )
-                    .help("API 中转模式必须填写，通常以 /v1 结尾；仅账号登录时可留空使用 Codex 官方端点。"),
+                    .help("第三方 API 模式必须填写，通常以 /v1 结尾；仅账号登录时可留空使用 Codex 官方端点。"),
                     FormField::new(
                         "auth_mode",
                         "鉴权方式",
                         FieldKind::Select {
                             options: vec![
-                                SelectOption::new(AUTH_API_KEY, "仅 API 中转")
+                                SelectOption::new(AUTH_API_KEY, "仅第三方 API")
                                     .with_hint("experimental_bearer_token"),
                                 SelectOption::new(AUTH_OPENAI_LOGIN, "仅 ChatGPT 账号登录")
                                     .with_hint("requires_openai_auth=true"),
                                 SelectOption::new(
                                     AUTH_OPENAI_LOGIN_WITH_API_KEY,
-                                    "ChatGPT 登录 + API 中转",
+                                    "ChatGPT 登录 + 第三方 API",
                                 )
                                 .with_hint(
                                     "auth.json 保留登录态，请求使用 experimental_bearer_token",
@@ -90,15 +90,15 @@ impl AppConfig for CodexConfig {
                             ],
                         },
                     )
-                    .help("组合模式不会把中转密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。"),
+                    .help("组合模式不会把第三方密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。"),
                     FormField::new(
                         "api_key",
-                        "中转 API Key",
+                        "第三方 API Key",
                         FieldKind::Secret {
                             placeholder: "sk-...".into(),
                         },
                     )
-                    .help("仅两种 API 中转模式使用；保存后写入当前 provider 的 experimental_bearer_token。"),
+                    .help("仅两种第三方 API 模式使用；保存后写入当前 provider 的 experimental_bearer_token。"),
                 ],
             ),
             FormSection::new(
@@ -393,11 +393,13 @@ impl AppConfig for CodexConfig {
             && str_val(values, "api_key").trim().is_empty()
             && str_val(values, LEGACY_ENV_KEY).trim().is_empty()
         {
-            issues.push(ConfigIssue::warning("中转模式尚未填写 API Key。").for_field("api_key"));
+            issues.push(
+                ConfigIssue::warning("第三方 API 模式尚未填写 API Key。").for_field("api_key"),
+            );
         }
         if !uses_relay && !str_val(values, "api_key").trim().is_empty() {
             issues.push(
-                ConfigIssue::info("仅账号登录模式不会使用该中转 API Key，保存时将移除。")
+                ConfigIssue::info("仅账号登录模式不会使用该第三方 API Key，保存时将移除。")
                     .for_field("api_key"),
             );
         }

@@ -24,7 +24,7 @@ use crate::services::provider::ProviderService;
 /// Fixed provider id for gateway entries (per app list).
 pub const GATEWAY_PROVIDER_ID: &str = "local-gateway";
 #[cfg(test)]
-const GATEWAY_PROVIDER_NAME: &str = "OcHub 中转模式";
+const GATEWAY_PROVIDER_NAME: &str = "OcHub 模型供应商模式";
 pub const STATION_ROUTE_PREFIX: &str = "station:";
 
 /// Stable provider id for one relay station. Hex encoding makes arbitrary
@@ -214,9 +214,9 @@ pub fn activate_route_for_app(
     let route = state
         .db
         .get_gateway_route_by_id(route_id)?
-        .ok_or_else(|| AppError::InvalidInput("找不到中转配置".to_string()))?;
+        .ok_or_else(|| AppError::InvalidInput("找不到模型供应商配置".to_string()))?;
     if !route.enabled {
-        return Err(AppError::InvalidInput("该中转配置已停用".to_string()));
+        return Err(AppError::InvalidInput("该模型供应商配置已停用".to_string()));
     }
     if route
         .app_type
@@ -224,7 +224,7 @@ pub fn activate_route_for_app(
         .is_some_and(|bound| bound != app_type.as_str())
     {
         return Err(AppError::InvalidInput(
-            "该中转配置不适用于当前应用".to_string(),
+            "该模型供应商配置不适用于当前应用".to_string(),
         ));
     }
     ensure_key_for_route(state, app_type.as_str(), Some(route_id))
@@ -501,7 +501,9 @@ pub fn apply_to_app(
         .iter()
         .any(|channel| channel.enabled)
     {
-        return Err(AppError::InvalidInput("请先添加并启用一个中转".to_string()));
+        return Err(AppError::InvalidInput(
+            "请先添加并启用一个模型供应商".to_string(),
+        ));
     }
     let mut station_routes: Vec<GatewayRoute> = state
         .db
@@ -510,13 +512,17 @@ pub fn apply_to_app(
         .filter(|route| route.enabled && route.id.starts_with(STATION_ROUTE_PREFIX))
         .collect();
     let route = match station_routes.len() {
-        0 => return Err(AppError::InvalidInput("请先添加并启用一个中转".to_string())),
+        0 => {
+            return Err(AppError::InvalidInput(
+                "请先添加并启用一个模型供应商".to_string(),
+            ))
+        }
         1 => station_routes.remove(0),
         // Refuse to pick one implicitly: which station wins would depend on DB
         // ordering, and a silent wrong pick is worse than asking the user.
         _ => {
             return Err(AppError::InvalidInput(
-                "存在多个已启用的中转，请在中转页面选择要应用的一个".to_string(),
+                "存在多个已启用的模型供应商，请在模型供应商页面选择要应用的一个".to_string(),
             ))
         }
     };
@@ -532,12 +538,14 @@ fn station_route_for_apply(
     let route = state
         .db
         .get_gateway_route_by_id(station_route_id)?
-        .ok_or_else(|| AppError::InvalidInput("找不到中转配置".to_string()))?;
+        .ok_or_else(|| AppError::InvalidInput("找不到模型供应商配置".to_string()))?;
     if !route.enabled {
-        return Err(AppError::InvalidInput("该中转配置已停用".to_string()));
+        return Err(AppError::InvalidInput("该模型供应商配置已停用".to_string()));
     }
     if !route.id.starts_with(STATION_ROUTE_PREFIX) {
-        return Err(AppError::InvalidInput("选择的配置不是中转配置".to_string()));
+        return Err(AppError::InvalidInput(
+            "选择的配置不是模型供应商配置".to_string(),
+        ));
     }
     let channels = state.db.get_gateway_channels()?;
     let enabled_channels: Vec<&GatewayChannel> = channels
@@ -545,14 +553,16 @@ fn station_route_for_apply(
         .filter(|channel| channel.enabled && route.channel_ids.contains(&channel.id))
         .collect();
     if enabled_channels.is_empty() {
-        return Err(AppError::InvalidInput("中转没有可用的服务地址".to_string()));
+        return Err(AppError::InvalidInput(
+            "模型供应商没有可用的服务地址".to_string(),
+        ));
     }
     if !enabled_channels
         .iter()
         .any(|channel| dialect_compatible(channel.dialect, app_type))
     {
         return Err(AppError::InvalidInput(format!(
-            "无法应用到 {}：「{}」是 OpenAI Chat 格式的中转，暂不支持该应用",
+            "无法应用到 {}：「{}」是 OpenAI Chat 格式的模型供应商，暂不支持该应用",
             app_label(app_type),
             route.name
         )));
@@ -669,7 +679,7 @@ pub fn build_station_channel(
         Some(&route.id),
     )?;
     let codec = provider_config::config_for(app_type).ok_or_else(|| {
-        AppError::InvalidInput(format!("{} 暂不支持中转站渠道", app_label(app_type)))
+        AppError::InvalidInput(format!("{} 暂不支持模型供应商渠道", app_label(app_type)))
     })?;
     let mut merged = values.clone();
     provider_config::inject_station_endpoint(
@@ -728,7 +738,7 @@ pub fn refresh_station_channel_settings(
         .meta
         .as_ref()
         .and_then(|meta| meta.gateway_route_id.as_deref())
-        .ok_or_else(|| AppError::InvalidInput("该渠道不关联中转站".to_string()))?;
+        .ok_or_else(|| AppError::InvalidInput("该渠道不关联模型供应商".to_string()))?;
     let route = station_route_for_apply(state, app_type, route_id)?;
     let key = ensure_key_for_route(
         state,
@@ -736,7 +746,7 @@ pub fn refresh_station_channel_settings(
         Some(&route.id),
     )?;
     let codec = provider_config::config_for(app_type).ok_or_else(|| {
-        AppError::InvalidInput(format!("{} 暂不支持中转站渠道", app_label(app_type)))
+        AppError::InvalidInput(format!("{} 暂不支持模型供应商渠道", app_label(app_type)))
     })?;
     let mut values = codec.decode(&provider.settings_config, provider.meta.as_ref());
     provider_config::inject_station_endpoint(
@@ -883,7 +893,7 @@ fn apply_route_to_app(
         category: Some("gateway".to_string()),
         created_at: Some(chrono::Utc::now().timestamp()),
         sort_index: None,
-        notes: Some("由 OcHub 中转模式自动管理".to_string()),
+        notes: Some("由 OcHub 模型供应商模式自动管理".to_string()),
         meta: Some(meta),
         icon: None,
         icon_color: None,
@@ -957,7 +967,7 @@ pub fn import_provider_as_channel(
         .ok_or_else(|| AppError::InvalidInput("找不到要导入的连接".to_string()))?;
     if provider.id == GATEWAY_PROVIDER_ID || provider.category.as_deref() == Some("gateway") {
         return Err(AppError::InvalidInput(
-            "中转模式不能再次导入为中转".to_string(),
+            "模型供应商模式不能再次导入为模型供应商".to_string(),
         ));
     }
     if provider
@@ -966,7 +976,7 @@ pub fn import_provider_as_channel(
         .is_some_and(|meta| meta.gateway_route_id.is_some())
     {
         return Err(AppError::InvalidInput(
-            "中转站渠道指向本地网关，不能导入为上游".to_string(),
+            "模型供应商渠道指向本地网关，不能导入为上游".to_string(),
         ));
     }
 
@@ -1355,7 +1365,7 @@ mod tests {
 
         let err = apply_to_app(&state, AppType::Claude, "http://127.0.0.1:4180").unwrap_err();
 
-        assert!(err.to_string().contains("多个已启用的中转"));
+        assert!(err.to_string().contains("多个已启用的模型供应商"));
     }
 
     #[test]
@@ -1366,7 +1376,7 @@ mod tests {
         let err = apply_station_to_app(&state, AppType::Claude, "http://127.0.0.1:4180", &route.id)
             .unwrap_err();
 
-        assert!(err.to_string().contains("不是中转配置"));
+        assert!(err.to_string().contains("不是模型供应商配置"));
     }
 
     #[test]
@@ -1581,7 +1591,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("找不到中转配置"));
+        assert!(err.to_string().contains("找不到模型供应商配置"));
     }
 
     #[test]

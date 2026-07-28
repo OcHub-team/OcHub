@@ -16,10 +16,10 @@ request.
 ## General sequence
 
 1. Record the complete status message shown by OcHub.
-2. Confirm the current app, provider, or relay station.
+2. Confirm the current app, connection, or model provider.
 3. Expand Files to be written and verify the path and important fields.
 4. Restart the target CLI and send the shortest possible request.
-5. For relay mode, confirm OcHub is running and inspect the Usage request log.
+5. For model provider mode, confirm OcHub is running and inspect the Usage request log.
 6. Change model mapping, reasoning, or environment variables only after those
    checks.
 
@@ -30,8 +30,8 @@ request.
 - Exit the running CLI; an existing process may cache configuration.
 - Look for an external-modification conflict or another manager writing the
   file.
-- OpenCode, OpenClaw, and Hermes keep multiple providers. Claude, Claude
-  Desktop, Codex, and Grok Build emphasize a current provider, so their actions
+- OpenCode, OpenClaw, and Hermes keep multiple connections. Claude, Claude
+  Desktop, Codex, and Grok Build emphasize a current connection, so their actions
   differ.
 
 ## The address is reachable but requests fail
@@ -46,10 +46,10 @@ Then check:
 - Whether a default model or exception rewrote the request.
 - The exact upstream status code and error.
 
-## Relay station cannot connect
+## Model provider cannot connect
 
 - Confirm the card is enabled.
-- Confirm that the station was applied to the app instead of only saved.
+- Confirm that the model provider was applied to the app instead of only saved.
 - Use connectivity checks to separate local-gateway and upstream failures.
 - Temporarily switch to a verified direct connection to prove the CLI still
   works.
@@ -79,7 +79,7 @@ Then check:
 - Check the app config directory, session range, and app filter.
 - Refresh and wait for scanning to finish.
 - Reset Provider, model, and status filters in Usage.
-- Only relay requests consistently include gateway latency; session imports may
+- Only gateway requests consistently include gateway latency; session imports may
   omit fields.
 
 ## Sync or restore fails

@@ -109,7 +109,7 @@ impl AppConfig for ClaudeConfig {
                         FieldKind::Select {
                             options: vec![
                                 SelectOption::new(AUTH_TOKEN_KEY, "ANTHROPIC_AUTH_TOKEN（Bearer）")
-                                    .with_hint("中转/第三方默认；走 Authorization: Bearer"),
+                                    .with_hint("第三方服务默认；走 Authorization: Bearer"),
                                 SelectOption::new(AUTH_API_KEY, "ANTHROPIC_API_KEY（x-api-key）")
                                     .with_hint("Anthropic 官方密钥；走 x-api-key"),
                             ],
@@ -382,7 +382,7 @@ impl AppConfig for ClaudeConfig {
         if auth_field == AUTH_API_KEY {
             issues.push(
                 ConfigIssue::info(
-                    "已选 ANTHROPIC_API_KEY（x-api-key）；多数中转服务需改用 ANTHROPIC_AUTH_TOKEN（Bearer）。",
+                    "已选 ANTHROPIC_API_KEY（x-api-key）；多数第三方服务需改用 ANTHROPIC_AUTH_TOKEN（Bearer）。",
                 )
                 .for_field("auth_field"),
             );

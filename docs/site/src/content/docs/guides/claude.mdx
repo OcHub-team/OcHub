@@ -6,14 +6,14 @@ sidebar:
   order: 5
 ---
 
-Claude Code and Claude Desktop both use current-provider switching: their live
+Claude Code and Claude Desktop both use current-connection switching: their live
 configuration points to one active connection. They share the Claude ecosystem,
 but OcHub manages a different capability set for each.
 
 | Capability | Claude Code | Claude Desktop |
 | --- | --- | --- |
 | Direct connection and official login | Yes | Yes |
-| Relay station | Yes | Yes |
+| Model provider | Yes | Yes |
 | MCP management | Yes | No |
 | Skill distribution | Yes | No |
 | Claude plugin integration | Yes | Not applicable |
@@ -21,20 +21,20 @@ but OcHub manages a different capability set for each.
 
 If you mainly code in a terminal, configure Claude Code first. Configure Claude
 Desktop separately when its desktop client needs a third-party endpoint.
-Providers are not copied between the two automatically.
+Connections are not copied between the two automatically.
 
 ## Configure a Claude Code direct connection
 
 <Steps>
 
 1. **Open Claude Code.** Select Claude Code under Apps and choose **Add
-   provider**.
+   connection**.
 
 2. **Enter the endpoint.** Use the Anthropic-compatible Base URL supplied by
    the provider. Claude Code requests `/v1/messages` under it, so do not append
    the full Messages endpoint to a normal Base URL.
 
-3. **Choose an auth variable.** Third-party relays usually use
+3. **Choose an auth variable.** Third-party services usually use
    `ANTHROPIC_AUTH_TOKEN` with Bearer auth. Official Anthropic keys usually use
    `ANTHROPIC_API_KEY` with `x-api-key`. Follow the provider's required header.
 
@@ -48,7 +48,7 @@ Providers are not copied between the two automatically.
    `settings.json` and make sure native hooks, permissions, and statusline
    fields are preserved.
 
-7. **Save and switch.** Save adds the provider to OcHub; Switch makes it the
+7. **Save and switch.** Save adds the connection to OcHub; Switch makes it the
    current Claude Code connection.
 
 8. **Verify in a new terminal.** Quit an existing Claude Code session, make a
@@ -88,7 +88,7 @@ A safe sequence is:
 
 ## Use official login
 
-If Claude Code is already signed in, add an Official login provider. It writes
+If Claude Code is already signed in, add an Official login connection. It writes
 no third-party Base URL or key and keeps Claude Code's own account state.
 
 Use it to:
@@ -136,7 +136,7 @@ flow again, use **Restore Claude onboarding** under Advanced tools.
 Claude Desktop connections are managed separately:
 
 1. Open the Claude Desktop app page.
-2. Add a third-party provider with Base URL and key, or choose Official login.
+2. Add a third-party connection with Base URL and key, or choose Official login.
 3. Expand the preview and verify the Claude Desktop destination.
 4. Save and switch.
 5. Fully quit Claude Desktop, reopen it, and make a short request.
@@ -169,5 +169,5 @@ Before considering the setup complete, verify a real Claude Code conversation,
 the correct model in usage or provider logs, a clean switch to official login,
 and the expected MCP and skill targets.
 
-Continue with [Manage providers](/guides/providers) for copy and drift behavior,
+Continue with [Manage connections](/guides/providers) for copy and drift behavior,
 or [Manage MCP and skills](/guides/mcp-skills) for shared capabilities.

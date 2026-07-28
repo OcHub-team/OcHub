@@ -6,7 +6,7 @@ sidebar:
 ---
 
 OcHub is a native desktop control center for AI coding tools. It lets you switch
-providers, manage shared capabilities, and run a local relay from one place —
+model providers, manage shared capabilities, and run a local gateway from one place —
 without a browser shell or webview.
 
 ## What OcHub manages
@@ -16,8 +16,8 @@ OpenClaw, and Hermes**.
 
 | Area | Capabilities |
 | --- | --- |
-| Providers | Discover, import, edit, switch, and test direct API providers |
-| Relay station | Route supported clients through a local gateway with model aliases, reasoning mapping, interface-candidate retry, backup-station switching, health checks, and usage accounting |
+| Connections | Discover, import, edit, switch, and test direct API connections |
+| Model providers | Route supported clients through a local gateway with model aliases, reasoning mapping, interface-candidate retry, backup-provider switching, health checks, and usage accounting |
 | Shared tools | Manage MCP servers and reusable skills across supported clients |
 | Operations | Browse sessions, inspect usage, configure sync, and manage app behavior |
 | Migration | One-time, read-only import from compatible cc-switch databases |
@@ -28,7 +28,7 @@ OcHub owns `~/.ochub/` and never writes back to `~/.cc-switch/`. It does update
 the live configuration directories of tools you explicitly manage.
 
 :::caution
-Quit cc-switch before switching providers in OcHub — both write the same tool
+Quit cc-switch before switching connections in OcHub — both write the same tool
 configuration directories, and running them together can interleave writes.
 :::
 
@@ -41,7 +41,7 @@ configuration before trying an early build.
 
 - [Install](/install) — Homebrew, direct downloads, and first-launch approval
 - [Quick start](/getting-started) — choose an app and complete the first connection
-- [Everyday features](/guides) — providers, MCP, skills, sessions, and usage
+- [Everyday features](/guides) — connections, MCP, skills, sessions, and usage
 - [Advanced features](/advanced) — routing, CLI maintenance, backup, and sync
 - [App-specific guides](/guides/claude) — Claude, Codex, OpenCode, and the other supported tools
 - [Migrate from cc-switch](/guides/migration) — import, collision handling, and rollback

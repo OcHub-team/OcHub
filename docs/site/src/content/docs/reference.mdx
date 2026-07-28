@@ -11,18 +11,18 @@ sidebar:
 
 ## Supported apps
 
-| App | Provider write mode | MCP | Skills | App-specific capabilities |
+| App | Connection write mode | MCP | Skills | App-specific capabilities |
 | --- | --- | --- | --- | --- |
-| Claude Code | Current-provider switching | Yes | Yes | Plugins, role models, sessions |
-| Claude Desktop | Current-provider switching | No | No | Official and third-party connections |
-| Codex | Current-provider switching | Yes | Yes | OAuth, model catalog, session history |
-| Grok Build | Current-provider switching | Yes | No | Profiles and API backends |
-| OpenCode | Multiple providers coexist | Yes | Yes | Multiple models, sessions, OMO |
-| OpenClaw | Multiple providers coexist | No | No | Default model, tools, environment |
-| Hermes | Multiple providers coexist | Yes | Yes | Models, rate limiting, memory |
+| Claude Code | Current-connection switching | Yes | Yes | Plugins, role models, sessions |
+| Claude Desktop | Current-connection switching | No | No | Official and third-party connections |
+| Codex | Current-connection switching | Yes | Yes | OAuth, model catalog, session history |
+| Grok Build | Current-connection switching | Yes | No | Profiles and API backends |
+| OpenCode | Multiple connections coexist | Yes | Yes | Multiple models, sessions, OMO |
+| OpenClaw | Multiple connections coexist | No | No | Default model, tools, environment |
+| Hermes | Multiple connections coexist | Yes | Yes | Models, rate limiting, memory |
 
-Current-provider switching emphasizes one live connection. Coexistence writes
-multiple providers into the tool so it or OcHub can select among them.
+Current-connection switching emphasizes one live connection. Coexistence writes
+multiple connections into the tool so it or OcHub can select among them.
 
 ## Default paths
 
@@ -51,12 +51,12 @@ changing it.
 | Current | The target app is currently using this connection |
 | Added | Present in the tool, but not current |
 | Direct connection | The tool calls the provider directly |
-| Relay mode | The tool calls the OcHub local gateway |
-| Applied | A relay station has been written to the app |
+| Model provider mode | The tool calls the OcHub local gateway |
+| Applied | A model provider has been written to the app |
 | Disabled | Configuration remains, but cannot be applied or routed |
 | Not checked | No connectivity check has run yet |
 
-## Relay interfaces
+## Model provider interfaces
 
 | Interface | Typical client |
 | --- | --- |
@@ -98,13 +98,13 @@ server and target app.
   <dt>App</dt>
   <dd>An AI tool whose configuration OcHub manages, such as Claude Code or Codex.</dd>
 
-  <dt>Provider</dt>
+  <dt>Connection</dt>
   <dd>A set of API, official-login, or model-service connection details.</dd>
 
   <dt>Direct connection</dt>
   <dd>A tool-to-provider request that does not pass through the OcHub gateway.</dd>
 
-  <dt>Relay station</dt>
+  <dt>Model provider</dt>
   <dd>An upstream configuration used by the local gateway for protocol conversion, model mapping, and interface-candidate retry.</dd>
 
   <dt>Configuration drift</dt>
@@ -123,6 +123,6 @@ server and target app.
   screenshot, or document.
 - Do not expose the local gateway directly to the public internet.
 - Run only trusted MCP commands and skills.
-- Back up before replacing a database or deleting sessions or providers.
+- Back up before replacing a database or deleting sessions or connections.
 - Do not let OcHub and another configuration manager write the same file at
   once.

@@ -8,23 +8,23 @@ sidebar:
 
 Codex uses both `config.toml` and `auth.json`. The first stores models and
 providers; the second stores official account login material. OcHub manages
-them as one provider configuration without pretending that an API key is an
+them as one connection without pretending that an API key is an
 official login.
 
 ## Choose an authentication mode
 
 | Mode | Account state | Model-request credential | Use it for |
 | --- | --- | --- | --- |
-| API relay only | ChatGPT login not required | Relay API key | A fully third-party Responses upstream |
+| Third-party API only | ChatGPT login not required | Third-party API key | A fully third-party Responses upstream |
 | ChatGPT login only | Uses `auth.json` | Official login state | Official Codex account and endpoint |
-| ChatGPT login + API relay | Preserves `auth.json` | Relay API key | Account features with third-party model requests |
+| ChatGPT login + third-party API | Preserves `auth.json` | Third-party API key | Account features with third-party model requests |
 
 In combined mode, `auth.json` still owns the account. Model requests use the
 current provider's `experimental_bearer_token`.
 
 <Aside type="note" title="OAuth and API keys have separate jobs">
 
-**Keep current OAuth for third-party providers** prevents a switch from
+**Keep current OAuth for third parties** prevents a switch from
 overwriting `auth.json`. It does not replace an API key required by a
 third-party upstream.
 
@@ -34,7 +34,7 @@ third-party upstream.
 
 <Steps>
 
-1. **Open Codex and add a provider.** Start from a preset when one matches, then
+1. **Open Codex and add a connection.** Start from a preset when one matches, then
    verify every field.
 
 2. **Set the Provider ID.** This is the key under
@@ -47,14 +47,14 @@ third-party upstream.
 4. **Enter the Base URL.** Third-party mode normally ends in `/v1`, after which
    Codex appends `/responses`.
 
-5. **Choose auth and enter a key.** API relay and combined mode use the relay
+5. **Choose auth and enter a key.** Third-party API and combined mode use the third-party
    key. Login-only mode does not.
 
 6. **Choose a model.** Use an ID actually supported upstream. Add `minimal`,
    `low`, `medium`, `high`, or `xhigh` reasoning only when needed.
 
 7. **Keep `wire_api = responses`.** Codex no longer supports `chat`.
-   Chat-only upstreams require OcHub relay conversion.
+   Chat-only upstreams require OcHub gateway conversion.
 
 8. **Review and switch.** Confirm the Provider ID, endpoint, model, and auth
    mode in the `config.toml` preview.
@@ -64,9 +64,9 @@ third-party upstream.
 
 </Steps>
 
-## When to use a relay station
+## When to use a model provider
 
-Prefer [relay mode](/getting-started/relay) when:
+Prefer [model provider mode](/getting-started/relay) when:
 
 - The upstream supports Chat Completions but not Responses.
 - A Codex model alias must be rewritten to an upstream ID.
@@ -108,12 +108,12 @@ secrets in the dedicated API-key field rather than ordinary custom headers.
 
 If Codex is already signed in:
 
-1. Add or choose an Official login provider.
+1. Add or choose an Official login connection.
 2. Switch and confirm the official endpoint behavior returns.
 3. Restart Codex.
 4. Make one request and verify that no third-party provider error remains.
 
-Enable **Keep current OAuth for third-party providers** in Codex App settings
+Enable **Keep current OAuth for third parties** in Codex App settings
 to preserve `auth.json` while using third-party model requests and make
 switching back easy.
 
@@ -150,12 +150,12 @@ Codex supports OcHub-managed MCP and skills.
 
 | Symptom | Likely direction | Fix |
 | --- | --- | --- |
-| `chat` was removed | Wrong `wire_api` or Chat-only upstream | Use Responses or relay conversion |
+| `chat` was removed | Wrong `wire_api` or Chat-only upstream | Use Responses or gateway conversion |
 | Base URL returns 404 | Incorrect `/v1` level | Verify the final path is `/v1/responses` |
-| Account remains but request gets 401 | OAuth is not the third-party key | Check mode and relay API key |
+| Account remains but request gets 401 | OAuth is not the third-party key | Check mode and third-party API key |
 | Remote compaction fails | Incomplete Responses support | Disable it or use a Responses upstream |
 | Model did not change | An old Codex process is running | Restart and inspect the preview |
 | Session count is wrong | History directory or unify setting changed | Verify the directory and backup |
 
 For a Chat-only upstream, continue to
-[Relay routing recipes](/advanced/routing-recipes).
+[Routing recipes](/advanced/routing-recipes).

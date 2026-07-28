@@ -1,22 +1,22 @@
 ---
-title: Relay routing recipes
+title: Routing recipes
 description: Solve common routing needs with model exceptions, protocol conversion, defaults, and reasoning mapping.
 audience: human
 sidebar:
   order: 2
 ---
 
-This guide assumes you have a [working relay station](/getting-started/relay)
+This guide assumes you have a [working model provider](/getting-started/relay)
 and at least one tool can make a request through OcHub. Each recipe adds only
 one layer so its effect is visible in the request log.
 
 ## Understand the decision order
 
-A relayed request:
+A request through the gateway:
 
 1. Identifies the client protocol: Anthropic Messages, OpenAI Chat, or OpenAI
    Responses.
-2. Finds the station connected to that app.
+2. Finds the model provider connected to that app.
 3. Matches the client model against the first applicable exception.
 4. Chooses the upstream model name.
 5. Builds candidates from enabled interfaces.
@@ -25,7 +25,7 @@ A relayed request:
 8. Records request model, upstream model, pricing model, tokens, status, and
    latency.
 
-Enter an upstream origin or custom prefix as the station API address, not a
+Enter an upstream origin or custom prefix as the model provider's API address, not a
 standard inference endpoint. If the final endpoint is
 `https://api.example.com/v1/messages`, normally enter
 `https://api.example.com`. OcHub appends the path for the selected interface.
@@ -59,7 +59,7 @@ first matching rule wins, so put exact models before broad patterns.
 Goal: let the client request `claude-sonnet-current` while the upstream receives
 `anthropic/claude-sonnet-4-6`.
 
-1. Edit the station and expand Model exceptions.
+1. Edit the model provider and expand Model exceptions.
 2. Add an exception.
 3. Set Model or pattern to `claude-sonnet-current`.
 4. Set Upstream model to `anthropic/claude-sonnet-4-6`.
@@ -75,10 +75,10 @@ provider-side logs when needed.
 Goal: Codex sends Responses requests, while the commercial upstream exposes
 only Chat Completions.
 
-1. Add or edit a station.
+1. Add or edit a model provider.
 2. Enter the Chat upstream base without `/v1/chat/completions`.
 3. Enable only **OpenAI Chat**.
-4. Switch **Codex** onto the station from its app page.
+4. Switch **Codex** onto the model provider from its app page.
 5. Add no model exception initially; let automatic routing convert Responses
    to Chat.
 6. Restart Codex and send a short request that does not depend on special
@@ -159,12 +159,12 @@ The four automatic budgets must be positive and ascending:
 Higher reasoning budgets can increase both time to first token and billed
 output or reasoning tokens.
 
-## Recipe 7: prepare a backup station
+## Recipe 7: prepare a backup model provider
 
 OcHub automatically selects and retries **enabled interfaces inside one
-station**. It does not automatically move from one station card to another.
+model provider**. It does not automatically move from one card to another.
 
-1. Create Primary and Backup stations.
+1. Create Primary and Backup model providers.
 2. Verify both with detection and a real request.
 3. Configure equivalent aliases.
 4. Keep the app on Primary normally.
@@ -180,7 +180,7 @@ an outage. Restore a working path first.
 | Field | Confirms |
 | --- | --- |
 | App | Correct client attribution |
-| Provider | Expected station |
+| Client model | Expected model provider |
 | Request model | Original model or alias |
 | Model | Upstream-returned or actual model |
 | Pricing model | Price-table model |
@@ -204,5 +204,5 @@ Change one variable per test and use a recognizable short prompt.
 | Latency jumps | Conversion, reasoning budget, or upstream health | Compare request details and backup |
 | Cost is 0 | Pricing model has no price | Add it under [Pricing](/advanced/pricing) |
 
-After rules stabilize, apply the station to other tools one at a time and make
+After rules stabilize, apply the model provider to other tools one at a time and make
 a real request from each protocol.

@@ -17,13 +17,13 @@ always have a known-good state to return to.
 
 | Goal | Guide |
 | --- | --- |
-| Solve real routing needs with aliases, protocol conversion, and exceptions | [Relay routing recipes](/advanced/routing-recipes) |
+| Solve real routing needs with aliases, protocol conversion, and exceptions | [Routing recipes](/advanced/routing-recipes) |
 | Align token cost with prices, multipliers, and billing | [Model pricing and cost calibration](/advanced/pricing) |
 | Create snapshots and sync with WebDAV or S3/R2 | [Data, backups, and sync](/advanced/data-sync) |
 
 ## Automatic routing and protocol conversion
 
-A relay station can enable:
+A model provider can enable:
 
 - Anthropic Messages
 - OpenAI Chat
@@ -56,11 +56,11 @@ Put specific rules before broad patterns and verify each with a real request.
 Any interface referenced by a rule must remain enabled.
 
 For complete precedence rules and examples, see
-[Relay routing recipes](/advanced/routing-recipes).
+[Routing recipes](/advanced/routing-recipes).
 
 ## Reasoning effort
 
-Relay stations offer three modes:
+Model providers offer three modes:
 
 - **Automatic mapping** translates CLI effort levels to upstream token budgets.
 - **Pass through** leaves the client's reasoning parameters unchanged.
@@ -72,18 +72,18 @@ token budgets, follow its interface documentation.
 
 ## Fast switching and a backup upstream
 
-Once a tool has been switched onto a station, its provider page can switch the
+Once a tool has been switched onto a model provider, its connection page can switch the
 active upstream without rewriting tool configuration.
 
 Keep a verified backup. When the primary fails:
 
-1. Switch the app to the backup station.
+1. Switch the app to the backup model provider.
 2. Make one short request.
 3. Compare status and latency in Usage.
 4. Switch back after recovery, without changing model rules during the outage.
 
-Automatic routing selects and retries interfaces inside one station. Moving
-between primary and backup station cards is still manual.
+Automatic routing selects and retries interfaces inside one model provider.
+Moving between primary and backup cards is still manual.
 
 ## Usage and pricing
 
@@ -96,16 +96,16 @@ After aliases or routing rewrites, confirm that the pricing model represents
 the model the provider actually bills. See
 [Model pricing and cost calibration](/advanced/pricing).
 
-## Advanced provider editing
+## Advanced connection editing
 
 ### Common configuration
 
-Common configuration is a snippet shared by providers for one app. Enabling
-**Apply common configuration to this provider** merges it during writes.
+Common configuration is a snippet shared by connections for one app. Enabling
+**Apply common configuration to this connection** merges it during writes.
 
 Before extracting from the current config, make sure it contains no key or
-model that belongs to only one provider, or that value will spread to every
-provider that enables the snippet.
+model that belongs to only one connection, or that value will spread to every
+connection that enables the snippet.
 
 ### Raw file editing
 

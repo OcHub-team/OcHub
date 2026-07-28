@@ -21,7 +21,7 @@ One request can have three model names:
 | Model | Model returned by or used upstream |
 | Pricing model | Model OcHub uses to look up a price |
 
-With relay rewriting, all three can differ. For example, the client may request
+With gateway rewriting, all three can differ. For example, the client may request
 `claude-sonnet-current`, routing may send
 `anthropic/claude-sonnet-4-6`, and the pricing model should follow whichever
 real ID matches billing.
@@ -184,7 +184,7 @@ and the provider invoice as the settlement record.
 
 | Source | Usually includes | May omit |
 | --- | --- | --- |
-| Relay request | Request ID, status, model, tokens, latency | Fields omitted by upstream |
+| Gateway request | Request ID, status, model, tokens, latency | Fields omitted by upstream |
 | CLI session | Model, some tokens, session time | Gateway status and first-token time |
 | Legacy local request | Historical tokens and cost | Current pricing-model semantics |
 | Synchronized session | Fields in the original session file | Provider or detailed cache split |

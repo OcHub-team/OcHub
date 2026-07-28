@@ -19,7 +19,7 @@
 "usage.confirm.delete.title" = "删除手动价格覆盖"
 "usage.data_source.codex_db" = "Codex 数据库"
 "usage.data_source.codex_session" = "Codex 会话"
-"usage.data_source.gateway" = "中转请求"
+"usage.data_source.gateway" = "模型供应商请求"
 "usage.data_source.gemini_session" = "Gemini 会话"
 "usage.data_source.opencode_session" = "OpenCode 会话"
 "usage.data_source.proxy" = "旧版本地请求"

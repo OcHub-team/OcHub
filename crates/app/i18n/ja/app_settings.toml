@@ -3,7 +3,7 @@
 # Checked against zh-Hans/app_settings.toml at build time: every key must be
 # present and use the same {placeholders}. Keys are sorted alphabetically.
 
-"app_settings.behavior.desc" = "プロバイダーの切り替え時や設定の書き込み時に、このアプリがどう動作するかを設定します。"
+"app_settings.behavior.desc" = "接続の切り替え時や設定の書き込み時に、このアプリがどう動作するかを設定します。"
 "app_settings.behavior.title" = "動作"
 "app_settings.claude.onboarding.desc" = "Claude Code の MCP 初期案内を完了済みとして扱います。"
 "app_settings.claude.onboarding.label" = "Claude の初期案内をスキップ"
@@ -11,7 +11,7 @@
 "app_settings.claude.plugin.label" = "Claude プラグイン連携"
 "app_settings.codex.migrate_history.desc" = "有効にすると、次回の移行処理で既存の公式セッション履歴を取り込みます。"
 "app_settings.codex.migrate_history.label" = "既存の Codex セッションを取り込む"
-"app_settings.codex.preserve_auth.desc" = "サードパーティの Codex プロバイダーへ切り替える際に auth.json を上書きせず、ログイン／併用モードでは現在の ChatGPT アカウントを使用します。"
+"app_settings.codex.preserve_auth.desc" = "サードパーティの Codex 接続へ切り替える際に auth.json を上書きせず、ログイン／併用モードでは現在の ChatGPT アカウントを使用します。"
 "app_settings.codex.preserve_auth.label" = "サードパーティでも現在の OAuth を保持"
 "app_settings.codex.unify_history.desc" = "公式とサードパーティの Codex セッションを同じ履歴の場所に書き込みます。"
 "app_settings.codex.unify_history.label" = "Codex のセッション履歴を統合"

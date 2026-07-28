@@ -3,7 +3,7 @@
 # Checked against zh-Hans/app_settings.toml at build time: every key must be
 # present and use the same {placeholders}. Keys are sorted alphabetically.
 
-"app_settings.behavior.desc" = "How this app behaves when OcHub switches providers or writes its config."
+"app_settings.behavior.desc" = "How this app behaves when OcHub switches connections or writes its config."
 "app_settings.behavior.title" = "Behavior"
 "app_settings.claude.onboarding.desc" = "Mark Claude Code's MCP onboarding as already completed."
 "app_settings.claude.onboarding.label" = "Skip Claude onboarding"
@@ -11,7 +11,7 @@
 "app_settings.claude.plugin.label" = "Claude plugin integration"
 "app_settings.codex.migrate_history.desc" = "Import the existing official session history during the next migration."
 "app_settings.codex.migrate_history.label" = "Import existing Codex sessions"
-"app_settings.codex.preserve_auth.desc" = "Do not overwrite auth.json when switching to a third-party Codex provider; login and combined modes reuse the current ChatGPT account."
+"app_settings.codex.preserve_auth.desc" = "Do not overwrite auth.json when switching to a third-party Codex connection; login and combined modes reuse the current ChatGPT account."
 "app_settings.codex.preserve_auth.label" = "Keep current OAuth for third parties"
 "app_settings.codex.unify_history.desc" = "Write official and third-party Codex sessions to one shared history location."
 "app_settings.codex.unify_history.label" = "Unify Codex session history"

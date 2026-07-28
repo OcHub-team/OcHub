@@ -10,8 +10,7 @@ sidebar:
 ---
 
 OcHub's core workflow is simple: choose an AI tool, then decide whether it
-should connect **directly to a provider** or go through OcHub's **local relay
-station**. On your first run, complete only one of these paths.
+should connect **directly to a provider** or go through OcHub's **local gateway**. On your first run, complete only one of these paths.
 
 ## Before you begin
 
@@ -39,7 +38,7 @@ corresponding AI tool. OcHub never writes back to `~/.cc-switch/`.
 <Steps>
 
 1. **Review the welcome notice.** Read the configuration-write explanation. If
-   OcHub detects cc-switch, it lists the providers, MCP servers, and skill
+   OcHub detects cc-switch, it lists the connections, MCP servers, and skill
    repositories available to import.
 
 2. **Decide whether to migrate.** **Import and start** reads cc-switch data.
@@ -65,7 +64,7 @@ corresponding AI tool. OcHub never writes back to `~/.cc-switch/`.
 | Usage | Inspect tokens, cost, cache, latency, and individual requests |
 | Sessions | Browse local CLI conversation history |
 | Advanced tools | Maintain CLIs, backups, environment variables, and app-specific files |
-| Relay stations | Manage local-gateway upstreams, model mapping, and fallback |
+| Model providers | Manage local-gateway upstreams, model mapping, and fallback |
 | Theme / Settings | Control appearance, app behavior, data, and remote sync |
 
 ## Choose a connection method
@@ -74,8 +73,8 @@ corresponding AI tool. OcHub never writes back to `~/.cc-switch/`.
 | --- | --- |
 | Configure one API endpoint for one tool | [Direct connection](/getting-started/direct-connection) |
 | Keep using the tool's own account login | Official login under Direct connections |
-| Share one upstream across multiple tools | [Relay station](/getting-started/relay) |
-| Rename models, convert protocols, or switch to a backup upstream | [Relay station](/getting-started/relay) |
+| Share one upstream across multiple tools | [Model provider](/getting-started/relay) |
+| Rename models, convert protocols, or switch to a backup upstream | [Model provider](/getting-started/relay) |
 
 For a first setup, start with a direct connection. Once the target CLI can make
 a real request, add MCP servers, skills, or more advanced routing rules.
@@ -83,6 +82,6 @@ a real request, add MCP servers, skills, or more advanced routing rules.
 ## Next steps
 
 - [Configure your first direct connection](/getting-started/direct-connection)
-- [Configure your first relay station](/getting-started/relay)
+- [Configure your first model provider](/getting-started/relay)
 - [Migrate safely from cc-switch](/guides/migration)
 - [Troubleshoot first-run problems](/troubleshooting)
