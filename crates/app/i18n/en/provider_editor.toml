@@ -94,6 +94,7 @@
 "provider_editor.station.empty" = "No compatible model provider yet — create and enable one on the Model providers page first."
 "provider_editor.station.missing" = "The linked model provider no longer exists — pick another one or switch back to a direct connection."
 "provider_editor.station.option" = "{name} · {count} models"
+"provider_editor.station.placeholder" = "Choose a model provider"
 "provider_editor.station.required" = "Choose a model provider"
 "provider_editor.speedtest.failed" = "Speed test failed: {error}"
 "provider_editor.speedtest.needs_base_url" = "The speed test needs a base URL"

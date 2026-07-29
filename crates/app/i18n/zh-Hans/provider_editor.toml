@@ -96,6 +96,7 @@
 "provider_editor.station.empty" = "暂无兼容的模型供应商，请先在模型供应商页面创建并启用。"
 "provider_editor.station.missing" = "原关联的模型供应商已不存在，请重新选择或改用直接连接。"
 "provider_editor.station.option" = "{name} · {count} 个模型"
+"provider_editor.station.placeholder" = "请选择模型供应商"
 "provider_editor.station.required" = "请选择一个模型供应商"
 "provider_editor.speedtest.failed" = "测速失败：{error}"
 "provider_editor.speedtest.needs_base_url" = "测速需要基础 URL"

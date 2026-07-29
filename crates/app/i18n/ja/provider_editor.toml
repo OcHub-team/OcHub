@@ -94,6 +94,7 @@
 "provider_editor.station.empty" = "互換性のあるモデルプロバイダーがありません。先にモデルプロバイダーページで作成して有効化してください。"
 "provider_editor.station.missing" = "関連付けられていたモデルプロバイダーは削除されました。別のモデルプロバイダーを選ぶか、直接接続に戻してください。"
 "provider_editor.station.option" = "{name} · {count} モデル"
+"provider_editor.station.placeholder" = "モデルプロバイダーを選択"
 "provider_editor.station.required" = "モデルプロバイダーを選択してください"
 "provider_editor.speedtest.failed" = "速度テストに失敗しました: {error}"
 "provider_editor.speedtest.needs_base_url" = "速度テストにはベース URL が必要です"

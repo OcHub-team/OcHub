@@ -3351,7 +3351,12 @@ impl ProviderEditor {
                     move |index, window, cx| on_select(&index, window, cx),
                 ));
         if self.source == ProviderSource::Station {
-            column = column.child(self.render_station_picker(cx));
+            column = column.child(components::field(
+                t(k::PROVIDER_EDITOR_SOURCE_STATION),
+                true,
+                None,
+                self.render_station_picker(cx),
+            ));
         }
         column.into_any_element()
     }
@@ -3410,20 +3415,16 @@ impl ProviderEditor {
                 }
             },
         );
-        let mut column =
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .w_full()
-                .min_w_0()
-                .child(components::select_dropdown(
-                    "provider-station",
-                    &label_refs,
-                    selected,
-                    open,
-                    move |event, window, cx| on_event(&event, window, cx),
-                ));
+        let mut column = div().flex().flex_col().gap_1().w_full().min_w_0().child(
+            components::select_dropdown_with_placeholder(
+                "provider-station",
+                &label_refs,
+                selected,
+                open,
+                t(k::PROVIDER_EDITOR_STATION_PLACEHOLDER),
+                move |event, window, cx| on_event(&event, window, cx),
+            ),
+        );
         // Editing a channel whose station was deleted: say so instead of
         // showing a blank dropdown selection.
         if selected == usize::MAX && self.selected_station.is_some() {

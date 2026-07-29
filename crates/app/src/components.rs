@@ -537,7 +537,37 @@ pub fn select_dropdown(
     open: bool,
     on_event: impl Fn(SelectDropdownEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    select_dropdown_control(id.into(), options, selected, open, Some(Rc::new(on_event)))
+    select_dropdown_control(
+        id.into(),
+        options,
+        selected,
+        open,
+        None,
+        Some(Rc::new(on_event)),
+    )
+}
+
+/// [`select_dropdown`] with guidance text for an unselected value.
+///
+/// The placeholder is shown only in the trigger and is never inserted into the
+/// option list, so required selectors cannot accidentally persist a fake
+/// "empty" choice.
+pub fn select_dropdown_with_placeholder(
+    id: impl Into<SharedString>,
+    options: &[&str],
+    selected: usize,
+    open: bool,
+    placeholder: impl Into<SharedString>,
+    on_event: impl Fn(SelectDropdownEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    select_dropdown_control(
+        id.into(),
+        options,
+        selected,
+        open,
+        Some(placeholder.into()),
+        Some(Rc::new(on_event)),
+    )
 }
 
 /// Read-only counterpart used by disabled settings rows.
@@ -546,7 +576,7 @@ pub fn select_dropdown_readonly(
     options: &[&str],
     selected: usize,
 ) -> gpui::Stateful<gpui::Div> {
-    select_dropdown_control(id.into(), options, selected, false, None)
+    select_dropdown_control(id.into(), options, selected, false, None, None)
 }
 
 fn select_dropdown_control(
@@ -554,13 +584,19 @@ fn select_dropdown_control(
     options: &[&str],
     selected: usize,
     open: bool,
+    placeholder: Option<SharedString>,
     on_event: Option<SelectDropdownHandler>,
 ) -> gpui::Stateful<gpui::Div> {
-    let current = options.get(selected).copied().unwrap_or_default();
+    let has_selection = options.get(selected).is_some();
+    let current = options
+        .get(selected)
+        .map(|option| SharedString::from((*option).to_string()))
+        .or(placeholder)
+        .unwrap_or_default();
     let mut trigger = div()
         .id(ElementId::Name(format!("{id}-trigger").into()))
         .role(gpui::Role::ComboBox)
-        .aria_label(SharedString::from(current.to_string()))
+        .aria_label(current.clone())
         .aria_expanded(open)
         .w_full()
         .min_w_0()
@@ -579,14 +615,12 @@ fn select_dropdown_control(
         })
         .bg(theme::surface())
         .text_sm()
-        .text_color(theme::text())
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .truncate()
-                .child(SharedString::from(current.to_string())),
-        )
+        .text_color(if has_selection {
+            theme::text()
+        } else {
+            theme::muted()
+        })
+        .child(div().min_w_0().flex_1().truncate().child(current))
         .child(icon(IconName::ChevronDown, theme::muted(), 13.));
     if let Some(handler) = on_event.clone() {
         trigger = trigger
