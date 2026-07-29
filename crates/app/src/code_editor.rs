@@ -1864,6 +1864,11 @@ impl Render for CodeEditor {
             // viewport a flex container and keep the content item from
             // shrinking so long logical lines create a real X scroll range.
             .flex()
+            // …and keep the default cross-axis stretch from squashing that item
+            // to the viewport height: GPUI derives the scrollable content size
+            // from the child's laid-out bounds, so a stretched item reports zero
+            // Y overflow and kills both wheel scrolling and the scrollbar.
+            .items_start()
             .flex_1()
             .min_w_0()
             .min_h_0()
