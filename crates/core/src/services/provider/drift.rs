@@ -40,6 +40,37 @@ fn protected_paths(app_type: &AppType) -> &'static [&'static str] {
     }
 }
 
+/// Keys whose value is an entire TOML document carried as one string.
+///
+/// Codex and Grok keep `config.toml` verbatim under `config`, so to a plain
+/// object diff the whole file is a single scalar: any byte of external editing
+/// collides with any byte we write, and the collision is unresolvable because
+/// there is no smaller unit to keep or drop. Parsing them turns that one useless
+/// conflict into the handful of keys that actually disagree.
+fn toml_text_paths(app_type: &AppType) -> &'static [&'static str] {
+    match app_type {
+        AppType::Codex | AppType::GrokBuild => &["config"],
+        _ => &[],
+    }
+}
+
+/// Per-app rules the merge consults as it walks down a settings tree.
+#[derive(Clone, Copy)]
+struct MergeRules<'a> {
+    protected: &'a [&'a str],
+    toml_text: &'a [&'a str],
+}
+
+impl MergeRules<'_> {
+    fn is_protected(&self, path: &str) -> bool {
+        matches_path(path, self.protected)
+    }
+
+    fn is_toml_text(&self, path: &str) -> bool {
+        matches_path(path, self.toml_text)
+    }
+}
+
 /// Whether this app participates in drift tracking.
 ///
 /// Additive-mode apps already merge per provider key, so an external edit
@@ -144,14 +175,11 @@ pub(crate) fn merge_user_edits(
     };
     let incoming_map = incoming.as_object().cloned().unwrap_or_default();
 
-    let merged = merge_objects(
-        base_map,
-        live_map,
-        &incoming_map,
-        "",
-        protected_paths(app_type),
-        &mut drift,
-    );
+    let rules = MergeRules {
+        protected: protected_paths(app_type),
+        toml_text: toml_text_paths(app_type),
+    };
+    let merged = merge_objects(base_map, live_map, &incoming_map, "", rules, &mut drift);
 
     (Value::Object(merged), drift)
 }
@@ -164,8 +192,8 @@ fn join_path(prefix: &str, key: &str) -> String {
     }
 }
 
-fn is_protected(path: &str, protected: &[&str]) -> bool {
-    protected
+fn matches_path(path: &str, roots: &[&str]) -> bool {
+    roots
         .iter()
         .any(|root| path == *root || path.starts_with(&format!("{root}.")))
 }
@@ -175,7 +203,7 @@ fn merge_objects(
     live: &Map<String, Value>,
     incoming: &Map<String, Value>,
     prefix: &str,
-    protected: &[&str],
+    rules: MergeRules<'_>,
     drift: &mut LiveDrift,
 ) -> Map<String, Value> {
     let mut out = incoming.clone();
@@ -191,13 +219,40 @@ fn merge_objects(
 
     for key in keys {
         let path = join_path(prefix, key);
-        if is_protected(&path, protected) {
+        if rules.is_protected(&path) {
             continue;
         }
 
         let base_value = base.get(key);
         let live_value = live.get(key);
         let incoming_value = incoming.get(key);
+
+        // An embedded TOML document is merged as a document, not compared as a
+        // string. Only the both-sides-present case needs it: with no ancestor or
+        // nothing on disk there is no edit to isolate, and the rules below
+        // already say the right thing.
+        //
+        // A non-string on our side would be a shape error rather than an edit,
+        // so that case is left to the generic rules too.
+        if rules.is_toml_text(&path)
+            && let (Some(Value::String(base_text)), Some(Value::String(live_text))) =
+                (base_value, live_value)
+            && base_text != live_text
+            && incoming_value.is_none_or(Value::is_string)
+        {
+            let incoming_text = incoming_value.and_then(Value::as_str);
+            match merge_toml_documents(base_text, live_text, incoming_text, &path, drift) {
+                Ok(merged) => {
+                    out.insert(key.clone(), Value::String(merged));
+                    continue;
+                }
+                // Unparsable TOML on either side: fall through and treat the
+                // document as one opaque value. Coarse, but never wrong.
+                Err(err) => {
+                    log::warn!("live config at '{path}' is not valid TOML, diffing it whole: {err}")
+                }
+            }
+        }
 
         match (base_value, live_value) {
             // Added outside OcHub.
@@ -241,14 +296,8 @@ fn merge_objects(
                         .and_then(Value::as_object)
                         .cloned()
                         .unwrap_or_default();
-                    let merged = merge_objects(
-                        base_child,
-                        live_child,
-                        &incoming_child,
-                        &path,
-                        protected,
-                        drift,
-                    );
+                    let merged =
+                        merge_objects(base_child, live_child, &incoming_child, &path, rules, drift);
 
                     // An empty result means the subtree existed only to hold the
                     // outgoing provider's values; do not leave a husk behind.
@@ -286,6 +335,235 @@ fn merge_objects(
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// Embedded TOML documents
+// ---------------------------------------------------------------------------
+
+/// Three-way merge of one embedded `config.toml`, reported per key.
+///
+/// The result is built on top of `incoming` so the outgoing document's own
+/// comments and layout survive, and the keys carried over from `live` arrive as
+/// the user wrote them — `toml_edit` keeps each item's formatting when it is
+/// moved between documents.
+///
+/// `incoming` is `None` when the new configuration has no document of its own:
+/// then nothing of ours can collide, and the file as edited stands.
+fn merge_toml_documents(
+    base: &str,
+    live: &str,
+    incoming: Option<&str>,
+    prefix: &str,
+    drift: &mut LiveDrift,
+) -> Result<String, toml_edit::TomlError> {
+    use toml_edit::DocumentMut;
+
+    let base_doc: DocumentMut = base.parse()?;
+    let live_doc: DocumentMut = live.parse()?;
+    let Some(incoming) = incoming else {
+        drift.preserved.push(prefix.to_string());
+        return Ok(live.to_string());
+    };
+    let mut out_doc: DocumentMut = incoming.parse()?;
+
+    merge_toml_tables(
+        base_doc.as_table(),
+        live_doc.as_table(),
+        out_doc.as_table_mut(),
+        prefix,
+        drift,
+    );
+
+    Ok(out_doc.to_string())
+}
+
+/// The object merge's rules, applied to TOML tables instead of JSON maps.
+///
+/// `out` arrives as a copy of the incoming table and is edited in place, so
+/// reading a key from it before touching it reads what the incoming
+/// configuration says about that key.
+///
+/// Values are compared through their JSON projection: two spellings of the same
+/// value (`a.b = 1` versus `[a] b = 1`, or a re-quoted string) are not an edit,
+/// and reporting them as one is how a merge starts fighting the formatter.
+fn merge_toml_tables(
+    base: &dyn toml_edit::TableLike,
+    live: &dyn toml_edit::TableLike,
+    out: &mut dyn toml_edit::TableLike,
+    prefix: &str,
+    drift: &mut LiveDrift,
+) {
+    use toml_edit::{Item, Table};
+
+    let mut keys: Vec<String> = base.iter().map(|(key, _)| key.to_string()).collect();
+    for (key, _) in live.iter() {
+        if base.get(key).is_none() {
+            keys.push(key.to_string());
+        }
+    }
+
+    // Carry a key over from the live document with its own key, so the comment
+    // written above `notify = [...]` — which TOML hangs off the key, not off the
+    // value — arrives with it.
+    fn carry_over(out: &mut dyn toml_edit::TableLike, live: &dyn toml_edit::TableLike, key: &str) {
+        let Some((live_key, live_item)) = live.get_key_value(key) else {
+            return;
+        };
+        match out.entry_format(live_key) {
+            toml_edit::Entry::Occupied(mut occupied) => {
+                occupied.insert(live_item.clone());
+            }
+            toml_edit::Entry::Vacant(vacant) => {
+                vacant.insert(live_item.clone());
+            }
+        }
+    }
+
+    for key in keys {
+        let path = join_path(prefix, &key);
+        let base_item = base.get(&key);
+        let live_item = live.get(&key);
+
+        // Everything the incoming document has to say about this key, read out
+        // before `out` is borrowed mutably below.
+        let incoming_json = out.get(&key).map(toml_item_to_json);
+        let incoming_is_table = out.get(&key).is_some_and(|item| item.is_table_like());
+
+        match (base_item, live_item) {
+            // Added outside OcHub.
+            (None, Some(live_item)) => match &incoming_json {
+                None => {
+                    carry_over(out, live, &key);
+                    drift.preserved.push(path);
+                }
+                Some(incoming) if *incoming == toml_item_to_json(live_item) => {}
+                Some(incoming) => drift.conflicts.push(DriftConflict {
+                    path,
+                    live: toml_item_to_json(live_item),
+                    incoming: incoming.clone(),
+                }),
+            },
+
+            // Deleted outside OcHub.
+            (Some(base_item), None) => match &incoming_json {
+                None => {}
+                Some(incoming) if *incoming == toml_item_to_json(base_item) => {
+                    out.remove(&key);
+                    drift.removed.push(path);
+                }
+                Some(incoming) => drift.conflicts.push(DriftConflict {
+                    path,
+                    live: Value::Null,
+                    incoming: incoming.clone(),
+                }),
+            },
+
+            (Some(base_item), Some(live_item))
+                if toml_item_to_json(base_item) != toml_item_to_json(live_item) =>
+            {
+                let nested = base_item
+                    .as_table_like()
+                    .zip(live_item.as_table_like())
+                    .filter(|_| incoming_json.is_none() || incoming_is_table);
+
+                if let Some((base_child, live_child)) = nested {
+                    // Recurse so an edit inside `[model_providers.x]` does not
+                    // have to fight the whole table for ownership.
+                    if incoming_json.is_none() {
+                        out.insert(&key, Item::Table(Table::new()));
+                    }
+                    let Some(out_child) = out.get_mut(&key).and_then(Item::as_table_like_mut)
+                    else {
+                        continue;
+                    };
+                    merge_toml_tables(base_child, live_child, out_child, &path, drift);
+
+                    // An empty result means the table existed only to hold the
+                    // outgoing provider's values; do not leave a husk behind.
+                    if incoming_json.is_none()
+                        && out.get(&key).is_some_and(|item| {
+                            item.as_table_like().is_some_and(|table| table.is_empty())
+                        })
+                    {
+                        out.remove(&key);
+                    }
+                    continue;
+                }
+
+                let base_json = toml_item_to_json(base_item);
+                let live_json = toml_item_to_json(live_item);
+                match &incoming_json {
+                    // The new configuration says nothing here, or says exactly
+                    // what the old one did — either way the user's edit stands.
+                    None => {
+                        carry_over(out, live, &key);
+                        drift.preserved.push(path);
+                    }
+                    Some(incoming) if *incoming == base_json => {
+                        carry_over(out, live, &key);
+                        drift.preserved.push(path);
+                    }
+                    Some(incoming) if *incoming == live_json => {}
+                    Some(incoming) => drift.conflicts.push(DriftConflict {
+                        path,
+                        live: live_json,
+                        incoming: incoming.clone(),
+                    }),
+                }
+            }
+
+            // Untouched by the user: `incoming` already owns it.
+            _ => {}
+        }
+    }
+}
+
+/// A TOML item as the JSON the drift report and the UI speak.
+///
+/// Dates have no JSON counterpart; their TOML spelling is what a user would
+/// recognise anyway.
+fn toml_item_to_json(item: &toml_edit::Item) -> Value {
+    use toml_edit::Item;
+
+    match item {
+        Item::None => Value::Null,
+        Item::Value(value) => toml_value_to_json(value),
+        Item::Table(table) => toml_table_to_json(table),
+        Item::ArrayOfTables(tables) => {
+            Value::Array(tables.iter().map(toml_table_to_json).collect())
+        }
+    }
+}
+
+fn toml_value_to_json(value: &toml_edit::Value) -> Value {
+    use toml_edit::Value as TomlValue;
+
+    match value {
+        TomlValue::String(text) => Value::String(text.value().clone()),
+        TomlValue::Integer(number) => Value::from(*number.value()),
+        TomlValue::Float(number) => serde_json::Number::from_f64(*number.value())
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        TomlValue::Boolean(flag) => Value::Bool(*flag.value()),
+        TomlValue::Datetime(stamp) => Value::String(stamp.value().to_string()),
+        TomlValue::Array(array) => Value::Array(array.iter().map(toml_value_to_json).collect()),
+        TomlValue::InlineTable(table) => Value::Object(
+            table
+                .iter()
+                .map(|(key, value)| (key.to_string(), toml_value_to_json(value)))
+                .collect(),
+        ),
+    }
+}
+
+fn toml_table_to_json(table: &toml_edit::Table) -> Value {
+    Value::Object(
+        table
+            .iter()
+            .map(|(key, item)| (key.to_string(), toml_item_to_json(item)))
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +613,26 @@ fn save_store(store: &SnapshotStore) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+/// Re-record the baseline after OcHub wrote the live config from somewhere
+/// other than the provider flow.
+///
+/// MCP sync rewrites the very files a switch just wrote, and it runs *after* the
+/// switch has taken its baseline. Without this the next switch reads OcHub's own
+/// `[mcp_servers]` block as an external edit — and no answer to the prompt could
+/// clear it, because resolving it wrote the file again and the sync re-applied
+/// itself again right behind. The provider is carried over from the existing
+/// baseline: a side write changes the file, never which provider is current.
+pub(crate) fn rebaseline_after_side_write(app_type: &AppType) {
+    if !tracks_live_drift(app_type) {
+        return;
+    }
+    // No baseline yet means nothing to invalidate: the first switch records one.
+    let Some(snapshot) = load_snapshot(app_type) else {
+        return;
+    };
+    record_snapshot(app_type, &snapshot.provider_id);
 }
 
 /// Read the recorded baseline for an app, if any.
@@ -512,18 +810,103 @@ mod tests {
         assert!(drift.is_empty());
     }
 
+    fn merge_codex_config(base: &str, live: &str, incoming: &str) -> (String, LiveDrift) {
+        let (merged, drift) = merge_user_edits(
+            &AppType::Codex,
+            &json!({ "auth": {}, "config": base }),
+            &json!({ "auth": {}, "config": live }),
+            &json!({ "auth": {}, "config": incoming }),
+        );
+        (
+            merged["config"]
+                .as_str()
+                .expect("config stays a TOML string")
+                .to_string(),
+            drift,
+        )
+    }
+
     #[test]
-    fn codex_config_text_is_reported_whole_because_toml_is_not_merged_yet() {
-        let base = json!({ "auth": {}, "config": "model = \"gpt-5\"\n" });
-        let live = json!({
-            "auth": {},
-            "config": "model = \"gpt-5\"\n\n[mcp_servers.local]\ncommand = \"x\"\n"
-        });
-        let incoming = json!({ "auth": {}, "config": "model = \"gpt-5-codex\"\n" });
+    fn a_hand_added_codex_table_survives_a_switch() {
+        // The whole of config.toml arrives as one string. Comparing it as one
+        // string is what used to make every switch a whole-file conflict.
+        let (merged, drift) = merge_codex_config(
+            "model = \"gpt-5\"\n",
+            "model = \"gpt-5\"\n\n[mcp_servers.local]\ncommand = \"x\"\n",
+            "model = \"gpt-5-codex\"\n",
+        );
 
-        let (merged, drift) = merge_user_edits(&AppType::Codex, &base, &live, &incoming);
+        assert!(merged.contains("model = \"gpt-5-codex\""));
+        assert!(merged.contains("[mcp_servers.local]"));
+        assert!(merged.contains("command = \"x\""));
+        assert_eq!(drift.preserved, vec!["config.mcp_servers".to_string()]);
+        assert!(!drift.has_conflicts());
+    }
 
-        assert_eq!(merged["config"], json!("model = \"gpt-5-codex\"\n"));
+    #[test]
+    fn a_codex_conflict_names_the_key_rather_than_the_file() {
+        let (merged, drift) = merge_codex_config(
+            "model_provider = \"a\"\napproval_policy = \"never\"\n",
+            "model_provider = \"local-gateway\"\napproval_policy = \"on-request\"\n",
+            "model_provider = \"b\"\napproval_policy = \"never\"\n",
+        );
+
+        // Only the key both sides set is a conflict; the other edit is kept.
+        assert_eq!(drift.conflicts.len(), 1);
+        assert_eq!(drift.conflicts[0].path, "config.model_provider");
+        assert_eq!(drift.conflicts[0].live, json!("local-gateway"));
+        assert_eq!(drift.conflicts[0].incoming, json!("b"));
+        assert!(merged.contains("model_provider = \"b\""));
+        assert!(merged.contains("approval_policy = \"on-request\""));
+        assert_eq!(drift.preserved, vec!["config.approval_policy".to_string()]);
+    }
+
+    #[test]
+    fn codex_comments_and_hand_written_layout_survive_the_merge() {
+        let (merged, _) = merge_codex_config(
+            "model = \"gpt-5\"\n",
+            "model = \"gpt-5\"\n\n# mine, hands off\nnotify = [\"script\"]\n",
+            "# provider header\nmodel = \"gpt-5-codex\"\n",
+        );
+
+        assert!(merged.contains("# provider header"));
+        assert!(merged.contains("# mine, hands off"));
+        assert!(merged.contains("notify = [\"script\"]"));
+    }
+
+    #[test]
+    fn a_reformatted_codex_file_is_not_an_edit() {
+        // Same values, different spelling: an inline table versus a section.
+        let (_, drift) = merge_codex_config(
+            "[model_providers.a]\nbase_url = \"https://a.example\"\n",
+            "model_providers = { a = { base_url = \"https://a.example\" } }\n",
+            "[model_providers.a]\nbase_url = \"https://a.example\"\n",
+        );
+
+        assert!(drift.is_empty(), "unexpected drift: {drift:?}");
+    }
+
+    #[test]
+    fn a_hand_deleted_codex_key_stays_deleted() {
+        let (merged, drift) = merge_codex_config(
+            "model = \"gpt-5\"\nsandbox_mode = \"read-only\"\n",
+            "model = \"gpt-5\"\n",
+            "model = \"gpt-5-codex\"\nsandbox_mode = \"read-only\"\n",
+        );
+
+        assert!(!merged.contains("sandbox_mode"));
+        assert_eq!(drift.removed, vec!["config.sandbox_mode".to_string()]);
+    }
+
+    #[test]
+    fn unparsable_codex_toml_falls_back_to_the_whole_document() {
+        let (merged, drift) = merge_codex_config(
+            "model = \"gpt-5\"\n",
+            "model = \"gpt-5\"\nthis is not toml\n",
+            "model = \"gpt-5-codex\"\n",
+        );
+
+        assert_eq!(merged, "model = \"gpt-5-codex\"\n");
         assert_eq!(drift.conflicts.len(), 1);
         assert_eq!(drift.conflicts[0].path, "config");
     }

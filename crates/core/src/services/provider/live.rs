@@ -1812,6 +1812,121 @@ mod tests {
         );
     }
 
+    fn codex_provider(id: &str, config: &str) -> Provider {
+        Provider::with_id(
+            id.to_string(),
+            id.to_string(),
+            json!({ "auth": {}, "config": config }),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_hand_edited_codex_key_survives_a_switch_that_changes_a_different_key() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+
+        for provider in [
+            codex_provider("alpha", "model = \"gpt-5\"\nmodel_provider = \"alpha\"\n"),
+            codex_provider("beta", "model = \"gpt-5\"\nmodel_provider = \"beta\"\n"),
+        ] {
+            state
+                .db
+                .save_provider("codex", &provider)
+                .expect("save provider");
+        }
+
+        crate::services::provider::ProviderService::switch(&state, AppType::Codex, "alpha")
+            .expect("switch to alpha");
+
+        // The user edits config.toml directly: one key beta also sets, one it
+        // knows nothing about.
+        let path = get_codex_config_path();
+        let edited = format!(
+            "{}\napproval_policy = \"never\"\n\n[mcp_servers.mine]\ncommand = \"x\"\n",
+            std::fs::read_to_string(&path)
+                .expect("read live")
+                .replace("model_provider = \"alpha\"", "model_provider = \"hand\"")
+        );
+        std::fs::write(&path, edited).expect("hand edit");
+
+        let result =
+            crate::services::provider::ProviderService::switch(&state, AppType::Codex, "beta")
+                .expect("switch to beta");
+
+        let after = std::fs::read_to_string(&path).expect("read live after switch");
+        assert!(
+            after.contains("approval_policy = \"never\""),
+            "an edit beta says nothing about must survive: {after}"
+        );
+        assert!(
+            after.contains("[mcp_servers.mine]"),
+            "a hand-added table must survive: {after}"
+        );
+        assert!(after.contains("model_provider = \"beta\""));
+
+        // The whole file used to be one unresolvable conflict; now only the key
+        // both sides set is reported.
+        let drift = result.drift.expect("switch reports the external edit");
+        assert_eq!(
+            drift.conflicts.len(),
+            1,
+            "unexpected conflicts: {:?}",
+            drift.conflicts
+        );
+        assert_eq!(drift.conflicts[0].path, "config.model_provider");
+    }
+
+    #[test]
+    fn an_mcp_sync_after_a_switch_is_not_reported_as_an_external_edit() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
+
+        for provider in [
+            codex_provider("alpha", "model = \"gpt-5\"\nmodel_provider = \"alpha\"\n"),
+            codex_provider("beta", "model = \"gpt-5\"\nmodel_provider = \"beta\"\n"),
+        ] {
+            state
+                .db
+                .save_provider("codex", &provider)
+                .expect("save provider");
+        }
+
+        // MCP servers are synced into the same config.toml a switch writes, and
+        // the sync runs after the switch has taken its baseline.
+        let mut server = crate::db::legacy_json::McpServer {
+            id: "local".to_string(),
+            name: "local".to_string(),
+            server: json!({ "command": "x", "args": [] }),
+            apps: Default::default(),
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: Vec::new(),
+        };
+        server.apps.set_enabled_for(&AppType::Codex, true);
+        state.db.save_mcp_server(&server).expect("save mcp server");
+
+        crate::services::provider::ProviderService::switch(&state, AppType::Codex, "alpha")
+            .expect("switch to alpha");
+        assert!(
+            std::fs::read_to_string(get_codex_config_path())
+                .expect("read live")
+                .contains("[mcp_servers.local]"),
+            "the sync must have written to the file the baseline covers"
+        );
+
+        let result =
+            crate::services::provider::ProviderService::switch(&state, AppType::Codex, "beta")
+                .expect("switch to beta");
+
+        assert!(
+            result.drift.is_none(),
+            "OcHub's own MCP sync must not come back as somebody else's edit: {:?}",
+            result.drift
+        );
+    }
+
     #[test]
     fn an_untouched_live_file_switches_without_reporting_drift() {
         let _home = TestHome::new();

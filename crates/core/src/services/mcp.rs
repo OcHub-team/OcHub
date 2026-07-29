@@ -50,6 +50,7 @@ impl McpService {
         // 同步到各个启用的应用
         Self::sync_server_to_apps(state, &server)?;
 
+        Self::rebaseline_live_snapshots();
         Ok(())
     }
 
@@ -62,6 +63,7 @@ impl McpService {
 
             // 从所有应用的 live 配置中移除
             Self::remove_server_from_all_apps(state, id, &server)?;
+            Self::rebaseline_live_snapshots();
             Ok(true)
         } else {
             Ok(false)
@@ -89,7 +91,19 @@ impl McpService {
             }
         }
 
+        Self::rebaseline_live_snapshots();
         Ok(())
+    }
+
+    /// Re-take the drift baselines after writing to files a provider switch owns.
+    ///
+    /// MCP servers live inside the same `config.toml` / `settings.json` a switch
+    /// writes, so a sync that ran after the switch recorded its baseline would
+    /// otherwise be reported back to the user as somebody else's edit.
+    fn rebaseline_live_snapshots() {
+        for app in AppType::all() {
+            crate::services::provider::drift::rebaseline_after_side_write(&app);
+        }
     }
 
     /// 将 MCP 服务器同步到所有启用的应用
@@ -204,6 +218,7 @@ impl McpService {
             }
         }
 
+        Self::rebaseline_live_snapshots();
         Ok(())
     }
 
@@ -252,6 +267,7 @@ impl McpService {
             }
         }
 
+        Self::rebaseline_live_snapshots();
         Ok(())
     }
 
