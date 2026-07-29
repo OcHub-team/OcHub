@@ -2841,6 +2841,24 @@ impl AppRoot {
                     )),
             )
             .child(Self::render_sidebar_group(
+                raw(k::SHELL_SIDEBAR_GROUP_NETWORK),
+                appearance,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_2()
+                    .child(self.render_nav_item(
+                        "nav-gateway",
+                        raw(k::SHELL_SIDEBAR_NAV_GATEWAY),
+                        Section::Gateway,
+                        appearance,
+                        cx,
+                    )),
+            )
+            .child(Self::render_sidebar_group(
                 raw(k::SHELL_SIDEBAR_GROUP_SYSTEM),
                 appearance,
             ))
