@@ -727,8 +727,6 @@ pub fn build_station_channel(
         app_type,
         base_url,
         &key.key,
-        &identity.id,
-        &identity.name,
         station_capabilities_for_route(state, &route)?,
     );
     validate_station_channel_models(app_type, &merged)?;
@@ -795,8 +793,6 @@ pub fn refresh_station_channel_settings(
         app_type,
         base_url,
         &key.key,
-        &provider.id,
-        &provider.name,
         station_capabilities_for_route(state, &route)?,
     );
     let encoded = codec.encode(&values, &provider.settings_config, provider.meta.as_ref());
@@ -884,6 +880,14 @@ fn apply_route_to_app(
 ) -> Result<ApplyResult, AppError> {
     let provider_id = gateway_provider_id(&route.id);
     let provider_name = route.name.clone();
+    let existing = state
+        .db
+        .get_provider_by_id(&provider_id, app_type.as_str())?;
+    // The DB record keeps a collision-free station UUID identity. Codex's
+    // model_provider is a separate, user-visible session bucket: default new
+    // managed entries to `custom`, and preserve any value the user selected
+    // when refreshing/reapplying an existing entry.
+    let config_provider_id = client_provider_id(app_type, &provider_id, existing.as_ref());
     let key_label = gateway_key_label(app_type, &route.id);
     let mut key = ensure_key_for_route(state, &key_label, Some(&route.id))?;
     if key.model_policy != model_policy {
@@ -900,7 +904,7 @@ fn apply_route_to_app(
     let client_models = config_policy.client_models();
     let settings = gateway_settings_for_provider(
         app_type,
-        &provider_id,
+        &config_provider_id,
         &provider_name,
         base_url,
         &key.key,
@@ -942,9 +946,6 @@ fn apply_route_to_app(
         icon_color: None,
     };
 
-    let existing = state
-        .db
-        .get_provider_by_id(&provider_id, app_type.as_str())?;
     if existing.is_some() {
         ProviderService::update(state, app_type, Some(&provider_id), provider)?;
     } else {
@@ -960,6 +961,21 @@ fn apply_route_to_app(
         route_name: route.name,
         applied: true,
     })
+}
+
+fn client_provider_id(
+    app_type: AppType,
+    internal_provider_id: &str,
+    existing: Option<&Provider>,
+) -> String {
+    if app_type != AppType::Codex {
+        return internal_provider_id.to_string();
+    }
+    existing
+        .and_then(|provider| provider.settings_config.get("config"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(crate::apps::codex::extract_codex_model_provider_id)
+        .unwrap_or_else(|| crate::apps::codex::OCHUB_CODEX_MODEL_PROVIDER_ID.to_string())
 }
 
 /// Connection info for clients we don't manage (generic chat-dialect tools):
@@ -1307,6 +1323,32 @@ mod tests {
     }
 
     #[test]
+    fn codex_station_record_id_is_separate_from_session_bucket() {
+        let internal_id = gateway_provider_id("station:first");
+        assert_eq!(
+            client_provider_id(AppType::Codex, &internal_id, None),
+            crate::apps::codex::OCHUB_CODEX_MODEL_PROVIDER_ID
+        );
+
+        let existing = Provider::with_id(
+            internal_id.clone(),
+            "First".into(),
+            json!({
+                "config": "model_provider = \"team_history\"\n[model_providers.team_history]\nname = \"Team\"\n"
+            }),
+            None,
+        );
+        assert_eq!(
+            client_provider_id(AppType::Codex, &internal_id, Some(&existing)),
+            "team_history"
+        );
+        assert_eq!(
+            client_provider_id(AppType::Claude, &internal_id, Some(&existing)),
+            internal_id
+        );
+    }
+
+    #[test]
     fn app_route_can_switch_without_rewriting_provider_config() {
         let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
         let default_route = ensure_app_route(&state, AppType::Claude).unwrap();
@@ -1581,6 +1623,8 @@ mod tests {
         let mut values = FormValues::new();
         provider_config::set_str(&mut values, "model", "gpt-5.5");
         provider_config::set_str(&mut values, "reasoning_effort", "high");
+        provider_config::set_str(&mut values, "provider_id", "company_proxy");
+        provider_config::set_str(&mut values, "name", "Company Proxy");
 
         let provider = build_station_channel(
             &state,
@@ -1597,7 +1641,9 @@ mod tests {
         let toml = provider.settings_config["config"].as_str().unwrap();
         assert!(toml.contains("model = \"gpt-5.5\""));
         assert!(toml.contains("model_reasoning_effort = \"high\""));
-        assert!(toml.contains("model_provider = \"codex\""));
+        assert!(toml.contains("model_provider = \"company_proxy\""));
+        assert!(toml.contains("[model_providers.company_proxy]"));
+        assert!(toml.contains("name = \"Company Proxy\""));
         assert!(toml.contains("base_url = \"http://127.0.0.1:4180/v1\""));
         assert!(toml.contains("wire_api = \"responses\""));
         assert!(toml.contains("supports_websockets = true"));
@@ -1742,7 +1788,7 @@ mod tests {
 
         let toml = provider.settings_config["config"].as_str().unwrap();
         assert!(!toml.contains("name = \"OpenAI\""), "{toml}");
-        assert!(toml.contains("name = \"渠道 codex-main\""), "{toml}");
+        assert!(toml.contains("name = \"custom\""), "{toml}");
     }
 
     #[test]

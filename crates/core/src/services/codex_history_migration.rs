@@ -25,6 +25,7 @@ use std::time::{Duration, SystemTime};
 use toml_edit::DocumentMut;
 
 const MIGRATION_NAME: &str = "codex-history-provider-migration-v1";
+const PROVIDER_RENAME_MIGRATION_NAME: &str = "codex-provider-id-rename-v1";
 const OFFICIAL_UNIFY_MIGRATION_NAME: &str = "codex-official-history-unify-v1";
 /// 还原操作自身的备份目录（与迁移备份分开，保持迁移账本目录纯净）。
 const OFFICIAL_UNIFY_RESTORE_BACKUP_NAME: &str = "codex-official-history-unify-restore-v1";
@@ -111,6 +112,52 @@ pub struct CodexProviderTemplateBucketMigrationOutcome {
     pub skipped_reason: Option<String>,
 }
 
+/// Move Codex session history from one explicit `model_provider` bucket to
+/// another. Both JSONL session metadata and the SQLite thread index are
+/// updated from backups, so renaming a provider id does not hide its history.
+pub fn migrate_codex_history_provider_bucket(
+    source_provider_id: &str,
+    target_provider_id: &str,
+) -> Result<CodexHistoryProviderBucketMigrationOutcome, AppError> {
+    let source_provider_id = source_provider_id.trim();
+    let target_provider_id = target_provider_id.trim();
+    if source_provider_id.is_empty() || target_provider_id.is_empty() {
+        return Err(AppError::InvalidInput(
+            "Codex Provider ID 不能为空".to_string(),
+        ));
+    }
+    if source_provider_id == target_provider_id {
+        return Ok(CodexHistoryProviderBucketMigrationOutcome {
+            skipped_reason: Some("provider_id_unchanged".to_string()),
+            ..Default::default()
+        });
+    }
+
+    let _op_guard = lock_codex_official_history_op();
+    let source_provider_ids: BTreeSet<String> =
+        std::iter::once(source_provider_id.to_string()).collect();
+    let backup_root = migration_backup_root(PROVIDER_RENAME_MIGRATION_NAME);
+    let codex_dir = get_codex_config_dir();
+    let migrated_jsonl_files = migrate_codex_jsonl_files(
+        &codex_dir,
+        &source_provider_ids,
+        target_provider_id,
+        &backup_root,
+    )?;
+    let migrated_state_rows = migrate_codex_state_dbs(
+        &codex_dir,
+        &source_provider_ids,
+        target_provider_id,
+        &backup_root,
+    )?;
+    Ok(CodexHistoryProviderBucketMigrationOutcome {
+        source_provider_ids: source_provider_ids.into_iter().collect(),
+        migrated_jsonl_files,
+        migrated_state_rows,
+        skipped_reason: None,
+    })
+}
+
 pub fn maybe_migrate_codex_third_party_history_provider_bucket(
     db: &Database,
 ) -> Result<CodexHistoryProviderBucketMigrationOutcome, AppError> {
@@ -141,10 +188,18 @@ pub fn maybe_migrate_codex_third_party_history_provider_bucket(
 
     let backup_root = migration_backup_root(MIGRATION_NAME);
     let codex_dir = get_codex_config_dir();
-    let migrated_jsonl_files =
-        migrate_codex_jsonl_files(&codex_dir, &source_provider_ids, &backup_root)?;
-    let migrated_state_rows =
-        migrate_codex_state_dbs(&codex_dir, &source_provider_ids, &backup_root)?;
+    let migrated_jsonl_files = migrate_codex_jsonl_files(
+        &codex_dir,
+        &source_provider_ids,
+        OCHUB_CODEX_MODEL_PROVIDER_ID,
+        &backup_root,
+    )?;
+    let migrated_state_rows = migrate_codex_state_dbs(
+        &codex_dir,
+        &source_provider_ids,
+        OCHUB_CODEX_MODEL_PROVIDER_ID,
+        &backup_root,
+    )?;
 
     let source_provider_ids_vec: Vec<String> = source_provider_ids.iter().cloned().collect();
     crate::settings::mark_codex_third_party_history_provider_bucket_migrated(
@@ -235,10 +290,18 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket()
     let source_provider_ids: BTreeSet<String> =
         std::iter::once(OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID.to_string()).collect();
     let backup_root = migration_backup_root(OFFICIAL_UNIFY_MIGRATION_NAME);
-    let migrated_jsonl_files =
-        migrate_codex_jsonl_files(&codex_dir, &source_provider_ids, &backup_root)?;
-    let migrated_state_rows =
-        migrate_codex_state_dbs(&codex_dir, &source_provider_ids, &backup_root)?;
+    let migrated_jsonl_files = migrate_codex_jsonl_files(
+        &codex_dir,
+        &source_provider_ids,
+        OCHUB_CODEX_MODEL_PROVIDER_ID,
+        &backup_root,
+    )?;
+    let migrated_state_rows = migrate_codex_state_dbs(
+        &codex_dir,
+        &source_provider_ids,
+        OCHUB_CODEX_MODEL_PROVIDER_ID,
+        &backup_root,
+    )?;
     // 备份代际记录来源目录，restore 据此只取当前目录的账本。
     write_backup_generation_meta(&backup_root, &codex_dir_key)?;
 
@@ -959,6 +1022,7 @@ fn rewrite_legacy_provider_profile_refs(doc: &mut DocumentMut, source_provider_i
 fn migrate_codex_jsonl_files(
     codex_dir: &Path,
     source_provider_ids: &BTreeSet<String>,
+    target_provider_id: &str,
     backup_root: &Path,
 ) -> Result<usize, AppError> {
     let mut files = Vec::new();
@@ -972,6 +1036,7 @@ fn migrate_codex_jsonl_files(
             &file_path,
             codex_dir,
             &source_provider_ids,
+            target_provider_id,
             backup_root,
         )? {
             migrated += 1;
@@ -1010,10 +1075,11 @@ fn rewrite_codex_session_file_for_provider_bucket(
     path: &Path,
     codex_dir: &Path,
     source_provider_ids: &HashSet<String>,
+    target_provider_id: &str,
     backup_root: &Path,
 ) -> Result<bool, AppError> {
     rewrite_codex_session_file_lines(path, codex_dir, backup_root, |line| {
-        rewrite_codex_session_meta_line(line, source_provider_ids)
+        rewrite_codex_session_meta_line(line, source_provider_ids, target_provider_id)
     })
 }
 
@@ -1073,6 +1139,7 @@ fn ensure_codex_session_file_unchanged(
 fn rewrite_codex_session_meta_line(
     line: &str,
     source_provider_ids: &HashSet<String>,
+    target_provider_id: &str,
 ) -> Option<String> {
     if !line.contains("\"session_meta\"") || !line.contains("\"model_provider\"") {
         return None;
@@ -1091,7 +1158,7 @@ fn rewrite_codex_session_meta_line(
 
     payload.insert(
         "model_provider".to_string(),
-        Value::String(OCHUB_CODEX_MODEL_PROVIDER_ID.to_string()),
+        Value::String(target_provider_id.to_string()),
     );
     serde_json::to_string(&value).ok()
 }
@@ -1099,6 +1166,7 @@ fn rewrite_codex_session_meta_line(
 fn migrate_codex_state_dbs(
     codex_dir: &Path,
     source_provider_ids: &BTreeSet<String>,
+    target_provider_id: &str,
     backup_root: &Path,
 ) -> Result<usize, AppError> {
     let config_text = read_codex_config_text().unwrap_or_default();
@@ -1108,6 +1176,7 @@ fn migrate_codex_state_dbs(
             &db_path,
             codex_dir,
             source_provider_ids,
+            target_provider_id,
             backup_root,
         )?;
     }
@@ -1167,6 +1236,7 @@ fn migrate_codex_state_db_provider_bucket(
     db_path: &Path,
     codex_dir: &Path,
     source_provider_ids: &BTreeSet<String>,
+    target_provider_id: &str,
     backup_root: &Path,
 ) -> Result<usize, AppError> {
     if !db_path.exists() || source_provider_ids.is_empty() {
@@ -1203,7 +1273,7 @@ fn migrate_codex_state_db_provider_bucket(
     let update_sql =
         format!("UPDATE threads SET model_provider = ? WHERE model_provider IN ({placeholders})");
     let mut values = Vec::with_capacity(source_provider_ids.len() + 1);
-    values.push(OCHUB_CODEX_MODEL_PROVIDER_ID.to_string());
+    values.push(target_provider_id.to_string());
     values.extend(source_provider_ids.iter().cloned());
     let tx = conn
         .transaction()
@@ -1322,4 +1392,24 @@ fn relative_backup_path(path: &Path, root: &Path) -> PathBuf {
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".to_string());
     PathBuf::from("external").join(format!("{hash:016x}-{file_name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_meta_rewrite_accepts_an_explicit_target_bucket() {
+        let line =
+            r#"{"type":"session_meta","payload":{"id":"thread-1","model_provider":"old_uuid"}}"#;
+        let sources = HashSet::from(["old_uuid".to_string()]);
+
+        let rewritten = rewrite_codex_session_meta_line(line, &sources, "team_history").unwrap();
+        let value: Value = serde_json::from_str(&rewritten).unwrap();
+
+        assert_eq!(
+            value["payload"]["model_provider"].as_str(),
+            Some("team_history")
+        );
+    }
 }

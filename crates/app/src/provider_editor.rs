@@ -124,6 +124,7 @@ const PREVIEW_SPLIT_MAX_WIDTH: f32 = 560.;
 enum ProviderSaveFailure {
     CommonConfig(String),
     Provider(String),
+    HistoryMigration(String),
 }
 
 struct ProviderSaveOutcome {
@@ -717,21 +718,6 @@ impl ProviderEditor {
         self.invalidate_preview(cx);
     }
 
-    /// The id Codex's `[model_providers.<id>]` table will use, for preview
-    /// injection. Edit mode pins the stored provider id so re-saves never
-    /// orphan the table the create wrote.
-    fn station_channel_id(&self, cx: &Context<Self>) -> String {
-        if let Some(original_id) = &self.original_id {
-            return original_id.clone();
-        }
-        let typed = self.provider_id.read(cx).content().trim().to_string();
-        if typed.is_empty() {
-            "station".to_string()
-        } else {
-            typed
-        }
-    }
-
     /// Build text/kv/grid input entities from the current `values`.
     fn build_inputs(&mut self, cx: &mut Context<Self>) {
         let fields: Vec<FormField> = self
@@ -1070,16 +1056,12 @@ impl ProviderEditor {
         if self.source == ProviderSource::Station
             && let Some(info) = &self.station_gateway
         {
-            let channel_id = self.station_channel_id(cx);
-            let channel_name = self.name.read(cx).content().trim().to_string();
             let caps = self.station_capabilities();
             provider_config::inject_station_endpoint(
                 &mut self.values,
                 self.app_type,
                 &info.origin,
                 &info.key,
-                &channel_id,
-                &channel_name,
                 caps,
             );
         }
@@ -1361,6 +1343,13 @@ impl ProviderEditor {
                         this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
                         cx.notify();
                     }
+                    Err(ProviderSaveFailure::HistoryMigration(error)) => {
+                        this.set_error(tf!(
+                            k::PROVIDER_EDITOR_HISTORY_MIGRATION_FAILED,
+                            error = error
+                        ));
+                        cx.notify();
+                    }
                 }
             })
             .ok();
@@ -1462,12 +1451,41 @@ impl ProviderEditor {
                             prior_meta.as_ref(),
                         )
                         .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
+                        // Legacy station entries used the OcHub record UUID as
+                        // Codex's model_provider. Only that exact generated
+                        // shape is safe to migrate automatically: shared,
+                        // user-chosen buckets (for example `custom`) may be
+                        // referenced by more than one connection.
+                        let history_bucket_rename = if app_type == AppType::Codex {
+                            original_provider.as_ref().and_then(|original| {
+                                let old_id = original
+                                    .settings_config
+                                    .get("config")
+                                    .and_then(Value::as_str)
+                                    .and_then(
+                                        ochub_core::apps::codex::extract_codex_model_provider_id,
+                                    )?;
+                                let new_id = provider
+                                    .settings_config
+                                    .get("config")
+                                    .and_then(Value::as_str)
+                                    .and_then(
+                                        ochub_core::apps::codex::extract_codex_model_provider_id,
+                                    )?;
+                                let legacy_coupled_id = old_id == original.id
+                                    && (uuid::Uuid::parse_str(&old_id).is_ok()
+                                        || old_id.starts_with("local-gateway-"));
+                                (legacy_coupled_id && old_id != new_id).then_some((old_id, new_id))
+                            })
+                        } else {
+                            None
+                        };
                         // Editing must not strip fields the form doesn't own.
-                        if let Some(original) = original_provider {
+                        if let Some(original) = original_provider.as_ref() {
                             provider.created_at = original.created_at;
                             provider.sort_index = original.sort_index;
-                            provider.icon = original.icon;
-                            provider.icon_color = original.icon_color;
+                            provider.icon.clone_from(&original.icon);
+                            provider.icon_color.clone_from(&original.icon_color);
                         }
                         if common_config_supported {
                             if common_config_enabled {
@@ -1491,7 +1509,16 @@ impl ProviderEditor {
                                 ProviderService::add(&app, app_type, provider, true).map(|_| ())
                             }
                         }
-                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))
+                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
+                        if let Some((old_id, new_id)) = history_bucket_rename {
+                            ochub_core::services::migrate_codex_history_provider_bucket(
+                                &old_id, &new_id,
+                            )
+                            .map_err(|error| {
+                                ProviderSaveFailure::HistoryMigration(error.to_string())
+                            })?;
+                        }
+                        Ok(())
                     })();
                     ProviderSaveOutcome {
                         saved_snippet,
@@ -1515,6 +1542,13 @@ impl ProviderEditor {
                     }
                     Err(ProviderSaveFailure::Provider(error)) => {
                         this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
+                        cx.notify();
+                    }
+                    Err(ProviderSaveFailure::HistoryMigration(error)) => {
+                        this.set_error(tf!(
+                            k::PROVIDER_EDITOR_HISTORY_MIGRATION_FAILED,
+                            error = error
+                        ));
                         cx.notify();
                     }
                 }

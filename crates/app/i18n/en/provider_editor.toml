@@ -86,6 +86,7 @@
 "provider_editor.row.delete" = "Delete"
 "provider_editor.save.config_invalid" = "The config is not valid: {message}"
 "provider_editor.save.failed" = "Save failed: {error}"
+"provider_editor.history_migration.failed" = "The connection was saved, but Codex session history migration failed: {error}. Save again after resolving the issue to retry."
 "provider_editor.source.direct" = "Direct connection"
 "provider_editor.source.help" = "With a model provider you skip the endpoint and key — just pick the models to use."
 "provider_editor.source.label" = "Source"

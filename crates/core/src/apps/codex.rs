@@ -166,6 +166,17 @@ fn active_codex_model_provider_id(doc: &DocumentMut) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Return the active Codex history/provider bucket from a `config.toml`.
+///
+/// This is intentionally separate from OcHub's provider record id. Codex
+/// persists this value in session metadata and uses it when resuming history.
+pub fn extract_codex_model_provider_id(config_text: &str) -> Option<String> {
+    config_text
+        .parse::<DocumentMut>()
+        .ok()
+        .and_then(|doc| active_codex_model_provider_id(&doc))
+}
+
 pub(crate) fn is_custom_codex_model_provider_id(id: &str) -> bool {
     let id = id.trim();
     !id.is_empty()

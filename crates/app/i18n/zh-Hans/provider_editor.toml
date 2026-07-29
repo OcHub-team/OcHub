@@ -88,6 +88,7 @@
 "provider_editor.row.delete" = "删除"
 "provider_editor.save.config_invalid" = "配置无效：{message}"
 "provider_editor.save.failed" = "保存失败: {error}"
+"provider_editor.history_migration.failed" = "连接已保存，但 Codex 会话历史迁移失败：{error}。修复问题后可再次保存重试。"
 "provider_editor.source.direct" = "直接连接"
 "provider_editor.source.help" = "选择模型供应商后无需填写地址与密钥，只需配置要使用的模型。"
 "provider_editor.source.label" = "来源"

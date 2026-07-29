@@ -572,6 +572,12 @@ fn build_auth(_values: &FormValues, prior: &Value) -> Value {
 /// (so unknown keys survive).
 fn build_config_text(values: &FormValues, prior: &str) -> String {
     let mut doc = prior.parse::<DocumentMut>().unwrap_or_default();
+    let prior_provider_id = doc
+        .get("model_provider")
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
 
     let provider_id = {
         let id = str_val(values, "provider_id").trim();
@@ -616,6 +622,16 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
     }));
     if let Some(mps) = mps.as_table_mut() {
         mps.set_implicit(true);
+        // A Provider ID rename is a table rename, not a second unrelated
+        // provider. Move the prior table when the destination is free so
+        // unknown provider-scoped keys survive and no stale table is orphaned.
+        if let Some(prior_provider_id) = prior_provider_id.as_deref()
+            && prior_provider_id != provider_id
+            && !mps.contains_key(&provider_id)
+            && let Some(prior_table) = mps.remove(prior_provider_id)
+        {
+            mps.insert(&provider_id, prior_table);
+        }
         let ptbl = mps.entry(&provider_id).or_insert(Item::Table(Table::new()));
         if let Some(ptbl) = ptbl.as_table_mut() {
             let name = str_val(values, "name").trim();
@@ -860,6 +876,39 @@ mod tests {
             );
         }
         assert_eq!(str_val(&decoded, "auth_mode"), AUTH_API_KEY);
+    }
+
+    #[test]
+    fn provider_id_rename_moves_table_and_preserves_unknown_fields() {
+        let prior = json!({
+            "auth": {},
+            "config": r#"model_provider = "old_uuid"
+
+[model_providers.old_uuid]
+name = "Legacy"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+experimental_feature = "keep-me"
+"#
+        });
+        let mut values = CodexConfig.decode(&prior, None);
+        set_str(&mut values, "provider_id", "team_history");
+
+        let result = CodexConfig.encode(&values, &prior, None);
+        let config = result.settings_config["config"].as_str().unwrap();
+        assert!(
+            config.contains("model_provider = \"team_history\""),
+            "{config}"
+        );
+        assert!(
+            config.contains("[model_providers.team_history]"),
+            "{config}"
+        );
+        assert!(!config.contains("[model_providers.old_uuid]"), "{config}");
+        assert!(
+            config.contains("experimental_feature = \"keep-me\""),
+            "{config}"
+        );
     }
 
     #[test]

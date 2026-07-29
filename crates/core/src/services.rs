@@ -41,7 +41,7 @@ pub use codex_history_migration::{
     CodexProviderTemplateBucketMigrationOutcome, has_codex_official_history_unify_backup,
     maybe_migrate_codex_official_history_to_unified_bucket,
     maybe_migrate_codex_provider_template_bucket,
-    maybe_migrate_codex_third_party_history_provider_bucket,
+    maybe_migrate_codex_third_party_history_provider_bucket, migrate_codex_history_provider_bucket,
     restore_codex_official_history_from_backups,
 };
 pub use config::ConfigService;

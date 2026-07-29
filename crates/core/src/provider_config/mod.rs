@@ -476,16 +476,15 @@ pub fn clamp_station_fields(values: &mut FormValues, app: AppType, caps: Station
 
 /// Overwrite the station-managed fields of `values` so the codec encodes a
 /// config that points at the local gateway. `base_url` is the running gateway
-/// origin (no path); `key` is the gateway-issued client key; `provider_id` and
-/// `display_name` seed Codex's `[model_providers.<id>]` table. `caps` clamps
-/// the fields the user still owns ([`clamp_station_fields`]).
+/// origin (no path); `key` is the gateway-issued client key. Codex provider
+/// identity fields deliberately remain user-owned: `model_provider` is also
+/// Codex's session-history bucket and must not inherit OcHub's internal UUID.
+/// `caps` clamps the fields the user still owns ([`clamp_station_fields`]).
 pub fn inject_station_endpoint(
     values: &mut FormValues,
     app: AppType,
     base_url: &str,
     key: &str,
-    provider_id: &str,
-    display_name: &str,
     caps: StationCapabilities,
 ) {
     clamp_station_fields(values, app, caps);
@@ -502,15 +501,6 @@ pub fn inject_station_endpoint(
             set_bool(values, "is_full_url", false);
         }
         AppType::Codex => {
-            set_str(
-                values,
-                "provider_id",
-                sanitize_toml_provider_id(provider_id),
-            );
-            // `name` only reaches config.toml when remote compaction is off:
-            // the codec forces the literal `OpenAI` when it is on, which is
-            // exactly the naming Codex requires to enable the feature.
-            set_str(values, "name", display_name.trim());
             set_str(values, "base_url", format!("{origin}/v1"));
             set_str(values, "api_key", key);
             set_str(values, "wire_api", "responses");
@@ -522,27 +512,5 @@ pub fn inject_station_endpoint(
             values.insert("http_headers".into(), Value::Object(Default::default()));
         }
         _ => {}
-    }
-}
-
-/// Make an arbitrary provider id safe as a Codex TOML table key
-/// (`[model_providers.<id>]`): lowercase alphanumerics plus `-`/`_`.
-fn sanitize_toml_provider_id(id: &str) -> String {
-    let mut out = String::with_capacity(id.len());
-    let mut last_dash = false;
-    for ch in id.trim().chars().flat_map(char::to_lowercase) {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch);
-            last_dash = false;
-        } else if !last_dash && !out.is_empty() {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    let out = out.trim_matches('-').to_string();
-    if out.is_empty() {
-        "station".to_string()
-    } else {
-        out
     }
 }
