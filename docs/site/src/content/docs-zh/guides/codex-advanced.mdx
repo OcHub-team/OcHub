@@ -1,0 +1,207 @@
+---
+title: Codex 进阶与易踩坑
+description: 同时保留 ChatGPT 登录与模型供应商转发，理解远程压缩、Responses WebSocket 和本地会话历史。
+audience: human
+sidebar:
+  order: 6.5
+---
+
+Codex 的账号、模型请求和聊天记录是三套相互关联、但并不等价的状态。很多看似随机的
+401、压缩失败或“历史消失”，其实都来自把它们当成了同一件事。
+
+## 先建立正确的心智模型
+
+| 名称 | 保存位置 | 实际作用 |
+| --- | --- | --- |
+| OcHub 连接 ID | OcHub 数据库 | 标识一张连接卡片；内部可以继续使用 UUID |
+| Codex Provider ID | `config.toml` 的 `model_provider` | 选择 `[model_providers.<id>]`，也是 Codex 会话历史的 Provider 分桶 |
+| Codex Provider 名称 | `[model_providers.<id>].name` | Provider 显示/能力兼容字段；不是历史分桶 |
+| ChatGPT 登录 | `auth.json` 或系统凭据存储 | 保存并刷新 ChatGPT 登录凭据 |
+| 模型供应商访问密钥 | 当前 Provider 的认证字段 | 认证发往第三方或 OcHub 本地网关的模型请求 |
+
+因此，修改 OcHub 卡片名称不会迁移聊天记录；修改 `model_provider` 则可能让旧会话落在另一个
+分桶里。OcHub 会把内部连接 UUID 与 Codex Provider ID 分开，新建模型供应商连接默认使用
+稳定的 `custom`，也允许你改成 `company_proxy` 等明确名称。
+
+<Aside type="caution" title="Provider ID 要稳定，不要当显示名称使用">
+
+Provider ID 应使用短、稳定、无空格的值。更换上游地址、模型或卡片名称时通常不需要改它。
+如果旧连接曾把 UUID 写成 Provider ID，请在 OcHub 编辑器中修改并保存；OcHub 会先备份，再
+迁移匹配的 JSONL 会话元数据和 SQLite 线程索引。
+
+</Aside>
+
+## 同时保留 ChatGPT 登录并走模型供应商
+
+这个模式适合你仍需要 ChatGPT 登录状态，但希望模型推理由第三方 Responses API 或 OcHub
+模型供应商承担的场景。
+
+<Steps>
+
+1. **先完成 ChatGPT 登录。** 在 Codex 中登录，确认账号连接能单独工作。登录凭据可能保存在
+   `~/.codex/auth.json`，也可能由系统钥匙串保存。
+
+2. **让 OcHub 保留登录材料。** 打开 Codex 应用设置，启用“第三方连接保留当前 OAuth”。
+
+3. **新建 Codex 连接并选择“模型供应商”。** 选择已经配置好的模型供应商与客户端模型。
+
+4. **设置稳定的 Provider ID。** 例如 `company_proxy`。这是聊天记录分桶，不是 OcHub 的
+   内部连接 ID。
+
+5. **选择“ChatGPT 登录 + 第三方 API”。** OcHub 保留登录状态，同时给本地网关写入独立的
+   客户端密钥。
+
+6. **检查预览。** `model_provider` 应是你选择的稳定 ID；`base_url` 应指向 OcHub 本地网关；
+   Provider 中应同时保留 OpenAI 登录要求和网关 bearer token。
+
+7. **保存、切换并重开 Codex。** 先发一条短请求，再到“用量 → 请求日志”核对请求是否经过
+   `gateway`。
+
+</Steps>
+
+典型的生成结果类似下面这样；密钥由 OcHub 生成，不要手工复制到其他机器：
+
+```toml
+model_provider = "company_proxy"
+
+[model_providers.company_proxy]
+name = "Company Proxy"
+base_url = "http://127.0.0.1:4180/v1"
+wire_api = "responses"
+requires_openai_auth = true
+experimental_bearer_token = "rd-..."
+```
+
+这里有两条独立的认证链：
+
+- ChatGPT 登录仍由 Codex 的登录缓存负责。
+- 模型请求到 OcHub 网关时使用 `rd-...`；网关再使用模型供应商自己的上游密钥。
+
+仅仅保留 `auth.json` 不会让第三方 API 自动接受 ChatGPT OAuth。反过来，只有网关密钥也
+不等于已经登录 ChatGPT。
+
+## 压缩到底压缩了什么
+
+长对话有两个不同概念：
+
+- **本地 transcript**：完整或近完整地保存在磁盘，用于 `/resume`、会话列表和审计。
+- **活动上下文**：下一次模型请求实际携带的历史，受模型上下文窗口限制。
+
+`/compact` 压缩的是活动上下文：Codex 用一份摘要替换较早的对话，使后续请求继续保留关键
+决定，又不会无限增长。它不会等价于删除本地聊天记录。Codex 也可以在达到模型默认阈值时
+自动压缩；高级用户可通过 `model_auto_compact_token_limit` 调整触发阈值。
+
+## 什么是远程压缩
+
+普通压缩可以在客户端完成摘要。远程压缩则把 Responses 专用的压缩请求交给支持该语义的
+上游处理。在 OcHub 当前实现中，这类请求包含 Responses 的 `compaction_trigger`，没有可靠的
+Chat Completions 或 Anthropic Messages 等价物。
+
+因此，OcHub 只在所选模型供应商至少有一个原生 Responses 上游时允许开启远程压缩：
+
+1. 模型供应商中必须启用 Responses 接口。
+2. 编辑 Codex 连接，选择该模型供应商。
+3. 在 Provider 区域开启“远程压缩”。
+4. 检查预览中 Provider 名称是否被写为精确的 `OpenAI`。
+5. 重开 Codex，在长对话中使用 `/compact` 验证。
+
+Provider 名称写成 `OpenAI` 是当前 Codex/OcHub 的能力兼容约定，不要把它与
+`model_provider = "openai"` 混淆。前者是当前自定义 Provider 的名称；后者会选择 Codex 保留的
+内建 OpenAI Provider，不能拿来定义自建转发站。
+
+<Aside type="caution" title="“OpenAI-compatible”不代表支持远程压缩">
+
+许多服务只实现 `/v1/responses` 的常规生成，并不认识压缩触发项。出现 400、未知 input type
+或压缩后会话中断时，请关闭远程压缩。Chat-only 上游即使能通过 OcHub 转换普通请求，也不能
+转换远程压缩。
+
+</Aside>
+
+## Responses WebSocket 是什么
+
+`supports_websockets = true` 告诉 Codex：当前模型 Provider 支持 Responses API 的
+WebSocket 传输。它可以让支持方使用持久的双向连接承载 Responses 流，而不是每次都新建普通
+HTTP/SSE 请求。
+
+这里最容易混淆的是两种完全不同的 WebSocket：
+
+| WebSocket | 连接谁 | OcHub 中对应什么 |
+| --- | --- | --- |
+| Responses WebSocket | Codex 模型客户端 ↔ 模型 Provider | `supports_websockets = true` |
+| app-server WebSocket | 外部客户端 ↔ `codex app-server` | `codex --remote` / `app-server --listen` |
+
+OcHub 的开关是第一种，不会把 Codex CLI 变成远程 app-server。
+
+## 什么时候开启 WebSocket
+
+只有同时满足这些条件才开启：
+
+- 上游明确支持 Responses WebSocket，而不只是 HTTP streaming。
+- 模型供应商中的 Responses 接口已经启用 WebSocket 能力。
+- 网络代理、TLS 终止层和企业 CA 允许 `wss://` 握手与长连接。
+- 普通 Responses 请求已经验证成功。
+
+在模型供应商编辑器中开启 WebSocket 后，OcHub 会把能力传递给 Codex 连接。检查
+`config.toml` 预览：
+
+```toml
+[model_providers.company_proxy]
+wire_api = "responses"
+supports_websockets = true
+```
+
+WebSocket 可能减少重复连接开销，并更适合持续事件流，但不保证任何上游都更快。若握手失败、
+连接频繁断开或企业代理只支持普通 HTTPS，请关闭它并使用 HTTP/SSE。不要用这个开关修复模型
+不支持、鉴权错误或 Base URL 错误。
+
+## 聊天记录保存在哪里
+
+官方 Codex 行为是把可恢复的会话 transcript 保存在本机。当前版本通常在
+`$CODEX_HOME`（默认 `~/.codex`）下使用：
+
+- `sessions/`：活动会话的 rollout JSONL。
+- `archived_sessions/`：归档但仍可恢复的会话。
+- `state_5.sqlite`：线程列表、索引和 Provider 分桶等状态。
+
+这些是当前实现细节，未来 Codex 可能调整文件名或布局。优先使用 `/resume`、`/archive`、
+`codex unarchive` 和 OcHub 的会话管理，不要在 Codex 运行时手工批量改文件。
+
+`auth.json` 不是聊天记录；它包含敏感登录凭据，应像密码一样保护，不要提交到 Git、粘贴到
+工单或公开聊天。
+
+## Provider ID 为什么会影响历史
+
+Codex 会在会话 `session_meta` 和线程索引中记录 `model_provider`。这让它可以区分官方
+`openai`、共享 `custom` 和其他自定义 Provider，但也意味着修改 Provider ID 会改变会话所属
+分桶。
+
+实用规则：
+
+- 只更换上游 URL、模型或 API Key：保留 Provider ID。
+- 希望多个第三方连接共享历史：给它们使用同一个稳定 ID，例如 `custom`。
+- 希望不同团队/环境隔离历史：使用不同 ID，例如 `team_proxy`、`personal_proxy`。
+- 从旧 UUID ID 改成语义化 ID：先退出 Codex，再通过 OcHub 保存，让迁移逻辑处理 JSONL 与
+  SQLite，并保留备份。
+- `/archive` 只归档，会话仍在本机；`/delete` 会永久删除当前会话及其派生子会话。
+
+## 一份排障顺序
+
+遇到组合模式、压缩或 WebSocket 问题时，按层排查：
+
+1. **登录层**：Codex 是否仍显示已登录？凭据保存在文件还是钥匙串？
+2. **Provider 层**：`model_provider` 是否指向实际存在的 `[model_providers.<id>]`？
+3. **网关层**：Base URL 是否是 OcHub 本地地址，`rd-...` 客户端密钥是否由当前连接生成？
+4. **普通请求层**：先关闭远程压缩和 WebSocket，验证一条普通 Responses 请求。
+5. **WebSocket 层**：确认上游与网络链路都支持后再开启。
+6. **压缩层**：最后开启远程压缩，并在长对话中单独验证 `/compact`。
+7. **历史层**：若 `/resume` 列表变化，核对 `CODEX_HOME` 与 Provider ID，不要先删除文件。
+
+## 官方参考与 OcHub 实现说明
+
+- OpenAI [Codex 配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)
+  定义了 `model_provider`、`requires_openai_auth`、`supports_websockets` 和自动压缩阈值。
+- OpenAI [Codex 认证与会话](https://learn.chatgpt.com/docs/auth)说明登录缓存和凭据存储。
+- OpenAI [Codex CLI 命令](https://learn.chatgpt.com/docs/developer-commands.md?surface=cli)
+  说明 `/compact`、`/resume`、`/archive` 和 `/delete`。
+- “Provider 名称触发远程压缩”、Responses-only 路由保护、UUID 历史迁移和具体文件扫描范围
+  是 OcHub 针对当前 Codex 行为实现的兼容层，不是 OpenAI 承诺的永久协议。
