@@ -29,7 +29,8 @@ use crate::highlight::{self, Lang};
 use crate::text_input::{
     Backspace, CaretBlink, CloseFind, Copy, Cut, Delete, Down, End, Find, FindNext, FindPrevious,
     Home, Left, Newline, Paste, Redo, Right, SelectAll, SelectLeft, SelectRight,
-    ShowCharacterPalette, TextInput, Undo, Up, closest_match, find_matches, render_find_bar,
+    ShowCharacterPalette, TextInput, Undo, Up, closest_match, extend_word_selection, find_matches,
+    render_find_bar, surrounding_word_range,
 };
 use crate::theme;
 
@@ -99,6 +100,9 @@ pub struct CodeEditor {
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
     is_selecting: bool,
+    /// Initial run selected by a double click, retained until mouse-up so a
+    /// subsequent drag expands by complete words.
+    word_selection_anchor: Option<Range<usize>>,
     /// Shaped layouts for only the rows currently inside the scroll viewport.
     lines: Vec<ShapedLine>,
     /// Buffer-line index for each entry in `lines`.
@@ -166,6 +170,7 @@ impl CodeEditor {
             selection_reversed: false,
             marked_range: None,
             is_selecting: false,
+            word_selection_anchor: None,
             lines: Vec::new(),
             rows: Vec::new(),
             painted_row_start: 0,
@@ -883,6 +888,7 @@ impl CodeEditor {
                 scrollbar.thumb_bounds.size.height * 0.5
             };
             self.is_selecting = false;
+            self.word_selection_anchor = None;
             self.scrollbar_drag = Some(ScrollbarDrag { grab_offset });
             self.drag_scrollbar_to(event.position.y, cx);
             cx.stop_propagation();
@@ -901,10 +907,27 @@ impl CodeEditor {
             return;
         }
         self.is_selecting = true;
+        self.word_selection_anchor = None;
+        let offset = self.offset_for_position(event.position);
         if event.modifiers.shift {
-            self.select_to(self.offset_for_position(event.position), cx);
+            if event.click_count == 2 {
+                let range = surrounding_word_range(&self.content, offset);
+                let anchor = if self.selection_reversed {
+                    self.selected_range.end
+                } else {
+                    self.selected_range.start
+                };
+                let reversed = range.start < anchor;
+                self.set_selection(range.start.min(anchor)..range.end.max(anchor), reversed, cx);
+            } else {
+                self.select_to(offset, cx);
+            }
+        } else if event.click_count == 2 {
+            let range = surrounding_word_range(&self.content, offset);
+            self.word_selection_anchor = Some(range.clone());
+            self.set_selection(range, false, cx);
         } else {
-            self.move_to(self.offset_for_position(event.position), cx)
+            self.move_to(offset, cx)
         }
     }
 
@@ -914,6 +937,7 @@ impl CodeEditor {
             cx.notify();
         }
         self.is_selecting = false;
+        self.word_selection_anchor = None;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -923,7 +947,13 @@ impl CodeEditor {
             return;
         }
         if self.is_selecting {
-            self.select_to(self.offset_for_position(event.position), cx);
+            let offset = self.offset_for_position(event.position);
+            if let Some(original) = self.word_selection_anchor.clone() {
+                let (range, reversed) = extend_word_selection(&self.content, &original, offset);
+                self.set_selection(range, reversed, cx);
+            } else {
+                self.select_to(offset, cx);
+            }
         }
     }
 
@@ -947,6 +977,15 @@ impl CodeEditor {
         self.scroll_selection_into_view();
         self.reset_blink(cx);
         cx.notify()
+    }
+
+    fn set_selection(&mut self, range: Range<usize>, reversed: bool, cx: &mut Context<Self>) {
+        self.ensure_offset_visible(if reversed { range.start } else { range.end });
+        self.selected_range = range;
+        self.selection_reversed = reversed;
+        self.scroll_selection_into_view();
+        self.reset_blink(cx);
+        cx.notify();
     }
 
     fn cursor_offset(&self) -> usize {

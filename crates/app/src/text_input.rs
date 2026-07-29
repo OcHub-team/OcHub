@@ -250,6 +250,10 @@ pub struct TextInput {
     /// generic scroll container this follows keyboard/IME caret movement too.
     horizontal_scroll: Pixels,
     is_selecting: bool,
+    /// Initial run selected by a double click. While the mouse remains down,
+    /// dragging extends from this whole run instead of collapsing to a
+    /// character selection.
+    word_selection_anchor: Option<Range<usize>>,
     masked: bool,
     multiline: bool,
     /// Code-editor mode: multiline rendering, monospace, line-number gutter.
@@ -320,6 +324,99 @@ pub(crate) fn closest_match(matches: &[Range<usize>], cursor: usize) -> Option<u
                 .position(|range| range.start >= cursor || range.contains(&cursor))
                 .unwrap_or(0),
         )
+    }
+}
+
+/// The same three-way character classification Zed uses for double-click
+/// selection. Keeping punctuation separate means `foo.bar` selects one
+/// identifier at a time, while whitespace runs remain selectable too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CharKind {
+    Whitespace,
+    Punctuation,
+    Word,
+}
+
+fn char_kind(character: char) -> CharKind {
+    if character.is_alphanumeric() || character == '_' {
+        CharKind::Word
+    } else if character.is_whitespace() {
+        CharKind::Whitespace
+    } else {
+        CharKind::Punctuation
+    }
+}
+
+fn clamped_char_boundary(content: &str, offset: usize) -> usize {
+    let mut offset = offset.min(content.len());
+    while !content.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+fn surrounding_run(content: &str, offset: usize) -> (Range<usize>, Option<CharKind>) {
+    let offset = clamped_char_boundary(content, offset);
+    let mut start = offset;
+    let mut end = offset;
+    let mut previous = content[..offset].chars().rev().take(128).peekable();
+    let mut next = content[offset..].chars().take(128).peekable();
+    let kind = std::cmp::max(
+        previous.peek().copied().map(char_kind),
+        next.peek().copied().map(char_kind),
+    );
+
+    for character in previous {
+        if character != '\n' && Some(char_kind(character)) == kind {
+            start -= character.len_utf8();
+        } else {
+            break;
+        }
+    }
+    for character in next {
+        if character != '\n' && Some(char_kind(character)) == kind {
+            end += character.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    (start..end, kind)
+}
+
+/// Returns the Zed-style run selected by a double click at `offset`.
+///
+/// At a boundary the higher-priority adjacent class wins (`Word` before
+/// punctuation before whitespace), so double-clicking the gap immediately
+/// after a word still selects that word. Newlines always stop the range.
+pub(crate) fn surrounding_word_range(content: &str, offset: usize) -> Range<usize> {
+    surrounding_run(content, offset).0
+}
+
+/// Extend a double-click selection while the pointer is dragged. Word runs
+/// snap as a unit; punctuation and whitespace outside the original selection
+/// retain character-precise dragging, matching Zed's `SelectMode::Word`.
+pub(crate) fn extend_word_selection(
+    content: &str,
+    original: &Range<usize>,
+    offset: usize,
+) -> (Range<usize>, bool) {
+    let offset = clamped_char_boundary(content, offset);
+    let (run, kind) = surrounding_run(content, offset);
+    let head = if kind == Some(CharKind::Word) || original.contains(&offset) {
+        if run.start < original.start {
+            run.start
+        } else {
+            run.end
+        }
+    } else {
+        offset
+    };
+
+    if head <= original.start {
+        (head..original.end, true)
+    } else {
+        (original.start..head, false)
     }
 }
 
@@ -419,6 +516,7 @@ impl TextInput {
             last_bounds: None,
             horizontal_scroll: px(0.),
             is_selecting: false,
+            word_selection_anchor: None,
             masked: false,
             multiline: false,
             code: false,
@@ -978,20 +1076,44 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         self.is_selecting = true;
+        self.word_selection_anchor = None;
+        let offset = self.index_for_mouse_position(event.position);
         if event.modifiers.shift {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            if event.click_count == 2 {
+                let range = surrounding_word_range(&self.content, offset);
+                let anchor = if self.selection_reversed {
+                    self.selected_range.end
+                } else {
+                    self.selected_range.start
+                };
+                let reversed = range.start < anchor;
+                self.set_selection(range.start.min(anchor)..range.end.max(anchor), reversed, cx);
+            } else {
+                self.select_to(offset, cx);
+            }
+        } else if event.click_count == 2 {
+            let range = surrounding_word_range(&self.content, offset);
+            self.word_selection_anchor = Some(range.clone());
+            self.set_selection(range, false, cx);
         } else {
-            self.move_to(self.index_for_mouse_position(event.position), cx)
+            self.move_to(offset, cx)
         }
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
         self.is_selecting = false;
+        self.word_selection_anchor = None;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            let offset = self.index_for_mouse_position(event.position);
+            if let Some(original) = self.word_selection_anchor.clone() {
+                let (range, reversed) = extend_word_selection(&self.content, &original, offset);
+                self.set_selection(range, reversed, cx);
+            } else {
+                self.select_to(offset, cx);
+            }
         }
     }
 
@@ -1047,6 +1169,14 @@ impl TextInput {
         self.selection_reversed = false;
         self.reset_caret_blink(cx);
         cx.notify()
+    }
+
+    fn set_selection(&mut self, range: Range<usize>, reversed: bool, cx: &mut Context<Self>) {
+        self.selected_range = range;
+        self.selection_reversed = reversed;
+        self.scroll_selection_into_view();
+        self.reset_caret_blink(cx);
+        cx.notify();
     }
 
     fn cursor_offset(&self) -> usize {
@@ -2039,7 +2169,8 @@ mod tests {
 
     use super::{
         CaretBlink, accessible_value, closest_match, code_visible_rows, display_offset,
-        find_matches, horizontal_scroll_for_caret, raw_offset_from_display, utf8_offset_from_utf16,
+        extend_word_selection, find_matches, horizontal_scroll_for_caret, raw_offset_from_display,
+        surrounding_word_range, utf8_offset_from_utf16,
     };
 
     /// The composition caret arrives as a UTF-16 offset into the marked text.
@@ -2099,6 +2230,41 @@ mod tests {
         assert_eq!(closest_match(&matches, 7), Some(1));
         assert_eq!(closest_match(&matches, 99), Some(0));
         assert_eq!(closest_match(&[], 0), None);
+    }
+
+    #[test]
+    fn double_click_range_matches_zed_character_classes() {
+        let content = "foo.bar  baz";
+        assert_eq!(surrounding_word_range(content, 1), 0..3);
+        assert_eq!(surrounding_word_range(content, 3), 0..3);
+        assert_eq!(surrounding_word_range(content, 4), 4..7);
+        assert_eq!(surrounding_word_range(content, 8), 7..9);
+        assert_eq!(surrounding_word_range(content, 9), 9..12);
+
+        let punctuation = "foo::bar";
+        assert_eq!(surrounding_word_range(punctuation, 4), 3..5);
+    }
+
+    #[test]
+    fn double_click_range_is_utf8_safe_and_stops_at_newlines() {
+        let unicode = "变量_1.δοκιμή";
+        let separator = unicode.find('.').expect("separator");
+        assert_eq!(surrounding_word_range(unicode, 1), 0..separator);
+        assert_eq!(
+            surrounding_word_range(unicode, separator + 2),
+            separator + 1..unicode.len()
+        );
+
+        assert_eq!(surrounding_word_range("foo\nbar", 3), 0..3);
+        assert_eq!(surrounding_word_range("foo\nbar", 4), 4..7);
+    }
+
+    #[test]
+    fn dragging_after_double_click_extends_by_whole_words() {
+        let content = "one two three";
+        let original = 4..7;
+        assert_eq!(extend_word_selection(content, &original, 1), (0..7, true));
+        assert_eq!(extend_word_selection(content, &original, 9), (4..13, false));
     }
 
     #[test]
