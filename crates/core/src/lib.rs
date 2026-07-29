@@ -44,11 +44,12 @@ pub use app_type::AppType;
 pub use db::Database;
 pub use deeplink::{
     DeepLinkImportRequest, MODEL_PROVIDER_SCHEMA, McpImportError, McpImportResult,
-    ModelProviderImportEndpoint, ModelProviderImportManifest, ModelProviderImportModelRule,
-    ModelProviderImportReasoning, ModelProviderImportResult, ModelProviderImportSource,
-    PreparedModelProviderImport, decode_model_provider_request, encode_model_provider_payload,
-    import_mcp_from_deeplink, import_model_provider_from_deeplink, import_provider_from_deeplink,
-    import_skill_from_deeplink, parse_deeplink_url, prepare_model_provider_import,
+    ModelProviderImportApplyFailure, ModelProviderImportEndpoint, ModelProviderImportManifest,
+    ModelProviderImportModelRule, ModelProviderImportReasoning, ModelProviderImportResult,
+    ModelProviderImportSource, ModelProviderImportTarget, PreparedModelProviderImport,
+    decode_model_provider_request, encode_model_provider_payload, import_mcp_from_deeplink,
+    import_model_provider_from_deeplink, import_provider_from_deeplink, import_skill_from_deeplink,
+    parse_deeplink_url, prepare_model_provider_import,
 };
 pub use error::{AppError, Result};
 pub use model::{

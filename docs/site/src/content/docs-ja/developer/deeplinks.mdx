@@ -9,8 +9,8 @@ sidebar:
 完成済み設定を OcHub デスクトップアプリへ渡す場合に Deep Link を使用します。
 
 モデルプロバイダーでは編集可能なプレビューが開き、ユーザーが「モデルプロバイダーを
-インポート」を選ぶまで書き込みません。インポートしても Claude、Codex、その他のツールへ
-自動適用されることはありません。
+インポート」を選ぶまで書き込みません。Manifest に `applyTo` がある場合、プレビューには
+このプロバイダーを設定するツールも表示され、確認前に任意の対象を解除できます。
 
 ## 互換性と動作
 
@@ -53,11 +53,15 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
   },
   "name": "Aster API",
   "apiKey": "sk-user-secret",
+  "dialects": ["messages", "responses"],
+  "models": ["claude-sonnet-4-5", "gpt-5.4"],
+  "websocketEnabled": true,
   "endpoints": [
     {
-      "baseUrl": "https://api.aster.example",
-      "dialects": ["messages", "responses"],
-      "models": ["claude-sonnet-4-5", "gpt-5.4"]
+      "baseUrl": "https://api.aster.example"
+    },
+    {
+      "baseUrl": "https://backup.aster.example"
     }
   ],
   "defaultModel": "claude-sonnet-4-5",
@@ -71,6 +75,11 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
   "reasoning": {
     "mode": "passthrough"
   },
+  "applyTo": [
+    { "app": "codex", "preferredModel": "gpt-5.4" },
+    { "app": "claude", "preferredModel": "claude-sonnet-4-5" },
+    { "app": "opencode" }
+  ],
   "enabled": true,
   "requires": []
 }
@@ -86,12 +95,16 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
 | `schema` | 必須 | `io.ochub.model-provider/v1` 固定 |
 | `name` | 必須 | モデルプロバイダーと生成される Channel の表示名 |
 | `apiKey` | ワンクリックでは必須 | 全 Endpoint から生成される Channel で共有 |
+| `dialects` | 必須 | プロバイダーのインターフェース：`messages`、`responses`、`chat` の 1 つ以上 |
+| `models` | 任意 | プロバイダーが提供する一意なモデル。最大 500 件。空なら全モデルを許可 |
+| `websocketEnabled` | 任意 | 全 Endpoint で共有するネイティブ Responses WebSocket 機能。既定は `false` |
 | `endpoints` | 必須 | 1〜8 個の上流 API Endpoint |
 | `source` | 任意 | 安定したソース ID、任意のリビジョンと Web サイト情報 |
 | `website` | 任意 | プロバイダーの Web サイト。`source.website` より優先 |
 | `defaultModel` | 任意 | ルールに一致しないリクエストの既定上流モデル |
 | `modelRules` | 任意 | クライアントモデルの書き換えと任意のインターフェース規則 |
 | `reasoning` | 任意 | 推論パラメーターの扱い。既定はそのまま転送 |
+| `applyTo` | 任意 | ユーザー確認後にこのプロバイダーを設定するツール |
 | `enabled` | 任意 | プロバイダーと Channel の初期状態。既定は `true` |
 | `requires` | 任意 | 予約済み機能リスト。現在は空である必要があります |
 
@@ -100,12 +113,38 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
 | フィールド | 必須 | 意味 |
 | --- | --- | --- |
 | `baseUrl` | 必須 | Host を含み、認証情報を埋め込まない HTTP / HTTPS ベース URL |
-| `dialects` | 必須 | `messages`、`responses`、`chat` の 1 つ以上 |
-| `models` | 任意 | この Endpoint で利用できる一意なモデル。最大 500 件 |
 
-OcHub は Endpoint と Dialect の組み合わせごとに Channel を作成します。Manifest は最大
-8 Endpoint、100 モデルルールで、文字列 1 つは最大 4 KiB です。同じ Endpoint 内で
-Dialect またはモデルが重複すると拒否されます。
+各 Endpoint は `baseUrl` のみを受け付けます。これらは同等のフェイルオーバー先で、
+配列順に試され、プロバイダーの API キー、インターフェース、モデル、WebSocket
+機能を共有します。`websocketEnabled: true` には `responses` が必要で、すべての
+フェイルオーバー先がネイティブ Responses WebSocket に対応することを意味します。
+機能が異なるアドレスは別のプロバイダーとして定義してください。
+
+OcHub は内部で Endpoint と Dialect の組み合わせごとに Channel を作成します。Manifest
+は最大 8 Endpoint、100 モデルルールで、文字列 1 つは最大 4 KiB です。重複する
+プロバイダー Dialect、モデル、Endpoint アドレスは拒否されます。
+
+## 適用先
+
+各 `applyTo` 項は `app` と任意の `preferredModel` を受け付けます。対応する値は
+`claude`、`claude-desktop`、`codex`、`grokbuild`、`opencode`、`openclaw`、
+`hermes` です。同じアプリを複数回指定することはできません。
+プロバイダーの `models` が空でない場合、`preferredModel` はその完全名または
+ワイルドカード項目のいずれかに一致する必要があります。プロバイダーには各対象と互換性の
+あるインターフェースが必要で、`applyTo` が空でない場合は `enabled` が `true` で
+なければなりません。
+
+デスクトップのプレビューでは要求された適用先が既定で有効になり、確認前に解除したり
+優先モデルを変更したりできます。確認後、OcHub はプロバイダーをインポートし、
+ローカル Gateway を起動して、選択した各ツールに OcHub 管理のプロバイダーを作成・
+切り替えます。上流 API キーは OcHub 内に保持され、ツールにはローカル Gateway
+アドレスと個別のローカルキーだけが渡されます。一部が失敗しても、プロバイダーと成功した
+適用先は保持され、失敗したツールが報告されます。
+
+`ochcli deeplink import` には確認画面がありません。プロバイダーをインポートした後、
+すべての `applyTo` 対象を直ちに適用します。成功結果には `appliedTo` と
+`applyFailures` が含まれ、対象の一部が失敗した場合は同じ詳細を含む部分失敗エラーを
+返します。
 
 ## 推論設定
 
@@ -154,11 +193,15 @@ const manifest = {
   schema: "io.ochub.model-provider/v1",
   name: "Aster API",
   apiKey: "sk-user-secret",
+  dialects: ["messages", "responses"],
+  models: ["claude-sonnet-4-5", "gpt-5.4"],
+  websocketEnabled: true,
+  applyTo: [
+    { app: "codex", preferredModel: "gpt-5.4" }
+  ],
   endpoints: [
     {
-      baseUrl: "https://api.aster.example",
-      dialects: ["messages", "responses"],
-      models: ["claude-sonnet-4-5"]
+      baseUrl: "https://api.aster.example"
     }
   ]
 };
@@ -215,6 +258,7 @@ ochcli deeplink import "$URL"
 
 解析とドライランの出力は既定で秘密情報をマスクします。ログ、CI、共有ターミナルでは
 `--show-secrets` を使わないでください。
+ドライランでないインポートは、すべての `applyTo` 対象も直ちに適用します。
 
 macOS デスクトップテスト：
 

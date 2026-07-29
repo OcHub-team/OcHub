@@ -135,11 +135,15 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
   },
   "name": "Aster API",
   "apiKey": "sk-user-secret",
+  "dialects": ["messages", "responses", "chat"],
+  "models": ["claude-*", "gpt-*"],
+  "websocketEnabled": true,
   "endpoints": [
     {
-      "baseUrl": "https://api.aster.example",
-      "dialects": ["messages", "responses", "chat"],
-      "models": ["claude-*", "gpt-*"]
+      "baseUrl": "https://api.aster.example"
+    },
+    {
+      "baseUrl": "https://backup.aster.example"
     }
   ],
   "defaultModel": "claude-sonnet-4-5",
@@ -149,6 +153,11 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
       "upstreamModel": "claude-haiku-4-5",
       "dialect": "messages"
     }
+  ],
+  "applyTo": [
+    { "app": "codex", "preferredModel": "gpt-5.4" },
+    { "app": "claude", "preferredModel": "claude-sonnet-4-5" },
+    { "app": "opencode" }
   ],
   "enabled": true,
   "requires": []
@@ -162,15 +171,19 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
 | `name` | `GatewayRoute.name` 和各 `GatewayChannel.name` |
 | `source.website` | `GatewayRoute.website_url` |
 | `apiKey` | 各 `GatewayChannel.api_key` |
-| `endpoints[]` | 每个 URL 生成一个 `endpoint_id` |
-| `dialects[]` | 每个接口生成一条 `GatewayChannel` |
-| `models[]` | 同一 endpoint 下各 channel 的 `models` |
+| `dialects[]` | 供应商支持的接口；与每个 endpoint 展开为 `GatewayChannel` |
+| `models[]` | 供应商模型列表；复制到所有派生 Channel |
+| `websocketEnabled` | `GatewayRoute.websocket_enabled`；声明原生 Responses WebSocket 能力 |
+| `endpoints[]` | 等价的故障切换 URL；数组顺序即尝试顺序，每个 URL 生成一个 `endpoint_id` |
 | `defaultModel` | `GatewayRoute.default_model` |
 | `modelRules[]` | `GatewayRoute.model_rules` |
+| `applyTo[]` | 用户确认后，为每个目标应用创建并切换到 OcHub 本地 Gateway Provider |
 | `reasoning` | `GatewayRoute.reasoning` |
 | `enabled` | Route 和 Channel 的初始状态 |
 
-`dialects` 只接受 OcHub 当前的 `messages`、`responses`、`chat`。Manifest 不允许指定数据库 ID、创建时间、本地监听端口或 OcHub 本地访问密钥。
+`dialects` 只接受 OcHub 当前的 `messages`、`responses`、`chat`。`websocketEnabled` 默认为 `false`，设为 `true` 时必须同时包含 `responses`，并表示所有故障切换地址都原生支持 Responses WebSocket。Endpoint 只接受 `baseUrl`，不能单独声明接口、模型或 WebSocket 能力；如果两个地址能力不同，它们应建成两个模型供应商。Manifest 不允许指定数据库 ID、创建时间、本地监听端口或 OcHub 本地访问密钥。
+
+`applyTo` 支持 `claude`、`claude-desktop`、`codex`、`grokbuild`、`opencode`、`openclaw` 和 `hermes`。每个应用最多出现一次，可通过 `preferredModel` 指定该工具的默认模型；供应商 `models` 非空时，默认模型必须匹配其中一个精确名称或通配规则。Deep Link 只负责在预览页预选目标；桌面端必须等用户确认后才写入工具配置。上游 API Key 不会写入工具配置，目标工具只接收 OcHub 本地 Gateway 地址和独立生成的本地密钥。
 
 ### 4.3 思考强度
 
@@ -214,10 +227,10 @@ json utf-8 → base64url no-padding → URL query payload
   "schema": "io.ochub.model-provider/v1",
   "name": "Aster API",
   "apiKey": "sk-user-secret",
+  "dialects": ["messages"],
   "endpoints": [
     {
-      "baseUrl": "https://api.aster.example",
-      "dialects": ["messages"]
+      "baseUrl": "https://api.aster.example"
     }
   ]
 }
@@ -260,8 +273,8 @@ ochub://v1/import?resource=model-provider&payload=<上述 JSON 的 Base64URL>
 | 项目 | 上限 |
 |---|---:|
 | endpoint | 8 |
-| 每个 endpoint 的 dialect | 3 |
-| 每个 endpoint 的模型 | 500 |
+| 供应商 dialect | 3 |
+| 供应商模型 | 500 |
 | model rule | 100 |
 | 单个字符串 | 4 KiB |
 | 解码后 payload | 64 KiB |

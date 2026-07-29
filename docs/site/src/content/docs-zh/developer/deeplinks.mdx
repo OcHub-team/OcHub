@@ -9,7 +9,7 @@ sidebar:
 Deep Link。
 
 导入模型供应商时，OcHub 会先打开可编辑预览。只有用户点击“导入模型供应商”后才会写入；
-导入供应商不会自动应用到 Claude、Codex 或其他工具。
+Manifest 包含 `applyTo` 时，预览还会列出要配置此供应商的工具，用户可在确认前关闭任意目标。
 
 ## 兼容性与行为
 
@@ -51,11 +51,15 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
   },
   "name": "Aster API",
   "apiKey": "sk-user-secret",
+  "dialects": ["messages", "responses"],
+  "models": ["claude-sonnet-4-5", "gpt-5.4"],
+  "websocketEnabled": true,
   "endpoints": [
     {
-      "baseUrl": "https://api.aster.example",
-      "dialects": ["messages", "responses"],
-      "models": ["claude-sonnet-4-5", "gpt-5.4"]
+      "baseUrl": "https://api.aster.example"
+    },
+    {
+      "baseUrl": "https://backup.aster.example"
     }
   ],
   "defaultModel": "claude-sonnet-4-5",
@@ -69,6 +73,11 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
   "reasoning": {
     "mode": "passthrough"
   },
+  "applyTo": [
+    { "app": "codex", "preferredModel": "gpt-5.4" },
+    { "app": "claude", "preferredModel": "claude-sonnet-4-5" },
+    { "app": "opencode" }
+  ],
   "enabled": true,
   "requires": []
 }
@@ -84,12 +93,16 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
 | `schema` | 是 | 必须为 `io.ochub.model-provider/v1` |
 | `name` | 是 | 模型供应商及其生成接口的显示名称 |
 | `apiKey` | 一键导入时必填 | 由所有 Endpoint 生成的 Channel 共用 |
+| `dialects` | 是 | 供应商接口：`messages`、`responses`、`chat` 中的一种或多种 |
+| `models` | 否 | 供应商提供的模型，最多 500 个且不能重复；留空表示任意模型 |
+| `websocketEnabled` | 否 | 所有 Endpoint 共用的原生 Responses WebSocket 能力；默认为 `false` |
 | `endpoints` | 是 | 一至八个上游 API Endpoint |
 | `source` | 否 | 稳定来源 ID，以及可选的版本和官网元数据 |
 | `website` | 否 | 供应商官网；与 `source.website` 同时存在时优先使用 |
 | `defaultModel` | 否 | 请求没有命中规则时使用的默认上游模型 |
 | `modelRules` | 否 | 客户端模型改写和可选接口规则 |
 | `reasoning` | 否 | 思考参数处理方式；默认原样传递 |
+| `applyTo` | 否 | 用户确认导入后，要配置此供应商的工具列表 |
 | `enabled` | 否 | 供应商和 Channel 的初始状态；默认为 `true` |
 | `requires` | 否 | 预留能力列表；当前必须为空 |
 
@@ -98,12 +111,32 @@ ochub://v1/import?resource=model-provider&payload=<base64url-json>
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
 | `baseUrl` | 是 | 含 Host、不内嵌凭据的 HTTP 或 HTTPS 基础地址 |
-| `dialects` | 是 | `messages`、`responses`、`chat` 中的一种或多种 |
-| `models` | 否 | 此 Endpoint 可用的模型，最多 500 个且不能重复 |
 
-OcHub 会为每个 Endpoint 和 Dialect 组合创建一个 Channel。一个 Manifest 最多包含
-8 个 Endpoint 和 100 条模型规则；单个字符串最大为 4 KiB。同一 Endpoint 中重复的
-Dialect 或模型会被拒绝。
+每个 Endpoint 只接受 `baseUrl`。这些地址能力等价，按数组顺序故障切换，并共用供应商
+API Key、接口、模型和 WebSocket 能力。`websocketEnabled: true` 要求启用
+`responses`，并表示所有故障切换地址都原生支持 Responses WebSocket；能力不同的地址
+应定义为不同供应商。
+
+OcHub 内部会为每个 Endpoint 和 Dialect 组合创建一个 Channel。一个 Manifest 最多包含
+8 个 Endpoint 和 100 条模型规则；单个字符串最大为 4 KiB。重复的供应商 Dialect、
+模型或 Endpoint 地址会被拒绝。
+
+## 应用目标
+
+每个 `applyTo` 项包含 `app` 和可选的 `preferredModel`。支持的应用值为
+`claude`、`claude-desktop`、`codex`、`grokbuild`、`opencode`、`openclaw`
+和 `hermes`；同一应用只能出现一次。
+供应商 `models` 非空时，`preferredModel` 必须匹配其中一个精确名称或通配规则。供应商
+必须包含与每个目标兼容的接口；`applyTo` 非空时，`enabled` 必须为 `true`。
+
+桌面预览默认启用 Manifest 请求的所有目标，用户可在确认前取消目标或修改默认模型。
+确认后，OcHub 会导入供应商、启动本地 Gateway，并在每个选中工具中创建或切换到由
+OcHub 管理的供应商。上游 API Key 只保存在 OcHub；工具配置只接收本地 Gateway 地址
+和独立的本地密钥。某个目标失败时，供应商和其他成功目标会保留，并明确报告失败工具。
+
+`ochcli deeplink import` 没有确认界面，会在导入供应商后立即应用所有 `applyTo` 目标。
+成功结果包含 `appliedTo` 和 `applyFailures`；任一目标失败时，命令会返回包含相同详情的
+部分失败错误。
 
 ## 思考配置
 
@@ -152,11 +185,15 @@ const manifest = {
   schema: "io.ochub.model-provider/v1",
   name: "Aster API",
   apiKey: "sk-user-secret",
+  dialects: ["messages", "responses"],
+  models: ["claude-sonnet-4-5", "gpt-5.4"],
+  websocketEnabled: true,
+  applyTo: [
+    { app: "codex", preferredModel: "gpt-5.4" }
+  ],
   endpoints: [
     {
-      baseUrl: "https://api.aster.example",
-      dialects: ["messages", "responses"],
-      models: ["claude-sonnet-4-5"]
+      baseUrl: "https://api.aster.example"
     }
   ]
 };
@@ -212,6 +249,7 @@ ochcli deeplink import "$URL"
 ```
 
 解析和演练输出默认会脱敏。不要在日志、CI 和共享终端中使用 `--show-secrets`。
+非演练导入还会立即应用所有 `applyTo` 目标。
 
 在 macOS 上测试桌面端：
 

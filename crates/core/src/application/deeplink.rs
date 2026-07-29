@@ -45,6 +45,15 @@ impl Application {
             "model-provider" => {
                 let result =
                     crate::deeplink::import_model_provider_from_deeplink(self.state(), request)?;
+                if !result.apply_failures.is_empty() {
+                    let details = serde_json::to_value(&result)
+                        .map_err(|source| crate::AppError::JsonSerialize { source })?;
+                    return Err(ApplicationError::PartialFailure {
+                        message: "model provider imported, but one or more app targets failed"
+                            .to_string(),
+                        details,
+                    });
+                }
                 serde_json::to_value(result)
                     .map_err(|source| crate::AppError::JsonSerialize { source }.into())
             }

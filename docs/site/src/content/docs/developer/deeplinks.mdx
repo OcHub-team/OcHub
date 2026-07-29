@@ -9,8 +9,9 @@ Use an OcHub Deep Link when a provider website, account console, or setup guide
 should hand a ready-to-review configuration to the desktop app.
 
 For model providers, OcHub opens an editable preview and writes nothing until
-the user selects **Import model provider**. Importing a provider does not apply
-it to Claude, Codex, or another tool.
+the user selects **Import model provider**. When the manifest contains
+`applyTo`, the preview also shows which tools will receive the provider and
+lets the user turn off any target before confirming.
 
 ## Compatibility and behavior
 
@@ -53,11 +54,15 @@ before encoding the complete payload.
   },
   "name": "Aster API",
   "apiKey": "sk-user-secret",
+  "dialects": ["messages", "responses"],
+  "models": ["claude-sonnet-4-5", "gpt-5.4"],
+  "websocketEnabled": true,
   "endpoints": [
     {
-      "baseUrl": "https://api.aster.example",
-      "dialects": ["messages", "responses"],
-      "models": ["claude-sonnet-4-5", "gpt-5.4"]
+      "baseUrl": "https://api.aster.example"
+    },
+    {
+      "baseUrl": "https://backup.aster.example"
     }
   ],
   "defaultModel": "claude-sonnet-4-5",
@@ -71,6 +76,11 @@ before encoding the complete payload.
   "reasoning": {
     "mode": "passthrough"
   },
+  "applyTo": [
+    { "app": "codex", "preferredModel": "gpt-5.4" },
+    { "app": "claude", "preferredModel": "claude-sonnet-4-5" },
+    { "app": "opencode" }
+  ],
   "enabled": true,
   "requires": []
 }
@@ -87,12 +97,16 @@ form.
 | `schema` | Yes | Must be `io.ochub.model-provider/v1` |
 | `name` | Yes | Display name for the model provider and generated channels |
 | `apiKey` | For one-click import | Shared by channels generated from every endpoint |
+| `dialects` | Yes | Provider interfaces: one or more of `messages`, `responses`, and `chat` |
+| `models` | No | Models served by the provider; up to 500 unique entries; blank allows any model |
+| `websocketEnabled` | No | Native Responses WebSocket capability shared by all endpoints; defaults to `false` |
 | `endpoints` | Yes | One to eight upstream API endpoint objects |
 | `source` | No | Stable source ID plus optional revision and website metadata |
 | `website` | No | Provider website; overrides `source.website` when both exist |
 | `defaultModel` | No | Fallback upstream model for unmatched requests |
 | `modelRules` | No | Client-model rewrite and optional interface rules |
 | `reasoning` | No | Reasoning handling; defaults to pass through |
+| `applyTo` | No | Tools to configure with this provider after the user confirms the import |
 | `enabled` | No | Initial provider/channel state; defaults to `true` |
 | `requires` | No | Reserved capability list; it must currently be empty |
 
@@ -101,12 +115,39 @@ Each endpoint accepts:
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `baseUrl` | Yes | HTTP or HTTPS base URL with a host and no embedded credentials |
-| `dialects` | Yes | One or more of `messages`, `responses`, and `chat` |
-| `models` | No | Models available through this endpoint; up to 500 unique entries |
 
-OcHub creates one channel per endpoint and dialect. A manifest may contain at
+Each endpoint accepts only `baseUrl`. Endpoints are equivalent failover
+addresses and are tried in array order; they share the provider API key,
+interfaces, models, and WebSocket capability. `websocketEnabled: true` requires
+the `responses` dialect and means every failover address supports native
+Responses WebSocket. If addresses expose different capabilities, define
+separate providers.
+
+Internally, OcHub creates one channel per endpoint and dialect. A manifest may contain at
 most eight endpoints and 100 model rules. A string may be at most 4 KiB.
-Duplicate dialects or models inside one endpoint are rejected.
+Duplicate provider dialects, models, or endpoint addresses are rejected.
+
+## Apply targets
+
+Each `applyTo` entry accepts an `app` and an optional `preferredModel`.
+Supported app values are `claude`, `claude-desktop`, `codex`, `grokbuild`,
+`opencode`, `openclaw`, and `hermes`. An app may appear only once.
+When provider `models` is not empty, `preferredModel` must match one of its
+exact or wildcard entries. The provider must include an interface compatible
+with every target, and `enabled` must be `true` when `applyTo` is not empty.
+
+The desktop preview enables every requested target by default and lets the
+user turn targets off or change their preferred models before confirming.
+After confirmation, OcHub imports the provider, starts the local Gateway, and
+creates or switches to an OcHub-managed provider in each selected tool. The
+upstream API key remains in OcHub; tool configuration receives only the local
+Gateway address and a separate local key. If one target fails, the provider
+and successful targets remain installed and the failed tools are reported.
+
+`ochcli deeplink import` has no confirmation screen. It imports the provider
+and immediately applies every `applyTo` target. Successful output includes
+`appliedTo` and `applyFailures`; if any target fails, the command returns a
+partial-failure error with those same details.
 
 ## Reasoning configuration
 
@@ -156,11 +197,15 @@ const manifest = {
   schema: "io.ochub.model-provider/v1",
   name: "Aster API",
   apiKey: "sk-user-secret",
+  dialects: ["messages", "responses"],
+  models: ["claude-sonnet-4-5", "gpt-5.4"],
+  websocketEnabled: true,
+  applyTo: [
+    { app: "codex", preferredModel: "gpt-5.4" }
+  ],
   endpoints: [
     {
-      baseUrl: "https://api.aster.example",
-      dialects: ["messages", "responses"],
-      models: ["claude-sonnet-4-5"]
+      baseUrl: "https://api.aster.example"
     }
   ]
 };
@@ -218,6 +263,7 @@ ochcli deeplink import "$URL"
 
 Parse and dry-run output redact secrets by default. Avoid
 `--show-secrets` in logs, CI, and shared terminals.
+The non-dry-run command also applies every `applyTo` target immediately.
 
 For desktop testing on macOS:
 

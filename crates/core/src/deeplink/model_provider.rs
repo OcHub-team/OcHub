@@ -9,18 +9,18 @@ use url::Url;
 use uuid::Uuid;
 
 use super::DeepLinkImportRequest;
-use crate::AppState;
 use crate::error::AppError;
 use crate::gateway::apply;
 use crate::gateway::types::{
     Dialect, GatewayChannel, GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode,
-    GatewayRoute,
+    GatewayRoute, pattern_matches,
 };
+use crate::{AppState, AppType};
 
 pub const MODEL_PROVIDER_SCHEMA: &str = "io.ochub.model-provider/v1";
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_ENDPOINTS: usize = 8;
-const MAX_MODELS_PER_ENDPOINT: usize = 500;
+const MAX_MODELS: usize = 500;
 const MAX_MODEL_RULES: usize = 100;
 const MAX_STRING_BYTES: usize = 4 * 1024;
 
@@ -35,12 +35,17 @@ pub struct ModelProviderImportSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelProviderImportEndpoint {
     pub base_url: String,
-    pub dialects: Vec<Dialect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelProviderImportTarget {
+    pub app: AppType,
     #[serde(default)]
-    pub models: Vec<String>,
+    pub preferred_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,7 +128,14 @@ pub struct ModelProviderImportManifest {
     pub website: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+    pub dialects: Vec<Dialect>,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub websocket_enabled: bool,
     pub endpoints: Vec<ModelProviderImportEndpoint>,
+    #[serde(default)]
+    pub apply_to: Vec<ModelProviderImportTarget>,
     #[serde(default)]
     pub default_model: Option<String>,
     #[serde(default)]
@@ -189,36 +201,96 @@ impl ModelProviderImportManifest {
             validate_required_string("defaultModel", model)?;
         }
 
+        if self.dialects.is_empty() {
+            return Err(AppError::InvalidInput(
+                "dialects must not be empty".to_string(),
+            ));
+        }
+        let mut dialects = HashSet::new();
+        for dialect in &self.dialects {
+            if !dialects.insert(*dialect) {
+                return Err(AppError::InvalidInput(format!(
+                    "Model provider contains duplicate dialect {}",
+                    dialect.as_str()
+                )));
+            }
+        }
+        if self.websocket_enabled && !dialects.contains(&Dialect::Responses) {
+            return Err(AppError::InvalidInput(
+                "websocketEnabled requires the responses dialect".to_string(),
+            ));
+        }
+        if self.models.len() > MAX_MODELS {
+            return Err(AppError::InvalidInput(format!(
+                "Model provider contains more than {MAX_MODELS} models"
+            )));
+        }
+        let mut models = HashSet::new();
+        for model in &self.models {
+            validate_required_string("models", model)?;
+            if !models.insert(model) {
+                return Err(AppError::InvalidInput(format!(
+                    "Model provider contains duplicate model {model}"
+                )));
+            }
+        }
+
+        let mut endpoints = HashSet::new();
         for (endpoint_index, endpoint) in self.endpoints.iter().enumerate() {
             validate_http_url(
                 &format!("endpoints[{endpoint_index}].baseUrl"),
                 &endpoint.base_url,
             )?;
-            if endpoint.dialects.is_empty() {
+            let normalized = endpoint.base_url.trim_end_matches('/');
+            if !endpoints.insert(normalized) {
                 return Err(AppError::InvalidInput(format!(
-                    "endpoints[{endpoint_index}].dialects must not be empty"
+                    "Model provider contains duplicate endpoint {normalized}"
                 )));
             }
-            let mut dialects = HashSet::new();
-            for dialect in &endpoint.dialects {
-                if !dialects.insert(*dialect) {
-                    return Err(AppError::InvalidInput(format!(
-                        "endpoints[{endpoint_index}] contains duplicate dialect {}",
-                        dialect.as_str()
-                    )));
-                }
-            }
-            if endpoint.models.len() > MAX_MODELS_PER_ENDPOINT {
+        }
+
+        let mut target_apps = HashSet::new();
+        if !self.apply_to.is_empty() && !self.enabled {
+            return Err(AppError::InvalidInput(
+                "enabled must be true when applyTo is not empty".to_string(),
+            ));
+        }
+        for (target_index, target) in self.apply_to.iter().enumerate() {
+            if !target_apps.insert(target.app) {
                 return Err(AppError::InvalidInput(format!(
-                    "endpoints[{endpoint_index}] contains more than {MAX_MODELS_PER_ENDPOINT} models"
+                    "applyTo contains duplicate app {}",
+                    target.app.as_str()
                 )));
             }
-            let mut models = HashSet::new();
-            for model in &endpoint.models {
-                validate_required_string("model", model)?;
-                if !models.insert(model) {
+            if !apply::supported_apps().contains(&target.app) {
+                return Err(AppError::InvalidInput(format!(
+                    "applyTo[{target_index}] uses unsupported app {}",
+                    target.app.as_str()
+                )));
+            }
+            if !self
+                .dialects
+                .iter()
+                .any(|dialect| apply::dialect_compatible(*dialect, target.app))
+            {
+                return Err(AppError::InvalidInput(format!(
+                    "Provider interfaces are incompatible with applyTo app {}",
+                    target.app.as_str()
+                )));
+            }
+            if let Some(model) = &target.preferred_model {
+                validate_required_string(
+                    &format!("applyTo[{target_index}].preferredModel"),
+                    model,
+                )?;
+                if !self.models.is_empty()
+                    && !self
+                        .models
+                        .iter()
+                        .any(|pattern| pattern_matches(pattern, model))
+                {
                     return Err(AppError::InvalidInput(format!(
-                        "endpoints[{endpoint_index}] contains duplicate model {model}"
+                        "applyTo[{target_index}].preferredModel is not allowed by provider models"
                     )));
                 }
             }
@@ -228,6 +300,15 @@ impl ModelProviderImportManifest {
             validate_required_string("modelRules.model", &rule.model)?;
             if !rule.upstream_model.is_empty() {
                 validate_required_string("modelRules.upstreamModel", &rule.upstream_model)?;
+            }
+            if rule
+                .dialect
+                .is_some_and(|dialect| !dialects.contains(&dialect))
+            {
+                return Err(AppError::InvalidInput(format!(
+                    "Model rule dialect {} is not enabled by this provider",
+                    rule.dialect.expect("checked above").as_str()
+                )));
             }
         }
 
@@ -255,9 +336,18 @@ pub struct PreparedModelProviderImport {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelProviderImportApplyFailure {
+    pub app: AppType,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelProviderImportResult {
     pub route_id: String,
     pub channel_ids: Vec<String>,
+    pub applied_to: Vec<AppType>,
+    pub apply_failures: Vec<ModelProviderImportApplyFailure>,
     pub imported: bool,
 }
 
@@ -298,7 +388,7 @@ pub fn prepare_model_provider_import(
     let mut channels = Vec::new();
     for (endpoint_index, endpoint) in manifest.endpoints.iter().enumerate() {
         let endpoint_id = Uuid::new_v4().to_string();
-        for dialect in &endpoint.dialects {
+        for dialect in &manifest.dialects {
             channels.push(GatewayChannel {
                 id: format!(
                     "station-channel:{station_id}:{endpoint_id}:{}",
@@ -310,7 +400,7 @@ pub fn prepare_model_provider_import(
                 base_url: endpoint.base_url.trim_end_matches('/').to_string(),
                 api_key: api_key.clone(),
                 path_override: None,
-                models: endpoint.models.clone(),
+                models: manifest.models.clone(),
                 model_override: None,
                 priority: endpoint_index as i32 * 10,
                 weight: 1,
@@ -341,7 +431,7 @@ pub fn prepare_model_provider_import(
             })
             .collect(),
         reasoning: manifest.reasoning.clone().into(),
-        websocket_enabled: false,
+        websocket_enabled: manifest.websocket_enabled,
         enabled: manifest.enabled,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -371,6 +461,37 @@ pub fn import_model_provider_from_deeplink(
     state
         .db
         .save_gateway_station(&prepared.channels, &prepared.route, &[])?;
+    let mut applied_to = Vec::new();
+    let mut apply_failures = Vec::new();
+    if !prepared.manifest.apply_to.is_empty() {
+        let mut config = state.db.get_gateway_config()?;
+        if !config.enabled {
+            config.enabled = true;
+            state.db.set_gateway_config(&config)?;
+        }
+        let base_url = format!("http://127.0.0.1:{}", config.port);
+        for target in &prepared.manifest.apply_to {
+            let result = apply::station_model_policy(state, target.app, &prepared.route).and_then(
+                |mut policy| {
+                    policy.preferred_model = target.preferred_model.clone();
+                    apply::apply_station_to_app_with_policy(
+                        state,
+                        target.app,
+                        &base_url,
+                        &prepared.route.id,
+                        policy,
+                    )
+                },
+            );
+            match result {
+                Ok(_) => applied_to.push(target.app),
+                Err(error) => apply_failures.push(ModelProviderImportApplyFailure {
+                    app: target.app,
+                    error: error.to_string(),
+                }),
+            }
+        }
+    }
     Ok(ModelProviderImportResult {
         route_id: prepared.route.id,
         channel_ids: prepared
@@ -378,6 +499,8 @@ pub fn import_model_provider_from_deeplink(
             .into_iter()
             .map(|channel| channel.id)
             .collect(),
+        applied_to,
+        apply_failures,
         imported: true,
     })
 }
@@ -446,11 +569,13 @@ mod tests {
             name: "Aster API".to_string(),
             website: Some("https://aster.example".to_string()),
             api_key: Some("sk-secret".to_string()),
+            dialects: vec![Dialect::Messages, Dialect::Responses],
+            models: vec!["claude-*".to_string()],
+            websocket_enabled: false,
             endpoints: vec![ModelProviderImportEndpoint {
                 base_url: "https://api.aster.example/".to_string(),
-                dialects: vec![Dialect::Messages, Dialect::Responses],
-                models: vec!["claude-*".to_string()],
             }],
+            apply_to: Vec::new(),
             default_model: Some("claude-sonnet-4-5".to_string()),
             model_rules: Vec::new(),
             reasoning: ModelProviderImportReasoning::default(),
@@ -504,12 +629,117 @@ mod tests {
                 .iter()
                 .all(|channel| channel.base_url == "https://api.aster.example")
         );
+        assert!(!prepared.route.websocket_enabled);
+    }
+
+    #[test]
+    fn websocket_capability_is_provider_scoped_and_requires_responses() {
+        let mut enabled_manifest = manifest();
+        enabled_manifest.websocket_enabled = true;
+        let prepared = prepare_model_provider_import(enabled_manifest).unwrap();
+        assert!(prepared.route.websocket_enabled);
+
+        let mut invalid = manifest();
+        invalid.websocket_enabled = true;
+        invalid.dialects = vec![Dialect::Messages];
+        assert!(invalid.validate().is_err());
     }
 
     #[test]
     fn rejects_duplicate_dialects() {
         let mut manifest = manifest();
-        manifest.endpoints[0].dialects = vec![Dialect::Messages, Dialect::Messages];
+        manifest.dialects = vec![Dialect::Messages, Dialect::Messages];
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn endpoints_are_failover_addresses_for_the_same_capabilities() {
+        let mut manifest = manifest();
+        manifest.endpoints.push(ModelProviderImportEndpoint {
+            base_url: "https://backup.aster.example/".to_string(),
+        });
+
+        let prepared = prepare_model_provider_import(manifest).unwrap();
+        assert_eq!(prepared.channels.len(), 4);
+        assert_eq!(
+            prepared
+                .channels
+                .iter()
+                .map(|channel| channel.priority)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 10, 10]
+        );
+        assert!(prepared.channels.iter().all(|channel| {
+            channel.models == ["claude-*"]
+                && matches!(channel.dialect, Dialect::Messages | Dialect::Responses)
+        }));
+    }
+
+    #[test]
+    fn rejects_the_old_endpoint_scoped_capability_shape() {
+        let json = r#"{
+            "schema":"io.ochub.model-provider/v1",
+            "name":"Old shape",
+            "dialects":["messages"],
+            "endpoints":[{
+                "baseUrl":"https://api.example.com",
+                "dialects":["messages"],
+                "models":["model"]
+            }]
+        }"#;
+        let error = serde_json::from_str::<ModelProviderImportManifest>(json).unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn accepts_multiple_compatible_application_targets() {
+        let mut manifest = manifest();
+        manifest.models.push("gpt-5.4".to_string());
+        manifest.apply_to = vec![
+            ModelProviderImportTarget {
+                app: AppType::Claude,
+                preferred_model: Some("claude-sonnet-4-5".to_string()),
+            },
+            ModelProviderImportTarget {
+                app: AppType::Codex,
+                preferred_model: Some("gpt-5.4".to_string()),
+            },
+            ModelProviderImportTarget {
+                app: AppType::OpenCode,
+                preferred_model: None,
+            },
+        ];
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_targets_or_applying_a_disabled_provider() {
+        let mut duplicate = manifest();
+        duplicate.apply_to = vec![
+            ModelProviderImportTarget {
+                app: AppType::Codex,
+                preferred_model: None,
+            },
+            ModelProviderImportTarget {
+                app: AppType::Codex,
+                preferred_model: None,
+            },
+        ];
+        assert!(duplicate.validate().is_err());
+
+        let mut disabled = manifest();
+        disabled.enabled = false;
+        disabled.apply_to = vec![ModelProviderImportTarget {
+            app: AppType::Claude,
+            preferred_model: None,
+        }];
+        assert!(disabled.validate().is_err());
+
+        let mut unknown_model = manifest();
+        unknown_model.apply_to = vec![ModelProviderImportTarget {
+            app: AppType::Codex,
+            preferred_model: Some("gpt-5.4".to_string()),
+        }];
+        assert!(unknown_model.validate().is_err());
     }
 }
