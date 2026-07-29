@@ -20,9 +20,13 @@ use super::{
 use crate::AppType;
 use crate::model::ProviderMeta;
 
-const AUTH_API_KEY: &str = "api_key";
+pub(super) const AUTH_API_KEY: &str = "api_key";
 const AUTH_OPENAI_LOGIN: &str = "openai_login";
 const AUTH_OPENAI_LOGIN_WITH_API_KEY: &str = "openai_login_with_api_key";
+
+/// Login-only auth carries no bearer, so a station-sourced channel would reach
+/// the gateway unauthenticated. The two relay-bearing modes both stay offered.
+pub(super) const STATION_HIDDEN_AUTH_MODES: &[&str] = &[AUTH_OPENAI_LOGIN];
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const HAS_OPENAI_LOGIN: &str = "_has_openai_login";
 const LEGACY_ENV_KEY: &str = "_legacy_env_key";
@@ -530,6 +534,12 @@ fn normalize_base_url(raw: &str) -> String {
 
 fn auth_mode_uses_relay(auth_mode: &str) -> bool {
     matches!(auth_mode, AUTH_API_KEY | AUTH_OPENAI_LOGIN_WITH_API_KEY)
+}
+
+/// A station-sourced channel authenticates to the gateway with the key the
+/// gateway issued, so only the modes that actually send that bearer work.
+pub(super) fn station_auth_mode_supported(auth_mode: &str) -> bool {
+    auth_mode_uses_relay(auth_mode)
 }
 
 fn auth_mode_uses_login(auth_mode: &str) -> bool {

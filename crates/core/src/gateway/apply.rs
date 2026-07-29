@@ -18,7 +18,7 @@ use crate::gateway::types::{
     GatewayRoute,
 };
 use crate::model::{ClaudeDesktopModelRoute, Provider, ProviderMeta};
-use crate::provider_config::{self, FormValues, Severity};
+use crate::provider_config::{self, FormValues, Severity, StationCapabilities};
 use crate::services::provider::ProviderService;
 
 /// Fixed provider id for gateway entries (per app list).
@@ -613,6 +613,37 @@ pub struct StationChannelOption {
     pub name: String,
     /// Exact upstream model ids the station declares, for model pickers.
     pub models: Vec<String>,
+    /// What this station can back, for the fields the editor keeps editable.
+    pub capabilities: StationCapabilities,
+}
+
+/// What `route` can back for a station-sourced channel. Remote compaction is
+/// gated on a Responses upstream because the gateway refuses to translate a
+/// compaction call into any other dialect (see
+/// [`pipeline::channel_supports_request`](crate::gateway::pipeline)).
+pub fn station_capabilities(
+    route: &GatewayRoute,
+    channels: &[GatewayChannel],
+) -> StationCapabilities {
+    StationCapabilities {
+        websockets: route.websocket_enabled,
+        remote_compaction: channels.iter().any(|channel| {
+            channel.enabled
+                && channel.dialect == Dialect::Responses
+                && route.allows_channel(&channel.id)
+        }),
+    }
+}
+
+/// [`station_capabilities`] against the stored channel set.
+pub fn station_capabilities_for_route(
+    state: &AppState,
+    route: &GatewayRoute,
+) -> Result<StationCapabilities, AppError> {
+    Ok(station_capabilities(
+        route,
+        &state.db.get_gateway_channels()?,
+    ))
 }
 
 /// Relay stations able to serve `app_type`, for the channel editor's station
@@ -643,6 +674,7 @@ pub fn station_channel_options(
             route_id: route.id.clone(),
             name: route.name.clone(),
             models: station_models(&route, &channels),
+            capabilities: station_capabilities(&route, &channels),
         });
     }
     options.sort_by(|a, b| {
@@ -697,7 +729,7 @@ pub fn build_station_channel(
         &key.key,
         &identity.id,
         &identity.name,
-        route.websocket_enabled,
+        station_capabilities_for_route(state, &route)?,
     );
     validate_station_channel_models(app_type, &merged)?;
     if let Some(issue) = codec
@@ -765,7 +797,7 @@ pub fn refresh_station_channel_settings(
         &key.key,
         &provider.id,
         &provider.name,
-        route.websocket_enabled,
+        station_capabilities_for_route(state, &route)?,
     );
     let encoded = codec.encode(&values, &provider.settings_config, provider.meta.as_ref());
     let mut settings = encoded.settings_config;
@@ -1580,6 +1612,137 @@ mod tests {
             provider.meta.as_ref().unwrap().gateway_route_id.as_deref(),
             Some(route.id.as_str())
         );
+    }
+
+    /// The gateway key is the only credential a station channel has, but the
+    /// combined mode still lets Codex keep its ChatGPT login in `auth.json`.
+    #[test]
+    fn build_station_channel_codex_keeps_login_plus_relay_auth() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "model", "gpt-5.5");
+        provider_config::set_str(&mut values, "auth_mode", "openai_login_with_api_key");
+
+        let provider = build_station_channel(
+            &state,
+            AppType::Codex,
+            &route.id,
+            &values,
+            identity("codex-main"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let toml = provider.settings_config["config"].as_str().unwrap();
+        assert!(toml.contains("requires_openai_auth = true"), "{toml}");
+        assert!(toml.contains("experimental_bearer_token = \"rd-"), "{toml}");
+    }
+
+    /// Login-only auth would reach the gateway with no bearer at all, so it is
+    /// clamped back to the relay mode even if it arrives in the values.
+    #[test]
+    fn build_station_channel_codex_clamps_login_only_auth() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "model", "gpt-5.5");
+        provider_config::set_str(&mut values, "auth_mode", "openai_login");
+
+        let provider = build_station_channel(
+            &state,
+            AppType::Codex,
+            &route.id,
+            &values,
+            identity("codex-main"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let toml = provider.settings_config["config"].as_str().unwrap();
+        assert!(!toml.contains("requires_openai_auth"), "{toml}");
+        assert!(toml.contains("experimental_bearer_token = \"rd-"), "{toml}");
+    }
+
+    /// Remote compaction survives a station with a Responses upstream — and
+    /// survives a later origin refresh, which re-encodes from the stored file.
+    #[test]
+    fn build_station_channel_codex_keeps_remote_compaction_on_a_responses_station() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
+        assert!(
+            station_capabilities_for_route(&state, &route)
+                .unwrap()
+                .remote_compaction
+        );
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "model", "gpt-5.5");
+        provider_config::set_bool(&mut values, "remote_compaction", true);
+
+        let provider = build_station_channel(
+            &state,
+            AppType::Codex,
+            &route.id,
+            &values,
+            identity("codex-main"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let toml = provider.settings_config["config"].as_str().unwrap();
+        assert!(toml.contains("name = \"OpenAI\""), "{toml}");
+
+        let (settings, _) = refresh_station_channel_settings(
+            &state,
+            AppType::Codex,
+            &provider,
+            "http://127.0.0.1:5000",
+        )
+        .unwrap();
+        let toml = settings["config"].as_str().unwrap();
+        assert!(toml.contains("name = \"OpenAI\""), "{toml}");
+        assert!(
+            toml.contains("base_url = \"http://127.0.0.1:5000/v1\""),
+            "{toml}"
+        );
+    }
+
+    /// A station without a Responses upstream cannot take a compaction call —
+    /// the pipeline would have nowhere to send it — so the flag is dropped.
+    #[test]
+    fn build_station_channel_codex_drops_remote_compaction_without_a_responses_upstream() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Messages);
+        assert!(
+            !station_capabilities_for_route(&state, &route)
+                .unwrap()
+                .remote_compaction
+        );
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "model", "gpt-5.5");
+        provider_config::set_bool(&mut values, "remote_compaction", true);
+
+        let provider = build_station_channel(
+            &state,
+            AppType::Codex,
+            &route.id,
+            &values,
+            identity("codex-main"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let toml = provider.settings_config["config"].as_str().unwrap();
+        assert!(!toml.contains("name = \"OpenAI\""), "{toml}");
+        assert!(toml.contains("name = \"渠道 codex-main\""), "{toml}");
     }
 
     #[test]

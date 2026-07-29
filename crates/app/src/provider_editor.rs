@@ -20,7 +20,7 @@ use gpui::{
 use ochub_core::gateway::apply;
 use ochub_core::provider_config::{
     self, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues, GridCellKind,
-    Language, Severity, bool_val, str_val,
+    Language, Severity, StationCapabilities, bool_val, str_val,
 };
 use ochub_core::services::ConfigService;
 use ochub_core::services::provider::ProviderService;
@@ -147,7 +147,6 @@ struct StationGatewayInfo {
     route_id: String,
     origin: String,
     key: String,
-    supports_websockets: bool,
 }
 
 /// Which model-suggestion popover is open. Suggestions only exist in station
@@ -521,7 +520,11 @@ impl ProviderEditor {
                     }
                 }
                 this.station_options_loaded = true;
+                // Capabilities ride along with the options, so what the
+                // station can back is only known now.
+                this.clamp_station_fields();
                 this.refresh_station_gateway(cx);
+                this.invalidate_preview(cx);
                 cx.notify();
             })
             .ok();
@@ -557,20 +560,11 @@ impl ProviderEditor {
                         &apply::gateway_key_label(app_type, &route_id),
                         Some(&route_id),
                     )?;
-                    let supports_websockets = app
-                        .db
-                        .get_gateway_route_by_id(&route_id)?
-                        .is_some_and(|route| route.websocket_enabled);
-                    Ok::<_, ochub_core::error::AppError>((
-                        route_id,
-                        origin,
-                        key.key,
-                        supports_websockets,
-                    ))
+                    Ok::<_, ochub_core::error::AppError>((route_id, origin, key.key))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let Ok((route_id, origin, key, supports_websockets)) = result else {
+                let Ok((route_id, origin, key)) = result else {
                     return;
                 };
                 // A station change raced us; that selection has its own task.
@@ -581,7 +575,6 @@ impl ProviderEditor {
                     route_id,
                     origin,
                     key,
-                    supports_websockets,
                 });
                 this.invalidate_preview(cx);
             })
@@ -598,6 +591,7 @@ impl ProviderEditor {
         self.open_model_suggestion = None;
         self.station_dropdown_open = false;
         if source == ProviderSource::Station {
+            self.clamp_station_fields();
             self.refresh_station_gateway(cx);
         }
         self.form_list_state.remeasure();
@@ -625,9 +619,35 @@ impl ProviderEditor {
             self.name
                 .update(cx, |input, cx| input.set_content(name, cx));
         }
+        self.clamp_station_fields();
         self.refresh_station_gateway(cx);
         self.form_list_state.remeasure();
         self.invalidate_preview(cx);
+    }
+
+    /// What the selected station can back. An unknown station (options still
+    /// loading, or one that vanished) reads as "nothing extra", which only
+    /// ever narrows the form.
+    fn station_capabilities(&self) -> StationCapabilities {
+        self.selected_station
+            .as_deref()
+            .and_then(|route_id| {
+                self.station_options
+                    .iter()
+                    .find(|option| option.route_id == route_id)
+            })
+            .map(|option| option.capabilities)
+            .unwrap_or_default()
+    }
+
+    /// Pull the station-constrained fields back into range for the selected
+    /// station, so the form shows the same choice a save would write.
+    fn clamp_station_fields(&mut self) {
+        if self.source != ProviderSource::Station {
+            return;
+        }
+        let caps = self.station_capabilities();
+        provider_config::clamp_station_fields(&mut self.values, self.app_type, caps);
     }
 
     /// Models the selected station declares, for suggestion popovers.
@@ -1052,6 +1072,7 @@ impl ProviderEditor {
         {
             let channel_id = self.station_channel_id(cx);
             let channel_name = self.name.read(cx).content().trim().to_string();
+            let caps = self.station_capabilities();
             provider_config::inject_station_endpoint(
                 &mut self.values,
                 self.app_type,
@@ -1059,7 +1080,7 @@ impl ProviderEditor {
                 &info.key,
                 &channel_id,
                 &channel_name,
-                info.supports_websockets,
+                caps,
             );
         }
     }
@@ -1862,6 +1883,18 @@ impl ProviderEditor {
                 }
             }
             FieldKind::Select { options } => {
+                // A station channel reaches the gateway with the gateway's own
+                // key, so options that would leave it credential-less are not
+                // offered while that source is active.
+                let hidden: &[&str] = if self.source == ProviderSource::Station {
+                    provider_config::station_hidden_options(self.app_type, &field.id)
+                } else {
+                    &[]
+                };
+                let options: Vec<&provider_config::SelectOption> = options
+                    .iter()
+                    .filter(|option| !hidden.contains(&option.value.as_str()))
+                    .collect();
                 let current = str_val(&self.values, &field.id).to_string();
                 let selected = options.iter().position(|o| o.value == current).unwrap_or(0);
                 let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
@@ -1930,9 +1963,7 @@ impl ProviderEditor {
             }
             FieldKind::Toggle => {
                 let on = bool_val(&self.values, &field.id);
-                let station_managed_websocket = self.source == ProviderSource::Station
-                    && self.app_type == AppType::Codex
-                    && field.id == "supports_websockets";
+                let disabled = self.station_toggle_disabled(field);
                 let fid = field.id.clone();
                 let control = div()
                     .id(SharedString::from(format!("tog-{}", field.id)))
@@ -1944,7 +1975,7 @@ impl ProviderEditor {
                     } else {
                         gpui::Toggled::False
                     });
-                if station_managed_websocket {
+                if disabled {
                     control
                         .cursor_not_allowed()
                         .opacity(components::DISABLED_OPACITY)
@@ -1967,10 +1998,40 @@ impl ProviderEditor {
         components::field(
             field.label.clone(),
             field.required,
-            field.help.clone().map(SharedString::from),
+            self.field_help(field),
             body,
         )
         .into_any_element()
+    }
+
+    /// A toggle the selected station leaves no room for: the transport it
+    /// declares (`supports_websockets`), or a feature it has no upstream for.
+    /// It stays visible so "why can't I change this?" has an answer right
+    /// under it — see [`Self::field_help`].
+    fn station_toggle_disabled(&self, field: &FormField) -> bool {
+        if self.source != ProviderSource::Station || self.app_type != AppType::Codex {
+            return false;
+        }
+        match field.id.as_str() {
+            "supports_websockets" => true,
+            "remote_compaction" => !self.station_capabilities().remote_compaction,
+            _ => false,
+        }
+    }
+
+    /// The field's schema help, or the station-mode variant when the source
+    /// changes what the control means.
+    fn field_help(&self, field: &FormField) -> Option<SharedString> {
+        if self.source == ProviderSource::Station
+            && let Some(help) = provider_config::station_field_help(
+                self.app_type,
+                &field.id,
+                !self.station_toggle_disabled(field),
+            )
+        {
+            return Some(SharedString::new_static(help));
+        }
+        field.help.clone().map(SharedString::from)
     }
 
     /// Wrap a model text input with a popover listing the selected station's

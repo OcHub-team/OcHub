@@ -386,11 +386,26 @@ pub fn station_source_supported(app: AppType) -> bool {
     matches!(app, AppType::Claude | AppType::Codex)
 }
 
+/// What the selected station can back, for the fields a station-sourced
+/// channel still lets the user decide.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct StationCapabilities {
+    /// The station route has WebSocket transport enabled.
+    pub websockets: bool,
+    /// The station has an enabled Responses upstream, the only kind the
+    /// gateway will hand a remote-compaction request to.
+    pub remote_compaction: bool,
+}
+
 /// Schema field ids the station manages (endpoint, credentials, wire-level
 /// options). The editor hides these when the source is a relay station and
 /// [`inject_station_endpoint`] overwrites them, so stale values from a
 /// previous direct-connection incarnation can never leak into the generated
 /// config.
+///
+/// Fields the station *constrains* rather than owns — Codex's `auth_mode` and
+/// `remote_compaction` — stay out of this list and are clamped instead by
+/// [`clamp_station_fields`].
 pub fn station_managed_fields(app: AppType) -> &'static [&'static str] {
     match app {
         AppType::Claude => &[
@@ -404,9 +419,7 @@ pub fn station_managed_fields(app: AppType) -> &'static [&'static str] {
         AppType::Codex => &[
             "provider_id",
             "name",
-            "remote_compaction",
             "base_url",
-            "auth_mode",
             "api_key",
             "wire_api",
             "supports_websockets",
@@ -418,10 +431,54 @@ pub fn station_managed_fields(app: AppType) -> &'static [&'static str] {
     }
 }
 
+/// Select options a station-sourced channel must not offer, because the
+/// station's own credential is the only thing that reaches the gateway.
+pub fn station_hidden_options(app: AppType, field_id: &str) -> &'static [&'static str] {
+    match (app, field_id) {
+        (AppType::Codex, "auth_mode") => codex::STATION_HIDDEN_AUTH_MODES,
+        _ => &[],
+    }
+}
+
+/// Help text replacing a field's schema help while the source is a relay
+/// station, where the control keeps a different meaning. `supported` is false
+/// when the selected station cannot back the field at all, in which case the
+/// editor shows it disabled with the reason.
+pub fn station_field_help(app: AppType, field_id: &str, supported: bool) -> Option<&'static str> {
+    match (app, field_id) {
+        (AppType::Codex, "auth_mode") => Some(
+            "模型供应商模式下 Authorization 一律由网关签发的密钥承担；选择组合模式可在此之上保留 auth.json 里的 ChatGPT 登录态。",
+        ),
+        (AppType::Codex, "remote_compaction") if supported => Some(
+            "远程压缩请求会转发到该模型供应商的 Responses 上游；开启后 config.toml 里的 provider name 会强制写为 OpenAI。",
+        ),
+        (AppType::Codex, "remote_compaction") => {
+            Some("该模型供应商没有启用中的 Responses 上游，网关无法转发远程压缩请求。")
+        }
+        _ => None,
+    }
+}
+
+/// Clamp the fields a station constrains but does not own, so a choice carried
+/// over from direct-connection mode (or from a station with richer upstreams)
+/// can never produce a config the gateway would reject.
+pub fn clamp_station_fields(values: &mut FormValues, app: AppType, caps: StationCapabilities) {
+    if app != AppType::Codex {
+        return;
+    }
+    if !codex::station_auth_mode_supported(str_val(values, "auth_mode")) {
+        set_str(values, "auth_mode", codex::AUTH_API_KEY);
+    }
+    if !caps.remote_compaction {
+        set_bool(values, "remote_compaction", false);
+    }
+}
+
 /// Overwrite the station-managed fields of `values` so the codec encodes a
 /// config that points at the local gateway. `base_url` is the running gateway
 /// origin (no path); `key` is the gateway-issued client key; `provider_id` and
-/// `display_name` seed Codex's `[model_providers.<id>]` table.
+/// `display_name` seed Codex's `[model_providers.<id>]` table. `caps` clamps
+/// the fields the user still owns ([`clamp_station_fields`]).
 pub fn inject_station_endpoint(
     values: &mut FormValues,
     app: AppType,
@@ -429,8 +486,9 @@ pub fn inject_station_endpoint(
     key: &str,
     provider_id: &str,
     display_name: &str,
-    supports_websockets: bool,
+    caps: StationCapabilities,
 ) {
+    clamp_station_fields(values, app, caps);
     let origin = base_url.trim().trim_end_matches('/');
     match app {
         AppType::Claude => {
@@ -449,13 +507,14 @@ pub fn inject_station_endpoint(
                 "provider_id",
                 sanitize_toml_provider_id(provider_id),
             );
+            // `name` only reaches config.toml when remote compaction is off:
+            // the codec forces the literal `OpenAI` when it is on, which is
+            // exactly the naming Codex requires to enable the feature.
             set_str(values, "name", display_name.trim());
-            set_bool(values, "remote_compaction", false);
             set_str(values, "base_url", format!("{origin}/v1"));
-            set_str(values, "auth_mode", "api_key");
             set_str(values, "api_key", key);
             set_str(values, "wire_api", "responses");
-            set_bool(values, "supports_websockets", supports_websockets);
+            set_bool(values, "supports_websockets", caps.websockets);
             // The gateway does not implement the Responses store.
             set_bool(values, "disable_response_storage", true);
             set_str(values, "_legacy_env_key", "");
