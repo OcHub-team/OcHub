@@ -254,6 +254,13 @@ body {
 	}
 }
 
+/* Figures that break out of the prose column (OcHub app mockups) need to know
+ * how much room the article column actually has — the viewport also covers the
+ * sidebar and the TOC, so `100vw` overflows on mid-width windows. */
+.docs-main {
+	container-type: inline-size;
+}
+
 /* OcHub ships an explicit `selection` token — use it directly
  * instead of tinting the primary. */
 ::selection {

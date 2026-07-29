@@ -415,7 +415,7 @@ const appItems = [
     --ochub-green-soft: #dff2e6;
     --ochub-red: #b73e36;
     --ochub-red-soft: #f6e1dd;
-    width: min(50rem, calc(100vw - 2rem));
+    width: min(50rem, calc(100cqw - 3rem));
     margin: 1.75rem 0 2rem 50%;
     transform: translateX(-50%);
   }
@@ -939,6 +939,7 @@ const appItems = [
 
   .ochub-provider-title {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.35rem;
     color: var(--ochub-text);
@@ -1103,10 +1104,6 @@ const appItems = [
 
     .ochub-provider-copy {
       min-width: calc(100% - 3rem);
-    }
-
-    .ochub-provider-title {
-      flex-wrap: wrap;
     }
 
     .ochub-model-provider > .ochub-button {
