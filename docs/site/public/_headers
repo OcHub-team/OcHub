@@ -1,0 +1,21 @@
+# Cloudflare Workers static-assets headers. Astro copies public/* verbatim
+# into dist/, and Workers picks this file up from the asset directory root.
+#
+# Why this exists: the agent-facing endpoints (src/pages/**/index.md.ts,
+# index.mdx.ts, llms.txt.ts) already return `charset=utf-8`, but the site
+# builds with `output: "static"` — prerendering writes only the response
+# body to disk and drops its headers. Cloudflare then infers the type from
+# the extension alone, so `.md` went out as bare `text/markdown`. A browser
+# rendering text/* with no declared charset falls back to the local default
+# encoding, which turns every translated page into mojibake. HTML is immune
+# because BaseLayout emits <meta charset="utf-8">; these files have no such
+# fallback, so the charset has to come from the header.
+
+/*.md
+  Content-Type: text/markdown; charset=utf-8
+
+/*.mdx
+  Content-Type: text/mdx; charset=utf-8
+
+/*.txt
+  Content-Type: text/plain; charset=utf-8

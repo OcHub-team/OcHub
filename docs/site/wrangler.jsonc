@@ -11,6 +11,11 @@
   //
   // Serving static files needs no Worker script: with `assets` and no
   // `main`, Cloudflare serves the directory directly.
+  //
+  // That directness has a cost: Cloudflare types each file from its
+  // extension and knows nothing of the `Content-Type` our endpoints set,
+  // because a static build keeps only their bodies. `public/_headers`
+  // puts the `charset=utf-8` back on the .md/.mdx/.txt responses.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ochub-docs",
   "compatibility_date": "2026-07-25",
