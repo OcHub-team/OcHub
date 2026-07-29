@@ -25,6 +25,7 @@ futures.workspace = true
 log.workspace = true
 uuid.workspace = true
 unicode-segmentation.workspace = true
+similar.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
 fs2.workspace = true

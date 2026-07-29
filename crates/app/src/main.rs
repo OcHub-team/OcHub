@@ -13,6 +13,7 @@ mod chart;
 mod code_editor;
 mod components;
 mod core_async;
+mod diff_view;
 mod fold;
 mod gallery_view;
 mod gateway_view;

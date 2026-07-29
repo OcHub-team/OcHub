@@ -38,6 +38,8 @@
 "shell.drift.conflict.heading" = "両方は保持できません（{count}）"
 "shell.drift.conflict.incoming" = "書き込む値"
 "shell.drift.conflict.yours" = "ファイル内"
+"shell.drift.diff.folded" = "… 変更のない {count} 行"
+"shell.drift.diff.truncated" = "他に {count} 行は非表示"
 "shell.drift.kept.heading" = "保持されます（{count}）"
 "shell.drift.removed.heading" = "削除のままになります（{count}）"
 "shell.drift.title" = "設定ファイルが OcHub の外部で編集されました"

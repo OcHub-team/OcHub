@@ -39,6 +39,8 @@
 "shell.drift.conflict.heading" = "无法同时保留（{count}）"
 "shell.drift.conflict.incoming" = "将写入"
 "shell.drift.conflict.yours" = "文件里"
+"shell.drift.diff.folded" = "… 未改动的 {count} 行"
+"shell.drift.diff.truncated" = "还有 {count} 行未显示"
 "shell.drift.kept.heading" = "将保留（{count}）"
 "shell.drift.removed.heading" = "将保持删除（{count}）"
 "shell.drift.title" = "配置文件已被外部修改"

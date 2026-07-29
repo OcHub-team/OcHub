@@ -24,6 +24,7 @@ use ochub_core::{AppState, AppType, Provider};
 use crate::about_view::AboutView;
 use crate::app_settings_view::{AppSettingsEvent, AppSettingsView, app_has_settings};
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+use crate::diff_view;
 use crate::gallery_view::GalleryView;
 use crate::gateway_view::GatewayView;
 use crate::i18n::{k, raw, t};
@@ -1520,19 +1521,17 @@ impl AppRoot {
         cx.notify();
     }
 
-    /// One line of a JSON value, short enough to read inside a dialog.
-    fn drift_value_preview(value: &serde_json::Value) -> String {
-        let text = match value {
-            // A deletion has no "before" value to show.
-            serde_json::Value::Null => return "—".to_string(),
+    /// One side of a conflict as the text the diff compares.
+    ///
+    /// A deletion has no text at all rather than a placeholder: the empty column
+    /// beside the other version is what makes it read as a deletion.
+    fn drift_value_text(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::Null => String::new(),
             serde_json::Value::String(text) => text.clone(),
-            other => other.to_string(),
-        };
-        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if flat.chars().count() > 68 {
-            format!("{}…", flat.chars().take(68).collect::<String>())
-        } else {
-            flat
+            // Tables and arrays are laid out one field per line so the diff can
+            // point at the field that changed instead of at the whole value.
+            other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
         }
     }
 
@@ -1569,25 +1568,36 @@ impl AppRoot {
         )
     }
 
-    fn drift_conflict_row(label: SharedString, value: &serde_json::Value) -> gpui::Div {
+    /// One conflict, as the two versions side by side.
+    fn drift_conflict_diff(conflict: &DriftConflict) -> gpui::Div {
+        /// Enough to read a changed block; longer values say how much is left.
+        const ROWS: usize = 20;
+
+        let live = Self::drift_value_text(&conflict.live);
+        let incoming = Self::drift_value_text(&conflict.incoming);
+        let (rows, hidden) = diff_view::side_by_side(&live, &incoming, ROWS);
+
         div()
             .flex()
-            .flex_row()
-            .gap_2()
+            .flex_col()
+            .gap_1()
             .child(
                 div()
-                    .flex_none()
-                    .w(px(72.))
-                    .text_color(theme::muted())
+                    .text_color(theme::text())
                     .text_xs()
-                    .child(label),
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(SharedString::from(conflict.path.clone())),
             )
-            .child(
-                div()
-                    .text_color(theme::subtext())
-                    .text_xs()
-                    .child(SharedString::from(Self::drift_value_preview(value))),
-            )
+            .child(diff_view::render(
+                &rows,
+                hidden,
+                Some(diff_view::header_row(
+                    t(k::SHELL_DRIFT_CONFLICT_YOURS),
+                    t(k::SHELL_DRIFT_CONFLICT_INCOMING),
+                )),
+                |count| SharedString::from(tf!(k::SHELL_DRIFT_DIFF_FOLDED, count = count)),
+                |count| SharedString::from(tf!(k::SHELL_DRIFT_DIFF_TRUNCATED, count = count)),
+            ))
     }
 
     /// The half the user actually has to rule on: both sides changed the same
@@ -1606,27 +1616,7 @@ impl AppRoot {
                     BadgeTone::Warning,
                     tf!(k::SHELL_DRIFT_CONFLICT_HEADING, count = conflicts.len()),
                 ))
-                .children(conflicts.iter().take(SHOWN).map(|conflict| {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_color(theme::text())
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(SharedString::from(conflict.path.clone())),
-                        )
-                        .child(Self::drift_conflict_row(
-                            t(k::SHELL_DRIFT_CONFLICT_YOURS),
-                            &conflict.live,
-                        ))
-                        .child(Self::drift_conflict_row(
-                            t(k::SHELL_DRIFT_CONFLICT_INCOMING),
-                            &conflict.incoming,
-                        ))
-                }))
+                .children(conflicts.iter().take(SHOWN).map(Self::drift_conflict_diff))
                 .children(Self::drift_overflow(conflicts.len(), SHOWN)),
         )
     }
@@ -1644,9 +1634,17 @@ impl AppRoot {
 
         components::modal_overlay(
             components::modal_card()
+                // Wide enough for two columns of config text; a diff squeezed
+                // into one column is the thing this dialog exists to avoid.
+                .w(px(760.))
+                .max_h(px(600.))
                 .child(components::modal_header(t(k::SHELL_DRIFT_TITLE)))
                 .child(
                     components::modal_body()
+                        .id("drift-body")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
                         .child(div().text_color(theme::subtext()).text_sm().child(body))
                         // Conflicts first: everything below them is already
                         // decided in the user's favour.
@@ -3704,28 +3702,32 @@ mod drift_dialog_tests {
     #[test]
     fn a_string_value_is_shown_without_its_json_quotes() {
         assert_eq!(
-            AppRoot::drift_value_preview(&json!("https://relay.example/v1")),
+            AppRoot::drift_value_text(&json!("https://relay.example/v1")),
             "https://relay.example/v1"
         );
     }
 
     #[test]
-    fn a_deletion_reads_as_a_dash_rather_than_the_word_null() {
-        assert_eq!(AppRoot::drift_value_preview(&json!(null)), "—");
+    fn a_deletion_has_no_text_so_its_column_reads_as_empty() {
+        assert_eq!(AppRoot::drift_value_text(&json!(null)), "");
     }
 
     #[test]
-    fn a_structured_value_is_flattened_onto_one_line() {
-        let preview = AppRoot::drift_value_preview(&json!({ "matcher": "Bash" }));
-        assert!(!preview.contains('\n'));
-        assert!(preview.contains("matcher"));
+    fn a_structured_value_keeps_one_field_per_line_for_the_diff() {
+        let text = AppRoot::drift_value_text(&json!({ "matcher": "Bash", "type": "command" }));
+        assert!(text.contains("matcher"));
+        assert!(
+            text.lines().count() > 2,
+            "the diff needs line granularity: {text}"
+        );
     }
 
     #[test]
-    fn an_overlong_value_is_truncated_with_an_ellipsis() {
-        let preview = AppRoot::drift_value_preview(&json!("x".repeat(200)));
-        assert!(preview.ends_with('…'));
-        assert_eq!(preview.chars().count(), 69);
+    fn a_long_value_is_left_whole_for_the_diff_to_fold() {
+        // Truncating here would hide the very line the user has to rule on;
+        // folding unchanged runs is the diff's job.
+        let text = AppRoot::drift_value_text(&json!("x".repeat(200)));
+        assert_eq!(text.chars().count(), 200);
     }
 }
 

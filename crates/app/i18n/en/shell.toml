@@ -38,6 +38,8 @@
 "shell.drift.conflict.heading" = "Cannot keep both ({count})"
 "shell.drift.conflict.incoming" = "Will write"
 "shell.drift.conflict.yours" = "In the file"
+"shell.drift.diff.folded" = "… {count} unchanged lines"
+"shell.drift.diff.truncated" = "{count} more lines not shown"
 "shell.drift.kept.heading" = "Will be kept ({count})"
 "shell.drift.removed.heading" = "Will stay deleted ({count})"
 "shell.drift.title" = "The config file was edited outside OcHub"
