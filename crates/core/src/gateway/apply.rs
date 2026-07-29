@@ -851,7 +851,7 @@ fn apply_route_to_app(
     model_policy: Option<GatewayAppModelPolicy>,
 ) -> Result<ApplyResult, AppError> {
     let provider_id = gateway_provider_id(&route.id);
-    let provider_name = format!("OcHub · {}", route.name);
+    let provider_name = route.name.clone();
     let key_label = gateway_key_label(app_type, &route.id);
     let mut key = ensure_key_for_route(state, &key_label, Some(&route.id))?;
     if key.model_policy != model_policy {

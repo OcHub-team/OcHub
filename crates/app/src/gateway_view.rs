@@ -34,6 +34,10 @@ use crate::theme;
 pub enum GatewayEvent {
     /// Open the Providers page for this app (e.g. to switch it off a station).
     OpenProviders(AppType),
+    /// A Deep Link import finished; open the first app it configured.
+    ImportFinished(Option<AppType>),
+    /// A Deep Link preview was dismissed without saving.
+    ImportCancelled,
 }
 
 #[derive(Clone)]
@@ -434,6 +438,10 @@ impl GatewayView {
     }
 
     pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cancelled_deeplink = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.is_deeplink_import);
         let closed_editor = self.editor.take().is_some();
         if self.delete_blocked.take().is_some()
             || self.confirm_delete.take().is_some()
@@ -443,6 +451,9 @@ impl GatewayView {
                 self.rebuild_rows();
             }
             cx.notify();
+            if cancelled_deeplink {
+                cx.emit(GatewayEvent::ImportCancelled);
+            }
         } else {
             window.play_system_bell();
         }
@@ -568,9 +579,16 @@ impl GatewayView {
     }
 
     fn close_editor(&mut self, cx: &mut Context<Self>) {
+        let cancelled_deeplink = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.is_deeplink_import);
         if self.editor.take().is_some() {
             self.rebuild_rows();
             cx.notify();
+            if cancelled_deeplink {
+                cx.emit(GatewayEvent::ImportCancelled);
+            }
         }
     }
 
@@ -1207,6 +1225,7 @@ impl GatewayView {
                 this.mutation_in_flight = false;
                 match result {
                     Ok((name, applied, failures)) => {
+                        let imported_app = applied.first().copied();
                         let (level, message) = if !failures.is_empty() {
                             let failures = failures
                                 .into_iter()
@@ -1249,6 +1268,9 @@ impl GatewayView {
                         this.editor = None;
                         this.rebuild_rows();
                         this.reload(cx);
+                        if is_deeplink_import {
+                            cx.emit(GatewayEvent::ImportFinished(imported_app));
+                        }
                     }
                     Err(error) => this.set_status(
                         NotificationLevel::Error,
@@ -3193,10 +3215,18 @@ impl GatewayView {
 
 impl Render for GatewayView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let deeplink_preview = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.is_deeplink_import);
         layout::page()
             .relative()
-            .child(
-                layout::page_header(t(k::GATEWAY_PAGE_TITLE), Some(t(k::GATEWAY_PAGE_SUBTITLE)))
+            .when(!deeplink_preview, |page| {
+                page.child(
+                    layout::page_header(
+                        t(k::GATEWAY_PAGE_TITLE),
+                        Some(t(k::GATEWAY_PAGE_SUBTITLE)),
+                    )
                     .child(
                         div()
                             .flex()
@@ -3253,7 +3283,8 @@ impl Render for GatewayView {
                                 )),
                             ),
                     ),
-            )
+                )
+            })
             .child(layout::wide_virtual_body(
                 "relay-stations-body",
                 gpui::list(

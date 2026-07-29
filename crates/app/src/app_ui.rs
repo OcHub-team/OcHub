@@ -233,10 +233,7 @@ pub struct AppRoot {
 #[derive(Clone, Copy)]
 enum ProviderRow {
     Hero,
-    GatewayRoutes,
     DirectLabel,
-    GatewayLabel,
-    GatewayCta,
     EmptyState,
     Card(usize),
 }
@@ -959,6 +956,16 @@ impl AppRoot {
         cx.subscribe(&this.gateway_view, |this, _view, event, cx| match event {
             crate::gateway_view::GatewayEvent::OpenProviders(app) => {
                 this.selected_app = *app;
+                this.select_section(Section::Providers, cx);
+            }
+            crate::gateway_view::GatewayEvent::ImportFinished(app) => {
+                if let Some(app) = app.filter(|app| this.visible_apps.contains(app)) {
+                    this.selected_app = app;
+                }
+                this.select_section(Section::Providers, cx);
+                this.reload(cx);
+            }
+            crate::gateway_view::GatewayEvent::ImportCancelled => {
                 this.select_section(Section::Providers, cx);
             }
         })
@@ -1731,23 +1738,6 @@ impl AppRoot {
         text
     }
 
-    /// Stations this app could be switched onto: enabled, station-shaped, and
-    /// either unbound or bound to this app.
-    fn eligible_station_routes(&self) -> Vec<&GatewayRoute> {
-        let app = self.selected_app;
-        self.gateway_routes
-            .iter()
-            .filter(|route| {
-                route.enabled
-                    && route.id.starts_with(apply::STATION_ROUTE_PREFIX)
-                    && route
-                        .app_type
-                        .as_deref()
-                        .is_none_or(|bound| bound == app.as_str())
-            })
-            .collect()
-    }
-
     fn connect_local_gateway(&mut self, provider_id: String, cx: &mut Context<Self>) {
         if self.provider_action_in_flight {
             return;
@@ -1764,7 +1754,7 @@ impl AppRoot {
                 t(k::SHELL_GATEWAY_NEEDS_STATION_MESSAGE),
                 cx,
             );
-            self.select_section(Section::Gateway, cx);
+            self.open_edit_editor_by_id(&provider_id, cx);
             return;
         };
         self.connect_station_route(station_route_id, cx);
@@ -1848,46 +1838,6 @@ impl AppRoot {
         .detach();
     }
 
-    fn activate_gateway_route(&mut self, route_id: String, cx: &mut Context<Self>) {
-        if self.provider_action_in_flight {
-            return;
-        }
-        let route_name = self
-            .gateway_routes
-            .iter()
-            .find(|route| route.id == route_id)
-            .map(|route| route.name.clone())
-            .unwrap_or_else(|| route_id.clone());
-        self.provider_action_in_flight = true;
-        let app = self.app.clone();
-        let app_type = self.selected_app;
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    apply::activate_route_for_app(&app, app_type, &route_id)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.provider_action_in_flight = false;
-                match result {
-                    Ok(_) => this.notify_success(
-                        tf!(k::SHELL_GATEWAY_ROUTES_SWITCHED, name = route_name),
-                        cx,
-                    ),
-                    Err(error) => {
-                        this.notify_error(t(k::SHELL_GATEWAY_ROUTES_SWITCH_FAILED), error, cx)
-                    }
-                }
-                this.reload(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-    }
-
     fn do_remove_from_live(&mut self, id: String, cx: &mut Context<Self>) {
         if self.provider_action_in_flight {
             return;
@@ -1926,58 +1876,27 @@ impl AppRoot {
     /// called only after data/current-order changes, never from `render`.
     fn rebuild_provider_structure_cache(&mut self) {
         let is_switch = !self.selected_app.is_additive_mode();
-        let current_is_gateway = self
-            .providers
-            .iter()
-            .find(|provider| provider.id == self.current)
-            .is_some_and(Provider::is_local_gateway);
-        let direct_ixs: Vec<usize> = self
+        let connection_ixs: Vec<usize> = self
             .providers
             .iter()
             .enumerate()
-            .filter(|(_, provider)| {
-                !provider.is_local_gateway() && (!is_switch || provider.id != self.current)
-            })
+            .filter(|(_, provider)| !is_switch || provider.id != self.current)
             .map(|(index, _)| index)
             .collect();
-        let gateway_ixs: Vec<usize> = self
-            .providers
-            .iter()
-            .enumerate()
-            .filter(|(_, provider)| {
-                provider.is_local_gateway() && (!is_switch || provider.id != self.current)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        let supports_gateway = apply::supported_apps().contains(&self.selected_app);
         let no_providers = self.providers.is_empty();
 
         let mut plan = Vec::new();
         if is_switch {
             plan.push(ProviderRow::Hero);
-            if current_is_gateway {
-                plan.push(ProviderRow::GatewayRoutes);
-            }
-            if !direct_ixs.is_empty() {
+            if !connection_ixs.is_empty() {
                 plan.push(ProviderRow::DirectLabel);
-                plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
-            }
-            if supports_gateway && !current_is_gateway {
-                plan.push(ProviderRow::GatewayLabel);
-                if gateway_ixs.is_empty() {
-                    plan.push(ProviderRow::GatewayCta);
-                } else {
-                    plan.extend(gateway_ixs.iter().copied().map(ProviderRow::Card));
-                }
-            }
-            if no_providers && !supports_gateway {
-                plan.push(ProviderRow::EmptyState);
+                plan.extend(connection_ixs.iter().copied().map(ProviderRow::Card));
             }
         } else {
             if no_providers {
                 plan.push(ProviderRow::EmptyState);
             }
-            plan.extend(direct_ixs.iter().copied().map(ProviderRow::Card));
+            plan.extend(connection_ixs.iter().copied().map(ProviderRow::Card));
         }
 
         let mut row_by_provider = vec![None; self.providers.len()];
@@ -1987,9 +1906,14 @@ impl AppRoot {
             }
         }
 
-        let mut sortable_rows = Vec::with_capacity(direct_ixs.len());
-        let mut sortable_positions = HashMap::with_capacity(direct_ixs.len());
-        for (position, provider_index) in direct_ixs.iter().copied().enumerate() {
+        // Every visible connection participates in the same ordering model.
+        // Model-provider-backed connections are ordinary app connections in
+        // this view, so excluding them would leave a visual hole and prevent
+        // users from positioning them relative to direct connections.
+        let sortable_ixs = connection_ixs.clone();
+        let mut sortable_rows = Vec::with_capacity(sortable_ixs.len());
+        let mut sortable_positions = HashMap::with_capacity(sortable_ixs.len());
+        for (position, provider_index) in sortable_ixs.iter().copied().enumerate() {
             let Some(row_index) = row_by_provider[provider_index] else {
                 continue;
             };
@@ -1999,7 +1923,7 @@ impl AppRoot {
         }
 
         self.provider_rows = plan.into();
-        self.provider_sortable_slots = direct_ixs.into();
+        self.provider_sortable_slots = sortable_ixs.into();
         self.provider_sortable_rows = sortable_rows.into();
         self.provider_sortable_positions = sortable_positions;
     }
@@ -2012,6 +1936,10 @@ impl AppRoot {
             .providers
             .iter()
             .map(|provider| {
+                let name = self
+                    .station_route_for_provider(provider)
+                    .map(|route| route.name.clone())
+                    .unwrap_or_else(|| provider.name.clone());
                 let base_url = if provider.is_local_gateway() {
                     SharedString::default()
                 } else if let Some(route_id) = provider
@@ -2039,7 +1967,7 @@ impl AppRoot {
                 (
                     provider.id.clone(),
                     ProviderPresentation {
-                        name: SharedString::from(provider.name.clone()),
+                        name: SharedString::from(name),
                         base_url,
                     },
                 )
@@ -2913,24 +2841,6 @@ impl AppRoot {
                     )),
             )
             .child(Self::render_sidebar_group(
-                raw(k::SHELL_SIDEBAR_GROUP_NETWORK),
-                appearance,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_2()
-                    .child(self.render_nav_item(
-                        "nav-gateway",
-                        raw(k::SHELL_SIDEBAR_NAV_GATEWAY),
-                        Section::Gateway,
-                        appearance,
-                        cx,
-                    )),
-            )
-            .child(Self::render_sidebar_group(
                 raw(k::SHELL_SIDEBAR_GROUP_SYSTEM),
                 appearance,
             ))
@@ -3003,6 +2913,7 @@ impl AppRoot {
         let is_gateway = provider.is_local_gateway();
         let id = provider.id.clone();
         let edit_id = id.clone();
+        let setup_edit_id = id.clone();
         let duplicate_id = id.clone();
         let delete_target = ProviderDeleteTarget {
             id: id.clone(),
@@ -3059,11 +2970,7 @@ impl AppRoot {
         } else {
             (k::SHELL_ACTION_SWITCH, k::SHELL_ACTION_SWITCH_ARIA)
         };
-        let (edit_label_key, edit_aria_key) = if is_gateway {
-            (k::SHELL_ACTION_MANAGE, k::SHELL_ACTION_MANAGE_ARIA)
-        } else {
-            (k::SHELL_ACTION_EDIT, k::SHELL_ACTION_EDIT_ARIA)
-        };
+        let (edit_label_key, edit_aria_key) = (k::SHELL_ACTION_EDIT, k::SHELL_ACTION_EDIT_ARIA);
 
         let drag_handle = sortable_position.map(|source_position| {
             let root = cx.entity();
@@ -3154,8 +3061,6 @@ impl AppRoot {
                             .child(icon(
                                 if is_current {
                                     IconName::Check
-                                } else if is_gateway {
-                                    IconName::Layers
                                 } else {
                                     Self::app_icon(self.selected_app)
                                 },
@@ -3189,12 +3094,6 @@ impl AppRoot {
                                             BadgeTone::Accent,
                                             t(k::SHELL_BADGE_CURRENT),
                                         ))
-                                    })
-                                    .when(is_gateway, |s| {
-                                        s.child(components::badge(
-                                            BadgeTone::Accent,
-                                            t(k::SHELL_BADGE_RELAY),
-                                        ))
                                     }),
                             )
                             .child(div().text_color(theme::muted()).text_xs().child(base_url)),
@@ -3218,51 +3117,43 @@ impl AppRoot {
                         .aria_label(SharedString::from(tf!(edit_aria_key, name = provider_name)))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
-                                if is_gateway {
-                                    this.select_section(Section::Gateway, cx);
-                                } else {
-                                    this.open_edit_editor_by_id(&edit_id, cx);
-                                }
+                                this.open_edit_editor_by_id(&edit_id, cx);
                             },
                         )),
                     )
-                    .when(!is_gateway, |row| {
-                        row.child(
-                            components::action_button(
-                                SharedString::from(format!("duplicate-{}", provider.id)),
-                                t(k::SHELL_ACTION_DUPLICATE),
-                                false,
-                            )
-                            .aria_label(SharedString::from(tf!(
-                                k::SHELL_ACTION_DUPLICATE_ARIA,
-                                name = provider_name
-                            )))
-                            .on_click(cx.listener(
-                                move |this, _event, _window, cx| {
-                                    this.do_duplicate(duplicate_id.clone(), cx);
-                                },
-                            )),
+                    .child(
+                        components::action_button(
+                            SharedString::from(format!("duplicate-{}", provider.id)),
+                            t(k::SHELL_ACTION_DUPLICATE),
+                            false,
                         )
-                    })
-                    .when(!is_gateway, |row| {
-                        row.child(
-                            components::action_button_tone(
-                                SharedString::from(format!("delete-{}", provider.id)),
-                                t(k::SHELL_ACTION_DELETE),
-                                ButtonTone::Danger,
-                            )
-                            .aria_label(SharedString::from(tf!(
-                                k::SHELL_ACTION_DELETE_ARIA,
-                                name = provider_name
-                            )))
-                            .on_click(cx.listener(
-                                move |this, _event, _window, cx| {
-                                    this.confirm_delete = Some(delete_target.clone());
-                                    cx.notify();
-                                },
-                            )),
+                        .aria_label(SharedString::from(tf!(
+                            k::SHELL_ACTION_DUPLICATE_ARIA,
+                            name = provider_name
+                        )))
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.do_duplicate(duplicate_id.clone(), cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        components::action_button_tone(
+                            SharedString::from(format!("delete-{}", provider.id)),
+                            t(k::SHELL_ACTION_DELETE),
+                            ButtonTone::Danger,
                         )
-                    })
+                        .aria_label(SharedString::from(tf!(
+                            k::SHELL_ACTION_DELETE_ARIA,
+                            name = provider_name
+                        )))
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.confirm_delete = Some(delete_target.clone());
+                                cx.notify();
+                            },
+                        )),
+                    )
                     .child(
                         components::action_button(
                             SharedString::from(format!("switch-{}", provider.id)),
@@ -3274,7 +3165,7 @@ impl AppRoot {
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 if gateway_needs_setup {
-                                    this.select_section(Section::Gateway, cx);
+                                    this.open_edit_editor_by_id(&setup_edit_id, cx);
                                 } else if is_additive && is_in_live {
                                     this.do_remove_from_live(live_id.clone(), cx);
                                 } else {
@@ -3364,16 +3255,8 @@ impl AppRoot {
                                     .child(t(k::SHELL_HERO_CURRENT)),
                             )
                             .child(components::badge(
-                                if is_gateway {
-                                    BadgeTone::Accent
-                                } else {
-                                    BadgeTone::Success
-                                },
-                                if is_gateway {
-                                    t(k::SHELL_BADGE_RELAY)
-                                } else {
-                                    t(k::SHELL_BADGE_DIRECT)
-                                },
+                                BadgeTone::Success,
+                                t(k::SHELL_BADGE_DIRECT),
                             )),
                     )
                     .child(
@@ -3442,24 +3325,15 @@ impl AppRoot {
             div().flex().flex_row().items_center().gap_2().child(
                 components::action_button(
                     SharedString::from(format!("hero-edit-{}", provider.id)),
-                    if is_gateway {
-                        t(k::SHELL_ACTION_MANAGE_RELAY)
-                    } else {
-                        t(k::SHELL_ACTION_EDIT)
-                    },
+                    t(k::SHELL_ACTION_EDIT),
                     false,
                 )
-                .aria_label(if is_gateway {
-                    t(k::SHELL_ACTION_MANAGE_RELAY)
-                } else {
-                    SharedString::from(tf!(k::SHELL_ACTION_EDIT_ARIA, name = provider_name))
-                })
+                .aria_label(SharedString::from(tf!(
+                    k::SHELL_ACTION_EDIT_ARIA,
+                    name = provider_name
+                )))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    if is_gateway {
-                        this.select_section(Section::Gateway, cx);
-                    } else {
-                        this.open_edit_editor_by_id(&edit_id, cx);
-                    }
+                    this.open_edit_editor_by_id(&edit_id, cx);
                 })),
             )
         });
@@ -3486,319 +3360,20 @@ impl AppRoot {
         card
     }
 
-    /// Shown when the app has no relay entry yet. Stations are applied from
-    /// here — the relay page only builds them — so this doubles as the picker
-    /// whenever there is something to pick.
-    fn render_gateway_cta(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let stations: Vec<(String, SharedString)> = self
-            .eligible_station_routes()
-            .into_iter()
-            .map(|route| (route.id.clone(), SharedString::from(route.name.clone())))
-            .collect();
-        let has_stations = !stations.is_empty();
-        let lead = if has_stations {
-            t(k::SHELL_GATEWAY_CTA_PICK)
-        } else {
-            t(k::SHELL_GATEWAY_CTA_DESC)
-        };
-        let header = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .w_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(32.))
-                            .h(px(32.))
-                            .rounded_md()
-                            .bg(theme::surface_hover())
-                            .child(icon(IconName::Layers, theme::subtext(), 16.)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t(k::SHELL_GATEWAY_CTA_TITLE)),
-                            )
-                            .child(div().text_color(theme::muted()).text_xs().child(lead)),
-                    ),
-            )
-            .child(
-                components::button(
-                    "setup-local-gateway",
-                    if has_stations {
-                        t(k::SHELL_ACTION_MANAGE_RELAY)
-                    } else {
-                        t(k::SHELL_ACTION_SETUP_RELAY)
-                    },
-                    if has_stations {
-                        ButtonTone::Ghost
-                    } else {
-                        ButtonTone::Primary
-                    },
-                    ButtonSize::Sm,
-                )
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.select_section(Section::Gateway, cx);
-                })),
-            );
-
-        components::panel()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .w_full()
-            .px_4()
-            .py_3()
-            .child(header)
-            .children(stations.into_iter().map(|(route_id, name)| {
-                let switch = components::button(
-                    SharedString::from(format!("cta-station-{route_id}")),
-                    t(k::SHELL_ACTION_SWITCH),
-                    ButtonTone::Primary,
-                    ButtonSize::Sm,
-                )
-                .aria_label(SharedString::from(tf!(
-                    k::SHELL_ACTION_SWITCH_ARIA,
-                    name = name
-                )))
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.connect_station_route(route_id.clone(), cx);
-                }));
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .w_full()
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(theme::surface())
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(name),
-                    )
-                    .child(switch)
-            }))
-    }
-
-    fn render_gateway_route_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let app = self.selected_app;
-        let active_route_id = self
-            .gateway_keys
-            .iter()
-            .find(|key| key.name == app.as_str() && key.enabled)
-            .and_then(|key| key.route_id.as_deref());
-        let routes: Vec<&GatewayRoute> = self
-            .gateway_routes
-            .iter()
-            .filter(|route| {
-                route.enabled
-                    && route.id.starts_with(apply::STATION_ROUTE_PREFIX)
-                    && route
-                        .app_type
-                        .as_deref()
-                        .is_none_or(|bound| bound == app.as_str())
-            })
-            .collect();
-
-        let manage_button = components::button(
-            "manage-relay-stations",
-            t(k::SHELL_ACTION_MANAGE_RELAY),
-            ButtonTone::Ghost,
-            ButtonSize::Sm,
-        )
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            this.select_section(Section::Gateway, cx);
-        }));
-
-        components::panel()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .w_full()
-            .p_4()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t(k::SHELL_GATEWAY_ROUTES_TITLE)),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(t(k::SHELL_GATEWAY_ROUTES_DESC)),
-                            ),
-                    )
-                    .child(manage_button),
-            )
-            .when(routes.is_empty(), |panel| {
-                panel.child(
-                    div()
-                        .text_color(theme::muted())
-                        .text_sm()
-                        .child(t(k::SHELL_GATEWAY_ROUTES_EMPTY)),
-                )
-            })
-            .children(routes.into_iter().map(|route| {
-                let route_id = route.id.clone();
-                let active = active_route_id == Some(route.id.as_str());
-                let model = route
-                    .default_model
-                    .as_deref()
-                    .map(|model| tf!(k::SHELL_GATEWAY_ROUTES_DEFAULT_MODEL, model = model))
-                    .unwrap_or_else(|| {
-                        if route.model_rules.is_empty() {
-                            raw(k::SHELL_GATEWAY_ROUTES_PASSTHROUGH).to_string()
-                        } else {
-                            tf!(
-                                k::SHELL_GATEWAY_ROUTES_MODEL_RULES,
-                                count = route.model_rules.len()
-                            )
-                        }
-                    });
-                let button = components::button(
-                    SharedString::from(format!("quick-station-{}", route.id)),
-                    if active {
-                        t(k::SHELL_GATEWAY_ROUTES_IN_USE)
-                    } else {
-                        t(k::SHELL_ACTION_SWITCH)
-                    },
-                    if active {
-                        ButtonTone::Neutral
-                    } else {
-                        ButtonTone::Primary
-                    },
-                    ButtonSize::Sm,
-                );
-                let button = if active {
-                    button
-                        .cursor_not_allowed()
-                        .opacity(components::DISABLED_OPACITY)
-                } else {
-                    button.on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.activate_gateway_route(route_id.clone(), cx);
-                    }))
-                };
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .w_full()
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(if active {
-                        theme::sidebar_selected()
-                    } else {
-                        theme::surface_hover()
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(SharedString::from(route.name.clone())),
-                                    )
-                                    .when(active, |row| {
-                                        row.child(components::badge(
-                                            BadgeTone::Accent,
-                                            t(k::SHELL_BADGE_CURRENT),
-                                        ))
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(SharedString::from(model)),
-                            ),
-                    )
-                    .child(button)
-            }))
-    }
-
     fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = self.selected_app;
-        let current_is_gateway = self
-            .providers
-            .iter()
-            .find(|provider| provider.id == self.current)
-            .is_some_and(Provider::is_local_gateway);
         let plan = self.provider_rows.clone();
         if self.provider_list_state.item_count() != plan.len() {
             self.provider_list_state.reset(plan.len());
         }
 
-        let direct_count = self
-            .providers
-            .iter()
-            .filter(|provider| !provider.is_local_gateway())
-            .count();
+        let connection_count = self.providers.len();
         // A whole sentence per mode: the count sits inside the phrase, and no
         // locale has to build one out of a mode fragment and a tail.
         let subtitle = SharedString::from(if app.is_additive_mode() {
-            tf!(k::SHELL_LIST_SUBTITLE_ADDITIVE, count = direct_count)
-        } else if current_is_gateway {
-            tf!(k::SHELL_LIST_SUBTITLE_RELAY, count = direct_count)
+            tf!(k::SHELL_LIST_SUBTITLE_ADDITIVE, count = connection_count)
         } else {
-            tf!(k::SHELL_LIST_SUBTITLE_DIRECT, count = direct_count)
+            tf!(k::SHELL_LIST_SUBTITLE_DIRECT, count = connection_count)
         });
 
         let actions = div()
@@ -3842,9 +3417,6 @@ impl AppRoot {
                     Some(ProviderRow::Hero) => {
                         block.child(this.render_active_hero(cx)).into_any_element()
                     }
-                    Some(ProviderRow::GatewayRoutes) => block
-                        .child(this.render_gateway_route_switcher(cx))
-                        .into_any_element(),
                     Some(ProviderRow::DirectLabel) => block
                         .child(
                             div()
@@ -3855,19 +3427,6 @@ impl AppRoot {
                                 .child(t(k::SHELL_LIST_SECTION_DIRECT)),
                         )
                         .into_any_element(),
-                    Some(ProviderRow::GatewayLabel) => block
-                        .child(
-                            div()
-                                .pt_1()
-                                .text_color(theme::subtext())
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(t(k::SHELL_LIST_SECTION_RELAY)),
-                        )
-                        .into_any_element(),
-                    Some(ProviderRow::GatewayCta) => {
-                        block.child(this.render_gateway_cta(cx)).into_any_element()
-                    }
                     Some(ProviderRow::EmptyState) => block
                         .child(
                             components::card().p_0().child(components::empty_state(
