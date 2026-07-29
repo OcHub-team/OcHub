@@ -1930,15 +1930,33 @@ impl ProviderEditor {
             }
             FieldKind::Toggle => {
                 let on = bool_val(&self.values, &field.id);
+                let station_managed_websocket = self.source == ProviderSource::Station
+                    && self.app_type == AppType::Codex
+                    && field.id == "supports_websockets";
                 let fid = field.id.clone();
-                div()
+                let control = div()
                     .id(SharedString::from(format!("tog-{}", field.id)))
-                    .cursor_pointer()
                     .child(layout::toggle(on))
-                    .on_click(cx.listener(move |this, _e, _w, cx| {
-                        this.toggle_bool(fid.clone(), cx);
-                    }))
-                    .into_any_element()
+                    .role(gpui::Role::Switch)
+                    .aria_label(SharedString::from(field.label.clone()))
+                    .aria_toggled(if on {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    });
+                if station_managed_websocket {
+                    control
+                        .cursor_not_allowed()
+                        .opacity(components::DISABLED_OPACITY)
+                        .into_any_element()
+                } else {
+                    control
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _e, _w, cx| {
+                            this.toggle_bool(fid.clone(), cx);
+                        }))
+                        .into_any_element()
+                }
             }
             FieldKind::KeyValue { .. } => self.render_kv(&field.id, cx).into_any_element(),
             FieldKind::ModelGrid { columns } => self
@@ -3372,7 +3390,8 @@ impl ProviderEditor {
             .filter(|field| {
                 !(station_mode
                     && provider_config::station_managed_fields(self.app_type)
-                        .contains(&field.id.as_str()))
+                        .contains(&field.id.as_str())
+                    && !(self.app_type == AppType::Codex && field.id == "supports_websockets"))
             })
             .collect();
         if fields.is_empty() {

@@ -143,6 +143,12 @@ impl AppConfig for CodexConfig {
                     FormField::new("disable_response_storage", "禁用响应存储", FieldKind::Toggle)
                         .help("disable_response_storage = true（ZDR / 不支持存储的上游）。"),
                     FormField::new(
+                        "supports_websockets",
+                        "支持 Responses WebSocket",
+                        FieldKind::Toggle,
+                    )
+                    .help("直连时可手动声明；模型供应商模式由所选供应商的 WebSocket 能力决定，不可单独覆盖。"),
+                    FormField::new(
                         "query_params",
                         "Query 参数",
                         FieldKind::KeyValue {
@@ -729,6 +735,17 @@ mod tests {
         set_str(&mut v, "model", "deepseek-chat");
         set_str(&mut v, "reasoning_effort", "high");
         v
+    }
+
+    #[test]
+    fn schema_exposes_responses_websocket_capability_toggle() {
+        let field = CodexConfig
+            .schema()
+            .into_iter()
+            .flat_map(|section| section.fields)
+            .find(|field| field.id == "supports_websockets")
+            .expect("Codex schema should expose WebSocket capability");
+        assert!(matches!(field.kind, FieldKind::Toggle));
     }
 
     #[test]
