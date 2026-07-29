@@ -10,6 +10,7 @@
 //! (ProviderService, McpService) and DB DAOs.
 
 mod mcp;
+mod model_provider;
 mod parser;
 mod provider;
 mod skill;
@@ -22,6 +23,13 @@ use serde::{Deserialize, Serialize};
 
 // Re-export public API
 pub use mcp::{McpImportError, McpImportResult, import_mcp_from_deeplink};
+pub use model_provider::{
+    MODEL_PROVIDER_SCHEMA, ModelProviderImportEndpoint, ModelProviderImportManifest,
+    ModelProviderImportModelRule, ModelProviderImportReasoning, ModelProviderImportResult,
+    ModelProviderImportSource, PreparedModelProviderImport, decode_model_provider_request,
+    encode_model_provider_payload, import_model_provider_from_deeplink,
+    prepare_model_provider_import,
+};
 pub use parser::parse_deeplink_url;
 pub use provider::{import_provider_from_deeplink, parse_and_merge_config};
 pub use skill::import_skill_from_deeplink;
@@ -127,4 +135,9 @@ pub struct DeepLinkImportRequest {
     /// Auto query interval in minutes (0 to disable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_auto_interval: Option<u64>,
+
+    // ============ Model-provider-specific fields ============
+    /// Base64URL-encoded `ModelProviderImportManifest`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
 }

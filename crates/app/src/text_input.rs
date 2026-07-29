@@ -109,6 +109,14 @@ const MAX_UNDO_SNAPSHOTS: usize = 100;
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 const MASK_GLYPH: &str = "•";
 
+fn accessible_value(raw: &str, masked: bool) -> SharedString {
+    if masked && !raw.is_empty() {
+        MASK_GLYPH.repeat(raw.chars().count()).into()
+    } else {
+        SharedString::from(raw.to_string())
+    }
+}
+
 /// Translate an offset in the stored value to the text actually painted by the
 /// lightweight input. Masked fields replace every Unicode scalar with one
 /// bullet, so raw byte offsets cannot be used directly against the shaped line.
@@ -1352,8 +1360,8 @@ impl Element for TextElement {
         let focused = input.focus_handle.is_focused(window);
         let style = window.text_style();
 
-        let display_content: SharedString = if masked && !raw_content.is_empty() {
-            MASK_GLYPH.repeat(raw_content.chars().count()).into()
+        let display_content: SharedString = if masked {
+            accessible_value(&raw_content, true)
         } else if input.multiline && (raw_content.contains('\n') || raw_content.contains('\r')) {
             raw_content.replace(['\r', '\n'], " ").into()
         } else {
@@ -1538,12 +1546,13 @@ impl Render for TextInput {
             .then(|| self.find_input.clone())
             .flatten()
             .map(|input| render_find_bar(input, self.find_active, self.find_matches.len()));
+        let aria_value = accessible_value(&self.content, self.masked);
         let base = div()
             .id("text-input")
             .role(gpui::Role::TextInput)
             .aria_label(self.placeholder.clone())
             .aria_placeholder(self.placeholder.clone())
-            .aria_value(self.content.clone())
+            .aria_value(aria_value)
             .focusable()
             .tab_stop(true)
             .flex()
@@ -2029,8 +2038,8 @@ mod tests {
     use gpui::{Bounds, point, px, size};
 
     use super::{
-        CaretBlink, closest_match, code_visible_rows, display_offset, find_matches,
-        horizontal_scroll_for_caret, raw_offset_from_display, utf8_offset_from_utf16,
+        CaretBlink, accessible_value, closest_match, code_visible_rows, display_offset,
+        find_matches, horizontal_scroll_for_caret, raw_offset_from_display, utf8_offset_from_utf16,
     };
 
     /// The composition caret arrives as a UTF-16 offset into the marked text.
@@ -2129,6 +2138,13 @@ mod tests {
         assert_eq!(raw_offset_from_display(raw, true, 3), 1);
         assert_eq!(raw_offset_from_display(raw, true, 6), 4);
         assert_eq!(raw_offset_from_display(raw, true, 9), raw.len());
+    }
+
+    #[test]
+    fn masked_accessibility_value_never_exposes_the_secret() {
+        assert_eq!(accessible_value("sk-secret", true).as_ref(), "•••••••••");
+        assert_eq!(accessible_value("sk-secret", false).as_ref(), "sk-secret");
+        assert_eq!(accessible_value("", true).as_ref(), "");
     }
 
     #[test]

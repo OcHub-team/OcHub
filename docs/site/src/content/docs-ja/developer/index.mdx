@@ -1,0 +1,23 @@
+---
+title: 開発者向け連携
+description: プロバイダーのコンソール、Web サイト、自動化を OcHub と連携します。
+sidebar:
+  order: 60
+  group:
+    label: 開発者向け連携
+    icon: ph:code
+---
+
+OcHub は、プロバイダーの Web サイトとローカル自動化向けにバージョン付きの連携機能を
+提供します。まず [Deep Link](/ja/developer/deeplinks/) で、デスクトップアプリに確認・編集
+可能なインポートプレビューを開くリンクを生成できます。
+
+## 利用できる連携
+
+| 連携 | 用途 |
+| --- | --- |
+| [Deep Link](/ja/developer/deeplinks/) | モデルプロバイダー、直接接続、MCP サーバー、スキルのインポート |
+| `ochcli` | ローカル自動化で Deep Link を解析、検証、ドライラン、適用 |
+
+Deep Link は設定の転送手段であり、認証ではありません。Payload に API キーが含まれる
+場合は、URL 全体を秘密情報として保護してください。

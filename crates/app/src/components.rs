@@ -916,9 +916,11 @@ pub fn disclosure(
     detail: impl Into<SharedString>,
     expanded: bool,
 ) -> gpui::Stateful<gpui::Div> {
+    let title = title.into();
     div()
         .id(id)
         .role(gpui::Role::Button)
+        .aria_label(title.clone())
         .aria_expanded(expanded)
         .flex()
         .flex_row()
@@ -946,7 +948,7 @@ pub fn disclosure(
                         .text_color(theme::text())
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(title.into()),
+                        .child(title),
                 )
                 .child(
                     div()

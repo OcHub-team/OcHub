@@ -78,6 +78,46 @@ pub(crate) fn open_settings_in_roots(cx: &mut App) {
     }
 }
 
+pub(crate) fn open_deeplink_in_roots(cx: &mut App, uri: &str) {
+    let manifest = ochub_core::parse_deeplink_url(uri)
+        .and_then(|request| ochub_core::decode_model_provider_request(&request))
+        .map_err(|error| error.to_string());
+    let mut delivered = false;
+    for window in cx.windows() {
+        let Some(root) = window.downcast::<AppRoot>() else {
+            continue;
+        };
+        delivered = true;
+        match manifest.clone() {
+            Ok(manifest) => {
+                let _ = root.update(cx, |root, _window, cx| {
+                    root.select_section(Section::Gateway, cx);
+                    root.gateway_view.update(cx, |view, cx| {
+                        view.open_model_provider_import(manifest, cx);
+                    });
+                });
+            }
+            Err(error) => {
+                let _ = root.update(cx, |root, _window, cx| {
+                    root.report_shell_notice(
+                        None,
+                        NotificationLevel::Error,
+                        raw(k::GATEWAY_DEEPLINK_TITLE).to_string(),
+                        Some(error),
+                        cx,
+                    );
+                });
+            }
+        }
+    }
+    if !delivered {
+        match manifest {
+            Ok(_) => log::warn!("model-provider deep link arrived before the main window existed"),
+            Err(error) => log::warn!("invalid model-provider deep link: {error}"),
+        }
+    }
+}
+
 /// Which top-level section the main panel renders.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {

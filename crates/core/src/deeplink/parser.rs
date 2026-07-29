@@ -58,12 +58,31 @@ pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppErr
     // Dispatch to appropriate parser based on resource type
     match resource.as_str() {
         "provider" => parse_provider_deeplink(&params, version, resource),
+        "model-provider" => parse_model_provider_deeplink(&params, version, resource),
         "mcp" => parse_mcp_deeplink(&params, version, resource),
         "skill" => parse_skill_deeplink(&params, version, resource),
         _ => Err(AppError::InvalidInput(format!(
             "Unsupported resource type: {resource}"
         ))),
     }
+}
+
+fn parse_model_provider_deeplink(
+    params: &HashMap<String, String>,
+    version: String,
+    resource: String,
+) -> Result<DeepLinkImportRequest, AppError> {
+    let payload = params
+        .get("payload")
+        .filter(|payload| !payload.trim().is_empty())
+        .ok_or_else(|| AppError::InvalidInput("Missing 'payload' parameter".to_string()))?
+        .clone();
+    Ok(DeepLinkImportRequest {
+        version,
+        resource,
+        payload: Some(payload),
+        ..Default::default()
+    })
 }
 
 /// Parse provider deep link parameters
@@ -170,6 +189,7 @@ fn parse_provider_deeplink(
         usage_access_token,
         usage_user_id,
         usage_auto_interval,
+        payload: None,
     })
 }
 
@@ -233,6 +253,7 @@ fn parse_mcp_deeplink(
         usage_access_token: None,
         usage_user_id: None,
         usage_auto_interval: None,
+        payload: None,
     })
 }
 
@@ -286,5 +307,6 @@ fn parse_skill_deeplink(
         usage_access_token: None,
         usage_user_id: None,
         usage_auto_interval: None,
+        payload: None,
     })
 }

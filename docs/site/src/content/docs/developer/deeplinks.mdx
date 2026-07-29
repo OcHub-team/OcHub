@@ -1,0 +1,263 @@
+---
+title: Deep Links
+description: Generate versioned ochub:// links that import model providers and other resources into OcHub.
+sidebar:
+  order: 1
+---
+
+Use an OcHub Deep Link when a provider website, account console, or setup guide
+should hand a ready-to-review configuration to the desktop app.
+
+For model providers, OcHub opens an editable preview and writes nothing until
+the user selects **Import model provider**. Importing a provider does not apply
+it to Claude, Codex, or another tool.
+
+## Compatibility and behavior
+
+The current protocol version is `v1`:
+
+```text
+ochub://v1/import?resource=<resource>&...
+```
+
+The model-provider resource is supported by the desktop app on macOS and by
+`ochcli`. The desktop app handles both cold-start and already-running delivery.
+
+Use `resource=model-provider` for the OcHub local gateway. Do not confuse it
+with `resource=provider`, which imports a direct connection for one target app.
+
+## Model-provider URL
+
+A model-provider link has one query parameter besides `resource`:
+
+```text
+ochub://v1/import?resource=model-provider&payload=<base64url-json>
+```
+
+`payload` is the UTF-8 JSON manifest encoded as unpadded Base64URL. It is not
+ordinary Base64: use URL-safe `-` and `_`, and remove trailing `=` padding.
+The decoded JSON may be at most 64 KiB.
+
+Do not put `apiKey` in a separate query parameter. Include it in the manifest
+before encoding the complete payload.
+
+## Manifest example
+
+```json
+{
+  "schema": "io.ochub.model-provider/v1",
+  "source": {
+    "id": "com.aster/default",
+    "revision": "2026-07-01",
+    "website": "https://aster.example"
+  },
+  "name": "Aster API",
+  "apiKey": "sk-user-secret",
+  "endpoints": [
+    {
+      "baseUrl": "https://api.aster.example",
+      "dialects": ["messages", "responses"],
+      "models": ["claude-sonnet-4-5", "gpt-5.4"]
+    }
+  ],
+  "defaultModel": "claude-sonnet-4-5",
+  "modelRules": [
+    {
+      "model": "fast",
+      "upstreamModel": "claude-sonnet-4-5",
+      "dialect": "messages"
+    }
+  ],
+  "reasoning": {
+    "mode": "passthrough"
+  },
+  "enabled": true,
+  "requires": []
+}
+```
+
+The preview masks the API key. A user may reveal or replace it before import.
+The CLI requires `apiKey` to be present because it cannot pause for the desktop
+form.
+
+## Manifest fields
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `schema` | Yes | Must be `io.ochub.model-provider/v1` |
+| `name` | Yes | Display name for the model provider and generated channels |
+| `apiKey` | For one-click import | Shared by channels generated from every endpoint |
+| `endpoints` | Yes | One to eight upstream API endpoint objects |
+| `source` | No | Stable source ID plus optional revision and website metadata |
+| `website` | No | Provider website; overrides `source.website` when both exist |
+| `defaultModel` | No | Fallback upstream model for unmatched requests |
+| `modelRules` | No | Client-model rewrite and optional interface rules |
+| `reasoning` | No | Reasoning handling; defaults to pass through |
+| `enabled` | No | Initial provider/channel state; defaults to `true` |
+| `requires` | No | Reserved capability list; it must currently be empty |
+
+Each endpoint accepts:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `baseUrl` | Yes | HTTP or HTTPS base URL with a host and no embedded credentials |
+| `dialects` | Yes | One or more of `messages`, `responses`, and `chat` |
+| `models` | No | Models available through this endpoint; up to 500 unique entries |
+
+OcHub creates one channel per endpoint and dialect. A manifest may contain at
+most eight endpoints and 100 model rules. A string may be at most 4 KiB.
+Duplicate dialects or models inside one endpoint are rejected.
+
+## Reasoning configuration
+
+Omitting `reasoning` is equivalent to:
+
+```json
+{
+  "reasoning": {
+    "mode": "passthrough"
+  }
+}
+```
+
+Supported modes are:
+
+| Mode | Behavior |
+| --- | --- |
+| `passthrough` | Preserve reasoning fields from the client whenever possible |
+| `auto` | Translate reasoning effort and token budgets between interfaces |
+| `disabled` | Remove or disable reasoning fields before forwarding |
+
+Automatic mapping can carry explicit budgets:
+
+```json
+{
+  "reasoning": {
+    "mode": "auto",
+    "lowBudget": 4096,
+    "mediumBudget": 10000,
+    "highBudget": 16000,
+    "maxBudget": 32000
+  }
+}
+```
+
+Budgets must be positive and ordered
+`lowBudget ≤ mediumBudget ≤ highBudget ≤ maxBudget`. Defaults are 4096, 10000,
+16000, and 32000. The user can still change the mode and budgets in the import
+preview.
+
+## Generate a link
+
+Node.js:
+
+```js
+const manifest = {
+  schema: "io.ochub.model-provider/v1",
+  name: "Aster API",
+  apiKey: "sk-user-secret",
+  endpoints: [
+    {
+      baseUrl: "https://api.aster.example",
+      dialects: ["messages", "responses"],
+      models: ["claude-sonnet-4-5"]
+    }
+  ]
+};
+
+const payload = Buffer.from(
+  JSON.stringify(manifest),
+  "utf8"
+).toString("base64url");
+
+const url =
+  `ochub://v1/import?resource=model-provider&payload=${payload}`;
+```
+
+Browser JavaScript:
+
+```js
+function encodeBase64Url(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+const payload = encodeBase64Url(manifest);
+const url =
+  `ochub://v1/import?resource=model-provider&payload=${payload}`;
+```
+
+Use the resulting URL as the destination of an **Import to OcHub** button. A
+public website should generate a personal link only after authentication and
+should warn that the link contains the user's API key.
+
+## Validate and test
+
+Parse and validate without writing:
+
+```sh
+ochcli deeplink parse "$URL"
+```
+
+Preview the mutation from automation:
+
+```sh
+ochcli --dry-run deeplink import "$URL"
+```
+
+Apply without the desktop confirmation screen:
+
+```sh
+ochcli deeplink import "$URL"
+```
+
+Parse and dry-run output redact secrets by default. Avoid
+`--show-secrets` in logs, CI, and shared terminals.
+
+For desktop testing on macOS:
+
+```sh
+open "$URL"
+```
+
+Verify cold start and delivery to an already-running OcHub process. The
+desktop preview may be canceled without changing the database.
+
+## Other resource types
+
+The same envelope supports existing resources:
+
+| Resource | Required parameters | Purpose |
+| --- | --- | --- |
+| `provider` | `app`, `name` | Import a direct connection for one app |
+| `mcp` | `apps`, `config` | Import Base64-encoded MCP JSON into one or more apps |
+| `skill` | `repo` | Import a skill from a GitHub `owner/name` repository |
+
+`provider` accepts `app=claude|codex|grokbuild|opencode|openclaw|hermes`, plus
+optional `homepage`, `endpoint`, `apiKey`, `model`, `notes`, role-model fields,
+configuration fields, and usage-query fields. `mcp.apps` is a comma-separated
+list and its `config` uses the legacy Base64 encoding supported by that
+resource. `skill` also accepts `directory` and `branch`.
+
+For new local-gateway integrations, always use `model-provider` and its
+versioned manifest instead of assembling a direct `provider` URL.
+
+## Security and errors
+
+Base64URL is encoding, not encryption. Anyone who receives the link can recover
+the API key. Treat the full URL like the key itself:
+
+- Do not place it in analytics, referrer logs, issue trackers, chat, or source
+  control.
+- Generate links on demand and show them only to the authenticated key owner.
+- If a link leaks, rotate the API key at the provider.
+- Do not log the raw URL or decoded payload.
+
+OcHub rejects an invalid scheme, protocol version, path, schema, Base64URL,
+JSON document, URL, dialect, duplicate entry, oversized payload, or unsupported
+entry in `requires`. A rejected link does not write partial provider state.

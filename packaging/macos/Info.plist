@@ -14,5 +14,16 @@
 	-->
 	<key>CFBundleIconName</key>
 	<string>OcHub</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>io.github.sleepstars.ochub.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ochub</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

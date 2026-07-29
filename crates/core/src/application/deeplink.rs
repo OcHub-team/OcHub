@@ -6,6 +6,16 @@ use crate::deeplink::DeepLinkImportRequest;
 impl Application {
     pub fn parse_deeplink(&self, uri: &str, show_secrets: bool) -> ApplicationResult<Value> {
         let request = crate::deeplink::parse_deeplink_url(uri)?;
+        if request.resource == "model-provider" {
+            let manifest = crate::deeplink::decode_model_provider_request(&request)?;
+            let value = serde_json::to_value(manifest)
+                .map_err(|source| crate::AppError::JsonSerialize { source })?;
+            return Ok(if show_secrets {
+                value
+            } else {
+                redact_json(&value)
+            });
+        }
         let value = serde_json::to_value(request)
             .map_err(|source| crate::AppError::JsonSerialize { source })?;
         Ok(if show_secrets {
@@ -31,6 +41,12 @@ impl Application {
                     "id": id,
                     "imported": true
                 }))
+            }
+            "model-provider" => {
+                let result =
+                    crate::deeplink::import_model_provider_from_deeplink(self.state(), request)?;
+                serde_json::to_value(result)
+                    .map_err(|source| crate::AppError::JsonSerialize { source }.into())
             }
             "mcp" => {
                 let result = crate::deeplink::import_mcp_from_deeplink(self.state(), request)?;

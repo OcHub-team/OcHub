@@ -1,0 +1,258 @@
+---
+title: Deep Link
+description: バージョン付き ochub:// リンクでモデルプロバイダーなどを OcHub にインポートします。
+sidebar:
+  order: 1
+---
+
+プロバイダーの Web サイト、アカウントコンソール、セットアップガイドから、確認可能な
+完成済み設定を OcHub デスクトップアプリへ渡す場合に Deep Link を使用します。
+
+モデルプロバイダーでは編集可能なプレビューが開き、ユーザーが「モデルプロバイダーを
+インポート」を選ぶまで書き込みません。インポートしても Claude、Codex、その他のツールへ
+自動適用されることはありません。
+
+## 互換性と動作
+
+現在のプロトコルバージョンは `v1` です。
+
+```text
+ochub://v1/import?resource=<resource>&...
+```
+
+モデルプロバイダーは macOS デスクトップアプリと `ochcli` で処理できます。デスクトップ
+アプリはコールドスタートと起動中のリンク受信の両方に対応します。
+
+OcHub ローカルゲートウェイには `resource=model-provider` を使用します。
+`resource=provider` は対象アプリ 1 つの直接接続をインポートする別のリソースです。
+
+## モデルプロバイダー URL
+
+モデルプロバイダーリンクでは、`resource` のほかに 1 つの Query パラメーターを使います。
+
+```text
+ochub://v1/import?resource=model-provider&payload=<base64url-json>
+```
+
+`payload` は UTF-8 JSON Manifest を Padding なしの Base64URL でエンコードした値です。
+通常の Base64 ではありません。URL セーフな `-` と `_` を使い、末尾の `=` を除去します。
+デコード後の JSON は最大 64 KiB です。
+
+`apiKey` を別の平文 Query パラメーターにしないでください。Manifest に含めてから Payload
+全体をエンコードします。
+
+## Manifest の例
+
+```json
+{
+  "schema": "io.ochub.model-provider/v1",
+  "source": {
+    "id": "com.aster/default",
+    "revision": "2026-07-01",
+    "website": "https://aster.example"
+  },
+  "name": "Aster API",
+  "apiKey": "sk-user-secret",
+  "endpoints": [
+    {
+      "baseUrl": "https://api.aster.example",
+      "dialects": ["messages", "responses"],
+      "models": ["claude-sonnet-4-5", "gpt-5.4"]
+    }
+  ],
+  "defaultModel": "claude-sonnet-4-5",
+  "modelRules": [
+    {
+      "model": "fast",
+      "upstreamModel": "claude-sonnet-4-5",
+      "dialect": "messages"
+    }
+  ],
+  "reasoning": {
+    "mode": "passthrough"
+  },
+  "enabled": true,
+  "requires": []
+}
+```
+
+プレビューでは API キーがマスクされ、インポート前に表示または置換できます。CLI は
+デスクトップフォームへの入力を待てないため、CLI インポートでは `apiKey` が必要です。
+
+## Manifest フィールド
+
+| フィールド | 必須 | 意味 |
+| --- | --- | --- |
+| `schema` | 必須 | `io.ochub.model-provider/v1` 固定 |
+| `name` | 必須 | モデルプロバイダーと生成される Channel の表示名 |
+| `apiKey` | ワンクリックでは必須 | 全 Endpoint から生成される Channel で共有 |
+| `endpoints` | 必須 | 1〜8 個の上流 API Endpoint |
+| `source` | 任意 | 安定したソース ID、任意のリビジョンと Web サイト情報 |
+| `website` | 任意 | プロバイダーの Web サイト。`source.website` より優先 |
+| `defaultModel` | 任意 | ルールに一致しないリクエストの既定上流モデル |
+| `modelRules` | 任意 | クライアントモデルの書き換えと任意のインターフェース規則 |
+| `reasoning` | 任意 | 推論パラメーターの扱い。既定はそのまま転送 |
+| `enabled` | 任意 | プロバイダーと Channel の初期状態。既定は `true` |
+| `requires` | 任意 | 予約済み機能リスト。現在は空である必要があります |
+
+各 Endpoint では次を指定できます。
+
+| フィールド | 必須 | 意味 |
+| --- | --- | --- |
+| `baseUrl` | 必須 | Host を含み、認証情報を埋め込まない HTTP / HTTPS ベース URL |
+| `dialects` | 必須 | `messages`、`responses`、`chat` の 1 つ以上 |
+| `models` | 任意 | この Endpoint で利用できる一意なモデル。最大 500 件 |
+
+OcHub は Endpoint と Dialect の組み合わせごとに Channel を作成します。Manifest は最大
+8 Endpoint、100 モデルルールで、文字列 1 つは最大 4 KiB です。同じ Endpoint 内で
+Dialect またはモデルが重複すると拒否されます。
+
+## 推論設定
+
+`reasoning` の省略は次と同じです。
+
+```json
+{
+  "reasoning": {
+    "mode": "passthrough"
+  }
+}
+```
+
+利用できるモード：
+
+| モード | 動作 |
+| --- | --- |
+| `passthrough` | 可能な限りクライアントの推論フィールドをそのまま保持 |
+| `auto` | インターフェース間で推論強度と Token 予算を変換 |
+| `disabled` | 転送前に推論フィールドを削除または無効化 |
+
+自動マッピングには明示的な予算を含められます。
+
+```json
+{
+  "reasoning": {
+    "mode": "auto",
+    "lowBudget": 4096,
+    "mediumBudget": 10000,
+    "highBudget": 16000,
+    "maxBudget": 32000
+  }
+}
+```
+
+予算は正数で、
+`lowBudget ≤ mediumBudget ≤ highBudget ≤ maxBudget` の順にします。既定値は 4096、
+10000、16000、32000 です。ユーザーはインポートプレビューでも変更できます。
+
+## リンクを生成する
+
+Node.js：
+
+```js
+const manifest = {
+  schema: "io.ochub.model-provider/v1",
+  name: "Aster API",
+  apiKey: "sk-user-secret",
+  endpoints: [
+    {
+      baseUrl: "https://api.aster.example",
+      dialects: ["messages", "responses"],
+      models: ["claude-sonnet-4-5"]
+    }
+  ]
+};
+
+const payload = Buffer.from(
+  JSON.stringify(manifest),
+  "utf8"
+).toString("base64url");
+
+const url =
+  `ochub://v1/import?resource=model-provider&payload=${payload}`;
+```
+
+ブラウザー JavaScript：
+
+```js
+function encodeBase64Url(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+const payload = encodeBase64Url(manifest);
+const url =
+  `ochub://v1/import?resource=model-provider&payload=${payload}`;
+```
+
+生成した URL を「OcHub にインポート」ボタンのリンク先にします。公開 Web サイトでは
+認証後にのみ個人リンクを生成し、リンクにユーザーの API キーが含まれることを明示します。
+
+## 検証とテスト
+
+書き込まずに解析・検証：
+
+```sh
+ochcli deeplink parse "$URL"
+```
+
+自動化から書き込みをドライラン：
+
+```sh
+ochcli --dry-run deeplink import "$URL"
+```
+
+デスクトップ確認なしで適用：
+
+```sh
+ochcli deeplink import "$URL"
+```
+
+解析とドライランの出力は既定で秘密情報をマスクします。ログ、CI、共有ターミナルでは
+`--show-secrets` を使わないでください。
+
+macOS デスクトップテスト：
+
+```sh
+open "$URL"
+```
+
+コールドスタートと起動中プロセスへの配信を確認します。デスクトッププレビューは
+キャンセルでき、その場合データベースは変更されません。
+
+## その他のリソース
+
+同じエンベロープで既存リソースも利用できます。
+
+| Resource | 必須パラメーター | 用途 |
+| --- | --- | --- |
+| `provider` | `app`、`name` | 1 アプリ向け直接接続のインポート |
+| `mcp` | `apps`、`config` | Base64 MCP JSON を 1 つ以上のアプリへインポート |
+| `skill` | `repo` | GitHub `owner/name` リポジトリからスキルをインポート |
+
+`provider.app` は `claude|codex|grokbuild|opencode|openclaw|hermes` を受け付け、
+`homepage`、`endpoint`、`apiKey`、`model`、`notes`、役割モデル、設定、使用量照会の
+各フィールドを任意で指定できます。`mcp.apps` はカンマ区切りで、`config` はこの
+リソース従来の Base64 エンコードです。`skill` は `directory` と `branch` も受け付けます。
+
+新しいローカルゲートウェイ連携では、直接接続の `provider` URL ではなく、常に
+`model-provider` とバージョン付き Manifest を使用してください。
+
+## セキュリティとエラー
+
+Base64URL はエンコードであり、暗号化ではありません。リンクを得た人は API キーを復元
+できるため、URL 全体を API キーと同じように扱います。
+
+- 分析、Referrer ログ、Issue、チャット、ソース管理へ書き込まない。
+- 必要なときだけ生成し、認証済みのキー所有者にだけ表示する。
+- リンクが漏れた場合はプロバイダー側で API キーをローテーションする。
+- 生の URL やデコードした Payload をログに残さない。
+
+Scheme、プロトコルバージョン、パス、Schema、Base64URL、JSON、URL、Dialect、重複、
+サイズ制限、または未対応の `requires` が不正な場合、OcHub は拒否します。拒否された
+リンクによって不完全なプロバイダー状態が書き込まれることはありません。

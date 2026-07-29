@@ -236,9 +236,9 @@ impl GatewayAppModelPolicy {
 #[serde(rename_all = "snake_case")]
 pub enum GatewayReasoningMode {
     /// Translate effort levels and token budgets between supported dialects.
-    #[default]
     Auto,
     /// Keep the source dialect's reasoning fields whenever possible.
+    #[default]
     Passthrough,
     /// Remove reasoning/thinking parameters before forwarding.
     Disabled,
@@ -262,7 +262,7 @@ pub struct GatewayReasoningConfig {
 impl Default for GatewayReasoningConfig {
     fn default() -> Self {
         Self {
-            mode: GatewayReasoningMode::Auto,
+            mode: GatewayReasoningMode::Passthrough,
             low_budget: default_low_budget(),
             medium_budget: default_medium_budget(),
             high_budget: default_high_budget(),
@@ -513,6 +513,18 @@ mod tests {
         assert!(!pattern_matches("claude-*", "gpt-4"));
         assert!(pattern_matches("exact", "exact"));
         assert!(!pattern_matches("exact", "exact2"));
+    }
+
+    #[test]
+    fn reasoning_defaults_to_passthrough() {
+        assert_eq!(
+            GatewayReasoningMode::default(),
+            GatewayReasoningMode::Passthrough
+        );
+        assert_eq!(
+            GatewayReasoningConfig::default().mode,
+            GatewayReasoningMode::Passthrough
+        );
     }
 
     #[test]

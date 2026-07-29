@@ -1,0 +1,254 @@
+---
+title: Deep Link
+description: 生成带版本的 ochub:// 链接，将模型供应商和其他资源导入 OcHub。
+sidebar:
+  order: 1
+---
+
+当供应商网站、账户控制台或安装指南需要把一份完整配置交给 OcHub 桌面端时，可以使用
+Deep Link。
+
+导入模型供应商时，OcHub 会先打开可编辑预览。只有用户点击“导入模型供应商”后才会写入；
+导入供应商不会自动应用到 Claude、Codex 或其他工具。
+
+## 兼容性与行为
+
+当前协议版本为 `v1`：
+
+```text
+ochub://v1/import?resource=<resource>&...
+```
+
+模型供应商资源可由 macOS 桌面端和 `ochcli` 处理。桌面端支持冷启动，也支持应用已运行时
+接收链接。
+
+OcHub 本地网关配置应使用 `resource=model-provider`。不要与 `resource=provider`
+混淆；后者表示给一个目标应用导入直接连接。
+
+## 模型供应商 URL
+
+模型供应商链接除 `resource` 外只有一个 Query 参数：
+
+```text
+ochub://v1/import?resource=model-provider&payload=<base64url-json>
+```
+
+`payload` 是将 UTF-8 JSON Manifest 编码为无 Padding 的 Base64URL 后得到的内容。
+它不是普通 Base64：应使用 URL 安全的 `-` 和 `_`，并移除末尾的 `=`。解码后的 JSON
+最大为 64 KiB。
+
+不要把 `apiKey` 作为单独的明文 Query 参数。应先把它写入 Manifest，再编码完整 Payload。
+
+## Manifest 示例
+
+```json
+{
+  "schema": "io.ochub.model-provider/v1",
+  "source": {
+    "id": "com.aster/default",
+    "revision": "2026-07-01",
+    "website": "https://aster.example"
+  },
+  "name": "Aster API",
+  "apiKey": "sk-user-secret",
+  "endpoints": [
+    {
+      "baseUrl": "https://api.aster.example",
+      "dialects": ["messages", "responses"],
+      "models": ["claude-sonnet-4-5", "gpt-5.4"]
+    }
+  ],
+  "defaultModel": "claude-sonnet-4-5",
+  "modelRules": [
+    {
+      "model": "fast",
+      "upstreamModel": "claude-sonnet-4-5",
+      "dialect": "messages"
+    }
+  ],
+  "reasoning": {
+    "mode": "passthrough"
+  },
+  "enabled": true,
+  "requires": []
+}
+```
+
+预览页会遮罩 API Key，用户可以在导入前显示或替换。CLI 无法暂停并等待桌面表单输入，因此
+通过 CLI 导入时必须提供 `apiKey`。
+
+## Manifest 字段
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| `schema` | 是 | 必须为 `io.ochub.model-provider/v1` |
+| `name` | 是 | 模型供应商及其生成接口的显示名称 |
+| `apiKey` | 一键导入时必填 | 由所有 Endpoint 生成的 Channel 共用 |
+| `endpoints` | 是 | 一至八个上游 API Endpoint |
+| `source` | 否 | 稳定来源 ID，以及可选的版本和官网元数据 |
+| `website` | 否 | 供应商官网；与 `source.website` 同时存在时优先使用 |
+| `defaultModel` | 否 | 请求没有命中规则时使用的默认上游模型 |
+| `modelRules` | 否 | 客户端模型改写和可选接口规则 |
+| `reasoning` | 否 | 思考参数处理方式；默认原样传递 |
+| `enabled` | 否 | 供应商和 Channel 的初始状态；默认为 `true` |
+| `requires` | 否 | 预留能力列表；当前必须为空 |
+
+每个 Endpoint 支持：
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| `baseUrl` | 是 | 含 Host、不内嵌凭据的 HTTP 或 HTTPS 基础地址 |
+| `dialects` | 是 | `messages`、`responses`、`chat` 中的一种或多种 |
+| `models` | 否 | 此 Endpoint 可用的模型，最多 500 个且不能重复 |
+
+OcHub 会为每个 Endpoint 和 Dialect 组合创建一个 Channel。一个 Manifest 最多包含
+8 个 Endpoint 和 100 条模型规则；单个字符串最大为 4 KiB。同一 Endpoint 中重复的
+Dialect 或模型会被拒绝。
+
+## 思考配置
+
+省略 `reasoning` 等价于：
+
+```json
+{
+  "reasoning": {
+    "mode": "passthrough"
+  }
+}
+```
+
+支持以下模式：
+
+| 模式 | 行为 |
+| --- | --- |
+| `passthrough` | 尽可能保留客户端传入的思考字段 |
+| `auto` | 在不同接口的思考强度和 Token 预算之间转换 |
+| `disabled` | 转发前移除或关闭思考字段 |
+
+自动映射可以携带明确预算：
+
+```json
+{
+  "reasoning": {
+    "mode": "auto",
+    "lowBudget": 4096,
+    "mediumBudget": 10000,
+    "highBudget": 16000,
+    "maxBudget": 32000
+  }
+}
+```
+
+预算必须为正数，并满足
+`lowBudget ≤ mediumBudget ≤ highBudget ≤ maxBudget`。默认值依次为 4096、10000、
+16000 和 32000。用户仍可以在导入预览中修改模式和预算。
+
+## 生成链接
+
+Node.js：
+
+```js
+const manifest = {
+  schema: "io.ochub.model-provider/v1",
+  name: "Aster API",
+  apiKey: "sk-user-secret",
+  endpoints: [
+    {
+      baseUrl: "https://api.aster.example",
+      dialects: ["messages", "responses"],
+      models: ["claude-sonnet-4-5"]
+    }
+  ]
+};
+
+const payload = Buffer.from(
+  JSON.stringify(manifest),
+  "utf8"
+).toString("base64url");
+
+const url =
+  `ochub://v1/import?resource=model-provider&payload=${payload}`;
+```
+
+浏览器 JavaScript：
+
+```js
+function encodeBase64Url(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+const payload = encodeBase64Url(manifest);
+const url =
+  `ochub://v1/import?resource=model-provider&payload=${payload}`;
+```
+
+可以把生成的 URL 用作“导入 OcHub”按钮的目标地址。公开网站只能在用户完成身份认证后生成
+个人链接，并应明确提示链接中包含用户的 API Key。
+
+## 校验与测试
+
+只解析和校验，不写入：
+
+```sh
+ochcli deeplink parse "$URL"
+```
+
+从自动化流程预演写入：
+
+```sh
+ochcli --dry-run deeplink import "$URL"
+```
+
+跳过桌面确认并直接写入：
+
+```sh
+ochcli deeplink import "$URL"
+```
+
+解析和演练输出默认会脱敏。不要在日志、CI 和共享终端中使用 `--show-secrets`。
+
+在 macOS 上测试桌面端：
+
+```sh
+open "$URL"
+```
+
+需要分别验证冷启动和应用已运行时的链接传递。桌面预览可以取消，取消后数据库不会变化。
+
+## 其他资源类型
+
+同一个协议外壳也支持现有资源：
+
+| Resource | 必填参数 | 用途 |
+| --- | --- | --- |
+| `provider` | `app`、`name` | 给一个应用导入直接连接 |
+| `mcp` | `apps`、`config` | 将 Base64 编码的 MCP JSON 导入一个或多个应用 |
+| `skill` | `repo` | 从 GitHub `owner/name` 仓库导入技能 |
+
+`provider` 的 `app` 可为 `claude|codex|grokbuild|opencode|openclaw|hermes`，还支持
+可选的 `homepage`、`endpoint`、`apiKey`、`model`、`notes`、角色模型字段、配置字段
+和用量查询字段。`mcp.apps` 是逗号分隔列表，`config` 使用此资源原有的 Base64 编码。
+`skill` 还支持 `directory` 和 `branch`。
+
+新的本地网关集成应始终使用 `model-provider` 及其带版本 Manifest，不要拼接直接连接
+`provider` URL。
+
+## 安全与错误
+
+Base64URL 只是编码，不是加密。拿到链接的人可以还原 API Key，因此完整 URL 应与 API Key
+采用相同的保护级别：
+
+- 不要把它写入分析系统、Referrer 日志、问题追踪、聊天或源代码。
+- 按需生成链接，并且只向已经认证的 Key 所有者展示。
+- 链接泄露后立即在供应商后台轮换 API Key。
+- 不要记录原始 URL 或解码后的 Payload。
+
+Scheme、协议版本、路径、Schema、Base64URL、JSON、URL、Dialect、重复字段或长度限制
+不合法，以及 `requires` 包含尚不支持的能力时，OcHub 都会拒绝导入。被拒绝的链接不会写入
+不完整的供应商状态。

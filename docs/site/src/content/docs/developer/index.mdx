@@ -1,0 +1,23 @@
+---
+title: Developer integration
+description: Integrate provider consoles, websites, and automation with OcHub.
+sidebar:
+  order: 60
+  group:
+    label: Developer integration
+    icon: ph:code
+---
+
+OcHub exposes versioned integration surfaces for provider websites and local
+automation. Start with [Deep Links](/developer/deeplinks/) to generate a link
+that opens a reviewed, editable import preview in the desktop app.
+
+## Available integrations
+
+| Integration | Use it for |
+| --- | --- |
+| [Deep Links](/developer/deeplinks/) | Import model providers, direct connections, MCP servers, or skills |
+| `ochcli` | Parse, validate, dry-run, or apply a Deep Link from local automation |
+
+Deep Links are configuration transport, not authentication. If a payload
+contains an API key, protect the complete URL as a secret.

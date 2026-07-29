@@ -19,7 +19,7 @@ use ochub_core::gateway::types::{
     GatewayReasoningMode, GatewayRoute,
 };
 use ochub_core::services::provider::ProviderService;
-use ochub_core::{AppState, AppType};
+use ochub_core::{AppState, AppType, ModelProviderImportManifest, prepare_model_provider_import};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -293,6 +293,9 @@ struct StationEditor {
     dialects_error: Option<SharedString>,
     budget_error: Option<SharedString>,
     rules_error: Option<SharedString>,
+    is_deeplink_import: bool,
+    import_source: Option<SharedString>,
+    import_contains_key: bool,
 }
 
 pub struct GatewayView {
@@ -456,6 +459,47 @@ impl GatewayView {
             .ok();
         })
         .detach();
+    }
+
+    pub fn open_model_provider_import(
+        &mut self,
+        manifest: ModelProviderImportManifest,
+        cx: &mut Context<Self>,
+    ) {
+        let contains_key = manifest
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty());
+        let import_source = manifest
+            .source
+            .as_ref()
+            .and_then(|source| source.website.as_deref().or(Some(source.id.as_str())))
+            .or(manifest.website.as_deref())
+            .map(SharedString::from);
+        let prepared = match prepare_model_provider_import(manifest) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.set_status(
+                    NotificationLevel::Error,
+                    tf!(k::GATEWAY_STATUS_IMPORT_FAILED, error = error),
+                    cx,
+                );
+                return;
+            }
+        };
+        let station = RelayStation {
+            channels: prepared.channels,
+            route: prepared.route,
+        };
+        self.open_editor(Some(&station), cx);
+        if let Some(editor) = &mut self.editor {
+            editor.is_deeplink_import = true;
+            editor.import_source = import_source;
+            editor.import_contains_key = contains_key;
+            editor.show_advanced = true;
+        }
+        self.rebuild_rows();
+        cx.notify();
     }
 
     fn rebuild_rows(&mut self) {
@@ -682,6 +726,9 @@ impl GatewayView {
             dialects_error: None,
             budget_error: None,
             rules_error: None,
+            is_deeplink_import: false,
+            import_source: None,
+            import_contains_key: false,
         });
         // The editor renders pinned above the list; jump there so clicking
         // Edit on a card far down the page visibly responds.
@@ -1023,22 +1070,16 @@ impl GatewayView {
             enabled: editor.enabled,
             created_at: editor.created_at,
         };
+        let is_deeplink_import = editor.is_deeplink_import;
+        let stale_channel_ids = stale_channel_ids.into_iter().collect::<Vec<_>>();
 
         self.mutation_in_flight = true;
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    channels
-                        .iter()
-                        .try_for_each(|channel| app.db.upsert_gateway_channel(channel))
-                        .and_then(|_| app.db.upsert_gateway_route(&route))
-                        .and_then(|_| {
-                            for channel_id in stale_channel_ids {
-                                app.db.delete_gateway_channel(&channel_id)?;
-                            }
-                            Ok(())
-                        })
+                    app.db
+                        .save_gateway_station(&channels, &route, &stale_channel_ids)
                         .map(|_| name)
                         .map_err(|error| error.to_string())
                 })
@@ -1049,7 +1090,11 @@ impl GatewayView {
                     Ok(name) => {
                         this.set_status(
                             NotificationLevel::Success,
-                            tf!(k::GATEWAY_STATUS_SAVED, name = name),
+                            if is_deeplink_import {
+                                tf!(k::GATEWAY_STATUS_IMPORTED, name = name)
+                            } else {
+                                tf!(k::GATEWAY_STATUS_SAVED, name = name)
+                            },
                             cx,
                         );
                         this.editor = None;
@@ -2470,18 +2515,19 @@ impl GatewayView {
 
     fn render_editor(&self, editor: &StationEditor, cx: &mut Context<Self>) -> gpui::AnyElement {
         let reasoning_index = match editor.reasoning_mode {
-            GatewayReasoningMode::Auto => 0,
-            GatewayReasoningMode::Passthrough => 1,
+            GatewayReasoningMode::Passthrough => 0,
+            GatewayReasoningMode::Auto => 1,
             GatewayReasoningMode::Disabled => 2,
         };
         let on_reasoning_select = cx.listener(|this, index: &usize, _window, cx| {
             if let Some(editor) = &mut this.editor {
                 editor.reasoning_mode = match index {
-                    1 => GatewayReasoningMode::Passthrough,
+                    1 => GatewayReasoningMode::Auto,
                     2 => GatewayReasoningMode::Disabled,
-                    _ => GatewayReasoningMode::Auto,
+                    _ => GatewayReasoningMode::Passthrough,
                 };
             }
+            this.list_state.remeasure();
             cx.notify();
         });
         let endpoint_rows: Vec<gpui::AnyElement> = editor
@@ -2514,6 +2560,8 @@ impl GatewayView {
                                     .any(|station| station.route.id == editor.route_id)
                                 {
                                     t(k::GATEWAY_EDITOR_TITLE_EDIT)
+                                } else if editor.is_deeplink_import {
+                                    t(k::GATEWAY_DEEPLINK_TITLE)
                                 } else {
                                     t(k::GATEWAY_EDITOR_TITLE_ADD)
                                 },
@@ -2540,7 +2588,11 @@ impl GatewayView {
                             .child(
                                 components::button(
                                     "station-editor-save-top",
-                                    t(k::GATEWAY_EDITOR_SAVE),
+                                    if editor.is_deeplink_import {
+                                        t(k::GATEWAY_DEEPLINK_ACTION_IMPORT)
+                                    } else {
+                                        t(k::GATEWAY_EDITOR_SAVE)
+                                    },
                                     ButtonTone::Primary,
                                     ButtonSize::Sm,
                                 )
@@ -2552,6 +2604,41 @@ impl GatewayView {
                             ),
                     ),
             )
+            .when(editor.is_deeplink_import, |panel| {
+                panel.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .px_3()
+                        .py_3()
+                        .rounded_lg()
+                        .bg(theme::accent_soft())
+                        .child(
+                            div()
+                                .text_color(theme::accent())
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(t(k::GATEWAY_DEEPLINK_DESCRIPTION)),
+                        )
+                        .when_some(editor.import_source.clone(), |notice, source| {
+                            notice.child(div().text_color(theme::subtext()).text_xs().child(
+                                SharedString::from(tf!(
+                                    k::GATEWAY_DEEPLINK_SOURCE,
+                                    source = source
+                                )),
+                            ))
+                        })
+                        .when(editor.import_contains_key, |notice| {
+                            notice.child(
+                                div()
+                                    .text_color(theme::subtext())
+                                    .text_xs()
+                                    .child(t(k::GATEWAY_DEEPLINK_KEY_NOTE)),
+                            )
+                        }),
+                )
+            })
             .child(section_title(
                 t(k::GATEWAY_EDITOR_CONNECTION_TITLE),
                 t(k::GATEWAY_EDITOR_CONNECTION_DESCRIPTION),
@@ -2697,8 +2784,8 @@ impl GatewayView {
                         components::segmented(
                             "station-reasoning",
                             &[
-                                raw(k::GATEWAY_EDITOR_REASONING_OPTION_AUTO),
                                 raw(k::GATEWAY_EDITOR_REASONING_OPTION_PASSTHROUGH),
+                                raw(k::GATEWAY_EDITOR_REASONING_OPTION_AUTO),
                                 raw(k::GATEWAY_EDITOR_REASONING_OPTION_DISABLED),
                             ],
                             reasoning_index,

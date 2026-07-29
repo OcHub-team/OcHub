@@ -421,129 +421,151 @@ fn main() {
 
     spawn_app_services(app_state.clone());
 
-    application()
-        .with_assets(Assets { base: asset_root })
-        .run(move |cx: &mut App| {
-            text_input::bind_keys(cx);
-            code_editor::bind_keys(cx);
-            shortcuts::bind_keys(cx);
-            layout::bind_keys(cx);
-            shell_menu::install(app_state.clone(), cx);
-            apply_quit_mode(cx);
-            // The locale is already installed (see the top of `main`); this only
-            // needs the appearance and startup fields.
-            let appearance_settings = ochub_core::settings::get_settings();
-            // Gate on the stored setting as well as the flag, so a stale login
-            // item cannot keep hiding the window after the user turns it off.
-            let start_hidden = launched_by_login_item(std::env::args().collect::<Vec<_>>())
-                && appearance_settings.silent_startup;
-            theme::install_selected(
-                &appearance_settings.theme_family,
-                appearance_settings.theme_mode,
-                cx.window_appearance(),
-            );
-            // Pin to the primary display (avoids landing on a secondary monitor)
-            // and use a roomier default size for the denser, redesigned UI.
-            let display_id = cx.primary_display().map(|display| display.id());
-            let display_bounds: Vec<_> = cx
-                .displays()
-                .iter()
-                .map(|display| display.bounds())
-                .collect();
-            let bounds = shell_support::load_window_bounds()
-                .filter(|bounds| {
-                    shell_support::bounds_visible_on_displays(*bounds, &display_bounds)
-                })
-                .unwrap_or_else(|| Bounds::centered(display_id, size(px(1200.), px(820.)), cx));
-            let window = cx.open_window(
-                WindowOptions {
-                    // Create the window but never order it in: the menu bar,
-                    // Dock menu and activation channel can all surface it
-                    // later, and every observer set up below stays valid.
-                    show: !start_hidden,
-                    focus: !start_hidden,
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    window_min_size: Some(size(px(960.), px(640.))),
-                    window_background: theme::window_background_appearance(),
-                    titlebar: Some(TitlebarOptions {
-                        title: None,
-                        // Content extends behind the native titlebar. Only the macOS
-                        // traffic lights remain, embedded directly in the sidebar.
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(18.), px(18.))),
-                    }),
-                    ..Default::default()
-                },
-                {
-                    let app_state = app_state.clone();
-                    move |window, cx| {
-                        window
-                            .observe_window_appearance(|window, cx| {
-                                let settings = ochub_core::settings::get_settings();
-                                if settings.theme_mode == ochub_core::settings::ThemeMode::System
-                                    && !theme::is_previewing()
-                                {
-                                    theme::install_selected(
-                                        &settings.theme_family,
-                                        settings.theme_mode,
-                                        window.appearance(),
-                                    );
-                                    theme::apply_window_background(window);
-                                }
-                                cx.refresh_windows();
-                            })
-                            .detach();
-                        cx.new(|cx| AppRoot::new(app_state.clone(), cx))
-                    }
-                },
-            );
-            let window = match window {
-                Ok(window) => window,
-                Err(err) => {
-                    log::error!("failed to open window: {err}");
-                    return;
+    let (deeplink_tx, mut deeplink_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    for argument in std::env::args().skip(1) {
+        if argument.starts_with("ochub://") {
+            let _ = deeplink_tx.send(argument);
+        }
+    }
+    let desktop_application = application().with_assets(Assets { base: asset_root });
+    desktop_application.on_open_urls({
+        let deeplink_tx = deeplink_tx.clone();
+        move |urls| {
+            for url in urls {
+                if url.starts_with("ochub://") {
+                    let _ = deeplink_tx.send(url);
                 }
-            };
+            }
+        }
+    });
+    desktop_application.run(move |cx: &mut App| {
+        text_input::bind_keys(cx);
+        code_editor::bind_keys(cx);
+        shortcuts::bind_keys(cx);
+        layout::bind_keys(cx);
+        shell_menu::install(app_state.clone(), cx);
+        apply_quit_mode(cx);
+        // The locale is already installed (see the top of `main`); this only
+        // needs the appearance and startup fields.
+        let appearance_settings = ochub_core::settings::get_settings();
+        // Gate on the stored setting as well as the flag, so a stale login
+        // item cannot keep hiding the window after the user turns it off.
+        let start_hidden = launched_by_login_item(std::env::args().collect::<Vec<_>>())
+            && appearance_settings.silent_startup;
+        theme::install_selected(
+            &appearance_settings.theme_family,
+            appearance_settings.theme_mode,
+            cx.window_appearance(),
+        );
+        // Pin to the primary display (avoids landing on a secondary monitor)
+        // and use a roomier default size for the denser, redesigned UI.
+        let display_id = cx.primary_display().map(|display| display.id());
+        let display_bounds: Vec<_> = cx
+            .displays()
+            .iter()
+            .map(|display| display.bounds())
+            .collect();
+        let bounds = shell_support::load_window_bounds()
+            .filter(|bounds| shell_support::bounds_visible_on_displays(*bounds, &display_bounds))
+            .unwrap_or_else(|| Bounds::centered(display_id, size(px(1200.), px(820.)), cx));
+        let window = cx.open_window(
+            WindowOptions {
+                // Create the window but never order it in: the menu bar,
+                // Dock menu and activation channel can all surface it
+                // later, and every observer set up below stays valid.
+                show: !start_hidden,
+                focus: !start_hidden,
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(960.), px(640.))),
+                window_background: theme::window_background_appearance(),
+                titlebar: Some(TitlebarOptions {
+                    title: None,
+                    // Content extends behind the native titlebar. Only the macOS
+                    // traffic lights remain, embedded directly in the sidebar.
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(18.), px(18.))),
+                }),
+                ..Default::default()
+            },
+            {
+                let app_state = app_state.clone();
+                move |window, cx| {
+                    window
+                        .observe_window_appearance(|window, cx| {
+                            let settings = ochub_core::settings::get_settings();
+                            if settings.theme_mode == ochub_core::settings::ThemeMode::System
+                                && !theme::is_previewing()
+                            {
+                                theme::install_selected(
+                                    &settings.theme_family,
+                                    settings.theme_mode,
+                                    window.appearance(),
+                                );
+                                theme::apply_window_background(window);
+                            }
+                            cx.refresh_windows();
+                        })
+                        .detach();
+                    cx.new(|cx| AppRoot::new(app_state.clone(), cx))
+                }
+            },
+        );
+        let window = match window {
+            Ok(window) => window,
+            Err(err) => {
+                log::error!("failed to open window: {err}");
+                return;
+            }
+        };
+        window
+            .update(cx, |_root, window, cx| {
+                window.on_window_should_close(cx, |window, _cx| {
+                    shell_support::save_window_bounds(window.window_bounds().get_bounds());
+                    // Read fresh rather than capturing, so toggling the
+                    // setting takes effect without a restart.
+                    if !ochub_core::settings::get_settings().minimize_to_tray_on_close {
+                        return true;
+                    }
+                    // Keep the root window alive while background services
+                    // continue running. The native close button must match
+                    // the CloseWindow action; otherwise the last window is
+                    // destroyed and a later activation has nothing to show.
+                    keep_main_window_in_background(window, _cx);
+                    false
+                });
+            })
+            .ok();
+        // gpui's shutdown clears its window map directly and never consults
+        // `on_window_should_close`, so quitting (Cmd-Q, or closing with the
+        // setting off) would otherwise never persist the window bounds.
+        cx.on_app_quit(move |cx| {
             window
-                .update(cx, |_root, window, cx| {
-                    window.on_window_should_close(cx, |window, _cx| {
-                        shell_support::save_window_bounds(window.window_bounds().get_bounds());
-                        // Read fresh rather than capturing, so toggling the
-                        // setting takes effect without a restart.
-                        if !ochub_core::settings::get_settings().minimize_to_tray_on_close {
-                            return true;
-                        }
-                        // Keep the root window alive while background services
-                        // continue running. The native close button must match
-                        // the CloseWindow action; otherwise the last window is
-                        // destroyed and a later activation has nothing to show.
-                        keep_main_window_in_background(window, _cx);
-                        false
-                    });
+                .update(cx, |_root, window, _cx| {
+                    shell_support::save_window_bounds(window.window_bounds().get_bounds());
                 })
                 .ok();
-            // gpui's shutdown clears its window map directly and never consults
-            // `on_window_should_close`, so quitting (Cmd-Q, or closing with the
-            // setting off) would otherwise never persist the window bounds.
-            cx.on_app_quit(move |cx| {
-                window
-                    .update(cx, |_root, window, _cx| {
-                        shell_support::save_window_bounds(window.window_bounds().get_bounds());
-                    })
-                    .ok();
-                async {}
-            })
-            .detach();
-            cx.spawn(async move |cx| {
-                while activation_rx.recv().await.is_some() {
-                    cx.update(shell_menu::activate_first_window);
-                }
-            })
-            .detach();
-            if !start_hidden {
-                cx.activate(true);
+            async {}
+        })
+        .detach();
+        cx.spawn(async move |cx| {
+            while activation_rx.recv().await.is_some() {
+                cx.update(shell_menu::activate_first_window);
             }
-        });
+        })
+        .detach();
+        cx.spawn(async move |cx| {
+            while let Some(uri) = deeplink_rx.recv().await {
+                cx.update(|cx| {
+                    shell_menu::activate_first_window(cx);
+                    app_ui::open_deeplink_in_roots(cx, &uri);
+                });
+            }
+        })
+        .detach();
+        if !start_hidden {
+            cx.activate(true);
+        }
+    });
 }
 
 fn version_requested<I, S>(args: I) -> bool

@@ -125,6 +125,109 @@ impl Database {
         Ok(())
     }
 
+    /// Persist every channel and its route as one Station transaction.
+    ///
+    /// `stale_channel_ids` belongs to the same edited Station and is deleted
+    /// only after all replacements have been written successfully.
+    pub fn save_gateway_station(
+        &self,
+        channels: &[GatewayChannel],
+        route: &GatewayRoute,
+        stale_channel_ids: &[String],
+    ) -> Result<(), AppError> {
+        route.validate().map_err(AppError::InvalidInput)?;
+        let known_ids = channels
+            .iter()
+            .map(|channel| channel.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        if route
+            .channel_ids
+            .iter()
+            .any(|channel_id| !known_ids.contains(channel_id.as_str()))
+        {
+            return Err(AppError::InvalidInput(
+                "Station route references a channel that is not part of the save".to_string(),
+            ));
+        }
+
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        for channel in channels {
+            tx.execute(
+                "INSERT INTO gateway_channels (
+                    id, endpoint_id, name, dialect, base_url, api_key, path_override, models,
+                    model_override, priority, weight, enabled, extra_headers, created_at,
+                    imported_from
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                ON CONFLICT(id) DO UPDATE SET
+                    endpoint_id = excluded.endpoint_id,
+                    name = excluded.name, dialect = excluded.dialect,
+                    base_url = excluded.base_url, api_key = excluded.api_key,
+                    path_override = excluded.path_override, models = excluded.models,
+                    model_override = excluded.model_override, priority = excluded.priority,
+                    weight = excluded.weight, enabled = excluded.enabled,
+                    extra_headers = excluded.extra_headers,
+                    imported_from = excluded.imported_from",
+                params![
+                    channel.id,
+                    channel.endpoint_id,
+                    channel.name,
+                    channel.dialect.as_str(),
+                    channel.base_url,
+                    channel.api_key,
+                    channel.path_override,
+                    to_json_string(&channel.models)?,
+                    channel.model_override,
+                    channel.priority,
+                    channel.weight as i64,
+                    channel.enabled,
+                    to_json_string(&channel.extra_headers)?,
+                    chrono::Utc::now().timestamp(),
+                    channel.imported_from,
+                ],
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        }
+        tx.execute(
+            "INSERT INTO gateway_routes (
+                id, name, website_url, app_type, channel_ids, default_model, model_rules,
+                reasoning, enabled, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name, website_url = excluded.website_url,
+                app_type = excluded.app_type,
+                channel_ids = excluded.channel_ids,
+                default_model = excluded.default_model,
+                model_rules = excluded.model_rules,
+                reasoning = excluded.reasoning,
+                enabled = excluded.enabled",
+            params![
+                route.id,
+                route.name,
+                route.website_url,
+                route.app_type,
+                to_json_string(&route.channel_ids)?,
+                route.default_model,
+                to_json_string(&route.model_rules)?,
+                to_json_string(&route.reasoning)?,
+                route.enabled,
+                route.created_at,
+            ],
+        )
+        .map_err(|error| AppError::Database(error.to_string()))?;
+        for channel_id in stale_channel_ids {
+            tx.execute(
+                "DELETE FROM gateway_channels WHERE id = ?1",
+                params![channel_id],
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|error| AppError::Database(error.to_string()))
+    }
+
     pub fn delete_gateway_channel(&self, id: &str) -> Result<bool, AppError> {
         let mut affected_routes = Vec::new();
         for mut route in self.get_gateway_routes()? {
@@ -420,6 +523,48 @@ mod tests {
         assert!(db.delete_gateway_channel("a").unwrap());
         assert!(!db.delete_gateway_channel("a").unwrap());
         assert_eq!(db.get_gateway_channels().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn station_save_is_atomic_and_round_trips() {
+        let db = Database::memory().unwrap();
+        let channel = channel("station-a");
+        let route = GatewayRoute {
+            id: "station-route:test".into(),
+            name: "Imported station".into(),
+            website_url: Some("https://example.com".into()),
+            app_type: None,
+            channel_ids: vec![channel.id.clone()],
+            default_model: None,
+            model_rules: Vec::new(),
+            reasoning: GatewayReasoningConfig::default(),
+            enabled: true,
+            created_at: 1,
+        };
+        db.save_gateway_station(std::slice::from_ref(&channel), &route, &[])
+            .unwrap();
+        assert_eq!(db.get_gateway_channels().unwrap().len(), 1);
+        assert_eq!(
+            db.get_gateway_route_by_id(&route.id)
+                .unwrap()
+                .unwrap()
+                .reasoning
+                .mode,
+            crate::gateway::types::GatewayReasoningMode::Passthrough
+        );
+
+        let mut invalid = route.clone();
+        invalid.id = "station-route:invalid".into();
+        invalid.channel_ids = vec!["missing".into()];
+        assert!(
+            db.save_gateway_station(std::slice::from_ref(&channel), &invalid, &[])
+                .is_err()
+        );
+        assert!(
+            db.get_gateway_route_by_id("station-route:invalid")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -1,0 +1,22 @@
+---
+title: 开发者集成
+description: 将供应商控制台、网站和自动化流程接入 OcHub。
+sidebar:
+  order: 60
+  group:
+    label: 开发者集成
+    icon: ph:code
+---
+
+OcHub 为供应商网站和本地自动化提供带版本的集成接口。可以从
+[Deep Link](/zh/developer/deeplinks/) 开始，生成一个在桌面端打开、可检查且可编辑的导入预览。
+
+## 可用集成
+
+| 集成 | 适用场景 |
+| --- | --- |
+| [Deep Link](/zh/developer/deeplinks/) | 导入模型供应商、直接连接、MCP 服务器或技能 |
+| `ochcli` | 在本地自动化中解析、校验、演练或执行 Deep Link |
+
+Deep Link 只负责传输配置，不是身份认证机制。Payload 如果包含 API Key，必须将完整 URL
+按密钥管理。
