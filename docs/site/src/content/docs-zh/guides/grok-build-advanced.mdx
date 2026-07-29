@@ -1,0 +1,152 @@
+---
+title: Grok Build 进阶与易踩坑
+description: 排查配置作用域、自定义模型协议、凭据、inspect、权限、沙箱与兼容导入。
+audience: human
+sidebar:
+  order: 7.2
+---
+
+Grok Build 会把用户模型 Profile、项目扩展、兼容导入、权限模式与独立沙箱组合起来。最快的
+排障方式是检查最终生效配置，而不是孤立地阅读一个 TOML 文件。
+
+## 从 `grok inspect` 开始
+
+在 Grok Build 出错的同一个仓库和子目录运行：
+
+```bash
+grok inspect
+```
+
+它会显示发现的配置来源、指令、技能、插件、Hook 与 MCP。比较不同电脑或 CI 环境时可使用
+`grok inspect --json`。
+
+Grok Build 的主要作用域：
+
+| 作用域 | 位置 | 用途 |
+| --- | --- | --- |
+| 环境 | `GROK_*` 等变量 | 会话与 CI 覆盖 |
+| 用户 | `~/.grok/config.toml` 或 `$GROK_HOME/config.toml` | 个人模型与 UI 默认值 |
+| 项目 | `.grok/config.toml` | 仓库 MCP、插件与权限规则 |
+| Managed/requirements | 受管 TOML | 企业默认值与策略锁定 |
+
+OcHub 写入所选的用户配置目录。项目配置不是第二份完整模型 Profile，它被限制为适合项目共享
+的扩展。若 `GROK_HOME` 指向其他位置，切换前也要在 OcHub 中设置相同目录。
+
+## Profile、模型 ID 与显示名不是一回事
+
+```toml
+[models]
+default = "company-grok"
+
+[model."company-grok"]
+model = "upstream-model-id"
+name = "Company Grok"
+```
+
+- `company-grok` 是 `[models].default` 选择的本地 Profile。
+- `upstream-model-id` 会发送给 API。
+- `Company Grok` 只是显示文字。
+
+只改显示名不能修复无效的上游模型。重命名 Profile 时要同时修改 `[models].default` 和匹配的
+`[model."<profile>"]` 表；OcHub 的结构化编辑器会同步处理。
+
+## `api_backend` 必须匹配端点
+
+Grok Build 支持三个自定义模型 Backend：
+
+| `api_backend` | 预期上游 |
+| --- | --- |
+| `responses` | OpenAI Responses |
+| `chat_completions` | OpenAI Chat Completions |
+| `messages` | Anthropic Messages |
+
+Base URL 本身不会选择或转换协议。配置不匹配通常表现为 404、未知请求字段或流式响应解析失败。
+应先验证上游文档中的真实端点，再在 OcHub 选择对应 Backend。
+
+## `env_key` 只保存变量名，不会设置变量
+
+环境变量鉴权配置：
+
+```toml
+env_key = "COMPANY_AI_KEY"
+```
+
+要求 `grok` 进程实际继承非空的 `COMPANY_AI_KEY`。OcHub 能看到密钥，不代表终端、IDE、
+launch agent、SSH 会话或 CI runner 也能看到。
+
+无浏览器的 xAI 官方用法通常使用 `XAI_API_KEY`。自定义 Provider 应使用专属变量名，避免把
+xAI 密钥意外发给其他地址。只有接受密钥保存在本地文件时才使用内联 `api_key`。
+
+## 上下文限制会影响客户端行为
+
+`context_window` 告诉 Grok Build 当前模型可接受多少上下文，不会扩大上游模型。虚高的值可能
+让压缩触发太晚，最终被服务器拒绝；过小的值会过早压缩。
+
+用 `/context` 查看活动用量，长会话需要手工压缩时用 `/compact`。限制应以准确的上游模型为准，
+不能使用整个模型系列的宣传最大值。
+
+## 权限与沙箱回答不同问题
+
+- 权限决定工具调用能否运行。
+- 沙箱限制已经获准的调用能访问哪些磁盘和网络资源。
+
+Ask 是安全默认值。Auto 会分类批准安全调用；Always-approve 跳过提示，但仍遵守明确 deny 与
+`PreToolUse` Hook。Allow 规则不能突破沙箱边界。
+
+Plan mode 也是独立机制。批准前它会阻止普通编辑工具，但 shell 命令仍按权限模式运行，也可能
+写文件。子 Agent 会继承权限模式，却不受父会话 Plan mode 的编辑门控。不要把 Plan mode 当作
+安全边界。
+
+自动化应使用狭窄 allow、明确 deny 与沙箱 Profile，而不是宽泛的 always-approve。
+
+## 兼容导入可能制造重复项
+
+Grok Build 可以自动读取 Claude Code 与 Cursor 的指令、技能、插件、Hook 和 MCP，也会读取
+`AGENTS.md` 文件族。这方便迁移，但可能从多个来源加载同一能力。
+
+常见现象：
+
+- 出现两个配置不同、名称相似的 MCP。
+- `.grok/` 中没有 Hook，却仍有 Hook 执行。
+- Claude 与 Grok 指令文件互相冲突。
+- 删除 Grok 副本后，插件或技能仍然出现。
+
+用 `grok inspect` 查看来源。MCP 中，同名项目服务器会完整替代用户服务器；Grok 配置优先于
+兼容的其他工具文件。应关闭不需要的兼容来源，不要长期保留多份静默副本。
+
+## 单独诊断 MCP 启动
+
+使用：
+
+```bash
+grok mcp list
+grok mcp doctor <name>
+```
+
+远程 MCP 应优先使用 HTTP。OAuth token 单独保存在 `~/.grok/mcp_credentials.json`。stdio
+服务器应检查 `~/.grok/logs/mcp/<server>.stderr.log`；首次运行需要下载包的 `npx` 服务可能
+要提高 `startup_timeout_sec`。
+
+项目 MCP 可以提交，但密钥应使用 `${VAR}` 或 `${VAR:-default}` 展开，不要写入明文。
+
+## Headless 运行要显式配置
+
+用于脚本与 CI 时：
+
+- 使用 `-p` 与机器可读输出格式。
+- 后台更新检查会影响确定性时增加 `--no-auto-update`。
+- 选择非交互权限模式，并写明 allow/deny。
+- 不同机器默认 Profile 可能不同时，传入 `-m <profile>`。
+
+工作站浏览器登录不会自动配置远程 runner。Headless 环境应使用 `grok login --device-auth`
+或作用域合适的 API Key。
+
+## 官方参考
+
+- xAI [Grok Build 概览](https://docs.x.ai/build/overview)
+- xAI [设置与作用域](https://docs.x.ai/build/settings)
+- xAI [权限](https://docs.x.ai/build/features/permissions)
+- xAI [MCP 服务器](https://docs.x.ai/build/features/mcp-servers)
+- xAI [CLI 参考](https://docs.x.ai/build/cli/reference)
+
+OcHub 预设、校验、预览与自定义配置目录描述的是 OcHub 当前实现。

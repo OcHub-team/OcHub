@@ -1,0 +1,175 @@
+---
+title: Advanced Grok Build pitfalls
+description: Diagnose configuration scopes, custom model backends, credentials, inspection, permissions, sandboxing, and compatibility imports.
+audience: human
+sidebar:
+  order: 7.2
+---
+
+Grok Build combines a user model profile with project extensions, compatibility
+imports, permission modes, and a separate sandbox. The fastest way to diagnose
+it is to inspect the effective configuration rather than reading one TOML file
+in isolation.
+
+## Start with `grok inspect`
+
+Run this from the same repository and subdirectory where Grok Build fails:
+
+```bash
+grok inspect
+```
+
+It reports discovered configuration sources, instructions, skills, plugins,
+hooks, and MCP servers. Use `grok inspect --json` when comparing machines or
+CI environments.
+
+Grok Build uses these main scopes:
+
+| Scope | Location | Purpose |
+| --- | --- | --- |
+| Environment | `GROK_*` and related variables | Session and CI overrides |
+| User | `~/.grok/config.toml` or `$GROK_HOME/config.toml` | Personal model and UI defaults |
+| Project | `.grok/config.toml` | Repo MCP, plugins, and permission rules |
+| Managed/requirements | Managed TOML files | Enterprise defaults and policy pins |
+
+OcHub writes the selected user configuration directory. Project config is not a
+second full model profile; it is intentionally limited to project-safe
+extensions. If `GROK_HOME` points elsewhere, make the same directory explicit
+in OcHub before switching.
+
+## Profile, model ID, and display name are different
+
+```toml
+[models]
+default = "company-grok"
+
+[model."company-grok"]
+model = "upstream-model-id"
+name = "Company Grok"
+```
+
+- `company-grok` is the local profile selected by `[models].default`.
+- `upstream-model-id` is sent to the API.
+- `Company Grok` is display text.
+
+Changing only the display name cannot fix an invalid upstream model. Renaming
+the profile requires updating `[models].default` and the matching
+`[model."<profile>"]` table together; OcHub does this in its structured editor.
+
+## `api_backend` must match the endpoint
+
+Grok Build supports three custom model backends:
+
+| `api_backend` | Expected upstream |
+| --- | --- |
+| `responses` | OpenAI Responses |
+| `chat_completions` | OpenAI Chat Completions |
+| `messages` | Anthropic Messages |
+
+The Base URL alone does not select or translate the protocol. A mismatch often
+looks like a 404, unknown request field, or broken streaming response. Test the
+upstream's documented endpoint first, then select the matching backend in
+OcHub.
+
+## `env_key` names a variable; it does not set it
+
+With environment authentication:
+
+```toml
+env_key = "COMPANY_AI_KEY"
+```
+
+the `grok` process must actually inherit a non-empty `COMPANY_AI_KEY`. A key
+visible to OcHub is not automatically visible to a terminal, IDE, launch agent,
+SSH session, or CI runner.
+
+For headless official xAI use, `XAI_API_KEY` is the standard variable. For a
+custom Provider, prefer a dedicated name to avoid accidentally sending an xAI
+key to another endpoint. Use inline `api_key` only when local file storage is
+acceptable.
+
+## Context limits are input to client behavior
+
+`context_window` tells Grok Build how much context the selected model accepts.
+It does not enlarge the upstream model. An inflated value can delay compaction
+until the server rejects the request; an undersized value compacts too early.
+
+Use `/context` to inspect active usage and `/compact` when a long session needs
+manual compaction. Confirm the limit against the exact upstream model, not a
+family marketing maximum.
+
+## Permissions and sandboxing answer different questions
+
+- Permissions decide whether a tool call may run.
+- The sandbox limits what an approved call can access on disk or network.
+
+Ask mode is the safe default. Auto mode classifies safe calls, while
+always-approve removes prompts but still honors explicit deny rules and
+`PreToolUse` hooks. An allow rule does not grant access outside the sandbox.
+
+Plan mode is also separate. It blocks normal edit tools before approval, but
+shell commands still follow their permission mode and can write files.
+Subagents inherit permission mode but are not edit-gated by the parent's plan
+mode. Do not treat plan mode as a security boundary.
+
+For automation, use narrow allow rules, explicit denies, and a sandbox profile
+instead of a blanket always-approve setting.
+
+## Compatibility imports can create duplicates
+
+Grok Build can automatically read Claude Code and Cursor instructions, skills,
+plugins, hooks, and MCP definitions, as well as the `AGENTS.md` family. This is
+convenient during migration but can load the same idea from several sources.
+
+Typical symptoms:
+
+- Two MCP servers with different configurations appear under similar names.
+- A hook runs even though no hook exists under `.grok/`.
+- Claude and Grok instruction files contradict one another.
+- A plugin or skill appears after you removed its Grok copy.
+
+Use `grok inspect` to see the origin. For MCP specifically, a project server
+with the same name replaces the user server entirely, and Grok config has
+priority over compatible vendor files. Disable unused compatibility imports
+rather than keeping several silent copies.
+
+## Diagnose MCP startup separately
+
+Use:
+
+```bash
+grok mcp list
+grok mcp doctor <name>
+```
+
+Remote MCP should use HTTP when available. OAuth tokens are stored separately
+under `~/.grok/mcp_credentials.json`. For stdio servers, check
+`~/.grok/logs/mcp/<server>.stderr.log`; a first-run `npx` download may need a
+larger `startup_timeout_sec`.
+
+Project MCP configuration may be committed, but secrets should use `${VAR}` or
+`${VAR:-default}` expansion rather than literal values.
+
+## Headless runs should be explicit
+
+For scripts and CI:
+
+- Use `-p` with a machine-readable output format.
+- Add `--no-auto-update` when a background update check would make automation
+  nondeterministic.
+- Choose a non-interactive permission mode and explicit allow/deny rules.
+- Pass `-m <profile>` when the default profile may differ between machines.
+
+Browser login on a workstation does not provision a remote runner. Use
+`grok login --device-auth` or a scoped API key in headless environments.
+
+## Official references
+
+- xAI [Grok Build overview](https://docs.x.ai/build/overview)
+- xAI [settings and scopes](https://docs.x.ai/build/settings)
+- xAI [permissions](https://docs.x.ai/build/features/permissions)
+- xAI [MCP servers](https://docs.x.ai/build/features/mcp-servers)
+- xAI [CLI reference](https://docs.x.ai/build/cli/reference)
+
+OcHub-specific presets, validation, previews, and custom configuration
+directories describe the current OcHub implementation.

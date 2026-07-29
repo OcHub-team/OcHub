@@ -1,0 +1,156 @@
+---
+title: Advanced Claude Code pitfalls
+description: Diagnose configuration precedence, gateway compatibility, instruction loading, MCP scopes, and permission behavior.
+audience: human
+sidebar:
+  order: 5.5
+---
+
+Claude Code can read settings, credentials, instructions, and tools from several
+places at once. When an OcHub switch appears to have no effect, the live value
+is usually being overridden elsewhere rather than lost.
+
+## Know which layer wins
+
+Claude Code applies settings from highest to lowest precedence:
+
+1. Managed policy
+2. Command-line arguments
+3. `.claude/settings.local.json`
+4. `.claude/settings.json`
+5. `~/.claude/settings.json`
+
+OcHub normally edits the user-level `~/.claude/settings.json`. A repository or
+local setting can therefore override the same scalar. Arrays merge across
+layers, so duplicate hooks, permissions, or plugin entries can come from more
+than one file.
+
+Environment variables are another override path. In particular,
+`ANTHROPIC_API_KEY` can take precedence over a Claude subscription login, and a
+stale `ANTHROPIC_BASE_URL` can keep traffic on an old gateway.
+
+When a switch does not stick:
+
+1. Restart Claude Code from a new shell.
+2. Check the current directory for `.claude/settings.local.json` and
+   `.claude/settings.json`.
+3. Inspect exported `ANTHROPIC_*` variables.
+4. Use Claude Code's configuration diagnostics to identify the source of the
+   effective value.
+5. Compare that result with the file preview in OcHub.
+
+## Choose the authentication header before the key
+
+These fields are not interchangeable:
+
+| Variable | Request behavior | Typical use |
+| --- | --- | --- |
+| `ANTHROPIC_AUTH_TOKEN` | `Authorization: Bearer ...` | Third-party gateway |
+| `ANTHROPIC_API_KEY` | `x-api-key: ...` | Anthropic API key |
+| Claude login cache | Account/subscription authentication | Official login |
+
+OcHub writes only the selected key variable and removes the other from the
+managed `env` object. Shell variables outside the file can still win. A 401
+after switching back to official login often means an exported API key is
+still active.
+
+## A custom Base URL still needs the Messages protocol
+
+`ANTHROPIC_BASE_URL` redirects Claude Code; it does not translate the request.
+A direct third-party endpoint must accept Anthropic Messages semantics. For a
+Chat Completions or Responses-only upstream, route through an OcHub model
+provider and let the gateway perform the supported conversion.
+
+Claude Code can discover gateway models from `/v1/models` when
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` is set. Discovery is off by
+default because a shared gateway credential might expose every model available
+to that credential. Enable it only when the catalog is safe for the current
+user.
+
+Some gateways implement Messages but reject Anthropic-specific beta headers or
+the `thinking` field:
+
+- `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` removes experimental beta fields.
+- `CLAUDE_CODE_DISABLE_THINKING=1` omits the thinking parameter.
+
+Use these as compatibility fallbacks after confirming the exact upstream error.
+They disable capabilities and should not mask an incorrect protocol selection.
+
+## Model aliases and context markers are capabilities
+
+Claude Code uses a fallback model plus role-specific mappings for Sonnet, Opus,
+Haiku, and Fable. A display name does not make an upstream model ID valid.
+Verify each actual ID before adding role mappings.
+
+OcHub's **1M context** option appends Claude Code's `[1M]` marker. Enable it only
+for a model and account that support extended context. Haiku does not accept
+this marker. A large `context_window` advertised by a relay is not proof that
+Claude Code's 1M variant is available.
+
+## `CLAUDE.md` is context, not policy
+
+Claude Code reads `CLAUDE.md`, not `AGENTS.md`, by default. To share one source
+with other agents, create a small `CLAUDE.md` containing:
+
+```md
+@AGENTS.md
+```
+
+Important details:
+
+- Keep each `CLAUDE.md` concise; Anthropic recommends targeting fewer than 200
+  lines.
+- Imports organize files but still load their content into context.
+- Conflicting parent, nested, local, and rule files are concatenated; the model
+  may not reliably resolve vague contradictions.
+- `--add-dir` grants directory access but does not load its instruction files
+  unless `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` is set.
+- After `/compact`, root instructions are re-injected. Nested instructions load
+  again when Claude reads a file in that subdirectory.
+
+Use `.claude/rules/` with path-scoped frontmatter for large monorepos instead of
+putting every convention in one always-loaded file.
+
+## MCP scope is not the same as settings scope
+
+Claude MCP servers have three common scopes:
+
+| Scope | Stored in | Shared |
+| --- | --- | --- |
+| Local | Project entry inside `~/.claude.json` | No |
+| Project | `.mcp.json` | Yes, through Git |
+| User | `~/.claude.json` | No, all local projects |
+
+For duplicate server names, local beats project, which beats user. Project MCP
+files should reference secrets with environment expansion rather than literal
+tokens. Claude prompts before trusting a project `.mcp.json`; use
+`claude mcp reset-project-choices` when a stale trust decision blocks a changed
+server.
+
+Use HTTP for new remote MCP servers where available; SSE transport is
+deprecated. For large MCP responses, remember that output consumes the active
+context and can hit Claude Code's output limits.
+
+## Permission, hook, and sandbox checks are separate
+
+Permission rules evaluate deny before ask and allow. A deny at a higher layer
+cannot be reopened by a lower layer. Hooks may also block or rewrite a tool
+call, while sandboxing limits what an already-approved shell command can reach.
+
+When a tool is unexpectedly blocked:
+
+1. Check `/hooks` to see the hook and source file.
+2. Inspect deny rules across managed, local, project, and user settings.
+3. Check sandbox filesystem and network restrictions.
+4. Change the narrowest responsible layer rather than adding a broad allow.
+
+## Official references
+
+- Anthropic [Claude Code settings](https://code.claude.com/docs/en/settings)
+- Anthropic [LLM gateway configuration](https://code.claude.com/docs/en/llm-gateway)
+- Anthropic [memory and CLAUDE.md](https://code.claude.com/docs/en/memory)
+- Anthropic [MCP configuration](https://code.claude.com/docs/en/mcp)
+- Anthropic [permissions](https://code.claude.com/docs/en/permissions)
+
+OcHub-specific field names, previews, protocol conversion, and configuration
+directory overrides describe the current OcHub implementation.
