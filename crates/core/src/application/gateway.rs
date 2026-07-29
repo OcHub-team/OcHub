@@ -29,6 +29,8 @@ pub struct GatewayStation {
     pub model_rules: Vec<GatewayModelRule>,
     #[serde(default)]
     pub reasoning: GatewayReasoningConfig,
+    #[serde(default)]
+    pub websocket_enabled: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -457,6 +459,7 @@ impl Application {
                 default_model: None,
                 model_rules: Vec::new(),
                 reasoning: GatewayReasoningConfig::default(),
+                websocket_enabled: false,
                 enabled: channel.enabled,
                 created_at: 0,
             };
@@ -535,6 +538,7 @@ impl Application {
             default_model: station.default_model.clone(),
             model_rules: station.model_rules.clone(),
             reasoning: station.reasoning.clone(),
+            websocket_enabled: station.websocket_enabled,
             enabled: station.enabled,
             created_at: if station.created_at == 0 {
                 chrono::Utc::now().timestamp()
@@ -781,6 +785,7 @@ fn station_from_route(route: GatewayRoute, channels: Vec<GatewayChannel>) -> Gat
         default_model: route.default_model,
         model_rules: route.model_rules,
         reasoning: route.reasoning,
+        websocket_enabled: route.websocket_enabled,
         enabled: route.enabled,
         created_at: route.created_at,
     }
@@ -800,6 +805,7 @@ fn station_route(station: &GatewayStation) -> GatewayRoute {
         default_model: station.default_model.clone(),
         model_rules: station.model_rules.clone(),
         reasoning: station.reasoning.clone(),
+        websocket_enabled: station.websocket_enabled,
         enabled: station.enabled,
         created_at: station.created_at,
     }

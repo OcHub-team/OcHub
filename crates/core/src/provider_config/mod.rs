@@ -409,6 +409,7 @@ pub fn station_managed_fields(app: AppType) -> &'static [&'static str] {
             "auth_mode",
             "api_key",
             "wire_api",
+            "supports_websockets",
             "disable_response_storage",
             "query_params",
             "http_headers",
@@ -428,6 +429,7 @@ pub fn inject_station_endpoint(
     key: &str,
     provider_id: &str,
     display_name: &str,
+    supports_websockets: bool,
 ) {
     let origin = base_url.trim().trim_end_matches('/');
     match app {
@@ -453,6 +455,7 @@ pub fn inject_station_endpoint(
             set_str(values, "auth_mode", "api_key");
             set_str(values, "api_key", key);
             set_str(values, "wire_api", "responses");
+            set_bool(values, "supports_websockets", supports_websockets);
             // The gateway does not implement the Responses store.
             set_bool(values, "disable_response_storage", true);
             set_str(values, "_legacy_env_key", "");

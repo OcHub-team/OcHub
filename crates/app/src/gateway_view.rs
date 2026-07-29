@@ -115,6 +115,7 @@ impl GatewayPageLoad {
                     default_model: None,
                     model_rules: Vec::new(),
                     reasoning: GatewayReasoningConfig::default(),
+                    websocket_enabled: false,
                     enabled: channel.enabled,
                     created_at: chrono::Utc::now().timestamp(),
                 },
@@ -285,6 +286,7 @@ struct StationEditor {
     low_budget: Entity<TextInput>,
     medium_budget: Entity<TextInput>,
     high_budget: Entity<TextInput>,
+    websocket_enabled: bool,
     max_budget: Entity<TextInput>,
     enabled: bool,
     show_advanced: bool,
@@ -570,6 +572,7 @@ impl GatewayView {
             default_model,
             channels,
             rules,
+            websocket_enabled,
             reasoning,
             enabled,
         ) = match station {
@@ -586,6 +589,7 @@ impl GatewayView {
                     station.route.default_model.clone().unwrap_or_default(),
                     station.channels.clone(),
                     station.route.model_rules.clone(),
+                    station.route.websocket_enabled,
                     station.route.reasoning.clone(),
                     station.route.enabled,
                 )
@@ -599,6 +603,7 @@ impl GatewayView {
                 String::new(),
                 Vec::new(),
                 Vec::new(),
+                false,
                 GatewayReasoningConfig::default(),
                 true,
             ),
@@ -693,7 +698,7 @@ impl GatewayView {
                 cx,
             ));
         }
-        let show_advanced = reasoning != GatewayReasoningConfig::default();
+        let show_advanced = reasoning != GatewayReasoningConfig::default() || websocket_enabled;
         self.editor = Some(StationEditor {
             route_id,
             created_at,
@@ -719,6 +724,7 @@ impl GatewayView {
                 .new(|cx| text_input(cx, "10000", &reasoning.medium_budget.to_string())),
             high_budget: cx.new(|cx| text_input(cx, "16000", &reasoning.high_budget.to_string())),
             max_budget: cx.new(|cx| text_input(cx, "32000", &reasoning.max_budget.to_string())),
+            websocket_enabled,
             enabled,
             show_advanced,
             reveal_key: false,
@@ -911,6 +917,13 @@ impl GatewayView {
         }
     }
 
+    fn toggle_editor_websocket(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.editor {
+            editor.websocket_enabled = !editor.websocket_enabled;
+            cx.notify();
+        }
+    }
+
     fn save_editor(&mut self, cx: &mut Context<Self>) {
         if self.mutation_in_flight {
             return;
@@ -1067,6 +1080,7 @@ impl GatewayView {
                 high_budget,
                 max_budget,
             },
+            websocket_enabled: editor.websocket_enabled,
             enabled: editor.enabled,
             created_at: editor.created_at,
         };
@@ -2773,6 +2787,52 @@ impl GatewayView {
             )
             .when(editor.show_advanced, |panel| {
                 panel
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_4()
+                            .px_3()
+                            .py_2()
+                            .rounded_lg()
+                            .bg(theme::surface())
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_color(theme::text())
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t(k::GATEWAY_EDITOR_WEBSOCKET_TITLE)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(theme::subtext())
+                                            .text_xs()
+                                            .child(t(k::GATEWAY_EDITOR_WEBSOCKET_DESCRIPTION)),
+                                    ),
+                            )
+                            .child(
+                                layout::toggle(editor.websocket_enabled)
+                                    .id("station-websocket-toggle")
+                                    .role(gpui::Role::Switch)
+                                    .aria_label(t(k::GATEWAY_EDITOR_WEBSOCKET_TITLE))
+                                    .aria_toggled(if editor.websocket_enabled {
+                                        gpui::Toggled::True
+                                    } else {
+                                        gpui::Toggled::False
+                                    })
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.toggle_editor_websocket(cx);
+                                    })),
+                            ),
+                    )
                     .child(section_title(
                         t(k::GATEWAY_EDITOR_REASONING_TITLE),
                         t(k::GATEWAY_EDITOR_REASONING_DESCRIPTION),

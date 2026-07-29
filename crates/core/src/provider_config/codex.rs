@@ -215,6 +215,13 @@ impl AppConfig for CodexConfig {
             .and_then(Item::as_table)
             .and_then(|t| t.get(&provider_id))
             .and_then(Item::as_table);
+        set_bool(
+            &mut values,
+            "supports_websockets",
+            ptbl.and_then(|table| table.get("supports_websockets"))
+                .and_then(Item::as_bool)
+                .unwrap_or(false),
+        );
 
         let read = |key: &str| -> String {
             ptbl.and_then(|t| t.get(key))
@@ -617,6 +624,11 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                 ptbl.insert("base_url", toml_edit::value(base_url));
             }
             ptbl.insert("wire_api", toml_edit::value("responses"));
+            if bool_val(values, "supports_websockets") {
+                ptbl.insert("supports_websockets", toml_edit::value(true));
+            } else {
+                ptbl.remove("supports_websockets");
+            }
 
             match str_val(values, "auth_mode") {
                 AUTH_OPENAI_LOGIN => {

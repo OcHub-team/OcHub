@@ -48,12 +48,13 @@ fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
         model_rules: serde_json::from_str(&model_rules).unwrap_or_default(),
         reasoning: serde_json::from_str(&reasoning)
             .unwrap_or_else(|_| GatewayReasoningConfig::default()),
-        enabled: row.get(8)?,
-        created_at: row.get(9)?,
+        websocket_enabled: row.get(8)?,
+        enabled: row.get(9)?,
+        created_at: row.get(10)?,
     })
 }
 
-const ROUTE_COLUMNS: &str = "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, enabled, created_at";
+const ROUTE_COLUMNS: &str = "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, websocket_enabled, enabled, created_at";
 
 impl Database {
     // -- settings blob ------------------------------------------------------
@@ -193,8 +194,8 @@ impl Database {
         tx.execute(
             "INSERT INTO gateway_routes (
                 id, name, website_url, app_type, channel_ids, default_model, model_rules,
-                reasoning, enabled, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                reasoning, websocket_enabled, enabled, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, website_url = excluded.website_url,
                 app_type = excluded.app_type,
@@ -202,6 +203,7 @@ impl Database {
                 default_model = excluded.default_model,
                 model_rules = excluded.model_rules,
                 reasoning = excluded.reasoning,
+                websocket_enabled = excluded.websocket_enabled,
                 enabled = excluded.enabled",
             params![
                 route.id,
@@ -212,6 +214,7 @@ impl Database {
                 route.default_model,
                 to_json_string(&route.model_rules)?,
                 to_json_string(&route.reasoning)?,
+                route.websocket_enabled,
                 route.enabled,
                 route.created_at,
             ],
@@ -330,8 +333,8 @@ impl Database {
         conn.execute(
             "INSERT INTO gateway_routes (
                 id, name, website_url, app_type, channel_ids, default_model, model_rules,
-                reasoning, enabled, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                reasoning, websocket_enabled, enabled, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, website_url = excluded.website_url,
                 app_type = excluded.app_type,
@@ -339,6 +342,7 @@ impl Database {
                 default_model = excluded.default_model,
                 model_rules = excluded.model_rules,
                 reasoning = excluded.reasoning,
+                websocket_enabled = excluded.websocket_enabled,
                 enabled = excluded.enabled",
             params![
                 route.id,
@@ -349,6 +353,7 @@ impl Database {
                 route.default_model,
                 to_json_string(&route.model_rules)?,
                 to_json_string(&route.reasoning)?,
+                route.websocket_enabled,
                 route.enabled,
                 route.created_at,
             ],
@@ -538,6 +543,7 @@ mod tests {
             default_model: None,
             model_rules: Vec::new(),
             reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
             enabled: true,
             created_at: 1,
         };
@@ -594,6 +600,7 @@ mod tests {
                 },
             ],
             reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
             enabled: true,
             created_at: 1,
         })
@@ -661,6 +668,7 @@ mod tests {
                 dialect: Some(Dialect::Responses),
             }],
             reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
             enabled: true,
             created_at: 1,
         };

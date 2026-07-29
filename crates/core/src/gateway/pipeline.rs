@@ -143,6 +143,18 @@ struct RequestConversionOptions<'a> {
     client_stream: bool,
 }
 
+pub(crate) struct PreparedWsCandidate {
+    pub channel: GatewayChannel,
+    pub frame: String,
+    pub client_model: String,
+    pub upstream_model: String,
+}
+
+pub(crate) struct WsPreparationError {
+    pub status: u16,
+    pub body: Value,
+}
+
 fn prepare_request(
     inlet: Dialect,
     channel: &GatewayChannel,
@@ -628,6 +640,46 @@ fn upstream_request(
     req.body(body.to_string())
 }
 
+fn count_tokens_request(
+    state: &GatewayState,
+    channel: &GatewayChannel,
+    body: &Value,
+) -> reqwest::RequestBuilder {
+    let url = format!(
+        "{}/count_tokens",
+        channel.endpoint_url().trim_end_matches('/')
+    );
+    let mut req = state
+        .http_client
+        .post(url)
+        .header("content-type", "application/json")
+        .header("x-api-key", &channel.api_key)
+        .header("anthropic-version", "2023-06-01");
+    for (name, value) in &channel.extra_headers {
+        req = req.header(name.as_str(), value.as_str());
+    }
+    req.body(body.to_string())
+}
+
+fn local_token_estimate(body: &Value) -> u64 {
+    fn collect_text_len(value: &Value, chars: &mut usize) {
+        match value {
+            Value::String(text) => *chars += text.len(),
+            Value::Array(values) => values
+                .iter()
+                .for_each(|value| collect_text_len(value, chars)),
+            Value::Object(values) => values
+                .values()
+                .for_each(|value| collect_text_len(value, chars)),
+            _ => {}
+        }
+    }
+
+    let mut chars = 0usize;
+    collect_text_len(body, &mut chars);
+    (chars / 4).max(1) as u64
+}
+
 /// Should this upstream failure trigger failover to the next candidate?
 fn failover_worthy(status: u16) -> bool {
     status == 401 || status == 403 || status == 408 || status == 429 || status >= 500
@@ -739,6 +791,453 @@ fn request_model_override<'a>(
             None => route.and_then(|route| route.default_model.as_deref()),
         },
     }
+}
+
+/// Count a Messages request with the same route and model policy as inference.
+///
+/// Exact counting is delegated to an eligible Messages upstream. The local
+/// character estimate is used only when the effective route has no Messages
+/// channel that can serve the mapped model.
+pub async fn count_tokens(
+    state: GatewayState,
+    raw_body: bytes::Bytes,
+    key: Option<GatewayKey>,
+) -> PipelineOutcome {
+    let body: Value = match serde_json::from_slice(&raw_body) {
+        Ok(value) => value,
+        Err(error) => {
+            return PipelineOutcome::Json {
+                status: 400,
+                body: error_body(Dialect::Messages, &format!("invalid JSON body: {error}")),
+            };
+        }
+    };
+    let route = match route_for_key(&state.db, key.as_ref()) {
+        Ok(route) => route,
+        Err(message) => {
+            return PipelineOutcome::Json {
+                status: 503,
+                body: error_body(Dialect::Messages, &message),
+            };
+        }
+    };
+    let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
+    let mut client_model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if client_model.is_empty() {
+        let default_model = model_policy
+            .and_then(|policy| {
+                policy
+                    .preferred_model
+                    .as_deref()
+                    .or(policy.fallback_model.as_deref())
+            })
+            .or_else(|| {
+                if model_policy.is_none() {
+                    route
+                        .as_ref()
+                        .and_then(|route| route.default_model.as_deref())
+                } else {
+                    None
+                }
+            });
+        if let Some(default_model) = default_model {
+            client_model = default_model.to_string();
+        }
+    }
+    if client_model.is_empty() {
+        return PipelineOutcome::Json {
+            status: 400,
+            body: error_body(Dialect::Messages, "missing model field"),
+        };
+    }
+
+    let channels = match state.db.get_gateway_channels() {
+        Ok(channels) => channels,
+        Err(error) => {
+            return PipelineOutcome::Json {
+                status: 500,
+                body: error_body(
+                    Dialect::Messages,
+                    &format!("channel lookup failed: {error}"),
+                ),
+            };
+        }
+    };
+    let rule = request_model_rule(model_policy, route.as_ref(), &client_model).cloned();
+    let route_model_override = request_model_override(rule.as_ref(), model_policy, route.as_ref());
+    let routing_model = route_model_override.unwrap_or(&client_model);
+    let messages_channels: Vec<GatewayChannel> = channels
+        .into_iter()
+        .filter(|channel| channel.dialect == Dialect::Messages)
+        .filter(|channel| {
+            route
+                .as_ref()
+                .is_none_or(|route| route.allows_channel(&channel.id))
+        })
+        .filter(|channel| {
+            rule.as_ref()
+                .and_then(|rule| rule.channel_id.as_deref())
+                .is_none_or(|channel_id| channel.id == channel_id)
+        })
+        .filter(|_| {
+            rule.as_ref()
+                .and_then(|rule| rule.dialect)
+                .is_none_or(|dialect| dialect == Dialect::Messages)
+        })
+        .collect();
+
+    let health = state.health.read().await.clone();
+    let unhealthy = |channel: &GatewayChannel| {
+        matches!(health.get(&channel.id), Some(ChannelHealth::Unhealthy(_)))
+    };
+    let mut candidates =
+        candidates_for_model_ranked(&messages_channels, routing_model, unhealthy, |_| 0, entropy);
+    if candidates.is_empty() {
+        candidates = candidates_for_model_ranked(
+            &messages_channels,
+            routing_model,
+            |_| false,
+            |_| 0,
+            entropy,
+        );
+    }
+    if candidates.is_empty() {
+        return PipelineOutcome::Json {
+            status: 200,
+            body: json!({ "input_tokens": local_token_estimate(&body) }),
+        };
+    }
+
+    let mut last_error = String::from("all Messages count_tokens channels failed");
+    for channel in candidates {
+        let upstream_model = route_model_override
+            .map(str::to_string)
+            .or_else(|| channel.model_override.clone())
+            .unwrap_or_else(|| client_model.clone());
+        let mut upstream_body = body.clone();
+        apply_reasoning_policy(
+            &mut upstream_body,
+            Dialect::Messages,
+            Dialect::Messages,
+            route.as_ref().map(|route| &route.reasoning),
+        );
+        if let Some(object) = upstream_body.as_object_mut() {
+            object.insert("model".into(), json!(upstream_model));
+        }
+        ochub_convert::signature::restore_thinking_blocks(&mut upstream_body, &*state.signatures);
+
+        let response = match count_tokens_request(&state, &channel, &upstream_body)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = format!("channel '{}' unreachable: {error}", channel.name);
+                mark_health(
+                    &state,
+                    &channel.id,
+                    ChannelHealth::Unhealthy(error.to_string()),
+                )
+                .await;
+                continue;
+            }
+        };
+        let status = response.status().as_u16();
+        let raw = match response.bytes().await {
+            Ok(raw) => raw,
+            Err(error) => {
+                last_error = format!(
+                    "channel '{}' count_tokens body read failed: {error}",
+                    channel.name
+                );
+                continue;
+            }
+        };
+        let parsed = serde_json::from_slice::<Value>(&raw).ok();
+        if status >= 400 {
+            let snippet: String = String::from_utf8_lossy(&raw).chars().take(300).collect();
+            last_error = format!("channel '{}' returned {status}: {snippet}", channel.name);
+            if status >= 500 {
+                mark_health(
+                    &state,
+                    &channel.id,
+                    ChannelHealth::Unhealthy(format!("HTTP {status}")),
+                )
+                .await;
+            }
+            if failover_worthy(status)
+                || model_unavailable_response(status, &String::from_utf8_lossy(&raw))
+            {
+                continue;
+            }
+            return PipelineOutcome::Json {
+                status,
+                body: parsed.unwrap_or_else(|| error_body(Dialect::Messages, &last_error)),
+            };
+        }
+        let Some(parsed) = parsed else {
+            last_error = format!(
+                "channel '{}' returned invalid count_tokens JSON",
+                channel.name
+            );
+            continue;
+        };
+        if parsed.get("input_tokens").and_then(Value::as_u64).is_none() {
+            last_error = format!(
+                "channel '{}' count_tokens response is missing input_tokens",
+                channel.name
+            );
+            continue;
+        }
+        mark_health(&state, &channel.id, ChannelHealth::Healthy).await;
+        return PipelineOutcome::Json {
+            status: 200,
+            body: parsed,
+        };
+    }
+
+    PipelineOutcome::Json {
+        status: 502,
+        body: error_body(Dialect::Messages, &last_error),
+    }
+}
+
+/// Resolve one downstream `response.create` frame to native Responses upstream
+/// candidates. WebSocket transport is deliberately Responses-only: unlike the
+/// HTTP pipeline, this path never converts to Messages/Chat or falls back to SSE.
+pub(crate) fn responses_ws_available(
+    state: &GatewayState,
+    key: Option<&GatewayKey>,
+) -> Result<bool, String> {
+    let Some(route) = route_for_key(&state.db, key)? else {
+        return Ok(false);
+    };
+    if !route.websocket_enabled {
+        return Ok(false);
+    }
+    let channels = state
+        .db
+        .get_gateway_channels()
+        .map_err(|error| format!("读取模型供应商接口失败: {error}"))?;
+    Ok(channels.iter().any(|channel| {
+        channel.enabled
+            && channel.dialect == Dialect::Responses
+            && route.allows_channel(&channel.id)
+    }))
+}
+
+pub(crate) async fn prepare_responses_ws_turn(
+    state: &GatewayState,
+    frame: &str,
+    key: Option<&GatewayKey>,
+) -> Result<Vec<PreparedWsCandidate>, WsPreparationError> {
+    let mut body: Value = serde_json::from_str(frame).map_err(|error| WsPreparationError {
+        status: 400,
+        body: error_body(Dialect::Responses, &format!("invalid JSON frame: {error}")),
+    })?;
+    let Some(object) = body.as_object_mut() else {
+        return Err(WsPreparationError {
+            status: 400,
+            body: error_body(Dialect::Responses, "request frame must be a JSON object"),
+        });
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("response.create") => {
+            object.remove("type");
+        }
+        None => {}
+        Some(event_type) => {
+            return Err(WsPreparationError {
+                status: 400,
+                body: error_body(
+                    Dialect::Responses,
+                    &format!("unsupported WebSocket event type '{event_type}'"),
+                ),
+            });
+        }
+    }
+
+    let route = route_for_key(&state.db, key).map_err(|message| WsPreparationError {
+        status: 503,
+        body: error_body(Dialect::Responses, &message),
+    })?;
+    if !route.as_ref().is_some_and(|route| route.websocket_enabled) {
+        return Err(WsPreparationError {
+            status: 426,
+            body: error_body(
+                Dialect::Responses,
+                "Responses WebSocket is not enabled for this model provider",
+            ),
+        });
+    }
+    let model_policy = key.and_then(|key| key.model_policy.as_ref());
+    let mut client_model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if client_model.is_empty() {
+        let default_model = model_policy
+            .and_then(|policy| {
+                policy
+                    .preferred_model
+                    .as_deref()
+                    .or(policy.fallback_model.as_deref())
+            })
+            .or_else(|| {
+                if model_policy.is_none() {
+                    route
+                        .as_ref()
+                        .and_then(|route| route.default_model.as_deref())
+                } else {
+                    None
+                }
+            });
+        if let Some(default_model) = default_model {
+            client_model = default_model.to_string();
+        }
+    }
+    if client_model.is_empty() {
+        return Err(WsPreparationError {
+            status: 400,
+            body: error_body(Dialect::Responses, "missing model field"),
+        });
+    }
+
+    let channels = state
+        .db
+        .get_gateway_channels()
+        .map_err(|error| WsPreparationError {
+            status: 500,
+            body: error_body(
+                Dialect::Responses,
+                &format!("channel lookup failed: {error}"),
+            ),
+        })?;
+    let rule = request_model_rule(model_policy, route.as_ref(), &client_model).cloned();
+    let route_model_override = request_model_override(rule.as_ref(), model_policy, route.as_ref());
+    let routing_model = route_model_override.unwrap_or(&client_model);
+    let responses_channels: Vec<GatewayChannel> = channels
+        .into_iter()
+        .filter(|channel| channel.dialect == Dialect::Responses)
+        .filter(|channel| {
+            route
+                .as_ref()
+                .is_none_or(|route| route.allows_channel(&channel.id))
+        })
+        .filter(|channel| {
+            rule.as_ref()
+                .and_then(|rule| rule.channel_id.as_deref())
+                .is_none_or(|channel_id| channel.id == channel_id)
+        })
+        .filter(|_| {
+            rule.as_ref()
+                .and_then(|rule| rule.dialect)
+                .is_none_or(|dialect| dialect == Dialect::Responses)
+        })
+        .collect();
+
+    let health = state.health.read().await.clone();
+    let unhealthy = |channel: &GatewayChannel| {
+        matches!(health.get(&channel.id), Some(ChannelHealth::Unhealthy(_)))
+    };
+    let mut candidates = candidates_for_model_ranked(
+        &responses_channels,
+        routing_model,
+        unhealthy,
+        |_| 0,
+        entropy,
+    );
+    if candidates.is_empty() {
+        candidates = candidates_for_model_ranked(
+            &responses_channels,
+            routing_model,
+            |_| false,
+            |_| 0,
+            entropy,
+        );
+    }
+    if candidates.is_empty() {
+        return Err(WsPreparationError {
+            status: 503,
+            body: error_body(
+                Dialect::Responses,
+                "Responses WebSocket requires a matching Responses upstream",
+            ),
+        });
+    }
+
+    let mut prepared_candidates = Vec::with_capacity(candidates.len());
+    for channel in candidates {
+        let prepared = prepare_request(
+            Dialect::Responses,
+            &channel,
+            &body,
+            RequestConversionOptions {
+                client_model: &client_model,
+                route_model_override,
+                reasoning: route.as_ref().map(|route| &route.reasoning),
+                client_stream: true,
+            },
+            &state.signatures,
+        )
+        .map_err(|error| WsPreparationError {
+            status: 400,
+            body: error_body(
+                Dialect::Responses,
+                &format!("request conversion failed: {error}"),
+            ),
+        })?;
+        let mut upstream_body = prepared.body;
+        if let Some(object) = upstream_body.as_object_mut() {
+            object.insert("type".into(), Value::String("response.create".into()));
+        }
+        prepared_candidates.push(PreparedWsCandidate {
+            channel,
+            frame: upstream_body.to_string(),
+            client_model: client_model.clone(),
+            upstream_model: prepared.upstream_model,
+        });
+    }
+    Ok(prepared_candidates)
+}
+
+pub(crate) async fn mark_ws_channel_health(
+    state: &GatewayState,
+    channel_id: &str,
+    health: ChannelHealth,
+) {
+    mark_health(state, channel_id, health).await;
+}
+
+pub(crate) fn record_responses_ws_usage(
+    state: &GatewayState,
+    candidate: &PreparedWsCandidate,
+    key: Option<&GatewayKey>,
+    completed_event: &Value,
+    latency_ms: u64,
+    first_token_ms: Option<u64>,
+) {
+    let Some(usage) = completed_event.pointer("/response/usage") else {
+        return;
+    };
+    let messages_usage = conv_usage::responses_usage_to_messages(usage);
+    log_usage(
+        &state.db,
+        &candidate.channel.id,
+        key,
+        &candidate.client_model,
+        &candidate.upstream_model,
+        token_usage_from_messages(&messages_usage, Some(candidate.upstream_model.clone())),
+        latency_ms,
+        first_token_ms,
+        200,
+        true,
+    );
 }
 
 /// Run one inference request through the gateway.
@@ -1210,6 +1709,177 @@ mod tests {
         assert_eq!(m["cache_read_input_tokens"], 30);
         assert_eq!(m["cache_creation_input_tokens"], 20);
         assert_eq!(m["output_tokens"], 7);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn count_tokens_prefers_messages_upstream_and_rewrites_model() {
+        let received = Arc::new(std::sync::Mutex::new(None::<(Value, String, String)>));
+        let received_for_handler = received.clone();
+        let app = axum::Router::new().route(
+            "/v1/messages/count_tokens",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+                    let received = received_for_handler.clone();
+                    async move {
+                        *received.lock().unwrap() = Some((
+                            body,
+                            headers
+                                .get("x-api-key")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or_default()
+                                .to_string(),
+                            headers
+                                .get("x-count-test")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or_default()
+                                .to_string(),
+                        ));
+                        axum::Json(json!({ "input_tokens": 37 }))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "messages".into(),
+            endpoint_id: Some("mock".into()),
+            name: "mock".into(),
+            dialect: Dialect::Messages,
+            base_url: format!("http://{addr}"),
+            api_key: "upstream-key".into(),
+            path_override: None,
+            models: vec![],
+            model_override: Some("upstream-model".into()),
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![("x-count-test".into(), "present".into())],
+            imported_from: None,
+        })
+        .unwrap();
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: Arc::new(RwLock::new(HashMap::new())),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        let request = json!({
+            "model": "client-model",
+            "messages": [{ "role": "user", "content": "hello" }]
+        });
+
+        let outcome = count_tokens(state, bytes::Bytes::from(request.to_string()), None).await;
+        let PipelineOutcome::Json { status, body } = outcome else {
+            panic!("expected JSON response");
+        };
+        assert_eq!(status, 200);
+        assert_eq!(body["input_tokens"], 37);
+
+        let (upstream_body, api_key, extra_header) = received.lock().unwrap().clone().unwrap();
+        assert_eq!(upstream_body["model"], "upstream-model");
+        assert!(upstream_body.get("stream").is_none());
+        assert_eq!(api_key, "upstream-key");
+        assert_eq!(extra_header, "present");
+    }
+
+    #[tokio::test]
+    async fn count_tokens_falls_back_only_without_messages_candidate() {
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "chat-only".into(),
+            endpoint_id: None,
+            name: "chat-only".into(),
+            dialect: Dialect::Chat,
+            base_url: "http://127.0.0.1:9".into(),
+            api_key: "unused".into(),
+            path_override: None,
+            models: vec![],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+            imported_from: None,
+        })
+        .unwrap();
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: Arc::new(RwLock::new(HashMap::new())),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        let request = json!({
+            "model": "m",
+            "messages": [{ "role": "user", "content": "abcdefgh" }]
+        });
+
+        let outcome = count_tokens(state, bytes::Bytes::from(request.to_string()), None).await;
+        let PipelineOutcome::Json { status, body } = outcome else {
+            panic!("expected JSON response");
+        };
+        assert_eq!(status, 200);
+        assert_eq!(body["input_tokens"], 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn count_tokens_does_not_hide_messages_upstream_failure_with_estimate() {
+        let app = axum::Router::new().route(
+            "/v1/messages/count_tokens",
+            axum::routing::post(|| async {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(json!({
+                        "type": "error",
+                        "error": { "type": "api_error", "message": "temporary failure" }
+                    })),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "messages".into(),
+            endpoint_id: None,
+            name: "messages".into(),
+            dialect: Dialect::Messages,
+            base_url: format!("http://{addr}"),
+            api_key: "key".into(),
+            path_override: None,
+            models: vec![],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+            imported_from: None,
+        })
+        .unwrap();
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: Arc::new(RwLock::new(HashMap::new())),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        let request = json!({
+            "model": "m",
+            "messages": [{ "role": "user", "content": "abcdefgh" }]
+        });
+
+        let outcome = count_tokens(state, bytes::Bytes::from(request.to_string()), None).await;
+        let PipelineOutcome::Json { status, body } = outcome else {
+            panic!("expected JSON response");
+        };
+        assert_eq!(status, 502, "{body}");
     }
 
     #[test]
@@ -1700,6 +2370,7 @@ mod tests {
                 low_budget: 7_777,
                 ..GatewayReasoningConfig::default()
             },
+            websocket_enabled: false,
             enabled: true,
             created_at: 1,
         })

@@ -147,6 +147,7 @@ struct StationGatewayInfo {
     route_id: String,
     origin: String,
     key: String,
+    supports_websockets: bool,
 }
 
 /// Which model-suggestion popover is open. Suggestions only exist in station
@@ -556,11 +557,20 @@ impl ProviderEditor {
                         &apply::gateway_key_label(app_type, &route_id),
                         Some(&route_id),
                     )?;
-                    Ok::<_, ochub_core::error::AppError>((route_id, origin, key.key))
+                    let supports_websockets = app
+                        .db
+                        .get_gateway_route_by_id(&route_id)?
+                        .is_some_and(|route| route.websocket_enabled);
+                    Ok::<_, ochub_core::error::AppError>((
+                        route_id,
+                        origin,
+                        key.key,
+                        supports_websockets,
+                    ))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let Ok((route_id, origin, key)) = result else {
+                let Ok((route_id, origin, key, supports_websockets)) = result else {
                     return;
                 };
                 // A station change raced us; that selection has its own task.
@@ -571,6 +581,7 @@ impl ProviderEditor {
                     route_id,
                     origin,
                     key,
+                    supports_websockets,
                 });
                 this.invalidate_preview(cx);
             })
@@ -1048,6 +1059,7 @@ impl ProviderEditor {
                 &info.key,
                 &channel_id,
                 &channel_name,
+                info.supports_websockets,
             );
         }
     }

@@ -288,6 +288,7 @@ impl Database {
                 default_model TEXT,
                 model_rules TEXT NOT NULL DEFAULT '[]',
                 reasoning TEXT NOT NULL DEFAULT '{}',
+                websocket_enabled INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL,
                 sort_index INTEGER
@@ -592,6 +593,23 @@ impl Database {
                             })?;
                         }
                         Self::set_user_version(conn, 9)?;
+                    }
+                    9 => {
+                        if Self::table_exists(conn, "gateway_routes")?
+                            && !Self::has_column(conn, "gateway_routes", "websocket_enabled")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE gateway_routes
+                                 ADD COLUMN websocket_enabled INTEGER NOT NULL DEFAULT 0",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!(
+                                    "为模型供应商添加 WebSocket 开关失败: {e}"
+                                ))
+                            })?;
+                        }
+                        Self::set_user_version(conn, 10)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -2255,5 +2273,43 @@ mod schema_migration_tests {
         assert_eq!(secret, "rd-existing");
         assert_eq!(route_id.as_deref(), Some("station:relay"));
         assert!(model_policy.is_none());
+    }
+
+    #[test]
+    fn migrates_v9_gateway_routes_with_websocket_disabled() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_routes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                website_url TEXT,
+                app_type TEXT,
+                channel_ids TEXT NOT NULL DEFAULT '[]',
+                default_model TEXT,
+                model_rules TEXT NOT NULL DEFAULT '[]',
+                reasoning TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                sort_index INTEGER
+             );
+             INSERT INTO gateway_routes (
+                id, name, channel_ids, enabled, created_at
+             ) VALUES ('station:relay', 'Relay', '[]', 1, 10);
+             PRAGMA user_version = 9;",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "gateway_routes", "websocket_enabled").unwrap());
+        let websocket_enabled: bool = conn
+            .query_row(
+                "SELECT websocket_enabled FROM gateway_routes WHERE id = 'station:relay'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!websocket_enabled);
     }
 }

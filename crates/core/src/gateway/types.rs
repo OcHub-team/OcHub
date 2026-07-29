@@ -338,6 +338,11 @@ pub struct GatewayRoute {
     pub model_rules: Vec<GatewayModelRule>,
     #[serde(default)]
     pub reasoning: GatewayReasoningConfig,
+    /// Advertise and accept native Responses WebSocket transport for clients
+    /// bound to this route. Disabled by default because the selected upstream
+    /// must itself support Responses over WebSocket end to end.
+    #[serde(default)]
+    pub websocket_enabled: bool,
     pub enabled: bool,
     pub created_at: i64,
 }
@@ -566,6 +571,7 @@ mod tests {
                 dialect: None,
             }],
             reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
             enabled: true,
             created_at: 1,
         };
@@ -590,6 +596,7 @@ mod tests {
                 dialect: Some(Dialect::Messages),
             }],
             reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
             enabled: true,
             created_at: 1,
         };

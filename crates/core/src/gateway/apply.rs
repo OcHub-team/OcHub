@@ -166,6 +166,7 @@ pub fn ensure_app_route(state: &AppState, app_type: AppType) -> Result<GatewayRo
         default_model: None,
         model_rules: Vec::new(),
         reasoning: GatewayReasoningConfig::default(),
+        websocket_enabled: false,
         enabled: true,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -196,6 +197,7 @@ pub fn ensure_station_route(
         default_model: None,
         model_rules: Vec::new(),
         reasoning: GatewayReasoningConfig::default(),
+        websocket_enabled: false,
         enabled: channel.enabled,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -351,6 +353,7 @@ fn gateway_settings_for(
         base_url,
         key,
         &policy,
+        false,
     )
 }
 
@@ -361,6 +364,7 @@ fn gateway_settings_for_provider(
     base_url: &str,
     key: &str,
     policy: &GatewayAppModelPolicy,
+    supports_websockets: bool,
 ) -> Result<serde_json::Value, AppError> {
     let models = policy.client_models();
     match app_type {
@@ -404,6 +408,10 @@ fn gateway_settings_for_provider(
             document["model_providers"][provider_id]["base_url"] =
                 toml_edit::value(format!("{base_url}/v1"));
             document["model_providers"][provider_id]["wire_api"] = toml_edit::value("responses");
+            if supports_websockets {
+                document["model_providers"][provider_id]["supports_websockets"] =
+                    toml_edit::value(true);
+            }
             document["model_providers"][provider_id]["experimental_bearer_token"] =
                 toml_edit::value(key);
             let toml = document.to_string();
@@ -689,6 +697,7 @@ pub fn build_station_channel(
         &key.key,
         &identity.id,
         &identity.name,
+        route.websocket_enabled,
     );
     validate_station_channel_models(app_type, &merged)?;
     if let Some(issue) = codec
@@ -756,6 +765,7 @@ pub fn refresh_station_channel_settings(
         &key.key,
         &provider.id,
         &provider.name,
+        route.websocket_enabled,
     );
     let encoded = codec.encode(&values, &provider.settings_config, provider.meta.as_ref());
     let mut settings = encoded.settings_config;
@@ -863,6 +873,7 @@ fn apply_route_to_app(
         base_url,
         &key.key,
         &config_policy,
+        route.websocket_enabled,
     )?;
     let mut meta = ProviderMeta {
         gateway_route_id: Some(route.id.clone()),
@@ -934,6 +945,7 @@ pub fn generic_client_info(state: &AppState, base_url: &str) -> Result<ApplyResu
                 default_model: None,
                 model_rules: Vec::new(),
                 reasoning: GatewayReasoningConfig::default(),
+                websocket_enabled: false,
                 enabled: true,
                 created_at: chrono::Utc::now().timestamp(),
             };
@@ -1059,6 +1071,7 @@ mod tests {
         assert!(toml.contains("model_provider = \"local-gateway\""));
         assert!(toml.contains("base_url = \"http://127.0.0.1:4180/v1\""));
         assert!(toml.contains("wire_api = \"responses\""));
+        assert!(!toml.contains("supports_websockets"));
         assert!(toml.contains("experimental_bearer_token = \"rd-k\""));
         assert!(!toml.contains("env_key"));
         assert_eq!(
@@ -1112,10 +1125,12 @@ mod tests {
             "http://127.0.0.1:4180",
             "rd-k",
             &policy,
+            true,
         )
         .unwrap();
         let codex_toml = codex["config"].as_str().unwrap();
         assert!(codex_toml.contains("model = \"gpt-5.6\""));
+        assert!(codex_toml.contains("supports_websockets = true"));
         assert_eq!(codex["modelCatalog"]["models"][0]["model"], "gpt-5.6");
         assert!(
             codex["modelCatalog"]["models"]
@@ -1132,6 +1147,7 @@ mod tests {
             "http://127.0.0.1:4180",
             "rd-k",
             &policy,
+            false,
         )
         .unwrap();
         assert_eq!(claude["env"]["ANTHROPIC_MODEL"], "gpt-5.6");
@@ -1207,6 +1223,7 @@ mod tests {
                 },
             ],
             reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
             enabled: true,
             created_at: 0,
         };
@@ -1272,6 +1289,7 @@ mod tests {
             default_model: Some("claude-haiku-4-5".into()),
             model_rules: Vec::new(),
             reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
             enabled: true,
             created_at: 2,
         };
@@ -1525,7 +1543,9 @@ mod tests {
     #[test]
     fn build_station_channel_codex_writes_toml_and_model_catalog() {
         let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
-        let route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
+        let mut route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
+        route.websocket_enabled = true;
+        state.db.upsert_gateway_route(&route).unwrap();
         let mut values = FormValues::new();
         provider_config::set_str(&mut values, "model", "gpt-5.5");
         provider_config::set_str(&mut values, "reasoning_effort", "high");
@@ -1548,6 +1568,7 @@ mod tests {
         assert!(toml.contains("model_provider = \"codex\""));
         assert!(toml.contains("base_url = \"http://127.0.0.1:4180/v1\""));
         assert!(toml.contains("wire_api = \"responses\""));
+        assert!(toml.contains("supports_websockets = true"));
         assert!(toml.contains("experimental_bearer_token = \"rd-"));
         assert!(toml.contains("disable_response_storage = true"));
         let catalog = provider.settings_config["modelCatalog"]["models"]

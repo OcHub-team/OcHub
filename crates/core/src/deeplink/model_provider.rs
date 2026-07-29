@@ -341,6 +341,7 @@ pub fn prepare_model_provider_import(
             })
             .collect(),
         reasoning: manifest.reasoning.clone().into(),
+        websocket_enabled: false,
         enabled: manifest.enabled,
         created_at: chrono::Utc::now().timestamp(),
     };

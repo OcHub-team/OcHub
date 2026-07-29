@@ -46,6 +46,7 @@ fs2.workspace = true
 futures.workspace = true
 tokio.workspace = true
 axum.workspace = true
+tokio-tungstenite.workspace = true
 bytes.workspace = true
 reqwest.workspace = true
 minisign-verify.workspace = true

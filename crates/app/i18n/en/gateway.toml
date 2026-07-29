@@ -44,6 +44,8 @@
 "gateway.deeplink.title" = "Import model provider"
 "gateway.editor.advanced.description" = "Thinking-parameter conversion rarely needs adjustment."
 "gateway.editor.advanced.title" = "Advanced settings"
+"gateway.editor.websocket.description" = "Enable only when the upstream natively supports Responses WebSocket. If unavailable, OcHub returns 426 so Codex can retry over HTTP/SSE."
+"gateway.editor.websocket.title" = "Responses WebSocket"
 "gateway.editor.api_key.placeholder" = "Model provider API key"
 "gateway.editor.base_url.label" = "API address"
 "gateway.editor.cancel" = "Cancel Esc"
