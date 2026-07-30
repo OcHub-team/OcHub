@@ -4654,17 +4654,20 @@ dependencies = [
 
 [[package]]
 name = "ochcli"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "clap_complete",
  "clap_mangen",
+ "fs2",
  "ochub-core",
+ "ochub-protocol",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -4675,12 +4678,14 @@ dependencies = [
 
 [[package]]
 name = "ochub-app"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "fs2",
  "futures",
+ "glob",
  "gpui",
  "gpui_platform",
  "image",
@@ -4688,12 +4693,15 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "ochub-core",
+ "ochub-protocol",
  "raw-window-handle",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "similar",
  "tempfile",
  "text",
+ "thiserror 2.0.19",
  "tokio",
  "toml 1.1.3+spec-1.1.0",
  "tray-icon",
@@ -4705,7 +4713,7 @@ dependencies = [
 
 [[package]]
 name = "ochub-convert"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "serde",
  "serde_json",
@@ -4715,7 +4723,7 @@ dependencies = [
 
 [[package]]
 name = "ochub-core"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "auto-launch",
@@ -4757,6 +4765,16 @@ dependencies = [
  "uuid",
  "winreg",
  "zip",
+]
+
+[[package]]
+name = "ochub-protocol"
+version = "0.4.20"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]

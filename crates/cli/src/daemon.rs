@@ -386,6 +386,7 @@ fn remote_command_allowed(command: &Command) -> bool {
             | Command::Paths
             | Command::Completion(_)
             | Command::Man(_)
+            | Command::Remote(_)
             | Command::Daemon(_)
             | Command::Gateway(crate::command::GatewayArgs {
                 command: GatewayCommand::Serve

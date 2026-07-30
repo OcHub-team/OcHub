@@ -10,7 +10,7 @@ use std::rc::Rc;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
 use gpui::{
     Anchor, AnyElement, App, ElementId, Entity, FontWeight, MouseButton, Rgba, ScrollHandle,
-    SharedString, Window, anchored, deferred, div, point, prelude::*, px,
+    SharedString, Window, WindowAppearance, anchored, deferred, div, point, prelude::*, px,
 };
 
 use crate::i18n::{Key, k, raw, t};
@@ -527,6 +527,12 @@ pub enum SelectDropdownEvent {
 
 type SelectDropdownHandler = Rc<dyn Fn(SelectDropdownEvent, &mut Window, &mut App)>;
 
+#[derive(Clone, Copy)]
+enum SelectDropdownChrome {
+    Field,
+    Sidebar(WindowAppearance),
+}
+
 /// A compact single-select trigger with a popover list. The owner keeps the
 /// open state so virtualized forms can unmount/remount the control without
 /// hiding mutable state inside a short-lived element.
@@ -543,6 +549,31 @@ pub fn select_dropdown(
         selected,
         open,
         None,
+        SelectDropdownChrome::Field,
+        Some(Rc::new(on_event)),
+    )
+}
+
+/// Sidebar counterpart of [`select_dropdown`].
+///
+/// The trigger deliberately has no field chrome: it rests directly on the
+/// sidebar backdrop and only gains the same hover/open highlight as navigation
+/// rows. The popover menu remains identical to the regular selector.
+pub fn select_dropdown_sidebar(
+    id: impl Into<SharedString>,
+    options: &[&str],
+    selected: usize,
+    open: bool,
+    appearance: WindowAppearance,
+    on_event: impl Fn(SelectDropdownEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    select_dropdown_control(
+        id.into(),
+        options,
+        selected,
+        open,
+        None,
+        SelectDropdownChrome::Sidebar(appearance),
         Some(Rc::new(on_event)),
     )
 }
@@ -566,6 +597,7 @@ pub fn select_dropdown_with_placeholder(
         selected,
         open,
         Some(placeholder.into()),
+        SelectDropdownChrome::Field,
         Some(Rc::new(on_event)),
     )
 }
@@ -576,7 +608,15 @@ pub fn select_dropdown_readonly(
     options: &[&str],
     selected: usize,
 ) -> gpui::Stateful<gpui::Div> {
-    select_dropdown_control(id.into(), options, selected, false, None, None)
+    select_dropdown_control(
+        id.into(),
+        options,
+        selected,
+        false,
+        None,
+        SelectDropdownChrome::Field,
+        None,
+    )
 }
 
 fn select_dropdown_control(
@@ -585,6 +625,7 @@ fn select_dropdown_control(
     selected: usize,
     open: bool,
     placeholder: Option<SharedString>,
+    chrome: SelectDropdownChrome,
     on_event: Option<SelectDropdownHandler>,
 ) -> gpui::Stateful<gpui::Div> {
     let has_selection = options.get(selected).is_some();
@@ -600,35 +641,59 @@ fn select_dropdown_control(
         .aria_expanded(open)
         .w_full()
         .min_w_0()
-        .h(px(38.))
-        .px_3()
         .flex()
         .flex_row()
         .items_center()
         .gap_2()
         .rounded_lg()
-        .border_1()
-        .border_color(if open {
-            theme::accent()
-        } else {
-            theme::border_strong()
-        })
-        .bg(theme::surface())
         .text_sm()
-        .text_color(if has_selection {
-            theme::text()
-        } else {
-            theme::muted()
-        })
         .child(div().min_w_0().flex_1().truncate().child(current))
         .child(icon(IconName::ChevronDown, theme::muted(), 13.));
+    trigger = match chrome {
+        SelectDropdownChrome::Field => trigger
+            .h(px(38.))
+            .px_3()
+            .border_1()
+            .border_color(if open {
+                theme::accent()
+            } else {
+                theme::border_strong()
+            })
+            .bg(theme::surface())
+            .text_color(if has_selection {
+                theme::text()
+            } else {
+                theme::muted()
+            }),
+        SelectDropdownChrome::Sidebar(appearance) => trigger
+            .h(px(34.))
+            .px_2()
+            .text_color(if has_selection {
+                theme::sidebar_glass_text(appearance)
+            } else {
+                theme::sidebar_glass_muted(appearance)
+            })
+            .when(open, |style| {
+                style
+                    .bg(theme::accent_soft())
+                    .font_weight(FontWeight::MEDIUM)
+            }),
+    };
     if let Some(handler) = on_event.clone() {
-        trigger = trigger
-            .cursor_pointer()
-            .hover(|style| style.border_color(theme::accent()).bg(theme::panel()))
-            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                handler(SelectDropdownEvent::Open(!open), window, cx)
-            });
+        trigger = trigger.cursor_pointer();
+        trigger = match chrome {
+            SelectDropdownChrome::Field => {
+                trigger.hover(|style| style.border_color(theme::accent()).bg(theme::panel()))
+            }
+            SelectDropdownChrome::Sidebar(_) => trigger.hover(|style| {
+                style
+                    .bg(theme::surface_hover())
+                    .text_color(theme::sidebar_text())
+            }),
+        };
+        trigger = trigger.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+            handler(SelectDropdownEvent::Open(!open), window, cx)
+        });
     }
 
     let mut control = div()

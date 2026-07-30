@@ -12,6 +12,7 @@ const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationState {
+    Planned,
     Prepared,
     Completed,
     Failed,
@@ -53,6 +54,61 @@ pub struct OperationHandle {
 }
 
 impl OperationHandle {
+    /// Record a reviewed-but-not-yet-applied remote plan.
+    ///
+    /// Planned records are intentionally non-blocking: only the later
+    /// transition to `Prepared` means a mutation may have started.
+    pub fn plan(
+        id: impl Into<String>,
+        operation: impl Into<String>,
+        actor: impl Into<String>,
+        input_summary: Value,
+    ) -> ApplicationResult<OperationRecord> {
+        let id = id.into();
+        validate_id(&id)?;
+        ensure_operations_dir()?;
+        let path = record_path(&id);
+        if path.exists() {
+            return Err(ApplicationError::InvalidInput(format!(
+                "operation {id} already exists"
+            )));
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = OperationRecord {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            id,
+            operation: operation.into(),
+            actor: actor.into(),
+            pid: std::process::id(),
+            state: OperationState::Planned,
+            started_at: now.clone(),
+            updated_at: now,
+            input_summary: redact_json(&input_summary),
+            result_summary: None,
+            error: None,
+            database_backup: None,
+            resolution: None,
+        };
+        write_record(&record)?;
+        Ok(record)
+    }
+
+    /// Atomically mark a previously journaled plan as prepared for mutation.
+    pub fn prepare(id: &str) -> ApplicationResult<Self> {
+        let mut record = inspect_operation(id)?;
+        if record.state != OperationState::Planned {
+            return Err(ApplicationError::InvalidInput(format!(
+                "operation {id} cannot be prepared from state {:?}",
+                record.state
+            )));
+        }
+        record.state = OperationState::Prepared;
+        record.pid = std::process::id();
+        record.updated_at = chrono::Utc::now().to_rfc3339();
+        write_record(&record)?;
+        Ok(Self { record })
+    }
+
     pub fn begin(
         operation: impl Into<String>,
         actor: impl Into<String>,
@@ -136,6 +192,25 @@ pub fn inspect_operation(id: &str) -> ApplicationResult<OperationRecord> {
         });
     }
     read_record_path(&path)
+}
+
+/// Add redacted audit fields before a planned remote operation is prepared.
+pub fn annotate_operation(id: &str, additional: Value) -> ApplicationResult<OperationRecord> {
+    let mut record = inspect_operation(id)?;
+    if record.state != OperationState::Planned {
+        return Err(ApplicationError::InvalidInput(format!(
+            "operation {id} cannot be annotated from state {:?}",
+            record.state
+        )));
+    }
+    let additional = redact_json(&additional);
+    match (&mut record.input_summary, additional) {
+        (Value::Object(existing), Value::Object(additional)) => existing.extend(additional),
+        (_, additional) => record.input_summary = additional,
+    }
+    record.updated_at = chrono::Utc::now().to_rfc3339();
+    write_record(&record)?;
+    Ok(record)
 }
 
 pub fn blocking_operations() -> ApplicationResult<Vec<OperationRecord>> {

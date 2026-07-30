@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -17,7 +17,7 @@ use crate::gateway::pipeline::GatewayState;
 use crate::gateway::types::{ChannelHealth, Dialect, GatewayConfig, GatewayEndpointTestResult};
 
 /// Externally visible gateway status.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayStatus {
     pub running: bool,

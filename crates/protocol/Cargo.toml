@@ -1,0 +1,20 @@
+[package]
+name = "ochub-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Versioned transport contract for OcHub Remote Nodes"
+
+[lib]
+name = "ochub_protocol"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true

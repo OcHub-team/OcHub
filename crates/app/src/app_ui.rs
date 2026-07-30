@@ -34,6 +34,7 @@ use crate::mcp_view::McpView;
 use crate::network_view::NetworkView;
 use crate::notifications::{NotificationHost, NotificationLevel, ToastSource};
 use crate::provider_editor::{EditorEvent, ProviderEditor};
+use crate::remote_view::RemoteView;
 use crate::sessions_view::SessionsView;
 use crate::settings_view::SettingsView;
 use crate::shell_menu;
@@ -134,6 +135,7 @@ enum Section {
     Settings,
     Gateway,
     Network,
+    Remote,
     /// Dev-only component gallery (visible with MS_GALLERY=1).
     Gallery,
 }
@@ -154,6 +156,7 @@ impl Section {
             "settings" | "setting" => Self::Settings,
             "gateway" => Self::Gateway,
             "network" | "proxy" => Self::Network,
+            "remote" | "nodes" => Self::Remote,
             "gallery" => Self::Gallery,
             "about" => Self::About,
             _ => Self::Providers,
@@ -207,6 +210,7 @@ pub struct AppRoot {
     settings_view: Entity<SettingsView>,
     gateway_view: Entity<GatewayView>,
     network_view: Entity<NetworkView>,
+    remote_view: Entity<RemoteView>,
     mcp_view: Entity<McpView>,
     skills_view: Entity<SkillsView>,
     usage_view: Entity<UsageView>,
@@ -227,6 +231,7 @@ pub struct AppRoot {
     /// dropped inside the provider list.
     provider_drag_state: Option<ProviderDragState>,
     sidebar_scroll_handle: ScrollHandle,
+    workspace_scope_open: bool,
     /// Version of an available update, once a check has found one. Marks 关于 in
     /// the sidebar, and unlike the one-shot toast it persists for as long as the
     /// update does — the dot is the affordance a user comes back to.
@@ -869,6 +874,7 @@ impl AppRoot {
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
         let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
         let network_view = cx.new(NetworkView::new);
+        let remote_view = cx.new(RemoteView::new);
         let mcp_view = cx.new(|cx| McpView::new(app.clone(), cx));
         let notifications = cx.new(|_| NotificationHost::new());
         let skills_view = cx.new(|cx| SkillsView::new(app.clone(), cx));
@@ -915,6 +921,7 @@ impl AppRoot {
             settings_view,
             gateway_view,
             network_view,
+            remote_view,
             mcp_view,
             skills_view,
             usage_view,
@@ -928,6 +935,7 @@ impl AppRoot {
             provider_list_state: ListState::new(0, ListAlignment::Top, px(512.)),
             provider_drag_state: None,
             sidebar_scroll_handle: ScrollHandle::new(),
+            workspace_scope_open: false,
             available_update: {
                 let settings = ochub_core::settings::get_settings();
                 Self::seeded_badge(settings.auto_update_check, settings.skipped_update_version)
@@ -1003,6 +1011,7 @@ impl AppRoot {
             Section::Skills => this.skills_view.update(cx, |v, cx| v.reload(cx)),
             Section::Gateway => this.gateway_view.update(cx, |v, cx| v.reload(cx)),
             Section::Network => this.network_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Remote => this.remote_view.update(cx, |v, cx| v.reload(cx)),
             Section::Usage => this.usage_view.update(cx, |v, cx| v.activate(cx)),
             Section::Sessions => this.sessions_view.update(cx, |v, cx| v.reload(cx)),
             Section::Tools => this.tools_view.update(cx, |v, cx| v.reload(cx)),
@@ -1050,6 +1059,7 @@ impl AppRoot {
         Self::observe_toasts(&self.settings_view, &self.notifications, cx);
         Self::observe_toasts(&self.gateway_view, &self.notifications, cx);
         Self::observe_toasts(&self.network_view, &self.notifications, cx);
+        Self::observe_toasts(&self.remote_view, &self.notifications, cx);
         Self::observe_toasts(&self.mcp_view, &self.notifications, cx);
         Self::observe_toasts(&self.skills_view, &self.notifications, cx);
         Self::observe_toasts(&self.usage_view, &self.notifications, cx);
@@ -1062,6 +1072,7 @@ impl AppRoot {
         Self::forward_toast(&self.settings_view, &self.notifications, cx);
         Self::forward_toast(&self.gateway_view, &self.notifications, cx);
         Self::forward_toast(&self.network_view, &self.notifications, cx);
+        Self::forward_toast(&self.remote_view, &self.notifications, cx);
         Self::forward_toast(&self.mcp_view, &self.notifications, cx);
         Self::forward_toast(&self.skills_view, &self.notifications, cx);
         Self::forward_toast(&self.usage_view, &self.notifications, cx);
@@ -1076,6 +1087,7 @@ impl AppRoot {
             Section::Settings => Self::forward_toast(&self.settings_view, &self.notifications, cx),
             Section::Gateway => Self::forward_toast(&self.gateway_view, &self.notifications, cx),
             Section::Network => Self::forward_toast(&self.network_view, &self.notifications, cx),
+            Section::Remote => Self::forward_toast(&self.remote_view, &self.notifications, cx),
             Section::Mcp => Self::forward_toast(&self.mcp_view, &self.notifications, cx),
             Section::Skills => Self::forward_toast(&self.skills_view, &self.notifications, cx),
             Section::Usage => Self::forward_toast(&self.usage_view, &self.notifications, cx),
@@ -1186,6 +1198,7 @@ impl AppRoot {
             Section::Settings => IconName::Settings,
             Section::Gateway => IconName::Cloud,
             Section::Network => IconName::Globe,
+            Section::Remote => IconName::Desktop,
             Section::Providers => IconName::Cloud,
             Section::Gallery => IconName::Layers,
         }
@@ -1318,6 +1331,7 @@ impl AppRoot {
                 Section::Skills => self.skills_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Gateway => self.gateway_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Network => self.network_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Remote => self.remote_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Usage => self.usage_view.update(cx, |v, cx| v.activate(cx)),
                 Section::Sessions => self.sessions_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Tools => self.tools_view.update(cx, |v, cx| v.reload(cx)),
@@ -1327,6 +1341,16 @@ impl AppRoot {
             self.flush_section_toast(section, cx);
             cx.notify();
         }
+    }
+
+    fn select_local_scope(&mut self, cx: &mut Context<Self>) {
+        self.select_section(Section::Providers, cx);
+    }
+
+    fn select_remote_scope(&mut self, id: String, cx: &mut Context<Self>) {
+        self.select_section(Section::Remote, cx);
+        self.remote_view
+            .update(cx, |view, cx| view.activate_scope(id, cx));
     }
 
     fn do_switch(&mut self, id: String, cx: &mut Context<Self>) {
@@ -2734,6 +2758,61 @@ impl AppRoot {
             }))
     }
 
+    fn render_workspace_scope(
+        &self,
+        appearance: WindowAppearance,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let remote = self.remote_view.read(cx);
+        let items = remote.scope_items();
+        let active_remote = remote.active_scope_id().map(str::to_string);
+        let mut labels = vec![t(k::SHELL_SIDEBAR_SCOPE_LOCAL).to_string()];
+        let mut targets = vec![None];
+        labels.extend(
+            items
+                .iter()
+                .map(|item| format!("{} · {}", item.label, item.target)),
+        );
+        targets.extend(items.iter().map(|item| Some(item.id.clone())));
+        let selected = if self.section == Section::Remote {
+            active_remote
+                .as_deref()
+                .and_then(|active| items.iter().position(|item| item.id == active))
+                .map(|index| index + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
+        let open = self.workspace_scope_open;
+        let on_event = cx.listener(
+            move |this, event: &components::SelectDropdownEvent, _window, cx| match *event {
+                components::SelectDropdownEvent::Open(open) => {
+                    this.workspace_scope_open = open;
+                    cx.notify();
+                }
+                components::SelectDropdownEvent::Select(index) => {
+                    this.workspace_scope_open = false;
+                    match targets.get(index).cloned().flatten() {
+                        Some(id) => this.select_remote_scope(id, cx),
+                        None => this.select_local_scope(cx),
+                    }
+                }
+            },
+        );
+        div()
+            .w_full()
+            .px_2()
+            .child(components::select_dropdown_sidebar(
+                "workspace-scope",
+                &label_refs,
+                selected,
+                open,
+                appearance,
+                move |event, window, cx| on_event(&event, window, cx),
+            ))
+    }
+
     fn render_sidebar_group(label: &'static str, appearance: WindowAppearance) -> impl IntoElement {
         div()
             .mt_4()
@@ -2792,6 +2871,11 @@ impl AppRoot {
                 self.sidebar_scroll_handle.clone(),
             ))
             .pb_4()
+            .child(Self::render_sidebar_group(
+                raw(k::SHELL_SIDEBAR_GROUP_WORKSPACE),
+                appearance,
+            ))
+            .child(self.render_workspace_scope(appearance, cx))
             .child(Self::render_sidebar_group(
                 raw(k::SHELL_SIDEBAR_GROUP_APPS),
                 appearance,
@@ -2871,6 +2955,13 @@ impl AppRoot {
                         "nav-network-proxy",
                         raw(k::SHELL_SIDEBAR_NAV_PROXY),
                         Section::Network,
+                        appearance,
+                        cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-remote-nodes",
+                        raw(k::SHELL_SIDEBAR_NAV_REMOTE),
+                        Section::Remote,
                         appearance,
                         cx,
                     )),
@@ -3505,6 +3596,7 @@ impl AppRoot {
             Section::Settings => self.settings_view.clone().into_any_element(),
             Section::Gateway => self.gateway_view.clone().into_any_element(),
             Section::Network => self.network_view.clone().into_any_element(),
+            Section::Remote => self.remote_view.clone().into_any_element(),
             Section::Mcp => self.mcp_view.clone().into_any_element(),
             Section::Skills => self.skills_view.clone().into_any_element(),
             Section::Usage => self.usage_view.clone().into_any_element(),

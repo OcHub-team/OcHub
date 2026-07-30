@@ -1,18 +1,18 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::gateway::GatewayStatus;
 use crate::services::provider::LiveDrift;
 use crate::services::usage_stats::ProviderLimitStatus;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AppModeDto {
     Switch,
     Additive,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSummary {
     pub id: String,
@@ -27,7 +27,7 @@ pub struct AppSummary {
     pub user_manifest: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusSummary {
     pub version: String,
@@ -38,7 +38,7 @@ pub struct StatusSummary {
     pub gateway: GatewayStatus,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderListItem {
     pub id: String,
@@ -52,14 +52,14 @@ pub struct ProviderListItem {
     pub base_url: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderDetails {
     pub app: String,
     pub provider: crate::Provider,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSwitchPlan {
     pub app: String,
@@ -142,7 +142,7 @@ pub struct OperationOutcome<T> {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorCheck {
     pub id: String,
@@ -152,7 +152,7 @@ pub struct DoctorCheck {
     pub details: Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorReport {
     pub healthy: bool,

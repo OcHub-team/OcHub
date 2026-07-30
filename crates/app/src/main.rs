@@ -25,6 +25,8 @@ mod mcp_view;
 mod network_view;
 mod notifications;
 mod provider_editor;
+mod remote;
+mod remote_view;
 mod scrollbar;
 mod sessions_view;
 mod settings_view;

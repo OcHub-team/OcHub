@@ -14,14 +14,17 @@ path = "src/main.rs"
 
 [dependencies]
 ochub-core.workspace = true
+ochub-protocol.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 clap_mangen.workspace = true
+fs2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

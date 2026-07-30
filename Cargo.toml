@@ -5,10 +5,11 @@ members = [
     "crates/app",
     "crates/convert",
     "crates/cli",
+    "crates/protocol",
 ]
 
 [workspace.package]
-version = "0.4.19"
+version = "0.4.20"
 edition = "2024"
 license = "GPL-3.0-or-later"
 authors = ["OcHub contributors"]
@@ -33,7 +34,7 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Async runtime + http
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "fs", "process", "io-util", "signal", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "fs", "process", "io-util", "io-std", "signal", "net"] }
 futures = "0.3"
 bytes = "1.5"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "stream", "blocking", "socks"] }
@@ -59,6 +60,7 @@ flate2 = "1"
 zip = "8.6"
 tempfile = "3"
 fs2 = "0.4"
+glob = "0.3"
 once_cell = "1.21"
 sys-locale = "0.3"
 rquickjs = { version = "0.12", features = ["array-buffer", "classes"] }
@@ -74,6 +76,7 @@ clap_mangen = "0.2"
 # Internal crates
 ochub-core = { path = "crates/core" }
 ochub-convert = { path = "crates/convert" }
+ochub-protocol = { path = "crates/protocol" }
 
 # GPUI is pinned to a Zed commit instead of crates.io because the published
 # crate lags the APIs used by OcHub.

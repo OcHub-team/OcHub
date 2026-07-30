@@ -76,6 +76,18 @@ pub async fn shutdown(socket: Option<&Path>, timeout_secs: u64) -> Result<IpcRes
     request(socket, timeout_secs, "shutdown", Value::Null).await
 }
 
+/// Execute one already-tokenized CLI request through the active local owner.
+///
+/// Remote Nodes maps its typed, allowlisted protocol methods to this internal
+/// adapter. No shell parsing is involved.
+pub async fn execute_argv(
+    socket: Option<&Path>,
+    timeout_secs: u64,
+    argv: Vec<String>,
+) -> Result<IpcResponse, CliError> {
+    request(socket, timeout_secs, "execute", json!({ "argv": argv })).await
+}
+
 pub fn owner_status() -> Result<Option<OwnerRecord>, CliError> {
     Ok(runtime::active_owner()?)
 }

@@ -94,6 +94,10 @@ pub struct Cli {
     #[arg(long, global = true, value_parser = parse_trace_id)]
     pub trace_id: Option<String>,
 
+    /// Resume a plan already recorded by the Remote Nodes bridge.
+    #[arg(long, global = true, hide = true, value_parser = parse_operation_id)]
+    pub remote_operation_id: Option<String>,
+
     /// Increase diagnostic logging.
     #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
@@ -131,6 +135,12 @@ fn parse_trace_id(raw: &str) -> Result<String, String> {
         );
     }
     Ok(value.to_string())
+}
+
+fn parse_operation_id(raw: &str) -> Result<String, String> {
+    uuid::Uuid::parse_str(raw)
+        .map(|id| id.to_string())
+        .map_err(|_| "remote operation id must be a UUID".to_string())
 }
 
 fn parse_duration(raw: &str) -> Result<Duration, String> {
@@ -241,6 +251,8 @@ pub enum Command {
     Gateway(GatewayArgs),
     /// Manage user-facing relay stations.
     Station(StationArgs),
+    /// Control this OcHub node over an authenticated SSH stdio channel.
+    Remote(RemoteArgs),
     /// Run and manage the local OcHub daemon.
     Daemon(DaemonArgs),
     /// Generate shell completion.
@@ -1809,6 +1821,38 @@ pub enum StationCommand {
 pub struct DaemonArgs {
     #[command(subcommand)]
     pub command: DaemonCommand,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteArgs {
+    #[command(subcommand)]
+    pub command: RemoteCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RemoteCommand {
+    /// Print node identity, protocol versions, runtime state, and capabilities.
+    Probe,
+    /// Serve the Remote Nodes protocol on stdin/stdout.
+    Serve {
+        /// Confirm that protocol frames use stdin/stdout.
+        #[arg(long)]
+        stdio: bool,
+        /// Own the data directory only for this SSH session instead of starting a daemon.
+        #[arg(long)]
+        ephemeral: bool,
+    },
+    /// Inspect the device-local remote access policy.
+    Policy {
+        #[command(subcommand)]
+        command: RemotePolicyCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RemotePolicyCommand {
+    Show,
+    Validate,
 }
 
 #[derive(Debug, Subcommand)]

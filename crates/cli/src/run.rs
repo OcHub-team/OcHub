@@ -73,6 +73,9 @@ pub async fn execute(cli: Cli, output: &Output) -> Result<(), CliError> {
         Command::Daemon(args) => {
             return crate::daemon::execute(&cli, &args.command, output).await;
         }
+        Command::Remote(args) => {
+            return crate::remote::execute(&cli, &args.command, output).await;
+        }
         Command::Paths => {
             ochub_core::app_store::refresh_app_config_dir_override();
             return output.success(
@@ -179,18 +182,29 @@ pub async fn execute_with_application(
             ))
             .into());
         }
-        let actor = ochub_core::runtime::active_owner()?
-            .filter(|owner| owner.pid == std::process::id())
-            .map(|_| "owner")
-            .unwrap_or("cli");
-        journal = Some(ochub_core::runtime::journal::OperationHandle::begin(
-            operation,
-            actor,
-            json!({
-                "operation": operation,
-                "dataDir": ochub_core::paths::get_app_config_dir()
-            }),
-        )?);
+        journal = Some(if let Some(id) = cli.remote_operation_id.as_deref() {
+            let planned = ochub_core::runtime::journal::inspect_operation(id)?;
+            if planned.operation != operation || planned.actor != "remote-desktop" {
+                return Err(ApplicationError::InvalidInput(format!(
+                    "remote operation {id} does not match mutation {operation}"
+                ))
+                .into());
+            }
+            ochub_core::runtime::journal::OperationHandle::prepare(id)?
+        } else {
+            let actor = ochub_core::runtime::active_owner()?
+                .filter(|owner| owner.pid == std::process::id())
+                .map(|_| "owner")
+                .unwrap_or("cli");
+            ochub_core::runtime::journal::OperationHandle::begin(
+                operation,
+                actor,
+                json!({
+                    "operation": operation,
+                    "dataDir": ochub_core::paths::get_app_config_dir()
+                }),
+            )?
+        });
     }
 
     let result = dispatch(application, cli, output).await;
@@ -255,6 +269,7 @@ async fn dispatch(application: &Application, cli: &Cli, output: &Output) -> Resu
         | Command::Paths
         | Command::Completion(_)
         | Command::Man(_)
+        | Command::Remote(_)
         | Command::Daemon(_) => Ok(()),
     }
 }
