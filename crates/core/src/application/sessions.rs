@@ -1,9 +1,12 @@
 use crate::application::{Application, ApplicationError, ApplicationResult};
+use crate::session_index::{IndexStats, MaintenanceOutcome, SearchHit, SessionIndex, SyncOutcome};
 use crate::session_manager::{
     DeleteSessionOutcome, DeleteSessionRequest, SessionMessage, SessionMeta,
     ToolInstallationReport, ToolVersion,
 };
 use crate::{AppId, AppType};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 impl Application {
     pub fn list_sessions(
@@ -128,6 +131,71 @@ impl Application {
                 details,
             })
         }
+    }
+
+    pub fn session_index_status(&self) -> ApplicationResult<Option<IndexStats>> {
+        if !crate::session_index::index_exists() {
+            return Ok(None);
+        }
+        SessionIndex::open()
+            .and_then(|index| index.stats())
+            .map(Some)
+            .map_err(ApplicationError::OperationFailed)
+    }
+
+    pub fn search_session_index(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ApplicationResult<Vec<SearchHit>> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(ApplicationError::InvalidInput(
+                "session search query cannot be empty".to_string(),
+            ));
+        }
+        if !(1..=10_000).contains(&limit) {
+            return Err(ApplicationError::InvalidInput(
+                "session search limit must be between 1 and 10000".to_string(),
+            ));
+        }
+        SessionIndex::open()
+            .and_then(|index| index.search(query, limit))
+            .map_err(ApplicationError::OperationFailed)
+    }
+
+    pub fn sync_session_index(&self) -> ApplicationResult<SyncOutcome> {
+        let sessions = self.list_sessions(&[], None)?;
+        let cancel = AtomicBool::new(false);
+        let index = SessionIndex::open().map_err(ApplicationError::OperationFailed)?;
+        let outcome = index
+            .sync(&sessions, |_done, _total| {}, &cancel)
+            .map_err(ApplicationError::OperationFailed)?;
+        if crate::settings::get_settings().session_index_auto_reclaim
+            && !outcome.cancelled
+            && index
+                .needs_maintenance()
+                .map_err(ApplicationError::OperationFailed)?
+        {
+            index
+                .maintain(Duration::from_secs(20))
+                .map_err(ApplicationError::OperationFailed)?;
+        }
+        Ok(outcome)
+    }
+
+    pub fn maintain_session_index(
+        &self,
+        budget: Duration,
+    ) -> ApplicationResult<MaintenanceOutcome> {
+        SessionIndex::open()
+            .and_then(|index| index.maintain(budget))
+            .map_err(ApplicationError::OperationFailed)
+    }
+
+    pub fn delete_session_index(&self) -> ApplicationResult<serde_json::Value> {
+        SessionIndex::delete_files(&crate::session_index::default_index_path());
+        Ok(serde_json::json!({ "deleted": true }))
     }
 
     pub async fn tool_versions(

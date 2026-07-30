@@ -13,8 +13,10 @@
 //! mechanical churn across three locale catalogs for no behavioural gain.
 
 use std::process::Command;
+use std::sync::Arc;
 
 use gpui::{AnyElement, Context, ScrollHandle, SharedString, Window, div, img, prelude::*, px};
+use ochub_core::AppState;
 use ochub_core::services::UpdateCheckResult;
 use ochub_core::settings::{self, AppSettings};
 
@@ -22,6 +24,7 @@ use crate::components::ButtonTone;
 use crate::i18n::{k, raw, t};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::tf;
 use crate::theme;
 
@@ -56,6 +59,10 @@ impl UpdateState {
 }
 
 pub struct AboutView {
+    backend: WorkspaceBackend,
+    workspace_available: bool,
+    workspace_remote: bool,
+    workspace_version: Option<String>,
     /// Display cache, re-read after every write so the switch on screen always
     /// shows what is on disk.
     settings: AppSettings,
@@ -66,17 +73,23 @@ pub struct AboutView {
     scroll: ScrollHandle,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
+    workspace_generation: u64,
 }
 
 impl AboutView {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(app: Arc<AppState>, _cx: &mut Context<Self>) -> Self {
         Self {
+            backend: WorkspaceBackend::local(app),
+            workspace_available: true,
+            workspace_remote: false,
+            workspace_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             settings: settings::get_settings(),
             update: UpdateState::default(),
             busy: false,
             scroll: ScrollHandle::new(),
             status: None,
             status_level: None,
+            workspace_generation: 0,
         }
     }
 
@@ -84,7 +97,49 @@ impl AboutView {
     /// view, and the auto-update flag is reachable from the settings search).
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.settings = settings::get_settings();
+        self.load_workspace_status(cx);
         cx.notify();
+    }
+
+    pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.workspace_remote = backend.is_remote();
+        self.backend = backend;
+        self.workspace_available = true;
+        self.update = UpdateState::default();
+        self.workspace_version = None;
+        self.load_workspace_status(cx);
+    }
+
+    pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.workspace_remote = true;
+        self.workspace_available = false;
+        self.workspace_version = None;
+        self.update = UpdateState::default();
+        cx.notify();
+    }
+
+    fn load_workspace_status(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move { backend.update_status().await }).await;
+            this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
+                if let Ok(status) = result {
+                    this.workspace_version = status["currentVersion"].as_str().map(str::to_string);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn set_status(
@@ -172,7 +227,7 @@ impl AboutView {
             } else {
                 ButtonTone::Neutral
             },
-            self.update.checking || self.update.installing,
+            self.update.checking || self.update.installing || !self.workspace_available,
             move |window, cx| activate(&(), window, cx),
         )
         .into_any_element()
@@ -287,7 +342,10 @@ impl AboutView {
             )),
             None => SharedString::from(tf!(
                 k::SETTINGS_ABOUT_UPDATE_CURRENT,
-                version = env!("CARGO_PKG_VERSION")
+                version = self
+                    .workspace_version
+                    .as_deref()
+                    .unwrap_or(raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION))
             )),
         }
     }
@@ -301,18 +359,25 @@ impl AboutView {
     }
 
     fn check_updates(&mut self, cx: &mut Context<Self>) {
-        if self.update.checking {
+        if self.update.checking || !self.workspace_available {
             return;
         }
         self.update.checking = true;
         self.set_status(NotificationLevel::Info, t(k::SETTINGS_UPDATE_CHECKING), cx);
 
-        let task = cx.background_spawn(crate::core_async::run(
-            ochub_core::services::update::check_for_updates(None),
-        ));
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
+        let task = cx.background_spawn(crate::core_async::run(async move {
+            let value = backend.check_for_update().await?;
+            serde_json::from_value::<UpdateCheckResult>(value)
+                .map_err(crate::remote::WorkspaceBackendError::from)
+        }));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.update.checking = false;
                 match result {
                     Ok(info) => {
@@ -365,6 +430,10 @@ impl AboutView {
     /// gateway port would be released late enough to race the relaunch.
     fn install_update(&mut self, cx: &mut Context<Self>) {
         if self.update.installing {
+            return;
+        }
+        if self.workspace_remote {
+            self.install_remote_update(cx);
             return;
         }
         self.update.installing = true;
@@ -443,6 +512,63 @@ impl AboutView {
                     Err(err) => this.set_status(
                         NotificationLevel::Error,
                         tf!(k::SETTINGS_UPDATE_INSTALL_FAILED, error = err),
+                        cx,
+                    ),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn install_remote_update(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available || !self.workspace_remote {
+            return;
+        }
+        self.update.installing = true;
+        self.update.progress = None;
+        self.set_status(
+            NotificationLevel::Info,
+            t(k::SETTINGS_UPDATE_INSTALLING),
+            cx,
+        );
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
+        cx.spawn(async move |this, cx| {
+            let result =
+                crate::core_async::run(async move { backend.install_update().await }).await;
+            this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
+                this.update.installing = false;
+                match result {
+                    Ok(value) if value["installed"].as_bool() == Some(true) => {
+                        let version = value["version"]
+                            .as_str()
+                            .unwrap_or(raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION));
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::SETTINGS_UPDATE_INSTALLED, version = version),
+                            cx,
+                        );
+                        this.workspace_version = Some(version.to_string());
+                    }
+                    Ok(_) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::SETTINGS_UPDATE_UP_TO_DATE,
+                            current = this
+                                .workspace_version
+                                .as_deref()
+                                .unwrap_or(raw(k::SETTINGS_UPDATE_UNKNOWN_VERSION))
+                        ),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_UPDATE_INSTALL_FAILED, error = error),
                         cx,
                     ),
                 }

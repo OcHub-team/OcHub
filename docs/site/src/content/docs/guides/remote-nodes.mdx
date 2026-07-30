@@ -42,21 +42,34 @@ Remote Nodes currently supports:
 | --- | --- |
 | Node | Live status, hostname, OS, architecture, node ID, `ochcli` version, owner process, and enabled apps |
 | Connections | List existing remote connections, show the current one, preview a switch, and apply it |
-| Gateway | Read status and start or stop the remote Gateway |
+| Providers | List, create, edit, delete, duplicate, reorder, switch, and run endpoint/network diagnostics in the normal app page |
+| MCP | List, create/edit, delete, toggle per app, import, and synchronize servers |
+| Skills | List, search, discover, install, uninstall, update, toggle per app, and manage repositories |
+| Usage | Summary, trends, provider/model breakdowns, request logs/details, source synchronization, and pricing configuration |
+| Sessions | List sessions, open full transcripts, search metadata and content, build/maintain/delete the full-text index, and delete sessions |
+| Network and settings | Read, change, and test the remote proxy; manage remote apps, backup policy, session indexing, data directory, and cc-switch migration |
+| Sync and backup | Configure/test WebDAV and S3, upload/download snapshots, manage backups, and import/export SQL at remote paths |
+| Tools and updates | Inspect/install/update remote CLI tools; repair environment conflicts; maintain Claude, Codex, OpenClaw, and Hermes; check and install remote OcHub updates |
+| Gateway and stations | Read and control the Gateway, show client connection information, import providers, and fully create/edit/probe/apply remote stations |
 | Diagnostics | Run Doctor plus SSH diagnostics |
 | Audit | Read recent remote operation records |
 
-The first release intentionally does **not** expose arbitrary shell execution.
-It also does not yet create or edit remote providers, transmit API keys, manage
-remote MCP/skills, browse remote sessions/usage, restore backups, install
-updates, or create a Gateway tunnel. Add or import providers on the remote
-machine first; the desktop can then switch among them.
+The workspace selector scopes the existing product pages. Their databases,
+tool configuration, sessions, paths, and network requests belong to the
+selected node. Desktop language, tray/login behavior, themes, and actions such
+as “Open in Finder” intentionally remain properties of the controlling
+computer.
+
+OcHub does **not** expose arbitrary shell execution or automatically create a
+Gateway data-plane tunnel. The desktop can negotiate the capabilities an older
+node advertises, but the complete workspace requires a current remote
+`ochcli`. Upgrade Desktop, `ochcli`, and `ochubd` together.
 
 ## Requirements
 
 Prepare all of the following:
 
-- OcHub Desktop `0.4.20` or later on the controlling computer.
+- OcHub Desktop `0.4.21` or later on the controlling computer.
 - System `ssh` and `ssh-keyscan` on the controlling computer.
 - A reachable OpenSSH server on the remote machine.
 - Matching or compatible `ochcli` and `ochubd` binaries on the remote machine.
@@ -167,6 +180,18 @@ your normal `~/.ssh/known_hosts` remain valid too. OcHub never silently sets
 The connection list then shows live online state, `ochcli` version, platform,
 and last successful connection. The workspace selector at the top of the
 sidebar lets you move between **This Mac** and saved remote nodes.
+
+If the selected node is offline, its SSH handshake times out, or capability
+negotiation fails, product pages immediately clear that node's cached data and
+disable remote writes. OcHub **never falls back to executing the action on This
+Mac**. Reconnect the node before continuing with providers, gateway, settings,
+sync, tools, or updates.
+
+After changing workspace, paths shown in product pages are paths on the
+**selected node**. For example, `/srv/backup/OcHub.sql` in Tools, the data
+directory in Settings, and sync/backup files are resolved remotely and do not
+use the controller's `HOME`. File pickers, opening a web page or Finder, and
+desktop preferences remain local.
 
 ## Switch a provider on the remote node
 
@@ -289,6 +314,20 @@ strong authorization boundary only when the SSH key is restricted to OcHub's
 forced command. See the
 [Remote Nodes design and security model](https://github.com/OcHub-team/OcHub/blob/main/docs/REMOTE-NODES-DESIGN.md)
 for that deployment pattern and protocol details.
+
+To restore a database, import SQL/cc-switch data, or install an update from the
+desktop, explicitly enable the corresponding high-risk capabilities on the
+remote node:
+
+```toml
+allowBackupRestore = true
+allowUpdateInstall = true
+```
+
+Writing a new Provider/OpenClaw secret also requires
+`allowSecretsWrite = true`. Untouched masked placeholders preserve the remote
+value instead of writing `******` back. Policy changes apply to the next SSH
+control session.
 
 ## Troubleshooting and current limits
 

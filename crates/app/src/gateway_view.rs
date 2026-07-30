@@ -13,10 +13,11 @@ use gpui::{
     ClipboardItem, Context, Entity, EventEmitter, FontWeight, ListAlignment, ListOffset, ListState,
     ScrollHandle, SharedString, Window, div, prelude::*, px,
 };
+use ochub_core::application::GatewayStation;
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
-    Dialect, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule, GatewayReasoningConfig,
-    GatewayReasoningMode, GatewayRoute,
+    Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule,
+    GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
 };
 use ochub_core::services::provider::ProviderService;
 use ochub_core::{AppState, AppType, ModelProviderImportManifest, prepare_model_provider_import};
@@ -26,6 +27,7 @@ use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme;
@@ -72,6 +74,37 @@ struct GatewayPageLoad {
     import_candidates: Vec<ImportCandidate>,
     installed_station_apps: HashSet<(AppType, String)>,
     enabled_apps: Arc<[AppType]>,
+}
+
+fn relay_station(station: GatewayStation) -> RelayStation {
+    let GatewayStation {
+        id,
+        name,
+        website_url,
+        channels,
+        default_model,
+        model_rules,
+        reasoning,
+        websocket_enabled,
+        enabled,
+        created_at,
+    } = station;
+    RelayStation {
+        route: GatewayRoute {
+            id: apply::station_route_id(&id),
+            name,
+            website_url,
+            app_type: None,
+            channel_ids: channels.iter().map(|channel| channel.id.clone()).collect(),
+            default_model,
+            model_rules,
+            reasoning,
+            websocket_enabled,
+            enabled,
+            created_at,
+        },
+        channels,
+    }
 }
 
 impl GatewayPageLoad {
@@ -209,6 +242,88 @@ impl GatewayPageLoad {
             enabled_apps: enabled_apps.into(),
         }
     }
+
+    async fn load_workspace(app: Arc<AppState>, backend: WorkspaceBackend) -> Result<Self, String> {
+        if !backend.is_remote() {
+            return Ok(Self::load(&app));
+        }
+        let stations: Vec<RelayStation> = backend
+            .list_stations()
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(relay_station)
+            .collect();
+        let imported_ids: HashSet<String> = stations
+            .iter()
+            .flat_map(|station| station.channels.iter().map(|channel| channel.id.clone()))
+            .collect();
+        let enabled_apps = backend
+            .list_apps()
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|app| app.enabled)
+            .filter_map(|app| app.id.parse::<AppType>().ok())
+            .collect::<Vec<_>>();
+        let mut import_candidates = Vec::new();
+        let mut installed_station_apps = HashSet::new();
+        for app_type in enabled_apps.iter().copied() {
+            let Ok(app_id) = ochub_core::AppId::parse(app_type.as_str()) else {
+                continue;
+            };
+            let providers = backend
+                .list_providers(&app_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            for provider in providers {
+                let details = backend
+                    .get_provider(&app_id, &provider.id)
+                    .await
+                    .ok()
+                    .map(|details| details.provider);
+                if let Some(route_id) = details
+                    .as_ref()
+                    .and_then(|provider| provider.meta.as_ref())
+                    .and_then(|meta| meta.gateway_route_id.clone())
+                {
+                    installed_station_apps.insert((app_type, route_id));
+                }
+
+                let channel_id = format!("imported-{}-{}", app_type.as_str(), provider.id);
+                if provider.id == apply::GATEWAY_PROVIDER_ID
+                    || provider.category.as_deref() == Some("gateway")
+                    || imported_ids.contains(&channel_id)
+                    || details.as_ref().is_some_and(|provider| {
+                        provider
+                            .meta
+                            .as_ref()
+                            .is_some_and(|meta| meta.gateway_route_id.is_some())
+                    })
+                {
+                    continue;
+                }
+                let Some(details) = details else {
+                    continue;
+                };
+                let (base_url, api_key) = details.resolve_usage_credentials(&app_type);
+                if !base_url.trim().is_empty() && !api_key.trim().is_empty() {
+                    import_candidates.push(ImportCandidate {
+                        app_type,
+                        provider_id: provider.id,
+                        name: provider.name,
+                        base_url,
+                    });
+                }
+            }
+        }
+        Ok(Self {
+            stations,
+            import_candidates,
+            installed_station_apps,
+            enabled_apps: enabled_apps.into(),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,7 +390,6 @@ struct ApplyTargetEditor {
 struct StationEditor {
     route_id: String,
     created_at: i64,
-    original_channel_ids: HashSet<String>,
     name: Entity<TextInput>,
     website_url: Entity<TextInput>,
     api_key: Entity<TextInput>,
@@ -308,6 +422,10 @@ struct StationEditor {
 
 pub struct GatewayView {
     app: Arc<AppState>,
+    // `None` is deliberate: an unavailable remote workspace must never fall
+    // back to the last local/remote backend retained by this long-lived view.
+    backend: Option<WorkspaceBackend>,
+    workspace_available: bool,
     stations: Vec<RelayStation>,
     import_candidates: Vec<ImportCandidate>,
     installed_station_apps: HashSet<(AppType, String)>,
@@ -405,7 +523,9 @@ impl GatewayView {
 
     pub fn new(app: Arc<AppState>, _cx: &mut Context<Self>) -> Self {
         Self {
+            backend: Some(WorkspaceBackend::local(app.clone())),
             app,
+            workspace_available: true,
             stations: Vec::new(),
             import_candidates: Vec::new(),
             installed_station_apps: HashSet::new(),
@@ -463,18 +583,46 @@ impl GatewayView {
         self.reload_generation = self.reload_generation.wrapping_add(1);
         let generation = self.reload_generation;
         let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            self.stations.clear();
+            self.import_candidates.clear();
+            self.installed_station_apps.clear();
+            self.rebuild_rows();
+            cx.notify();
+            return;
+        };
+        if !self.workspace_available {
+            self.stations.clear();
+            self.import_candidates.clear();
+            self.installed_station_apps.clear();
+            self.rebuild_rows();
+            cx.notify();
+            return;
+        }
         cx.spawn(async move |this, cx| {
-            let data = cx
-                .background_spawn(async move { GatewayPageLoad::load(&app) })
-                .await;
+            let data = GatewayPageLoad::load_workspace(app, backend).await;
             this.update(cx, |this, cx| {
                 if generation != this.reload_generation {
                     return;
                 }
-                this.stations = data.stations;
-                this.import_candidates = data.import_candidates;
-                this.installed_station_apps = data.installed_station_apps;
-                this.enabled_apps = data.enabled_apps;
+                match data {
+                    Ok(data) => {
+                        this.stations = data.stations;
+                        this.import_candidates = data.import_candidates;
+                        this.installed_station_apps = data.installed_station_apps;
+                        this.enabled_apps = data.enabled_apps;
+                    }
+                    Err(error) => {
+                        this.stations.clear();
+                        this.import_candidates.clear();
+                        this.installed_station_apps.clear();
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::GATEWAY_STATUS_UPDATE_FAILED, error = error),
+                            cx,
+                        );
+                    }
+                }
                 this.rebuild_rows();
                 cx.notify();
             })
@@ -483,11 +631,43 @@ impl GatewayView {
         .detach();
     }
 
+    pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        self.backend = Some(backend);
+        self.workspace_available = true;
+        self.editor = None;
+        self.show_imports = false;
+        self.show_connection = false;
+        self.connection_loading = false;
+        self.connection_info = None;
+        self.reveal_connection_key = false;
+        self.stations.clear();
+        self.import_candidates.clear();
+        self.installed_station_apps.clear();
+        self.enabled_apps = Arc::from([]);
+        self.rebuild_rows();
+        self.reload(cx);
+    }
+
+    pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.backend = None;
+        self.workspace_available = false;
+        self.editor = None;
+        self.show_imports = false;
+        self.show_connection = false;
+        self.connection_loading = false;
+        self.connection_info = None;
+        self.reveal_connection_key = false;
+        self.reload(cx);
+    }
+
     pub fn open_model_provider_import(
         &mut self,
         manifest: ModelProviderImportManifest,
         cx: &mut Context<Self>,
     ) {
+        if !self.workspace_available {
+            return;
+        }
         let apply_targets = manifest.apply_to.clone();
         let contains_key = manifest
             .api_key
@@ -744,7 +924,6 @@ impl GatewayView {
         self.editor = Some(StationEditor {
             route_id,
             created_at,
-            original_channel_ids: channel_dialects.keys().cloned().collect(),
             name: cx.new(|cx| text_input(cx, t(k::GATEWAY_EDITOR_NAME_PLACEHOLDER), &name)),
             website_url: cx
                 .new(|cx| text_input(cx, t(k::GATEWAY_EDITOR_WEBSITE_PLACEHOLDER), &website_url)),
@@ -1050,7 +1229,6 @@ impl GatewayView {
             .strip_prefix(apply::STATION_ROUTE_PREFIX)
             .unwrap_or(&editor.route_id);
         let mut channels = Vec::new();
-        let mut stale_channel_ids = editor.original_channel_ids.clone();
         for (endpoint_index, endpoint) in editor.endpoints.iter().enumerate() {
             let base_url = input_value(&endpoint.base_url, cx);
             for dialect in Dialect::ALL {
@@ -1090,7 +1268,6 @@ impl GatewayView {
                 channel.models = editor.models.selected.clone();
                 channel.priority = endpoint_index as i32 * 10;
                 channel.enabled = editor.enabled_dialects.contains(&dialect);
-                stale_channel_ids.remove(&channel.id);
                 channels.push(channel);
             }
         }
@@ -1126,100 +1303,86 @@ impl GatewayView {
             })
             .collect();
         let route_id = route.id.clone();
-        let stale_channel_ids = stale_channel_ids.into_iter().collect::<Vec<_>>();
+        let is_existing = self
+            .stations
+            .iter()
+            .any(|station| station.route.id == route_id);
+        let station_id = station_id.to_string();
+        let default_policy = GatewayAppModelPolicy {
+            models: apply::station_models(&route, &channels),
+            preferred_model: None,
+            fallback_model: route.default_model.clone(),
+            model_rules: route.model_rules.clone(),
+        };
+        let station = GatewayStation {
+            id: station_id.clone(),
+            name: route.name.clone(),
+            website_url: route.website_url.clone(),
+            channels,
+            default_model: route.default_model.clone(),
+            model_rules: route.model_rules.clone(),
+            reasoning: route.reasoning.clone(),
+            websocket_enabled: route.websocket_enabled,
+            enabled: route.enabled,
+            created_at: route.created_at,
+        };
 
         self.mutation_in_flight = true;
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let save_app = app.clone();
-            let saved = cx
-                .background_spawn(async move {
-                    save_app
-                        .db
-                        .save_gateway_station(&channels, &route, &stale_channel_ids)
-                        .map(|_| name)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let saved = if is_existing {
+                match serde_json::to_value(&station) {
+                    Ok(patch) => backend
+                        .update_station(&station_id, patch)
+                        .await
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error.to_string()),
+                }
+            } else {
+                backend
+                    .create_station(&station)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+            .map(|station| station.name);
             let result = match saved {
                 Err(error) => Err(error),
                 Ok(name) if apply_targets.is_empty() => Ok((name, Vec::new(), Vec::new())),
-                Ok(name) => {
-                    let config_app = app.clone();
-                    let gateway_config = cx
-                        .background_spawn(async move {
-                            let mut config = config_app
-                                .db
-                                .get_gateway_config()
-                                .map_err(|error| error.to_string())?;
-                            if !config.enabled {
-                                config.enabled = true;
-                                config_app
-                                    .db
-                                    .set_gateway_config(&config)
-                                    .map_err(|error| error.to_string())?;
-                            }
-                            Ok::<(), String>(())
-                        })
-                        .await;
-                    let gateway_status = match gateway_config {
-                        Ok(()) => app.gateway.start().await.map_err(|error| error.to_string()),
-                        Err(error) => Err(error),
-                    };
-                    match gateway_status {
-                        Ok(status) => {
-                            let apply_app = app.clone();
-                            let applied = cx
-                                .background_spawn(async move {
-                                    let mut successes = Vec::new();
-                                    let mut failures = Vec::new();
-                                    for (app_type, preferred_model) in apply_targets {
-                                        let result = apply::station_model_policy(
-                                            &apply_app,
-                                            app_type,
-                                            &apply_app
-                                                .db
-                                                .get_gateway_route_by_id(&route_id)
-                                                .map_err(|error| error.to_string())?
-                                                .ok_or_else(|| {
-                                                    "Imported route disappeared".to_string()
-                                                })?,
-                                        )
-                                        .and_then(|mut policy| {
-                                            policy.preferred_model = preferred_model;
-                                            apply::apply_station_to_app_with_policy(
-                                                &apply_app,
-                                                app_type,
-                                                &status.base_url,
-                                                &route_id,
-                                                policy,
-                                            )
-                                        });
-                                        match result {
-                                            Ok(_) => successes.push(app_type),
-                                            Err(error) => {
-                                                failures.push((app_type, error.to_string()))
-                                            }
-                                        }
-                                    }
-                                    Ok::<_, String>((successes, failures))
-                                })
-                                .await;
-                            match applied {
-                                Ok((successes, failures)) => Ok((name, successes, failures)),
-                                Err(error) => Err(error),
+                Ok(name) => match backend.set_gateway_running(true).await {
+                    Ok(_) => {
+                        let mut successes = Vec::new();
+                        let mut failures = Vec::new();
+                        for (app_type, preferred_model) in apply_targets {
+                            let mut policy = default_policy.clone();
+                            policy.preferred_model = preferred_model;
+                            let app_id = match ochub_core::AppId::parse(app_type.as_str()) {
+                                Ok(app_id) => app_id,
+                                Err(error) => {
+                                    failures.push((
+                                        app_type,
+                                        format!("invalid application id: {error}"),
+                                    ));
+                                    continue;
+                                }
+                            };
+                            match backend.apply_station(&station_id, &app_id, policy).await {
+                                Ok(_) => successes.push(app_type),
+                                Err(error) => failures.push((app_type, error.to_string())),
                             }
                         }
-                        Err(error) => Ok((
-                            name,
-                            Vec::new(),
-                            apply_targets
-                                .into_iter()
-                                .map(|(app, _)| (app, error.clone()))
-                                .collect(),
-                        )),
+                        Ok((name, successes, failures))
                     }
-                }
+                    Err(error) => Ok((
+                        name,
+                        Vec::new(),
+                        apply_targets
+                            .into_iter()
+                            .map(|(app, _)| (app, error.to_string()))
+                            .collect(),
+                    )),
+                },
             };
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
@@ -1297,19 +1460,23 @@ impl GatewayView {
             return;
         };
         let enabled = !station.is_enabled();
-        let mut route = station.route;
-        route.enabled = enabled;
+        let route = station.route;
+        let station_id = route
+            .id
+            .strip_prefix(apply::STATION_ROUTE_PREFIX)
+            .unwrap_or(&route.id)
+            .to_string();
+        let name = route.name;
         self.mutation_in_flight = true;
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    app.db
-                        .upsert_gateway_route(&route)
-                        .map(|_| route.name)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = backend
+                .set_station_enabled(&station_id, enabled)
+                .await
+                .map(|_| name)
+                .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
@@ -1354,34 +1521,20 @@ impl GatewayView {
         if self.mutation_in_flight {
             return;
         }
-        let channel_ids = self
-            .stations
-            .iter()
-            .find(|station| station.route.id == route_id)
-            .map(|station| {
-                station
-                    .channels
-                    .iter()
-                    .map(|channel| channel.id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let station_id = route_id
+            .strip_prefix(apply::STATION_ROUTE_PREFIX)
+            .unwrap_or(&route_id)
+            .to_string();
         self.mutation_in_flight = true;
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    app.db
-                        .delete_gateway_route(&route_id)
-                        .and_then(|_| {
-                            for channel_id in channel_ids {
-                                app.db.delete_gateway_channel(&channel_id)?;
-                            }
-                            Ok(())
-                        })
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = backend
+                .delete_station(&station_id)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
@@ -1410,19 +1563,18 @@ impl GatewayView {
             return;
         }
         self.mutation_in_flight = true;
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    apply::import_provider_as_channel(&app, app_type, &provider_id)
-                        .and_then(|channel| {
-                            let route = apply::ensure_station_route(&app, &channel)?;
-                            Ok((channel, route))
-                        })
-                        .map(|(channel, _)| channel.name)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = match ochub_core::AppId::parse(app_type.as_str()) {
+                Ok(app_id) => backend
+                    .import_provider_as_station(&app_id, &provider_id)
+                    .await
+                    .map(|channel| channel.name)
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
@@ -1449,6 +1601,9 @@ impl GatewayView {
     }
 
     fn toggle_connection_panel(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
         self.show_connection = !self.show_connection;
         self.rebuild_rows();
         if self.show_connection && self.connection_info.is_none() {
@@ -1464,42 +1619,30 @@ impl GatewayView {
         self.connection_loading = true;
         cx.notify();
 
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            self.connection_loading = false;
+            self.show_connection = false;
+            self.rebuild_rows();
+            cx.notify();
+            return;
+        };
+        let generation = self.reload_generation;
         cx.spawn(async move |this, cx| {
-            let prepare_app = app.clone();
-            let prepare = cx
-                .background_spawn(async move {
-                    let mut config = prepare_app
-                        .db
-                        .get_gateway_config()
-                        .map_err(|error| error.to_string())?;
-                    if !config.enabled {
-                        config.enabled = true;
-                        prepare_app
-                            .db
-                            .set_gateway_config(&config)
-                            .map_err(|error| error.to_string())?;
-                    }
-                    Ok::<(), String>(())
-                })
-                .await;
             let result = async {
-                prepare?;
-                let status = app
-                    .gateway
-                    .start()
+                backend
+                    .set_gateway_running(true)
                     .await
                     .map_err(|error| error.to_string())?;
-                let base_url = status.base_url;
-                let app_for_info = app.clone();
-                cx.background_spawn(
-                    async move { apply::generic_client_info(&app_for_info, &base_url) },
-                )
-                .await
-                .map_err(|error| error.to_string())
+                backend
+                    .gateway_connection_info()
+                    .await
+                    .map_err(|error| error.to_string())
             }
             .await;
             this.update(cx, |this, cx| {
+                if generation != this.reload_generation {
+                    return;
+                }
                 this.connection_loading = false;
                 match result {
                     Ok(info) => {
@@ -1523,6 +1666,7 @@ impl GatewayView {
     }
 
     fn detect_dialects(&mut self, endpoint_id: String, cx: &mut Context<Self>) {
+        let station_id = self.saved_editor_station_id();
         let Some(editor) = &self.editor else {
             return;
         };
@@ -1553,13 +1697,13 @@ impl GatewayView {
         }
         cx.notify();
 
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let detected = app
-                .gateway
-                .detect_dialects(base_url, api_key)
-                .await
-                .unwrap_or_default();
+            let detected = backend
+                .detect_station_dialects(&base_url, &api_key, station_id.as_deref())
+                .await;
             this.update(cx, |this, cx| {
                 if let Some(editor) = &mut this.editor
                     && let Some(endpoint) = editor
@@ -1567,12 +1711,15 @@ impl GatewayView {
                         .iter_mut()
                         .find(|endpoint| endpoint.id == endpoint_id)
                 {
-                    if detected.is_empty() {
-                        endpoint.probe = ProbeState::Failed;
-                    } else {
-                        editor.enabled_dialects = detected.iter().copied().collect();
-                        endpoint.probe = ProbeState::Detected;
-                        editor.dialects_error = None;
+                    match detected {
+                        Ok(detected) if !detected.is_empty() => {
+                            editor.enabled_dialects = detected.iter().copied().collect();
+                            endpoint.probe = ProbeState::Detected;
+                            editor.dialects_error = None;
+                        }
+                        _ => {
+                            endpoint.probe = ProbeState::Failed;
+                        }
                     }
                 }
                 cx.notify();
@@ -1583,6 +1730,7 @@ impl GatewayView {
     }
 
     fn fetch_endpoint_models(&mut self, endpoint_id: String, cx: &mut Context<Self>) {
+        let station_id = self.saved_editor_station_id();
         let Some(editor) = &self.editor else {
             return;
         };
@@ -1614,9 +1762,13 @@ impl GatewayView {
         }
         cx.notify();
 
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let result = app.gateway.fetch_models(base_url, api_key).await;
+            let result = backend
+                .fetch_station_models(&base_url, &api_key, station_id.as_deref())
+                .await;
             this.update(cx, |this, cx| {
                 let Some(editor) = &mut this.editor else {
                     return;
@@ -1650,6 +1802,7 @@ impl GatewayView {
     }
 
     fn test_endpoint(&mut self, endpoint_id: String, cx: &mut Context<Self>) {
+        let station_id = self.saved_editor_station_id();
         let Some(editor) = &self.editor else {
             return;
         };
@@ -1681,9 +1834,13 @@ impl GatewayView {
         }
         cx.notify();
 
-        let app = self.app.clone();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let result = app.gateway.test_endpoint(base_url, api_key).await;
+            let result = backend
+                .test_station_endpoint(&base_url, &api_key, station_id.as_deref())
+                .await;
             this.update(cx, |this, cx| {
                 let Some(endpoint) = this.editor.as_mut().and_then(|editor| {
                     editor
@@ -1713,6 +1870,19 @@ impl GatewayView {
                 .update(cx, |input, cx| input.set_masked(masked, cx));
             cx.notify();
         }
+    }
+
+    fn saved_editor_station_id(&self) -> Option<String> {
+        let route_id = &self.editor.as_ref()?.route_id;
+        self.stations
+            .iter()
+            .any(|station| &station.route.id == route_id)
+            .then(|| {
+                route_id
+                    .strip_prefix(apply::STATION_ROUTE_PREFIX)
+                    .unwrap_or(route_id)
+                    .to_string()
+            })
     }
 
     fn toggle_apply_target(&mut self, app: AppType, cx: &mut Context<Self>) {
@@ -3152,22 +3322,32 @@ impl GatewayView {
     }
 
     fn render_empty_state(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let add = if self.workspace_available {
+            components::button(
+                "station-empty-add",
+                t(k::GATEWAY_ACTION_ADD),
+                ButtonTone::Primary,
+                ButtonSize::Md,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.open_editor(None, cx);
+            }))
+            .into_any_element()
+        } else {
+            components::disabled_button(
+                "station-empty-add",
+                t(k::GATEWAY_ACTION_ADD),
+                ButtonTone::Primary,
+                ButtonSize::Md,
+                true,
+            )
+            .into_any_element()
+        };
         components::empty_state(
             IconName::Cloud,
             t(k::GATEWAY_EMPTY_TITLE),
             t(k::GATEWAY_EMPTY_HINT),
-            Some(
-                components::button(
-                    "station-empty-add",
-                    t(k::GATEWAY_ACTION_ADD),
-                    ButtonTone::Primary,
-                    ButtonSize::Md,
-                )
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.open_editor(None, cx);
-                }))
-                .into_any_element(),
-            ),
+            Some(add),
         )
         .into_any_element()
     }
@@ -3219,6 +3399,79 @@ impl Render for GatewayView {
             .editor
             .as_ref()
             .is_some_and(|editor| editor.is_deeplink_import);
+        let connection_button = if self.workspace_available {
+            components::button(
+                "station-connection-toggle",
+                if self.show_connection {
+                    t(k::GATEWAY_PAGE_CONNECTION_HIDE)
+                } else {
+                    t(k::GATEWAY_PAGE_CONNECTION_SHOW)
+                },
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.toggle_connection_panel(cx);
+            }))
+            .into_any_element()
+        } else {
+            components::disabled_button(
+                "station-connection-toggle",
+                t(k::GATEWAY_PAGE_CONNECTION_SHOW),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+                true,
+            )
+            .into_any_element()
+        };
+        let import_button = if self.workspace_available {
+            components::button(
+                "station-import-toggle",
+                if self.show_imports {
+                    t(k::GATEWAY_PAGE_IMPORT_HIDE)
+                } else {
+                    t(k::GATEWAY_PAGE_IMPORT_SHOW)
+                },
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.show_imports = !this.show_imports;
+                this.rebuild_rows();
+                cx.notify();
+            }))
+            .into_any_element()
+        } else {
+            components::disabled_button(
+                "station-import-toggle",
+                t(k::GATEWAY_PAGE_IMPORT_SHOW),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+                true,
+            )
+            .into_any_element()
+        };
+        let add_button = if self.workspace_available {
+            components::button(
+                "station-add",
+                t(k::GATEWAY_ACTION_ADD),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.open_editor(None, cx);
+            }))
+            .into_any_element()
+        } else {
+            components::disabled_button(
+                "station-add",
+                t(k::GATEWAY_ACTION_ADD),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+                true,
+            )
+            .into_any_element()
+        };
         layout::page()
             .relative()
             .when(!deeplink_preview, |page| {
@@ -3233,55 +3486,9 @@ impl Render for GatewayView {
                             .flex_row()
                             .flex_wrap()
                             .gap_2()
-                            .child(
-                                components::button(
-                                    "station-connection-toggle",
-                                    if self.show_connection {
-                                        t(k::GATEWAY_PAGE_CONNECTION_HIDE)
-                                    } else {
-                                        t(k::GATEWAY_PAGE_CONNECTION_SHOW)
-                                    },
-                                    ButtonTone::Neutral,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.toggle_connection_panel(cx);
-                                    },
-                                )),
-                            )
-                            .child(
-                                components::button(
-                                    "station-import-toggle",
-                                    if self.show_imports {
-                                        t(k::GATEWAY_PAGE_IMPORT_HIDE)
-                                    } else {
-                                        t(k::GATEWAY_PAGE_IMPORT_SHOW)
-                                    },
-                                    ButtonTone::Neutral,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.show_imports = !this.show_imports;
-                                        this.rebuild_rows();
-                                        cx.notify();
-                                    },
-                                )),
-                            )
-                            .child(
-                                components::button(
-                                    "station-add",
-                                    t(k::GATEWAY_ACTION_ADD),
-                                    ButtonTone::Primary,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.open_editor(None, cx);
-                                    },
-                                )),
-                            ),
+                            .child(connection_button)
+                            .child(import_button)
+                            .child(add_button),
                     ),
                 )
             })

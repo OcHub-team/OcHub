@@ -87,7 +87,8 @@ fn now_ms() -> i64 {
 }
 
 /// One matching session, with the earliest matching message in it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub provider_id: String,
     pub session_id: String,
@@ -101,7 +102,8 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncOutcome {
     pub indexed: usize,
     pub skipped: usize,
@@ -109,7 +111,8 @@ pub struct SyncOutcome {
     pub cancelled: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IndexStats {
     pub sessions: i64,
     pub messages: i64,
@@ -120,7 +123,8 @@ pub struct IndexStats {
     pub last_maintenance_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MaintenanceOutcome {
     pub reclaimed_bytes: u64,
     /// True when the time budget ran out with work still outstanding.

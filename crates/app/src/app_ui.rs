@@ -16,9 +16,7 @@ use gpui::{
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
-use ochub_core::services::provider::{
-    self, DriftConflict, DriftResolution, LiveDrift, ProviderService, drift,
-};
+use ochub_core::services::provider::{DriftConflict, DriftResolution, LiveDrift, ProviderService};
 use ochub_core::{AppState, AppType, Provider};
 
 use crate::about_view::AboutView;
@@ -34,7 +32,8 @@ use crate::mcp_view::McpView;
 use crate::network_view::NetworkView;
 use crate::notifications::{NotificationHost, NotificationLevel, ToastSource};
 use crate::provider_editor::{EditorEvent, ProviderEditor};
-use crate::remote_view::RemoteView;
+use crate::remote::{ProviderSwitchHandle, WorkspaceBackend};
+use crate::remote_view::{RemoteEvent, RemoteView};
 use crate::sessions_view::SessionsView;
 use crate::settings_view::SettingsView;
 use crate::shell_menu;
@@ -186,6 +185,7 @@ pub struct AppRoot {
     provider_sortable_rows: Arc<[usize]>,
     provider_sortable_positions: HashMap<String, usize>,
     provider_loaded_app: Option<AppType>,
+    provider_loaded_scope: Option<String>,
     provider_reload_generation: u64,
     provider_action_in_flight: bool,
     current: String,
@@ -232,6 +232,7 @@ pub struct AppRoot {
     provider_drag_state: Option<ProviderDragState>,
     sidebar_scroll_handle: ScrollHandle,
     workspace_scope_open: bool,
+    active_remote_scope: Option<String>,
     /// Version of an available update, once a check has found one. Marks 关于 in
     /// the sidebar, and unlike the one-shot toast it persists for as long as the
     /// update does — the dot is the affordance a user comes back to.
@@ -263,39 +264,66 @@ struct ProviderPageLoad {
 }
 
 impl ProviderPageLoad {
-    fn load(app: &AppState, app_type: AppType) -> Self {
-        if let Err(err) = ProviderService::auto_import_live_providers(app, app_type) {
+    async fn load(app: Arc<AppState>, backend: WorkspaceBackend, app_type: AppType) -> Self {
+        let app_id = app_type.app_id();
+        if !backend.is_remote()
+            && let Err(err) = backend.import_live_providers(&app_id).await
+        {
             log::debug!(
                 "automatic provider discovery skipped for {}: {err}",
                 app_type.as_str()
             );
         }
 
-        let providers = ProviderService::list(app, app_type)
-            .map(|map| map.into_values().collect::<Vec<_>>())
-            .map_err(|error| error.to_string());
-        let base_urls = providers
+        let listed = backend.list_providers(&app_id).await;
+        let current = listed
+            .as_ref()
+            .ok()
+            .and_then(|providers| providers.iter().find(|provider| provider.current))
+            .map(|provider| provider.id.clone())
+            .unwrap_or_default();
+        let base_urls = listed
             .as_ref()
             .map(|providers| {
                 providers
                     .iter()
-                    .filter(|provider| !provider.is_local_gateway())
-                    .map(|provider| {
-                        (
-                            provider.id.clone(),
-                            provider.resolve_usage_base_url(&app_type),
-                        )
-                    })
+                    .map(|provider| (provider.id.clone(), provider.base_url.clone()))
                     .collect()
             })
             .unwrap_or_default();
+        let providers = match listed {
+            Ok(items) => {
+                let requests = items.into_iter().map(|item| {
+                    let backend = backend.clone();
+                    let app_id = app_id.clone();
+                    async move {
+                        backend
+                            .get_provider(&app_id, &item.id)
+                            .await
+                            .map(|details| details.provider)
+                    }
+                });
+                futures::future::try_join_all(requests)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+            Err(error) => Err(error.to_string()),
+        };
 
         Self {
             providers,
             base_urls,
-            current: ProviderService::current(app, app_type).unwrap_or_default(),
-            gateway_routes: app.db.get_gateway_routes().unwrap_or_default(),
-            gateway_keys: app.db.get_gateway_keys().unwrap_or_default(),
+            current,
+            gateway_routes: if backend.is_remote() {
+                Vec::new()
+            } else {
+                app.db.get_gateway_routes().unwrap_or_default()
+            },
+            gateway_keys: if backend.is_remote() {
+                Vec::new()
+            } else {
+                app.db.get_gateway_keys().unwrap_or_default()
+            },
         }
     }
 }
@@ -873,7 +901,7 @@ impl AppRoot {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
         let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
-        let network_view = cx.new(NetworkView::new);
+        let network_view = cx.new(|cx| NetworkView::new(app.clone(), cx));
         let remote_view = cx.new(RemoteView::new);
         let mcp_view = cx.new(|cx| McpView::new(app.clone(), cx));
         let notifications = cx.new(|_| NotificationHost::new());
@@ -882,7 +910,7 @@ impl AppRoot {
         let sessions_view = cx.new(|cx| SessionsView::new(app.clone(), cx));
         let tools_view = cx.new(|cx| ToolsView::new(app.clone(), cx));
         let theme_view = cx.new(ThemeView::new);
-        let about_view = cx.new(AboutView::new);
+        let about_view = cx.new(|cx| AboutView::new(app.clone(), cx));
         let gallery_view = cx.new(GalleryView::new);
         let show_first_run_notice = crate::shell_support::first_run_notice_pending();
         let initial_section = Section::from_env();
@@ -893,7 +921,7 @@ impl AppRoot {
             .filter(|app| enabled.contains(app))
             .or_else(|| enabled.first().copied())
             .unwrap_or(AppType::Claude);
-        let app_settings_view = cx.new(|cx| AppSettingsView::new(initial_app, cx));
+        let app_settings_view = cx.new(|cx| AppSettingsView::new(app.clone(), initial_app, cx));
         let mut this = Self {
             app,
             selected_app: initial_app,
@@ -906,6 +934,7 @@ impl AppRoot {
             provider_sortable_rows: Vec::new().into(),
             provider_sortable_positions: HashMap::new(),
             provider_loaded_app: None,
+            provider_loaded_scope: None,
             provider_reload_generation: 0,
             provider_action_in_flight: false,
             current: String::new(),
@@ -936,6 +965,7 @@ impl AppRoot {
             provider_drag_state: None,
             sidebar_scroll_handle: ScrollHandle::new(),
             workspace_scope_open: false,
+            active_remote_scope: None,
             available_update: {
                 let settings = ochub_core::settings::get_settings();
                 Self::seeded_badge(settings.auto_update_check, settings.skipped_update_version)
@@ -951,20 +981,120 @@ impl AppRoot {
             },
         )
         .detach();
+        cx.subscribe(&this.remote_view, |this, view, event, cx| {
+            let RemoteEvent::ConnectionChanged { id, connected } = event;
+            if this.active_remote_scope.as_deref() != Some(id.as_str()) {
+                return;
+            }
+            this.editor = None;
+            this.provider_loaded_scope = None;
+            if *connected {
+                let enabled = view.read(cx).enabled_builtin_apps();
+                if !enabled.is_empty() {
+                    this.visible_apps = enabled.into();
+                    if !this.visible_apps.contains(&this.selected_app) {
+                        this.selected_app = this.visible_apps[0];
+                    }
+                }
+                this.reload(cx);
+                if this.section == Section::Mcp {
+                    this.reload_mcp_workspace(cx);
+                }
+                if this.section == Section::Skills {
+                    this.reload_skills_workspace(cx);
+                }
+                if this.section == Section::Usage {
+                    this.reload_usage_workspace(cx);
+                }
+                if this.section == Section::Sessions {
+                    this.reload_sessions_workspace(cx);
+                }
+                if this.section == Section::Gateway {
+                    this.reload_gateway_workspace(cx);
+                }
+                if this.section == Section::Network {
+                    this.reload_network_workspace(cx);
+                }
+                if this.section == Section::Settings {
+                    this.reload_settings_workspace(cx);
+                }
+                if this.section == Section::Tools {
+                    this.reload_tools_workspace(cx);
+                }
+                if this.section == Section::About {
+                    this.reload_about_workspace(cx);
+                }
+                if this.section == Section::Providers && this.showing_app_settings {
+                    this.open_app_settings(cx);
+                }
+            } else {
+                this.clear_provider_page();
+                if this.section == Section::Mcp {
+                    this.reload_mcp_workspace(cx);
+                }
+                if this.section == Section::Skills {
+                    this.reload_skills_workspace(cx);
+                }
+                if this.section == Section::Usage {
+                    this.reload_usage_workspace(cx);
+                }
+                if this.section == Section::Sessions {
+                    this.reload_sessions_workspace(cx);
+                }
+                if this.section == Section::Gateway {
+                    this.reload_gateway_workspace(cx);
+                }
+                if this.section == Section::Network {
+                    this.reload_network_workspace(cx);
+                }
+                if this.section == Section::Settings {
+                    this.reload_settings_workspace(cx);
+                }
+                if this.section == Section::Tools {
+                    this.reload_tools_workspace(cx);
+                }
+                if this.section == Section::About {
+                    this.reload_about_workspace(cx);
+                }
+                if this.section == Section::Providers && this.showing_app_settings {
+                    this.app_settings_view
+                        .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+                }
+                cx.notify();
+            }
+        })
+        .detach();
         cx.subscribe(&this.settings_view, |this, _view, event, cx| match event {
             crate::settings_view::SettingsEvent::AppsChanged => {
-                this.visible_apps = Self::load_visible_apps().into();
-                this.skills_view
-                    .update(cx, |view, cx| view.refresh_apps(cx));
+                if this.active_remote_scope.is_some() {
+                    this.reload_visible_workspace_apps(cx);
+                } else {
+                    this.visible_apps = Self::load_visible_apps().into();
+                    this.skills_view
+                        .update(cx, |view, cx| view.refresh_apps(cx));
+                    this.ensure_valid_selection(cx);
+                }
                 this.mcp_view.update(cx, |view, cx| view.refresh_apps(cx));
-                this.ensure_valid_selection(cx);
                 cx.notify();
             }
             crate::settings_view::SettingsEvent::LocaleChanged => {
                 this.relocalize(cx);
             }
             crate::settings_view::SettingsEvent::DataImported => {
-                this.reload_after_ccswitch_import(cx);
+                if this.active_remote_scope.is_some() {
+                    this.reload_visible_workspace_apps(cx);
+                    this.reload(cx);
+                    this.reload_mcp_workspace(cx);
+                    this.reload_skills_workspace(cx);
+                    this.reload_usage_workspace(cx);
+                    this.reload_sessions_workspace(cx);
+                    this.reload_gateway_workspace(cx);
+                    this.reload_settings_workspace(cx);
+                    this.reload_tools_workspace(cx);
+                    cx.notify();
+                } else {
+                    this.reload_after_ccswitch_import(cx);
+                }
             }
         })
         .detach();
@@ -1008,13 +1138,14 @@ impl AppRoot {
         }
         match initial_section {
             Section::Mcp => this.mcp_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Skills => this.skills_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Gateway => this.gateway_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Network => this.network_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Skills => this.reload_skills_workspace(cx),
+            Section::Gateway => this.reload_gateway_workspace(cx),
+            Section::Network => this.reload_network_workspace(cx),
             Section::Remote => this.remote_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Usage => this.usage_view.update(cx, |v, cx| v.activate(cx)),
-            Section::Sessions => this.sessions_view.update(cx, |v, cx| v.reload(cx)),
-            Section::Tools => this.tools_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Usage => this.reload_usage_workspace(cx),
+            Section::Sessions => this.reload_sessions_workspace(cx),
+            Section::Tools => this.reload_tools_workspace(cx),
+            Section::Settings => this.reload_settings_workspace(cx),
             _ => {}
         }
         this.flush_section_toast(initial_section, cx);
@@ -1207,28 +1338,32 @@ impl AppRoot {
     /// (Re)load providers + current id for the selected app from the store.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let app_type = self.selected_app;
-        if self.provider_loaded_app != Some(app_type) {
-            self.providers.clear();
-            self.provider_presentations.clear();
-            self.provider_rows = Vec::new().into();
-            self.provider_sortable_slots = Vec::new().into();
-            self.provider_sortable_rows = Vec::new().into();
-            self.provider_sortable_positions.clear();
-            self.current.clear();
-            self.gateway_routes.clear();
-            self.gateway_keys.clear();
-            self.provider_list_state.reset(0);
+        let scope = self
+            .active_remote_scope
+            .clone()
+            .unwrap_or_else(|| "local".to_string());
+        if self.provider_loaded_app != Some(app_type)
+            || self.provider_loaded_scope.as_deref() != Some(scope.as_str())
+        {
+            self.clear_provider_page();
         }
 
         self.provider_reload_generation = self.provider_reload_generation.wrapping_add(1);
         let generation = self.provider_reload_generation;
         let app = self.app.clone();
+        let Some(backend) = self.workspace_backend(cx) else {
+            cx.notify();
+            return;
+        };
+        let loaded_scope = scope.clone();
         cx.spawn(async move |this, cx| {
-            let data = cx
-                .background_spawn(async move { ProviderPageLoad::load(&app, app_type) })
-                .await;
+            let data = crate::core_async::run(ProviderPageLoad::load(app, backend, app_type)).await;
             this.update(cx, |this, cx| {
-                if generation != this.provider_reload_generation || app_type != this.selected_app {
+                let active_scope = this.active_remote_scope.as_deref().unwrap_or("local");
+                if generation != this.provider_reload_generation
+                    || app_type != this.selected_app
+                    || loaded_scope != active_scope
+                {
                     return;
                 }
                 match data.providers {
@@ -1243,8 +1378,172 @@ impl AppRoot {
                 this.gateway_keys = data.gateway_keys;
                 this.rebuild_provider_render_cache(&data.base_urls);
                 this.provider_loaded_app = Some(app_type);
+                this.provider_loaded_scope = Some(loaded_scope);
                 // Row heights and count follow the newly applied snapshot.
                 this.provider_list_state.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn clear_provider_page(&mut self) {
+        self.providers.clear();
+        self.provider_presentations.clear();
+        self.provider_rows = Vec::new().into();
+        self.provider_sortable_slots = Vec::new().into();
+        self.provider_sortable_rows = Vec::new().into();
+        self.provider_sortable_positions.clear();
+        self.current.clear();
+        self.gateway_routes.clear();
+        self.gateway_keys.clear();
+        self.provider_loaded_app = None;
+        self.provider_loaded_scope = None;
+        self.provider_list_state.reset(0);
+    }
+
+    fn workspace_backend(&self, cx: &App) -> Option<WorkspaceBackend> {
+        match self.active_remote_scope.as_deref() {
+            Some(id) => self.remote_view.read(cx).backend_for_scope(id),
+            None => Some(WorkspaceBackend::local(self.app.clone())),
+        }
+    }
+
+    fn reload_mcp_workspace(&mut self, cx: &mut Context<Self>) {
+        let apps = self
+            .visible_apps
+            .iter()
+            .copied()
+            .filter(|app| {
+                matches!(
+                    app,
+                    AppType::Claude
+                        | AppType::Codex
+                        | AppType::GrokBuild
+                        | AppType::OpenCode
+                        | AppType::Hermes
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.mcp_view
+                .update(cx, |view, cx| view.set_workspace(backend, apps, cx));
+        } else {
+            self.mcp_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(apps, cx));
+        }
+    }
+
+    fn reload_skills_workspace(&mut self, cx: &mut Context<Self>) {
+        let apps = self
+            .visible_apps
+            .iter()
+            .copied()
+            .filter(|app| {
+                matches!(
+                    app,
+                    AppType::Claude | AppType::Codex | AppType::OpenCode | AppType::Hermes
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.skills_view
+                .update(cx, |view, cx| view.set_workspace(backend, apps, cx));
+        } else {
+            self.skills_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(apps, cx));
+        }
+    }
+
+    fn reload_usage_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.usage_view
+                .update(cx, |view, cx| view.set_workspace(backend, cx));
+        } else {
+            self.usage_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_sessions_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.sessions_view
+                .update(cx, |view, cx| view.set_workspace(backend, cx));
+        } else {
+            self.sessions_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_gateway_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.gateway_view
+                .update(cx, |view, cx| view.set_workspace(backend, cx));
+        } else {
+            self.gateway_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_network_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.network_view
+                .update(cx, |view, cx| view.set_workspace(backend, cx));
+        } else {
+            self.network_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_settings_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.settings_view
+                .update(cx, |view, cx| view.set_workspace(backend, cx));
+        } else {
+            self.settings_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_tools_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.tools_view
+                .update(cx, |view, cx| view.set_workspace(backend, cx));
+        } else {
+            self.tools_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_about_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.about_view
+                .update(cx, |view, cx| view.set_workspace(backend, cx));
+        } else {
+            self.about_view
+                .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_visible_workspace_apps(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.workspace_backend(cx) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move { backend.list_apps().await }).await;
+            this.update(cx, |this, cx| {
+                if let Ok(apps) = result {
+                    let enabled = apps
+                        .into_iter()
+                        .filter(|app| app.enabled)
+                        .filter_map(|app| app.id.parse::<AppType>().ok())
+                        .collect::<Vec<_>>();
+                    if !enabled.is_empty() {
+                        this.visible_apps = enabled.into();
+                        this.ensure_valid_selection(cx);
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -1313,8 +1612,17 @@ impl AppRoot {
 
     fn open_app_settings(&mut self, cx: &mut Context<Self>) {
         let app = self.selected_app;
-        self.app_settings_view
-            .update(cx, |view, cx| view.reload_for(app, cx));
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.app_settings_view.update(cx, |view, cx| {
+                view.set_workspace(backend, cx);
+                view.reload_for(app, cx);
+            });
+        } else {
+            self.app_settings_view.update(cx, |view, cx| {
+                view.set_workspace_unavailable(cx);
+                view.reload_for(app, cx);
+            });
+        }
         self.editor = None;
         self.showing_app_settings = true;
         cx.notify();
@@ -1327,15 +1635,18 @@ impl AppRoot {
             self.showing_app_settings = false;
             // Reload the destination view's data so it reflects current state.
             match section {
-                Section::Mcp => self.mcp_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Skills => self.skills_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Gateway => self.gateway_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Network => self.network_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Mcp => {
+                    self.reload_mcp_workspace(cx);
+                }
+                Section::Skills => self.reload_skills_workspace(cx),
+                Section::Gateway => self.reload_gateway_workspace(cx),
+                Section::Network => self.reload_network_workspace(cx),
                 Section::Remote => self.remote_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Usage => self.usage_view.update(cx, |v, cx| v.activate(cx)),
-                Section::Sessions => self.sessions_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Tools => self.tools_view.update(cx, |v, cx| v.reload(cx)),
-                Section::Settings => self.settings_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Usage => self.reload_usage_workspace(cx),
+                Section::Sessions => self.reload_sessions_workspace(cx),
+                Section::Tools => self.reload_tools_workspace(cx),
+                Section::Settings => self.reload_settings_workspace(cx),
+                Section::About => self.reload_about_workspace(cx),
                 _ => {}
             }
             self.flush_section_toast(section, cx);
@@ -1344,33 +1655,55 @@ impl AppRoot {
     }
 
     fn select_local_scope(&mut self, cx: &mut Context<Self>) {
+        if self.active_remote_scope.take().is_some() {
+            self.editor = None;
+            self.showing_app_settings = false;
+            self.clear_provider_page();
+            self.visible_apps = Self::load_visible_apps().into();
+            if !self.visible_apps.contains(&self.selected_app)
+                && let Some(first) = self.visible_apps.first().copied()
+            {
+                self.selected_app = first;
+            }
+        }
         self.select_section(Section::Providers, cx);
+        self.reload(cx);
     }
 
     fn select_remote_scope(&mut self, id: String, cx: &mut Context<Self>) {
-        self.select_section(Section::Remote, cx);
+        if self.active_remote_scope.as_deref() != Some(id.as_str()) {
+            self.active_remote_scope = Some(id.clone());
+            self.editor = None;
+            self.showing_app_settings = false;
+            self.clear_provider_page();
+        }
+        self.section = Section::Providers;
         self.remote_view
             .update(cx, |view, cx| view.activate_scope(id, cx));
+        self.reload(cx);
+        cx.notify();
     }
 
     fn do_switch(&mut self, id: String, cx: &mut Context<Self>) {
-        if self
-            .providers
-            .iter()
-            .find(|provider| provider.id == id)
-            .is_some_and(Provider::is_local_gateway)
+        if self.active_remote_scope.is_none()
+            && self
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .is_some_and(Provider::is_local_gateway)
         {
             self.connect_local_gateway(id, cx);
             return;
         }
         // Station-sourced channels re-embed the live gateway origin + key
         // before switching, so a changed listen port never strands them.
-        if self
-            .providers
-            .iter()
-            .find(|provider| provider.id == id)
-            .and_then(|provider| provider.meta.as_ref())
-            .is_some_and(|meta| meta.gateway_route_id.is_some())
+        if self.active_remote_scope.is_none()
+            && self
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .and_then(|provider| provider.meta.as_ref())
+                .is_some_and(|meta| meta.gateway_route_id.is_some())
         {
             self.switch_station_channel(id, cx);
             return;
@@ -1384,33 +1717,48 @@ impl AppRoot {
             .find(|provider| provider.id == id)
             .map(|provider| provider.name.clone())
             .unwrap_or_else(|| id.clone());
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.notify_error(
+                t(k::SHELL_PROVIDER_SWITCH_FAILED),
+                "remote workspace is not connected".to_string(),
+                cx,
+            );
+            return;
+        };
         self.provider_action_in_flight = true;
-        let app = self.app.clone();
-        let app_type = self.selected_app;
+        let app_id = self.selected_app.app_id();
         let preview_id = id.clone();
         cx.spawn(async move |this, cx| {
-            let preview = cx
-                .background_spawn(async move {
-                    ProviderService::preview_switch(&app, app_type, &preview_id)
-                })
-                .await;
+            let preview = crate::core_async::run(async move {
+                backend
+                    .plan_provider_switch(
+                        &app_id,
+                        &preview_id,
+                        ochub_core::application::ProviderSwitchPolicy::Abort,
+                    )
+                    .await
+            })
+            .await;
             this.update(cx, |this, cx| match preview {
                 // Something outside OcHub edited the file. Write nothing until
                 // the user has seen it and said what to do.
-                Ok(found) if !found.is_empty() => {
+                Ok(handle) if !handle.plan().drift.is_empty() => {
                     this.provider_action_in_flight = false;
+                    let plan = handle.plan();
                     this.pending_drift = Some(PendingDrift {
                         provider_id: id,
                         provider_name: name,
-                        path: SharedString::from(drift::live_config_label(&app_type)),
-                        drift: found,
+                        path: SharedString::from(plan.config_path.clone()),
+                        drift: plan.drift.clone(),
                     });
                     cx.notify();
                 }
-                // No external edit, or the preview itself failed — the write
-                // recomputes this anyway and defaults to keeping the user's
-                // edits, so a failed preview must not block the switch.
-                _ => this.apply_switch(id, name, DriftResolution::Preserve, cx),
+                Ok(handle) => this.apply_switch_handle(handle, name, cx),
+                Err(error) => {
+                    this.provider_action_in_flight = false;
+                    this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error.to_string(), cx);
+                    cx.notify();
+                }
             })
             .ok();
         })
@@ -1425,41 +1773,108 @@ impl AppRoot {
         resolution: DriftResolution,
         cx: &mut Context<Self>,
     ) {
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.provider_action_in_flight = false;
+            self.notify_error(
+                t(k::SHELL_PROVIDER_SWITCH_FAILED),
+                "remote workspace is not connected".to_string(),
+                cx,
+            );
+            return;
+        };
         self.provider_action_in_flight = true;
-        let app = self.app.clone();
-        let app_type = self.selected_app;
+        let app_id = self.selected_app.app_id();
+        let policy = match resolution {
+            DriftResolution::Preserve => ochub_core::application::ProviderSwitchPolicy::Preserve,
+            DriftResolution::Discard => ochub_core::application::ProviderSwitchPolicy::Discard,
+        };
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ProviderService::switch_with(&app, app_type, &id, resolution)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                let handle = backend
+                    .plan_provider_switch(&app_id, &id, policy)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                backend
+                    .apply_provider_switch(handle)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.provider_action_in_flight = false;
                 match result {
-                    Ok(result) if result.warnings.is_empty() => {
-                        this.notify_success(tf!(k::SHELL_PROVIDER_SWITCHED, name = name), cx);
-                    }
                     Ok(result) => {
-                        this.notify_warning(
-                            tf!(k::SHELL_PROVIDER_SWITCHED, name = name),
-                            Self::warnings_summary(&result.warnings),
-                            cx,
-                        );
+                        let warnings = Self::response_warnings(&result);
+                        if warnings.is_empty() {
+                            this.notify_success(tf!(k::SHELL_PROVIDER_SWITCHED, name = name), cx);
+                        } else {
+                            this.notify_warning(
+                                tf!(k::SHELL_PROVIDER_SWITCHED, name = name),
+                                Self::warnings_summary(&warnings),
+                                cx,
+                            );
+                        }
                     }
                     Err(error) => {
                         this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error, cx);
                     }
                 }
                 this.reload(cx);
-                shell_menu::refresh(&this.app, cx);
+                if this.active_remote_scope.is_none() {
+                    shell_menu::refresh(&this.app, cx);
+                }
                 cx.notify();
             })
             .ok();
         })
         .detach();
         cx.notify();
+    }
+
+    fn apply_switch_handle(
+        &mut self,
+        handle: ProviderSwitchHandle,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.provider_action_in_flight = false;
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                backend
+                    .apply_provider_switch(handle)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(result) => {
+                        let warnings = Self::response_warnings(&result);
+                        if warnings.is_empty() {
+                            this.notify_success(tf!(k::SHELL_PROVIDER_SWITCHED, name = name), cx)
+                        } else {
+                            this.notify_warning(
+                                tf!(k::SHELL_PROVIDER_SWITCHED, name = name),
+                                Self::warnings_summary(&warnings),
+                                cx,
+                            )
+                        }
+                    }
+                    Err(error) => this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error, cx),
+                }
+                this.reload(cx);
+                if this.active_remote_scope.is_none() {
+                    shell_menu::refresh(&this.app, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Switch to a station-sourced channel: refresh its stored endpoint/key
@@ -1772,6 +2187,17 @@ impl AppRoot {
         text
     }
 
+    fn response_warnings(value: &serde_json::Value) -> Vec<String> {
+        value
+            .get("warnings")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect()
+    }
+
     fn connect_local_gateway(&mut self, provider_id: String, cx: &mut Context<Self>) {
         if self.provider_action_in_flight {
             return;
@@ -1877,15 +2303,20 @@ impl AppRoot {
             return;
         }
         self.provider_action_in_flight = true;
-        let app = self.app.clone();
-        let app_type = self.selected_app;
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.provider_action_in_flight = false;
+            return;
+        };
+        let app_id = self.selected_app.app_id();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ProviderService::remove_from_live_config(&app, app_type, &id)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .set_provider_live(&app_id, &id, false)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.provider_action_in_flight = false;
                 match result {
@@ -1897,7 +2328,9 @@ impl AppRoot {
                     }
                 }
                 this.reload(cx);
-                shell_menu::refresh(&this.app, cx);
+                if this.active_remote_scope.is_none() {
+                    shell_menu::refresh(&this.app, cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -2203,25 +2636,26 @@ impl AppRoot {
         }
         self.rebuild_provider_structure_cache();
 
-        let updates = self
+        let ids = self
             .providers
             .iter()
-            .enumerate()
-            .map(|(sort_index, provider)| provider::ProviderSortUpdate {
-                id: provider.id.clone(),
-                sort_index,
-            })
-            .collect();
+            .map(|provider| provider.id.clone())
+            .collect::<Vec<_>>();
         self.provider_action_in_flight = true;
-        let app = self.app.clone();
-        let app_type = self.selected_app;
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.provider_action_in_flight = false;
+            return;
+        };
+        let app_id = self.selected_app.app_id();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ProviderService::update_sort_order(&app, app_type, updates)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .sort_providers(&app_id, ids)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.provider_action_in_flight = false;
                 if let Err(error) = result {
@@ -2241,14 +2675,19 @@ impl AppRoot {
             return;
         }
         self.provider_action_in_flight = true;
-        let app = self.app.clone();
-        let app_type = self.selected_app;
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.provider_action_in_flight = false;
+            return;
+        };
+        let app_id = self.selected_app.app_id();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ProviderService::delete(&app, app_type, &id).map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .delete_provider(&app_id, &id)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.provider_action_in_flight = false;
                 match result {
@@ -2256,7 +2695,9 @@ impl AppRoot {
                     Err(error) => this.notify_error(t(k::SHELL_PROVIDER_DELETE_FAILED), error, cx),
                 }
                 this.reload(cx);
-                shell_menu::refresh(&this.app, cx);
+                if this.active_remote_scope.is_none() {
+                    shell_menu::refresh(&this.app, cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -2273,16 +2714,20 @@ impl AppRoot {
             return;
         }
         self.provider_action_in_flight = true;
-        let app = self.app.clone();
-        let app_type = self.selected_app;
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.provider_action_in_flight = false;
+            return;
+        };
+        let app_id = self.selected_app.app_id();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ProviderService::duplicate(&app, app_type, &id)
-                        .map(|provider| provider.name)
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .duplicate_provider(&app_id, &id)
+                    .await
+                    .map(|details| details.provider.name)
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.provider_action_in_flight = false;
                 match result {
@@ -2294,7 +2739,9 @@ impl AppRoot {
                     }
                 }
                 this.reload(cx);
-                shell_menu::refresh(&this.app, cx);
+                if this.active_remote_scope.is_none() {
+                    shell_menu::refresh(&this.app, cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -2561,7 +3008,15 @@ impl AppRoot {
     fn open_add_editor(&mut self, cx: &mut Context<Self>) {
         let app = self.app.clone();
         let app_type = self.selected_app;
-        let editor = cx.new(|cx| ProviderEditor::new_add(app, app_type, cx));
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.notify_error(
+                t(k::SHELL_PROVIDER_LOAD_FAILED),
+                "remote workspace is not connected".to_string(),
+                cx,
+            );
+            return;
+        };
+        let editor = cx.new(|cx| ProviderEditor::new_add(app, backend, app_type, cx));
         self.subscribe_editor(&editor, cx);
         self.editor = Some(editor);
         cx.notify();
@@ -2570,7 +3025,15 @@ impl AppRoot {
     fn open_edit_editor(&mut self, provider: Provider, cx: &mut Context<Self>) {
         let app = self.app.clone();
         let app_type = self.selected_app;
-        let editor = cx.new(|cx| ProviderEditor::new_edit(app, app_type, &provider, cx));
+        let Some(backend) = self.workspace_backend(cx) else {
+            self.notify_error(
+                t(k::SHELL_PROVIDER_LOAD_FAILED),
+                "remote workspace is not connected".to_string(),
+                cx,
+            );
+            return;
+        };
+        let editor = cx.new(|cx| ProviderEditor::new_edit(app, backend, app_type, &provider, cx));
         self.subscribe_editor(&editor, cx);
         self.editor = Some(editor);
         cx.notify();
@@ -2584,7 +3047,9 @@ impl AppRoot {
                 this.editor = None;
                 this.notify_success(t(k::SHELL_PROVIDER_SAVED), cx);
                 this.reload(cx);
-                shell_menu::refresh(&this.app, cx);
+                if this.active_remote_scope.is_none() {
+                    shell_menu::refresh(&this.app, cx);
+                }
                 cx.notify();
             }
             EditorEvent::Cancelled => {
@@ -2765,7 +3230,7 @@ impl AppRoot {
     ) -> gpui::Div {
         let remote = self.remote_view.read(cx);
         let items = remote.scope_items();
-        let active_remote = remote.active_scope_id().map(str::to_string);
+        let active_remote = self.active_remote_scope.clone();
         let mut labels = vec![t(k::SHELL_SIDEBAR_SCOPE_LOCAL).to_string()];
         let mut targets = vec![None];
         labels.extend(
@@ -2774,15 +3239,11 @@ impl AppRoot {
                 .map(|item| format!("{} · {}", item.label, item.target)),
         );
         targets.extend(items.iter().map(|item| Some(item.id.clone())));
-        let selected = if self.section == Section::Remote {
-            active_remote
-                .as_deref()
-                .and_then(|active| items.iter().position(|item| item.id == active))
-                .map(|index| index + 1)
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let selected = active_remote
+            .as_deref()
+            .and_then(|active| items.iter().position(|item| item.id == active))
+            .map(|index| index + 1)
+            .unwrap_or(0);
         let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
         let open = self.workspace_scope_open;
         let on_event = cx.listener(

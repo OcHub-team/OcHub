@@ -125,7 +125,6 @@
 "tools.db.hidden_count" = "過去のバックアップ {count} 件を隠しています。"
 "tools.db.refresh" = "バックアップを更新"
 "tools.db.rename_required" = "新しいバックアップ名を入力してください"
-"tools.db.serialize_failed" = "データベースのバックアップをシリアライズできませんでした：{error}"
 "tools.db.show_all" = "すべてのバックアップを表示"
 "tools.env.delete" = "削除してバックアップ"
 "tools.env.delete_failed" = "環境変数の競合を削除できませんでした：{error}"

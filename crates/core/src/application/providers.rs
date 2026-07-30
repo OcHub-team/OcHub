@@ -245,6 +245,15 @@ impl Application {
         Ok(())
     }
 
+    pub fn duplicate_provider(&self, app: &AppId, id: &str) -> ApplicationResult<ProviderDetails> {
+        let app_type = self.builtin_app(app, "provider.duplicate")?;
+        let provider = ProviderService::duplicate(&self.state, app_type, id)?;
+        Ok(ProviderDetails {
+            app: app.to_string(),
+            provider,
+        })
+    }
+
     pub fn remove_provider_from_live(&self, app: &AppId, id: &str) -> ApplicationResult<()> {
         if let Some(app_type) = AppType::from_app_id(app) {
             ProviderService::remove_from_live_config(&self.state, app_type, id)?;

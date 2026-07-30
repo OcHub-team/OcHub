@@ -24,7 +24,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const VALID_TOOLS: [&str; 5] = ["claude", "codex", "opencode", "openclaw", "hermes"];
 
 /// 单个工具的版本探测结果。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolVersion {
     pub name: String,
     pub version: Option<String>,
@@ -50,7 +50,7 @@ pub struct WslShellPreferenceInput {
 }
 
 /// 单处工具安装。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInstallation {
     pub path: String,
     pub version: Option<String>,
@@ -64,7 +64,7 @@ pub struct ToolInstallation {
 }
 
 /// 工具安装分布报告。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInstallationReport {
     pub tool: String,
     pub installs: Vec<ToolInstallation>,

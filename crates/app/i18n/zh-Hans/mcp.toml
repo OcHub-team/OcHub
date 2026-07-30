@@ -48,7 +48,6 @@
 "mcp.status.imported_partial" = "导入完成，新增 {count} 个；失败：{failures}"
 "mcp.status.json_invalid" = "JSON 解析失败: {error}"
 "mcp.status.load_failed" = "加载服务器失败: {error}"
-"mcp.status.missing" = "服务器不存在"
 "mcp.status.name_required" = "名称不能为空"
 "mcp.status.save_failed" = "保存失败: {error}"
 "mcp.status.saved" = "服务器已保存"

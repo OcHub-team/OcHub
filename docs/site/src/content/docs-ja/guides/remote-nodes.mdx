@@ -35,20 +35,31 @@ OcHub を閉じてもツールがローカルへ移動することはありま�
 | --- | --- |
 | ノード | 状態、ホスト名、OS、アーキテクチャ、Node ID、`ochcli` バージョン、Owner、アプリ |
 | 接続 | 既存接続の一覧、現在値、切り替えプレビュー、適用 |
-| Gateway | 状態表示、起動、停止 |
+| Provider | 通常のアプリ画面で一覧、作成、編集、削除、複製、並べ替え、切り替え、診断 |
+| MCP | 一覧、作成/編集、削除、アプリ別の有効化、インポート、同期 |
+| Skills | 一覧、検索、検出、インストール、削除、更新、アプリ別の有効化、リポジトリ管理 |
+| Usage | サマリー、トレンド、Provider/モデル集計、リクエスト詳細、同期、料金設定 |
+| Sessions | 一覧、全文表示、メタデータ/本文検索、全文 index の構築・保守・削除、session 削除 |
+| Network / Settings | remote proxy の表示・変更・test、app、backup policy、session index、data directory、cc-switch migration |
+| Sync / Backup | WebDAV/S3 の設定・test・upload/download、backup 管理、remote path での SQL import/export |
+| Tools / Update | remote CLI tool の確認・install・update、environment conflict、Claude/Codex/OpenClaw/Hermes の保守、OcHub update |
+| Gateway / Station | Gateway の状態・起動停止・接続情報。Provider import、Station の作成・編集・probe・model discovery・remote app への適用 |
 | 診断 | Doctor と SSH 診断 |
 | 監査 | 最近のリモート操作記録 |
 
-初期版は任意の Shell 実行を提供しません。リモート Provider の作成・編集、API Key
-転送、MCP/Skills、Session/Usage、バックアップ復元、更新インストール、Gateway
-トンネルもまだ対象外です。Provider は先にリモート側で追加またはインポートし、
-デスクトップからそれらを切り替えます。
+workspace selector は既存の product page 全体に作用します。database、tool config、
+session、path、network request は選択中 node のものです。一方、desktop language、
+tray/login、theme、「Finder で開く」などは意図的に操作側 computer に残ります。
+
+OcHub は任意の Shell 実行や自動 Gateway tunnel を提供しません。古い node とは広告済み
+capability の範囲で接続できますが、完全な workspace には新しい remote `ochcli` が必要です。
+Desktop、`ochcli`、`ochubd` を同時に更新してください。
 
 ## 必要条件
 
 次を準備してください。
 
-- 操作側コンピューターに OcHub Desktop `0.4.20` 以降。
+- 操作側コンピューターに OcHub Desktop `0.4.21` 以降。
 - 操作側で system `ssh` と `ssh-keyscan` が利用可能。
 - リモート側で到達可能な OpenSSH Server が稼働。
 - リモート側に互換バージョンの `ochcli` と `ochubd`。両方を同じディレクトリに置く。
@@ -149,6 +160,16 @@ ssh -o BatchMode=yes devbox ochcli remote probe
 
 接続一覧には online 状態、`ochcli` version、platform、最終接続時刻が表示されます。
 sidebar 上部の workspace selector で **This Mac** と保存済み remote node を切り替えます。
+
+選択中 node が offline、SSH handshake timeout、または capability negotiation 失敗に
+なった場合、各 page はその node の cache を直ちに消去し、remote write を無効にします。
+OcHub が **This Mac で同じ操作を自動実行することはありません**。Provider、gateway、
+settings、sync、tools、update を続ける前に node を再接続してください。
+
+workspace 切り替え後、page 内の path は**選択中 node の path**です。Tools の
+`/srv/backup/OcHub.sql`、Settings の data directory、sync/backup file は remote で
+解決され、操作側の `HOME` は使いません。file picker、web/Finder を開く操作、
+desktop preference は local のままです。
 
 ## リモートの Provider を切り替える
 
@@ -259,6 +280,18 @@ user と同じ権限を持ちます。policy が強い認可境界になるの�
 command に制限した場合だけです。構成例と protocol の詳細は
 [Remote Nodes design and security model](https://github.com/OcHub-team/OcHub/blob/main/docs/REMOTE-NODES-DESIGN.md)
 を参照してください。
+
+desktop から database restore、SQL/cc-switch import、remote update install を行う場合は、
+remote policy で必要な high-risk capability を明示的に有効にします。
+
+```toml
+allowBackupRestore = true
+allowUpdateInstall = true
+```
+
+新しい Provider/OpenClaw secret を書く場合は `allowSecretsWrite = true` も必要です。
+変更していない mask placeholder は remote の元値を保持し、`******` を書き戻しません。
+policy の変更は次の SSH control session から有効です。
 
 ## トラブルシューティングと現在の制限
 

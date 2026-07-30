@@ -125,7 +125,6 @@
 "tools.db.hidden_count" = "{count} older backups are hidden."
 "tools.db.refresh" = "Refresh backups"
 "tools.db.rename_required" = "Enter a new backup name"
-"tools.db.serialize_failed" = "Couldn't serialize the database backups: {error}"
 "tools.db.show_all" = "Show every backup"
 "tools.env.delete" = "Delete and back up"
 "tools.env.delete_failed" = "Couldn't delete the environment variable conflicts: {error}"

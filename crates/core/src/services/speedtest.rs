@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use reqwest::{Client, Url};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use crate::error::AppError;
@@ -10,7 +10,7 @@ const MAX_TIMEOUT_SECS: u64 = 30;
 const MIN_TIMEOUT_SECS: u64 = 2;
 
 /// 端点测速结果
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointLatency {
     pub url: String,
     pub latency: Option<u128>,

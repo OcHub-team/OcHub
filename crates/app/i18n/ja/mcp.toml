@@ -44,7 +44,6 @@
 "mcp.status.imported_partial" = "取り込みが完了しました。{count} 件を追加しましたが、一部は失敗しました: {failures}"
 "mcp.status.json_invalid" = "JSON の解析に失敗しました: {error}"
 "mcp.status.load_failed" = "サーバーの読み込みに失敗しました: {error}"
-"mcp.status.missing" = "そのサーバーは存在しません"
 "mcp.status.name_required" = "名前を入力してください"
 "mcp.status.save_failed" = "保存に失敗しました: {error}"
 "mcp.status.saved" = "サーバーを保存しました"

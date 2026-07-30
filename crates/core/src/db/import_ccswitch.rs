@@ -52,14 +52,14 @@ const KNOWN_APP_TYPES: &str = "('claude','claude-desktop','claude_desktop','clau
 const LEGACY_USAGE_CONFIG_APP_TYPES: &str = "('claude','codex','gemini')";
 
 /// 单表导入结果。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableImport {
     pub table: String,
     pub rows: usize,
 }
 
 /// cc-switch 的两代存储形态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportSourceKind {
     /// `cc-switch.db`：v3.x 起的 SQLite 库，内容是 JSON 配置的超集。
@@ -71,7 +71,7 @@ pub enum ImportSourceKind {
 /// 磁盘上找到的一份 cc-switch 数据，附带够首启弹窗说清「会带来什么」的清点。
 ///
 /// 清点是只读的：检测本身不写任何一边。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedSource {
     pub kind: ImportSourceKind,
     pub path: PathBuf,
@@ -89,7 +89,7 @@ impl DetectedSource {
 }
 
 /// 一次性导入报告，持久化到 settings（key = [`IMPORT_REPORT_KEY`]）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportReport {
     pub source_kind: ImportSourceKind,
     pub source_path: String,

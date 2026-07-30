@@ -22,6 +22,7 @@ use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme;
@@ -68,7 +69,8 @@ enum SkillRow {
 }
 
 pub struct SkillsView {
-    app: Arc<AppState>,
+    backend: WorkspaceBackend,
+    workspace_available: bool,
     tab: SkillsTab,
     discover_mode: DiscoverMode,
     skills: Vec<InstalledSkill>,
@@ -136,7 +138,8 @@ impl SkillsView {
         let skill_apps: Arc<[AppType]> = crate::app_meta::enabled_skill_apps().into();
         let selected_app = skill_apps.first().copied().unwrap_or(AppType::Claude);
         let this = Self {
-            app,
+            backend: WorkspaceBackend::local(app),
+            workspace_available: true,
             tab: SkillsTab::Installed,
             discover_mode: DiscoverMode::Market,
             skills: Vec::new(),
@@ -203,16 +206,18 @@ impl SkillsView {
         }
         self.reload_generation = self.reload_generation.wrapping_add(1);
         let generation = self.reload_generation;
-        let app = self.app.clone();
+        if !self.workspace_available {
+            self.skills.clear();
+            self.repos.clear();
+            self.refresh_list(cx);
+            return;
+        }
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let (skills, repos) = cx
-                .background_spawn(async move {
-                    (
-                        SkillService::get_all_installed(&app.db).map_err(|error| error.to_string()),
-                        app.db.get_skill_repos().unwrap_or_default(),
-                    )
-                })
-                .await;
+            let (skills, repos) = crate::core_async::run(async move {
+                tokio::join!(backend.list_installed_skills(), backend.list_skill_repos())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 if generation != this.reload_generation {
                     return;
@@ -228,12 +233,67 @@ impl SkillsView {
                         );
                     }
                 }
-                this.repos = repos;
+                match repos {
+                    Ok(repos) => this.repos = repos,
+                    Err(error) => {
+                        this.repos.clear();
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SKILLS_STATUS_LOAD_FAILED, error = error),
+                            cx,
+                        );
+                    }
+                }
                 this.refresh_list(cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn set_workspace(
+        &mut self,
+        backend: WorkspaceBackend,
+        skill_apps: Vec<AppType>,
+        cx: &mut Context<Self>,
+    ) {
+        self.backend = backend;
+        self.workspace_available = true;
+        self.skill_apps = skill_apps.into();
+        self.auto_checked = false;
+        self.confirm = None;
+        self.skills.clear();
+        self.repos.clear();
+        self.discoverable.clear();
+        self.market_results.clear();
+        self.updates.clear();
+        self.refresh_list(cx);
+        self.reload(cx);
+    }
+
+    pub(crate) fn set_workspace_unavailable(
+        &mut self,
+        skill_apps: Vec<AppType>,
+        cx: &mut Context<Self>,
+    ) {
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        self.workspace_available = false;
+        self.skill_apps = skill_apps.into();
+        self.skills.clear();
+        self.repos.clear();
+        self.discoverable.clear();
+        self.market_results.clear();
+        self.updates.clear();
+        self.confirm = None;
+        self.set_status(
+            NotificationLevel::Error,
+            tf!(
+                k::SKILLS_STATUS_LOAD_FAILED,
+                error = "remote workspace is not connected"
+            ),
+            cx,
+        );
+        self.refresh_list(cx);
     }
 
     /// 页面首次显示且存在远程技能时自动检查一次更新。视图在应用启动时就被
@@ -315,10 +375,11 @@ impl SkillsView {
         self.rows = rows.into();
     }
 
-    fn run_repo_io<R, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
+    fn run_repo_io<R, Fut, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
     where
         R: Send + 'static,
-        Work: FnOnce() -> R + Send + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        Work: FnOnce() -> Fut + Send + 'static,
         Apply: FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
     {
         if self.repo_mutating {
@@ -326,7 +387,7 @@ impl SkillsView {
         }
         self.repo_mutating = true;
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { work() }).await;
+            let result = crate::core_async::run(work()).await;
             this.update(cx, |this, cx| {
                 this.repo_mutating = false;
                 apply(this, result, cx);
@@ -352,14 +413,33 @@ impl SkillsView {
         cx.notify();
     }
 
+    fn require_workspace(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.workspace_available {
+            return true;
+        }
+        self.set_status(
+            NotificationLevel::Error,
+            tf!(
+                k::SKILLS_STATUS_LOAD_FAILED,
+                error = "remote workspace is not connected"
+            ),
+            cx,
+        );
+        false
+    }
+
     /// 在后台线程的临时 tokio runtime 中执行核心异步调用。
     /// SkillService 的网络路径（下载仓库、市场搜索）依赖 tokio 定时器，
     /// 不能在 GPUI 前台 executor 上直接 await，否则 `Handle::current` 会
     /// panic 并因跨 objc 栈无法 unwind 而直接 abort。
-    fn spawn_tokio<T: Send + 'static>(
+    fn spawn_tokio<T, E>(
         cx: &mut Context<Self>,
-        fut: impl std::future::Future<Output = anyhow::Result<T>> + Send + 'static,
-    ) -> gpui::Task<anyhow::Result<T>> {
+        fut: impl std::future::Future<Output = Result<T, E>> + Send + 'static,
+    ) -> gpui::Task<Result<T, E>>
+    where
+        T: Send + 'static,
+        E: Send + 'static,
+    {
         cx.background_spawn(crate::core_async::run(fut))
     }
 
@@ -427,7 +507,7 @@ impl SkillsView {
     // ── 已安装：更新 / 开关 / 卸载 / 同步 ───────────────────────────────────
 
     fn check_updates(&mut self, cx: &mut Context<Self>) {
-        if self.checking_updates {
+        if !self.require_workspace(cx) || self.checking_updates {
             return;
         }
         self.checking_updates = true;
@@ -437,10 +517,8 @@ impl SkillsView {
             cx,
         );
 
-        let app = self.app.clone();
-        let task = Self::spawn_tokio(cx, async move {
-            SkillService::new().check_updates(&app.db).await
-        });
+        let backend = self.backend.clone();
+        let task = Self::spawn_tokio(cx, async move { backend.check_skill_updates().await });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -482,17 +560,15 @@ impl SkillsView {
     }
 
     fn update_skill(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.updating.contains(&id) {
+        if !self.require_workspace(cx) || self.updating.contains(&id) {
             return;
         }
         self.updating.insert(id.clone());
         self.set_status(NotificationLevel::Info, t(k::SKILLS_STATUS_UPDATING), cx);
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let task_id = id.clone();
-        let task = Self::spawn_tokio(cx, async move {
-            SkillService::new().update_skill(&app.db, &task_id).await
-        });
+        let task = Self::spawn_tokio(cx, async move { backend.update_skill(&task_id).await });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -524,7 +600,7 @@ impl SkillsView {
 
     /// 逐个更新所有有新版本的技能（顺序执行，避免仓库并发下载冲突）。
     fn update_all(&mut self, cx: &mut Context<Self>) {
-        if self.updating_all || self.updates.is_empty() {
+        if !self.require_workspace(cx) || self.updating_all || self.updates.is_empty() {
             return;
         }
         let ids: Vec<String> = self.updates.keys().cloned().collect();
@@ -538,18 +614,17 @@ impl SkillsView {
             cx,
         );
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let task = Self::spawn_tokio(cx, async move {
-            let service = SkillService::new();
             let mut ok_ids = Vec::new();
             let mut errors = Vec::new();
             for id in ids {
-                match service.update_skill(&app.db, &id).await {
+                match backend.update_skill(&id).await {
                     Ok(skill) => ok_ids.push((id, skill.name)),
                     Err(err) => errors.push(format!("{err}")),
                 }
             }
-            anyhow::Ok((ok_ids, errors))
+            Ok::<_, std::convert::Infallible>((ok_ids, errors))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -603,6 +678,9 @@ impl SkillsView {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_workspace(cx) {
+            return;
+        }
         let key = format!("{id}:{}", app_type.as_str());
         if self.toggling.contains(&key) {
             return;
@@ -610,16 +688,18 @@ impl SkillsView {
         self.toggling.insert(key.clone());
         cx.notify();
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let task = Self::spawn_tokio(cx, async move {
-            SkillService::toggle_app(&app.db, &id, &app_type, enabled).await
+            backend
+                .set_skill_app(&id, &app_type.app_id(), enabled)
+                .await
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.toggling.remove(&key);
                 match result {
-                    Ok(()) => {
+                    Ok(_) => {
                         // Whole sentences per branch: the verb cannot be swapped
                         // into a Chinese frame and still read as English.
                         let app = Self::app_label(app_type);
@@ -647,7 +727,7 @@ impl SkillsView {
     }
 
     fn do_uninstall(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.uninstalling.contains(&id) {
+        if !self.require_workspace(cx) || self.uninstalling.contains(&id) {
             return;
         }
         self.uninstalling.insert(id.clone());
@@ -657,11 +737,9 @@ impl SkillsView {
             cx,
         );
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let task_id = id.clone();
-        let task = Self::spawn_tokio(cx, async move {
-            SkillService::uninstall(&app.db, &task_id).await
-        });
+        let task = Self::spawn_tokio(cx, async move { backend.uninstall_skill(&task_id).await });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -715,6 +793,17 @@ impl SkillsView {
     }
 
     fn open_skill_dir(&mut self, directory: &str, cx: &mut Context<Self>) {
+        if self.backend.is_remote() {
+            self.set_status(
+                NotificationLevel::Warning,
+                tf!(
+                    k::SKILLS_STATUS_OPEN_DIR_FAILED,
+                    error = "remote skill directories cannot be opened locally"
+                ),
+                cx,
+            );
+            return;
+        }
         let path = match SkillService::get_ssot_dir() {
             Ok(dir) => dir.join(directory),
             Err(err) => {
@@ -738,6 +827,9 @@ impl SkillsView {
     // ── 发现：市场搜索 / 仓库浏览 / 安装 ───────────────────────────────────
 
     fn run_market_search(&mut self, append: bool, cx: &mut Context<Self>) {
+        if !self.require_workspace(cx) {
+            return;
+        }
         let query = self.market_input.read(cx).content().trim().to_string();
         if query.is_empty() {
             // Refused, not failed: nothing was attempted.
@@ -759,8 +851,11 @@ impl SkillsView {
             cx,
         );
 
+        let backend = self.backend.clone();
         let task = Self::spawn_tokio(cx, async move {
-            SkillService::search_skills_sh(&query, MARKET_PAGE_SIZE, offset).await
+            backend
+                .search_skills(&query, MARKET_PAGE_SIZE, offset)
+                .await
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -797,20 +892,14 @@ impl SkillsView {
     }
 
     fn discover_skills(&mut self, cx: &mut Context<Self>) {
-        if self.discovering {
+        if !self.require_workspace(cx) || self.discovering {
             return;
         }
         self.discovering = true;
         self.set_status(NotificationLevel::Info, t(k::SKILLS_STATUS_DISCOVERING), cx);
 
-        let app = self.app.clone();
-        let task = Self::spawn_tokio(cx, async move {
-            let repos = app
-                .db
-                .get_skill_repos()
-                .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-            SkillService::new().discover_available(repos).await
-        });
+        let backend = self.backend.clone();
+        let task = Self::spawn_tokio(cx, async move { backend.discover_skills().await });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -853,7 +942,7 @@ impl SkillsView {
     }
 
     fn install_discoverable(&mut self, skill: DiscoverableSkill, cx: &mut Context<Self>) {
-        if self.installing.contains(&skill.key) {
+        if !self.require_workspace(cx) || self.installing.contains(&skill.key) {
             return;
         }
         let key = skill.key.clone();
@@ -864,12 +953,10 @@ impl SkillsView {
             cx,
         );
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let target_app = self.selected_app;
         let task = Self::spawn_tokio(cx, async move {
-            SkillService::new()
-                .install(&app.db, &skill, &target_app)
-                .await
+            backend.install_skill(&skill, &target_app.app_id()).await
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -917,6 +1004,9 @@ impl SkillsView {
     // ── 仓库管理 ────────────────────────────────────────────────────────────
 
     fn add_repo(&mut self, cx: &mut Context<Self>) {
+        if !self.require_workspace(cx) {
+            return;
+        }
         // Named `input` rather than `raw`: `i18n::raw` is in scope here.
         let input = self.repo_input.read(cx).content().trim().to_string();
         if input.is_empty() {
@@ -955,14 +1045,12 @@ impl SkillsView {
         let owner = repo.owner.clone();
         let name = repo.name.clone();
         let branch = repo.branch.clone();
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         self.run_repo_io(
             cx,
-            move || {
-                app.db
-                    .save_skill_repo(&repo)
-                    .and_then(|_| app.db.get_skill_repos())
-                    .map_err(|error| error.to_string())
+            move || async move {
+                backend.upsert_skill_repo(None, repo).await?;
+                backend.list_skill_repos().await
             },
             move |this, result, cx| match result {
                 Ok(repos) => {
@@ -991,6 +1079,9 @@ impl SkillsView {
     }
 
     fn toggle_repo(&mut self, owner: String, name: String, cx: &mut Context<Self>) {
+        if !self.require_workspace(cx) {
+            return;
+        }
         let Some(repo) = self
             .repos
             .iter()
@@ -1004,14 +1095,15 @@ impl SkillsView {
             ..repo
         };
         let enabled = toggled.enabled;
-        let app = self.app.clone();
+        let backend = self.backend.clone();
+        let original_id = format!("{owner}/{name}");
         self.run_repo_io(
             cx,
-            move || {
-                app.db
-                    .save_skill_repo(&toggled)
-                    .and_then(|_| app.db.get_skill_repos())
-                    .map_err(|error| error.to_string())
+            move || async move {
+                backend
+                    .upsert_skill_repo(Some(&original_id), toggled)
+                    .await?;
+                backend.list_skill_repos().await
             },
             move |this, result, cx| match result {
                 Ok(repos) => {
@@ -1034,16 +1126,19 @@ impl SkillsView {
     }
 
     fn do_delete_repo(&mut self, owner: String, name: String, cx: &mut Context<Self>) {
-        let app = self.app.clone();
+        if !self.require_workspace(cx) {
+            return;
+        }
+        let backend = self.backend.clone();
         let owner_for_work = owner.clone();
         let name_for_work = name.clone();
         self.run_repo_io(
             cx,
-            move || {
-                app.db
+            move || async move {
+                backend
                     .delete_skill_repo(&owner_for_work, &name_for_work)
-                    .and_then(|_| app.db.get_skill_repos())
-                    .map_err(|error| error.to_string())
+                    .await?;
+                backend.list_skill_repos().await
             },
             move |this, result, cx| match result {
                 Ok(repos) => {

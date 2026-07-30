@@ -55,6 +55,7 @@ use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{k, t};
 use crate::icons::IconName;
 use crate::notifications::NotificationLevel;
+use crate::remote::{WorkspaceBackend, WorkspaceBackendError};
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme;
@@ -100,6 +101,9 @@ pub(crate) enum Confirm {
 
 pub struct SettingsView {
     app: Arc<AppState>,
+    backend: WorkspaceBackend,
+    workspace_available: bool,
+    workspace_remote: bool,
     /// Display cache. Written only by `= settings::get_settings()`, never read
     /// back into the store — see the module doc.
     settings: AppSettings,
@@ -113,6 +117,10 @@ pub struct SettingsView {
     apps_list: ListState,
     sync_scroll: ScrollHandle,
     search: Entity<TextInput>,
+    data_dir_input: Entity<TextInput>,
+    data_dir_value: SharedString,
+    data_dir_has_override: bool,
+    data_dir_editing: bool,
     query: SharedString,
     /// At most one adaptive select row may have its dropdown open.
     open_select_row: Option<RowId>,
@@ -144,6 +152,7 @@ pub struct SettingsView {
     /// re-read after anything that changes it.
     session_index_stats: Option<IndexStats>,
     session_index_busy: bool,
+    workspace_generation: u64,
 }
 
 /// Root blocks when no search query is active. 关于 is its own section
@@ -160,7 +169,18 @@ const MANUAL_MAINTENANCE_BUDGET: std::time::Duration = std::time::Duration::from
 impl SettingsView {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::new(cx, t(k::SETTINGS_SEARCH_PLACEHOLDER)).compact());
+        let initial_data_dir = ochub_core::paths::get_app_config_dir()
+            .to_string_lossy()
+            .into_owned();
+        let data_dir_input = cx.new(|cx| {
+            let mut input = TextInput::new(cx, initial_data_dir.clone());
+            input.set_content(initial_data_dir.clone(), cx);
+            input
+        });
         let mut this = Self {
+            backend: WorkspaceBackend::local(app.clone()),
+            workspace_available: true,
+            workspace_remote: false,
             app,
             settings: settings::get_settings(),
             plugins: ochub_core::plugin::all_plugins_snapshot(),
@@ -170,6 +190,10 @@ impl SettingsView {
             apps_list: ListState::new(APPS_BLOCK_COUNT, ListAlignment::Top, px(600.)),
             sync_scroll: ScrollHandle::new(),
             search,
+            data_dir_input,
+            data_dir_value: SharedString::from(initial_data_dir),
+            data_dir_has_override: ochub_core::app_store::get_app_config_dir_override().is_some(),
+            data_dir_editing: false,
             query: SharedString::default(),
             open_select_row: None,
             toggling: HashSet::new(),
@@ -186,6 +210,7 @@ impl SettingsView {
             ccswitch_busy: false,
             session_index_stats: None,
             session_index_busy: false,
+            workspace_generation: 0,
         };
 
         // Filtering re-lays the list; ignore the notifications that carry no
@@ -213,6 +238,35 @@ impl SettingsView {
     /// the database is deliberately not done here — that would create the very
     /// file whose absence is being tested.
     fn refresh_session_index_stats(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            if !self.workspace_available {
+                self.session_index_stats = None;
+                self.root_list.reset(self.root_block_count());
+                cx.notify();
+                return;
+            }
+            let backend = self.backend.clone();
+            let generation = self.workspace_generation;
+            cx.spawn(async move |this, cx| {
+                let stats =
+                    crate::core_async::run(async move { backend.session_index_status().await })
+                        .await
+                        .ok()
+                        .flatten();
+                this.update(cx, |this, cx| {
+                    if generation != this.workspace_generation {
+                        return;
+                    }
+                    this.session_index_stats = stats;
+                    this.root_list.reset(this.root_block_count());
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
+        let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let stats = cx
                 .background_spawn(async {
@@ -222,6 +276,9 @@ impl SettingsView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.session_index_stats = stats;
                 this.root_list.reset(this.root_block_count());
                 cx.notify();
@@ -240,11 +297,11 @@ impl SettingsView {
     fn toggle_session_index(&mut self, cx: &mut Context<Self>) {
         let enabling = !self.settings.session_index_enabled;
         let disabled_at = (!enabling).then(|| chrono::Utc::now().timestamp_millis());
-        self.write_then(
-            move |settings| {
-                settings.session_index_enabled = enabling;
-                settings.session_index_disabled_at = disabled_at;
-            },
+        self.write_workspace(
+            vec![
+                ("sessionIndexEnabled", serde_json::json!(enabling)),
+                ("sessionIndexDisabledAt", serde_json::json!(disabled_at)),
+            ],
             |this, cx| this.refresh_session_index_stats(cx),
             cx,
         );
@@ -252,8 +309,9 @@ impl SettingsView {
 
     fn toggle_session_index_auto_reclaim(&mut self, cx: &mut Context<Self>) {
         let enabled = !self.settings.session_index_auto_reclaim;
-        self.write(
-            move |settings| settings.session_index_auto_reclaim = enabled,
+        self.write_workspace(
+            vec![("sessionIndexAutoReclaim", serde_json::json!(enabled))],
+            |_this, _cx| {},
             cx,
         );
     }
@@ -261,17 +319,20 @@ impl SettingsView {
     /// Return the index's free pages to the filesystem now, rather than waiting
     /// for the threshold that normally triggers it.
     fn reclaim_session_index(&mut self, cx: &mut Context<Self>) {
-        if self.session_index_busy {
+        if self.session_index_busy || !self.workspace_available {
             return;
         }
         self.session_index_busy = true;
+        let backend = self.backend.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async {
-                    SessionIndex::open().and_then(|index| index.maintain(MANUAL_MAINTENANCE_BUDGET))
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .maintain_session_index(MANUAL_MAINTENANCE_BUDGET.as_secs())
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.session_index_busy = false;
                 match result {
@@ -297,23 +358,25 @@ impl SettingsView {
     /// Safe in a way most delete actions are not: the index holds no original
     /// data, so the cost is a rebuild, not a loss.
     fn delete_session_index(&mut self, cx: &mut Context<Self>) {
-        if self.session_index_busy {
+        if self.session_index_busy || !self.workspace_available {
             return;
         }
         self.session_index_busy = true;
+        let backend = self.backend.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            cx.background_spawn(async {
-                SessionIndex::delete_files(&session_index::default_index_path());
-            })
-            .await;
+            let result =
+                crate::core_async::run(async move { backend.delete_session_index().await }).await;
             this.update(cx, |this, cx| {
                 this.session_index_busy = false;
-                this.set_status(
-                    NotificationLevel::Success,
-                    t(k::SETTINGS_SESSION_INDEX_DELETED),
-                    cx,
-                );
+                match result {
+                    Ok(()) => this.set_status(
+                        NotificationLevel::Success,
+                        t(k::SETTINGS_SESSION_INDEX_DELETED),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(NotificationLevel::Error, error.to_string(), cx),
+                }
                 this.refresh_session_index_stats(cx);
             })
             .ok();
@@ -345,6 +408,10 @@ impl SettingsView {
     /// exactly as typed. That can never collide with a restore, because
     /// 还原 is disabled while the draft is dirty.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.load_workspace_settings(cx);
+            return;
+        }
         self.settings = settings::get_settings();
         let reseed = self.draft.is_some() && !self.draft_dirty(cx);
         if reseed {
@@ -354,6 +421,157 @@ impl SettingsView {
         self.root_list.remeasure();
         self.apps_list.remeasure();
         cx.notify();
+    }
+
+    pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.workspace_remote = backend.is_remote();
+        self.backend = backend;
+        self.workspace_available = true;
+        self.settings_busy = false;
+        self.sync_busy = false;
+        self.ccswitch_busy = false;
+        self.session_index_busy = false;
+        self.toggling.clear();
+        self.settings = if self.workspace_remote {
+            merge_workspace_settings(settings::get_settings(), AppSettings::default())
+        } else {
+            settings::get_settings()
+        };
+        if self.workspace_remote {
+            self.ccswitch_source = None;
+            self.data_dir_value = SharedString::default();
+            self.data_dir_has_override = false;
+            self.data_dir_editing = false;
+        }
+        self.load_workspace_settings(cx);
+        self.load_workspace_metadata(cx);
+    }
+
+    pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.workspace_remote = true;
+        self.workspace_available = false;
+        self.settings_busy = false;
+        self.sync_busy = false;
+        self.ccswitch_busy = false;
+        self.session_index_busy = false;
+        self.toggling.clear();
+        let controller = settings::get_settings();
+        self.settings = merge_workspace_settings(controller, AppSettings::default());
+        self.ccswitch_source = None;
+        self.data_dir_value = SharedString::default();
+        self.data_dir_has_override = false;
+        self.data_dir_editing = false;
+        self.session_index_stats = None;
+        self.root_list.remeasure();
+        self.apps_list.remeasure();
+        cx.notify();
+    }
+
+    fn load_workspace_settings(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
+        let backend = self.backend.clone();
+        let remote = self.workspace_remote;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |this, cx| {
+            let result = backend
+                .settings()
+                .await
+                .and_then(|value| {
+                    serde_json::from_value::<AppSettings>(value)
+                        .map_err(WorkspaceBackendError::from)
+                })
+                .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
+                match result {
+                    Ok(workspace) => {
+                        this.settings = if remote {
+                            merge_workspace_settings(settings::get_settings(), workspace)
+                        } else {
+                            workspace
+                        };
+                        let reseed = this.draft.is_some() && !this.draft_dirty(cx);
+                        if reseed {
+                            this.reseed_draft(cx);
+                        }
+                        this.warn_if_dual_target(cx);
+                        this.refresh_session_index_stats(cx);
+                    }
+                    Err(error) => {
+                        if remote {
+                            this.settings = merge_workspace_settings(
+                                settings::get_settings(),
+                                AppSettings::default(),
+                            );
+                        }
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SETTINGS_STATUS_SAVE_FAILED, error = error),
+                            cx,
+                        );
+                    }
+                }
+                this.root_list.remeasure();
+                this.apps_list.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn load_workspace_metadata(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                let data_dir = backend.data_dir_status().await?;
+                let source = backend.detect_ccswitch().await?;
+                Ok::<_, WorkspaceBackendError>((data_dir, source))
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
+                match result {
+                    Ok((data_dir, source)) => {
+                        this.data_dir_has_override =
+                            data_dir["persistentOverride"].as_str().is_some();
+                        let path = data_dir["persistentOverride"]
+                            .as_str()
+                            .or_else(|| data_dir["effective"].as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        this.data_dir_value = SharedString::from(path.clone());
+                        this.data_dir_input
+                            .update(cx, |input, cx| input.set_content(path, cx));
+                        this.ccswitch_source = source.filter(|source| !source.is_empty());
+                    }
+                    Err(error) => {
+                        this.ccswitch_source = None;
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::SETTINGS_STATUS_SAVE_FAILED, error = error),
+                            cx,
+                        );
+                    }
+                }
+                this.root_list.reset(this.root_block_count());
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Re-apply the current locale to state that a repaint cannot reach.
@@ -504,6 +722,59 @@ impl SettingsView {
                     Ok(()) => {
                         this.reload(cx);
                         on_success(this, cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::SETTINGS_STATUS_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn write_workspace(
+        &mut self,
+        values: Vec<(&'static str, serde_json::Value)>,
+        on_success: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_busy || !self.workspace_available {
+            return;
+        }
+        self.settings_busy = true;
+        let backend = self.backend.clone();
+        let remote = self.workspace_remote;
+        let generation = self.workspace_generation;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                for (path, value) in values {
+                    backend.set_setting(path, value).await?;
+                }
+                let stored = backend.settings().await?;
+                serde_json::from_value::<AppSettings>(stored).map_err(WorkspaceBackendError::from)
+            })
+            .await
+            .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
+                this.settings_busy = false;
+                match result {
+                    Ok(workspace) => {
+                        this.settings = if remote {
+                            merge_workspace_settings(settings::get_settings(), workspace)
+                        } else {
+                            workspace
+                        };
+                        on_success(this, cx);
+                        this.root_list.remeasure();
+                        this.apps_list.remeasure();
+                        cx.notify();
                     }
                     Err(error) => this.set_status(
                         NotificationLevel::Error,
@@ -715,6 +986,49 @@ impl SettingsView {
                 ])),
         )
     }
+
+    fn render_data_dir_editor(&self, cx: &mut Context<Self>) -> gpui::Div {
+        components::modal_overlay(
+            components::modal_card()
+                .child(components::modal_header(t(k::SETTINGS_DATA_DIR_PROMPT)))
+                .child(
+                    components::modal_body().child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(t(k::SETTINGS_DATA_DIR_DESC))
+                            .child(self.data_dir_input.clone()),
+                    ),
+                )
+                .child(components::modal_footer(vec![
+                    components::button(
+                        "settings-data-dir-cancel",
+                        t(k::SETTINGS_ACTION_CANCEL),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.data_dir_editing = false;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                    components::button(
+                        "settings-data-dir-save",
+                        t(k::SETTINGS_ACTION_SAVE),
+                        ButtonTone::Primary,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        let path = this.data_dir_input.read(cx).content().trim().to_string();
+                        if !path.is_empty() {
+                            this.apply_data_dir(Some(path), cx);
+                        }
+                    }))
+                    .into_any_element(),
+                ])),
+        )
+    }
 }
 
 impl Render for SettingsView {
@@ -727,8 +1041,25 @@ impl Render for SettingsView {
         if let Some(confirm) = self.confirm {
             page = page.child(self.render_confirm(confirm, cx));
         }
+        if self.data_dir_editing {
+            page = page.child(self.render_data_dir_editor(cx));
+        }
         page
     }
+}
+
+fn merge_workspace_settings(mut controller: AppSettings, workspace: AppSettings) -> AppSettings {
+    controller.enabled_apps = workspace.enabled_apps;
+    controller.webdav_sync = workspace.webdav_sync;
+    controller.s3_sync = workspace.s3_sync;
+    controller.webdav_backup = workspace.webdav_backup;
+    controller.backup_interval_hours = workspace.backup_interval_hours;
+    controller.backup_retain_count = workspace.backup_retain_count;
+    controller.session_index_enabled = workspace.session_index_enabled;
+    controller.session_index_auto_reclaim = workspace.session_index_auto_reclaim;
+    controller.session_index_disabled_at = workspace.session_index_disabled_at;
+    controller.auto_sync_confirmed = workspace.auto_sync_confirmed;
+    controller
 }
 
 crate::notifications::impl_status_toasts_leveled!(SettingsView);

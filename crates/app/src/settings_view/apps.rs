@@ -173,7 +173,7 @@ impl SettingsView {
     /// the row actually in flight goes inert while the rest of the page stays
     /// usable.
     fn set_app_enabled(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.toggling.contains(id) {
+        if self.toggling.contains(id) || !self.workspace_available {
             return;
         }
         let Some(plugin) = self
@@ -184,38 +184,53 @@ impl SettingsView {
             return;
         };
         let currently = self.app_is_enabled(plugin.as_ref());
-        let app = self.app.clone();
         let app_id = plugin.id().clone();
+        let backend = self.backend.clone();
+        let remote = self.workspace_remote;
+        let generation = self.workspace_generation;
         let key = id.to_string();
         self.toggling.insert(key.clone());
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ochub_core::services::apps::set_app_enabled(&app, &app_id, !currently).await
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend.set_app_enabled(&app_id, !currently).await?;
+                let value = backend.settings().await?;
+                serde_json::from_value::<ochub_core::settings::AppSettings>(value)
+                    .map_err(super::WorkspaceBackendError::from)
+            })
+            .await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.toggling.remove(&key);
-                this.settings = settings::get_settings();
                 match result {
-                    Ok(()) => this.set_status(
-                        NotificationLevel::Success,
-                        if currently {
-                            t(k::SETTINGS_APPS_DISABLED)
+                    Ok(workspace) => {
+                        this.settings = if remote {
+                            super::merge_workspace_settings(settings::get_settings(), workspace)
                         } else {
-                            t(k::SETTINGS_APPS_ENABLED)
-                        },
-                        cx,
-                    ),
+                            workspace
+                        };
+                        this.set_status(
+                            NotificationLevel::Success,
+                            if currently {
+                                t(k::SETTINGS_APPS_DISABLED)
+                            } else {
+                                t(k::SETTINGS_APPS_ENABLED)
+                            },
+                            cx,
+                        );
+                    }
                     Err(err) => this.set_status(
                         NotificationLevel::Error,
                         tf!(k::SETTINGS_APPS_ACTION_FAILED, error = err),
                         cx,
                     ),
                 }
-                shell_menu::refresh(&this.app, cx);
+                if !remote {
+                    shell_menu::refresh(&this.app, cx);
+                }
                 cx.emit(SettingsEvent::AppsChanged);
                 this.apps_list.remeasure();
                 this.root_list.remeasure();

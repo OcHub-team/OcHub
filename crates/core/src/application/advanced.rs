@@ -320,8 +320,18 @@ impl Application {
     }
 
     pub fn set_openclaw_env(&self, value: Value) -> ApplicationResult<Value> {
-        let env = serde_json::from_value(value)
+        let mut env: crate::apps::openclaw::OpenClawEnvConfig = serde_json::from_value(value)
             .map_err(|error| ApplicationError::InvalidInput(error.to_string()))?;
+        if let Ok(existing) = crate::apps::openclaw::get_env_config() {
+            for (key, value) in &mut env.vars {
+                if value.as_str().is_some_and(|value| {
+                    !value.is_empty() && value.chars().all(|character| character == '*')
+                }) && let Some(original) = existing.vars.get(key)
+                {
+                    *value = original.clone();
+                }
+            }
+        }
         to_value(crate::apps::openclaw::set_env_config(&env)?)
     }
 

@@ -14,9 +14,8 @@ use gpui::{
     ListState, MouseButton, Pixels, Point, ScrollHandle, SharedString, Window, anchored, canvas,
     deferred, div, ease_out_quint, point, prelude::*, px, relative,
 };
-use ochub_core::services::session_usage::{
-    DataSourceSummary, SessionSyncResult, get_data_source_breakdown, sync_claude_session_logs,
-};
+use ochub_core::application::{PricingDefault, UsageFilter};
+use ochub_core::services::session_usage::DataSourceSummary;
 use ochub_core::services::usage_stats::{
     DailyStats, LogFilters, ModelPricingInfo, ModelStats, ProviderStats, RequestLogDetail,
     UsageSummaryByApp,
@@ -24,13 +23,14 @@ use ochub_core::services::usage_stats::{
 use ochub_core::services::{
     PricingCatalogRefreshKind, PricingCatalogRefreshOutcome, PricingCatalogStatus,
 };
-use ochub_core::{AppState, UsageSummary, services};
+use ochub_core::{AppState, UsageSummary};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone, format_local_timestamp};
 use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::tf;
 use crate::theme;
@@ -66,6 +66,26 @@ struct UsageData {
     errors: Vec<String>,
 }
 
+impl UsageData {
+    fn empty(errors: Vec<String>) -> Self {
+        Self {
+            summary: None,
+            summary_by_app: Vec::new(),
+            daily: Vec::new(),
+            providers: Vec::new(),
+            provider_options: Vec::new(),
+            models: Vec::new(),
+            model_options: Vec::new(),
+            logs: Vec::new(),
+            log_total: 0,
+            data_sources: Vec::new(),
+            pricing: Vec::new(),
+            pricing_catalog: PricingCatalogStatus::default(),
+            errors,
+        }
+    }
+}
+
 struct TrendCache {
     values: Arc<[f32]>,
     hover_labels: Arc<[SharedString]>,
@@ -93,65 +113,96 @@ impl Default for TrendCache {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn load_usage_data(
-    app: &AppState,
+async fn load_usage_data(
+    backend: WorkspaceBackend,
     start: Option<i64>,
     end: Option<i64>,
-    app_filter: Option<&str>,
-    provider_filter: Option<&str>,
-    model_filter: Option<&str>,
+    app_filter: Option<String>,
+    provider_filter: Option<String>,
+    model_filter: Option<String>,
     status_filter: Option<u16>,
     log_page: u32,
     log_page_size: u32,
 ) -> UsageData {
-    let mut errors = Vec::new();
-
-    let summary =
-        match app
-            .db
-            .get_usage_summary(start, end, app_filter, provider_filter, model_filter)
-        {
-            Ok(summary) => Some(summary),
-            Err(err) => {
-                errors.push(tf!(k::USAGE_STATUS_LOAD_FAILED, error = err));
-                None
-            }
-        };
-
-    let filters = LogFilters {
-        app_type: app_filter.map(str::to_string),
-        provider_name: provider_filter.map(str::to_string),
-        model: model_filter.map(str::to_string),
+    let filter = UsageFilter {
+        start,
+        end,
+        app: app_filter.clone(),
+        provider: provider_filter.clone(),
+        model: model_filter.clone(),
+    };
+    let option_filter = UsageFilter {
+        start,
+        end,
+        app: app_filter.clone(),
+        provider: None,
+        model: None,
+    };
+    let model_option_filter = UsageFilter {
+        start,
+        end,
+        app: app_filter.clone(),
+        provider: provider_filter.clone(),
+        model: None,
+    };
+    let log_filters = LogFilters {
+        app_type: app_filter.clone(),
+        provider_name: provider_filter.clone(),
+        model: model_filter.clone(),
         status_code: status_filter,
         start_date: start,
         end_date: end,
     };
-    let (logs, log_total) = match app.db.get_request_logs(&filters, log_page, log_page_size) {
+    let (
+        summary,
+        summary_by_app,
+        daily,
+        providers,
+        provider_options,
+        models,
+        model_options,
+        logs,
+        data_sources,
+        pricing,
+        pricing_catalog,
+    ) = tokio::join!(
+        backend.usage_summary(&filter),
+        backend.usage_by_app(&filter),
+        backend.usage_trend(&filter),
+        backend.usage_provider_stats(&filter),
+        backend.usage_provider_stats(&option_filter),
+        backend.usage_model_stats(&filter),
+        backend.usage_model_stats(&model_option_filter),
+        backend.usage_logs(&log_filters, log_page, log_page_size),
+        backend.usage_sources(),
+        backend.list_pricing_overrides(),
+        backend.pricing_status(),
+    );
+    let mut errors = Vec::new();
+    let summary = match summary {
+        Ok(summary) => Some(summary),
+        Err(error) => {
+            errors.push(tf!(k::USAGE_STATUS_LOAD_FAILED, error = error));
+            None
+        }
+    };
+    let (logs, log_total) = match logs {
         Ok(page) => (page.data, page.total),
         Err(err) => {
             errors.push(tf!(k::USAGE_STATUS_LOGS_LOAD_FAILED, error = err));
             (Vec::new(), 0)
         }
     };
-
-    let providers = app
-        .db
-        .get_provider_stats(start, end, app_filter, provider_filter, model_filter)
-        .unwrap_or_default();
-    let mut provider_options = if provider_filter.is_none() && model_filter.is_none() {
-        providers
-            .iter()
-            .map(|stats| stats.provider_name.clone())
-            .collect::<Vec<_>>()
-    } else {
-        app.db
-            .get_provider_stats(start, end, app_filter, None, None)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|stats| stats.provider_name)
-            .collect::<Vec<_>>()
-    };
-    if let Some(selected) = provider_filter
+    let providers = providers.unwrap_or_else(|error| {
+        errors.push(tf!(k::USAGE_STATUS_LOAD_FAILED, error = error));
+        Vec::new()
+    });
+    let mut provider_options = provider_options
+        .unwrap_or_default()
+        .into_iter()
+        .map(|stats| stats.provider_name)
+        .collect::<Vec<_>>();
+    if let Some(selected) = provider_filter.as_deref()
         && !provider_options.iter().any(|provider| provider == selected)
     {
         provider_options.push(selected.to_string());
@@ -159,24 +210,16 @@ fn load_usage_data(
     provider_options.sort_by_key(|provider| provider.to_lowercase());
     provider_options.dedup();
 
-    let models = app
-        .db
-        .get_model_stats(start, end, app_filter, provider_filter, model_filter)
-        .unwrap_or_default();
-    let mut model_options = if model_filter.is_none() {
-        models
-            .iter()
-            .map(|stats| stats.model.clone())
-            .collect::<Vec<_>>()
-    } else {
-        app.db
-            .get_model_stats(start, end, app_filter, provider_filter, None)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|stats| stats.model)
-            .collect::<Vec<_>>()
-    };
-    if let Some(selected) = model_filter
+    let models = models.unwrap_or_else(|error| {
+        errors.push(tf!(k::USAGE_STATUS_LOAD_FAILED, error = error));
+        Vec::new()
+    });
+    let mut model_options = model_options
+        .unwrap_or_default()
+        .into_iter()
+        .map(|stats| stats.model)
+        .collect::<Vec<_>>();
+    if let Some(selected) = model_filter.as_deref()
         && !model_options.iter().any(|model| model == selected)
     {
         model_options.push(selected.to_string());
@@ -186,23 +229,17 @@ fn load_usage_data(
 
     UsageData {
         summary,
-        summary_by_app: app
-            .db
-            .get_usage_summary_by_app(start, end, provider_filter, model_filter)
-            .unwrap_or_default(),
-        daily: app
-            .db
-            .get_daily_trends(start, end, app_filter, provider_filter, model_filter)
-            .unwrap_or_default(),
+        summary_by_app: summary_by_app.unwrap_or_default(),
+        daily: daily.unwrap_or_default(),
         providers,
         provider_options,
         models,
         model_options,
         logs,
         log_total,
-        data_sources: get_data_source_breakdown(&app.db).unwrap_or_default(),
-        pricing: app.db.get_model_pricing().unwrap_or_default(),
-        pricing_catalog: app.db.get_pricing_catalog_status().unwrap_or_default(),
+        data_sources: data_sources.unwrap_or_default(),
+        pricing: pricing.unwrap_or_default(),
+        pricing_catalog: pricing_catalog.unwrap_or_default(),
         errors,
     }
 }
@@ -292,7 +329,8 @@ impl UsageSection {
 }
 
 pub struct UsageView {
-    app: Arc<AppState>,
+    backend: WorkspaceBackend,
+    workspace_available: bool,
     summary: Option<UsageSummary>,
     summary_by_app: Vec<UsageSummaryByApp>,
     daily: Vec<DailyStats>,
@@ -364,6 +402,7 @@ pub struct UsageView {
     /// movement then invalidates only when it crosses into another bucket.
     trend_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     trend_hover_bucket: Option<usize>,
+    reload_generation: u64,
 }
 
 impl UsageView {
@@ -394,7 +433,8 @@ impl UsageView {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let now = Local::now();
         let mut this = Self {
-            app,
+            backend: WorkspaceBackend::local(app),
+            workspace_available: true,
             summary: None,
             summary_by_app: Vec::new(),
             daily: Vec::new(),
@@ -464,6 +504,7 @@ impl UsageView {
             trend_cache: TrendCache::default(),
             trend_bounds: Rc::new(Cell::new(None)),
             trend_hover_bucket: None,
+            reload_generation: 0,
         };
         this.rebuild_trend_cache();
         this.load_config_forms(cx);
@@ -550,18 +591,23 @@ impl UsageView {
         self.status_level = None;
     }
 
-    fn run_mutation<R, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
-    where
+    fn run_mutation<R, Fut, Work, Apply>(
+        &mut self,
+        cx: &mut Context<Self>,
+        work: Work,
+        apply: Apply,
+    ) where
         R: Send + 'static,
-        Work: FnOnce() -> R + Send + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        Work: FnOnce() -> Fut + Send + 'static,
         Apply: FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
     {
-        if self.mutation_in_flight {
+        if !self.workspace_available || self.mutation_in_flight {
             return;
         }
         self.mutation_in_flight = true;
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { work() }).await;
+            let result = crate::core_async::run(work()).await;
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 apply(this, result, cx);
@@ -576,7 +622,19 @@ impl UsageView {
     /// share the SQLite connection with the gateway's usage logging, so they
     /// must never run on the UI thread.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let app = self.app.clone();
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        let generation = self.reload_generation;
+        if !self.workspace_available {
+            self.apply_data(
+                UsageData::empty(vec![tf!(
+                    k::USAGE_STATUS_LOAD_FAILED,
+                    error = "remote workspace is not connected"
+                )]),
+                cx,
+            );
+            return;
+        }
+        let backend = self.backend.clone();
         let (start, end) = self.range.bounds();
         let app_filter = self.app_filter.clone();
         let provider_filter = self.provider_filter.clone();
@@ -585,24 +643,50 @@ impl UsageView {
         let log_page = self.log_page;
         let log_page_size = self.log_page_size;
         cx.spawn(async move |this, cx| {
-            let data = cx
-                .background_spawn(async move {
-                    load_usage_data(
-                        &app,
-                        start,
-                        end,
-                        app_filter.as_deref(),
-                        provider_filter.as_deref(),
-                        model_filter.as_deref(),
-                        status_filter,
-                        log_page,
-                        log_page_size,
-                    )
-                })
-                .await;
-            this.update(cx, |this, cx| this.apply_data(data, cx)).ok();
+            let data = crate::core_async::run(load_usage_data(
+                backend,
+                start,
+                end,
+                app_filter,
+                provider_filter,
+                model_filter,
+                status_filter,
+                log_page,
+                log_page_size,
+            ))
+            .await;
+            this.update(cx, |this, cx| {
+                if generation != this.reload_generation {
+                    return;
+                }
+                this.apply_data(data, cx);
+            })
+            .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        self.backend = backend;
+        self.workspace_available = true;
+        self.selected_log = None;
+        self.last_session_sync_started_at = None;
+        self.mutation_in_flight = false;
+        self.catalog_sync_in_flight = false;
+        self.session_sync_in_flight = false;
+        self.apply_data(UsageData::empty(Vec::new()), cx);
+        self.load_config_forms(cx);
+        self.activate(cx);
+    }
+
+    pub(crate) fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.workspace_available = false;
+        self.selected_log = None;
+        self.last_session_sync_started_at = None;
+        self.mutation_in_flight = false;
+        self.catalog_sync_in_flight = false;
+        self.session_sync_in_flight = false;
+        self.reload(cx);
     }
 
     fn apply_data(&mut self, data: UsageData, cx: &mut Context<Self>) {
@@ -701,34 +785,32 @@ impl UsageView {
     }
 
     fn load_config_forms(&mut self, cx: &mut Context<Self>) {
-        let app = self.app.clone();
+        if !self.workspace_available {
+            return;
+        }
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let loaded = cx
-                .background_spawn(async move {
-                    let mut pricing_defaults = Vec::new();
-                    for name in PRICING_APPS {
-                        let multiplier = app
-                            .db
-                            .get_default_cost_multiplier(name)
-                            .await
-                            .unwrap_or_else(|_| "1".to_string());
-                        let source = app
-                            .db
-                            .get_pricing_model_source(name)
-                            .await
-                            .unwrap_or_else(|_| "response".to_string());
-                        pricing_defaults.push((name, multiplier, source));
-                    }
-                    pricing_defaults
-                })
-                .await;
+            let loaded =
+                crate::core_async::run(async move { backend.pricing_defaults().await }).await;
             this.update(cx, |this, cx| {
-                for (name, multiplier, source) in loaded {
-                    this.pricing_sources.insert(name.to_string(), source);
-                    match name {
-                        "claude" => set_input(&this.multiplier_claude, multiplier, cx),
-                        "codex" => set_input(&this.multiplier_codex, multiplier, cx),
-                        _ => {}
+                match loaded {
+                    Ok(defaults) => {
+                        for item in defaults {
+                            this.pricing_sources
+                                .insert(item.app.clone(), item.model_source);
+                            match item.app.as_str() {
+                                "claude" => set_input(&this.multiplier_claude, item.multiplier, cx),
+                                "codex" => set_input(&this.multiplier_codex, item.multiplier, cx),
+                                _ => {}
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::USAGE_STATUS_LOAD_FAILED, error = error),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();
@@ -995,15 +1077,18 @@ impl UsageView {
             cx.notify();
             return;
         }
-        let app = self.app.clone();
+        if !self.workspace_available {
+            return;
+        }
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let detail = cx
-                .background_spawn(async move { app.db.get_request_detail(&request_id) })
-                .await;
+            let detail =
+                crate::core_async::run(async move { backend.usage_request(&request_id).await })
+                    .await;
             this.update(cx, |this, cx| {
                 match detail {
                     Ok(detail) => {
-                        this.selected_log = detail;
+                        this.selected_log = Some(detail);
                         this.clear_status();
                     }
                     Err(err) => {
@@ -1024,7 +1109,7 @@ impl UsageView {
     }
 
     fn sync_sessions(&mut self, announce: bool, cx: &mut Context<Self>) {
-        if self.session_sync_in_flight {
+        if !self.workspace_available || self.session_sync_in_flight {
             return;
         }
         self.session_sync_in_flight = true;
@@ -1032,77 +1117,46 @@ impl UsageView {
         if announce {
             self.set_status(NotificationLevel::Info, t(k::USAGE_STATUS_SYNCING), cx);
         }
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let mut result = match sync_claude_session_logs(&app.db) {
-                        Ok(result) => result,
-                        Err(err) => SessionSyncResult {
-                            imported: 0,
-                            skipped: 0,
-                            files_scanned: 0,
-                            errors: vec![format!("Claude sync failed: {err}")],
-                        },
-                    };
-
-                    for (label, sync_result) in [
-                        (
-                            "Codex",
-                            services::session_usage_codex::sync_codex_usage(&app.db),
-                        ),
-                        (
-                            "OpenCode",
-                            services::session_usage_opencode::sync_opencode_usage(&app.db),
-                        ),
-                    ] {
-                        match sync_result {
-                            Ok(r) => {
-                                result.imported += r.imported;
-                                result.skipped += r.skipped;
-                                result.files_scanned += r.files_scanned;
-                                result.errors.extend(r.errors);
-                            }
-                            Err(err) => result.errors.push(format!("{label} sync failed: {err}")),
-                        }
-                    }
-                    result
-                })
-                .await;
+            let result = crate::core_async::run(async move { backend.sync_usage(&[]).await }).await;
             this.update(cx, |this, cx| {
                 this.session_sync_in_flight = false;
-                // A sync that finished with per-file errors still imported what
-                // it could, so it is a warning rather than a failure.
-                let level = if result.errors.is_empty() {
-                    NotificationLevel::Success
-                } else {
-                    NotificationLevel::Warning
-                };
-                // Two whole sentences rather than one with an appended clause:
-                // only the reporting language knows where the error count goes.
-                let summary = if result.errors.is_empty() {
-                    tf!(
-                        k::USAGE_STATUS_SYNC_DONE,
-                        imported = result.imported,
-                        skipped = result.skipped,
-                        files = result.files_scanned,
-                    )
-                } else {
-                    tf!(
-                        k::USAGE_STATUS_SYNC_DONE_WITH_ERRORS,
-                        imported = result.imported,
-                        skipped = result.skipped,
-                        files = result.files_scanned,
-                        errors = result.errors.len(),
-                    )
-                };
-                // Automatic refresh stays quiet on success; it should make the
-                // page current, not emit a toast every time it is visited.
-                if announce || !result.errors.is_empty() {
-                    this.set_status(level, summary, cx);
+                match result {
+                    Ok(result) => {
+                        let level = if result.errors.is_empty() {
+                            NotificationLevel::Success
+                        } else {
+                            NotificationLevel::Warning
+                        };
+                        let summary = if result.errors.is_empty() {
+                            tf!(
+                                k::USAGE_STATUS_SYNC_DONE,
+                                imported = result.imported,
+                                skipped = result.skipped,
+                                files = result.files_scanned,
+                            )
+                        } else {
+                            tf!(
+                                k::USAGE_STATUS_SYNC_DONE_WITH_ERRORS,
+                                imported = result.imported,
+                                skipped = result.skipped,
+                                files = result.files_scanned,
+                                errors = result.errors.len(),
+                            )
+                        };
+                        if announce || !result.errors.is_empty() {
+                            this.set_status(level, summary, cx);
+                        }
+                        this.load_error = false;
+                        this.reload(cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::USAGE_STATUS_LOAD_FAILED, error = error),
+                        cx,
+                    ),
                 }
-                this.load_error = false;
-                this.reload(cx);
                 cx.notify();
             })
             .ok();
@@ -1147,10 +1201,10 @@ impl UsageView {
         let cache_creation = input_value(&self.pricing_cache_creation_cost, cx);
         let cache_creation_1h = input_value(&self.pricing_cache_creation_1h_cost, cx);
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         self.run_mutation(
             cx,
-            move || {
+            move || async move {
                 let pricing = ModelPricingInfo {
                     model_id: model_id.clone(),
                     display_name,
@@ -1160,8 +1214,9 @@ impl UsageView {
                     cache_creation_cost_per_million: cache_creation,
                     cache_creation_1h_cost_per_million: cache_creation_1h,
                 };
-                app.db
-                    .update_model_pricing(&pricing)
+                backend
+                    .set_pricing_override(pricing)
+                    .await
                     .map(|_| model_id)
                     .map_err(|error| error.to_string())
             },
@@ -1218,12 +1273,13 @@ impl UsageView {
     }
 
     fn delete_pricing(&mut self, model_id: String, cx: &mut Context<Self>) {
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         self.run_mutation(
             cx,
-            move || {
-                app.db
-                    .delete_model_pricing(&model_id)
+            move || async move {
+                backend
+                    .delete_pricing_override(&model_id)
+                    .await
                     .map(|_| model_id)
                     .map_err(|error| error.to_string())
             },
@@ -1246,16 +1302,14 @@ impl UsageView {
     }
 
     fn sync_pricing_catalog(&mut self, force: bool, announce: bool, cx: &mut Context<Self>) {
-        if self.catalog_sync_in_flight {
+        if !self.workspace_available || self.catalog_sync_in_flight {
             return;
         }
         self.catalog_sync_in_flight = true;
-        let db = self.app.db.clone();
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let result = crate::core_async::run(
-                services::pricing_catalog::refresh_pricing_catalog(db, force),
-            )
-            .await;
+            let result =
+                crate::core_async::run(async move { backend.refresh_pricing(force).await }).await;
             this.update(cx, |this, cx| {
                 this.catalog_sync_in_flight = false;
                 match result {
@@ -1325,46 +1379,40 @@ impl UsageView {
     }
 
     fn save_pricing_defaults(&mut self, cx: &mut Context<Self>) {
-        if self.mutation_in_flight {
+        if !self.workspace_available || self.mutation_in_flight {
             return;
         }
-        let configs = [
-            (
-                "claude",
-                input_value(&self.multiplier_claude, cx),
-                self.pricing_sources
+        let defaults = vec![
+            PricingDefault {
+                app: "claude".to_string(),
+                multiplier: input_value(&self.multiplier_claude, cx),
+                model_source: self
+                    .pricing_sources
                     .get("claude")
                     .cloned()
                     .unwrap_or_else(|| "response".to_string()),
-            ),
-            (
-                "codex",
-                input_value(&self.multiplier_codex, cx),
-                self.pricing_sources
+            },
+            PricingDefault {
+                app: "codex".to_string(),
+                multiplier: input_value(&self.multiplier_codex, cx),
+                model_source: self
+                    .pricing_sources
                     .get("codex")
                     .cloned()
                     .unwrap_or_else(|| "response".to_string()),
-            ),
+            },
         ];
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         self.mutation_in_flight = true;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    for (name, multiplier, source) in configs {
-                        app.db
-                            .set_default_cost_multiplier(name, multiplier.trim())
-                            .await?;
-                        app.db.set_pricing_model_source(name, source.trim()).await?;
-                    }
-                    Ok::<(), ochub_core::AppError>(())
-                })
-                .await;
+            let result =
+                crate::core_async::run(async move { backend.set_pricing_defaults(defaults).await })
+                    .await;
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
-                    Ok(()) => this.set_status(
+                    Ok(_) => this.set_status(
                         NotificationLevel::Success,
                         t(k::USAGE_PRICING_DEFAULTS_SAVED),
                         cx,

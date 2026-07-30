@@ -44,7 +44,6 @@
 "mcp.status.imported_partial" = "Import finished: {count} added. Failed: {failures}"
 "mcp.status.json_invalid" = "Couldn't parse the JSON: {error}"
 "mcp.status.load_failed" = "Couldn't load the servers: {error}"
-"mcp.status.missing" = "That server no longer exists"
 "mcp.status.name_required" = "Name cannot be empty"
 "mcp.status.save_failed" = "Save failed: {error}"
 "mcp.status.saved" = "Server saved"

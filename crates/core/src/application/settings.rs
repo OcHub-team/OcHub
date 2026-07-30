@@ -3,6 +3,7 @@ use serde_json::Value;
 use crate::application::{
     Application, ApplicationError, ApplicationResult, providers::redact_json,
 };
+use crate::settings::ProxySettings;
 
 impl Application {
     pub fn settings(&self, show_secrets: bool) -> ApplicationResult<Value> {
@@ -51,6 +52,48 @@ impl Application {
         self.get_setting(path, false)?;
         let replacement = get_path(&defaults, path).cloned().unwrap_or(Value::Null);
         self.set_setting(path, replacement)
+    }
+
+    pub fn proxy_settings(&self, show_secrets: bool) -> ProxySettings {
+        let mut proxy = crate::settings::get_settings().proxy.unwrap_or_default();
+        if !show_secrets && !proxy.password.is_empty() {
+            proxy.password = "******".to_string();
+        }
+        proxy
+    }
+
+    pub fn set_proxy_settings(&self, mut proxy: ProxySettings) -> ApplicationResult<ProxySettings> {
+        resolve_proxy_password(&mut proxy);
+        proxy.normalize();
+        proxy.validate()?;
+        let stored = proxy.clone();
+        crate::settings::mutate_settings(move |settings| {
+            settings.proxy = Some(stored);
+        })?;
+        Ok(proxy)
+    }
+
+    pub async fn test_proxy_settings(&self, mut proxy: ProxySettings) -> ApplicationResult<Value> {
+        resolve_proxy_password(&mut proxy);
+        proxy.enabled = true;
+        proxy.normalize();
+        proxy.validate()?;
+        crate::services::network_proxy::check_connection(&proxy).await?;
+        Ok(serde_json::json!({ "ok": true }))
+    }
+}
+
+fn resolve_proxy_password(proxy: &mut ProxySettings) {
+    if !proxy.password.is_empty() && proxy.password.chars().all(|character| character == '*') {
+        proxy.password = crate::settings::get_settings()
+            .proxy
+            .filter(|stored| {
+                stored.host.trim() == proxy.host.trim()
+                    && stored.port == proxy.port
+                    && stored.username.trim() == proxy.username.trim()
+            })
+            .map(|stored| stored.password)
+            .unwrap_or_default();
     }
 }
 

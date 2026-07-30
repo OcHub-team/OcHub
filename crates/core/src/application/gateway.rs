@@ -140,6 +140,32 @@ impl Application {
             .await?)
     }
 
+    pub async fn gateway_endpoint_models(
+        &self,
+        base_url: &str,
+        api_key: &str,
+    ) -> ApplicationResult<Vec<String>> {
+        validate_http_url(base_url)?;
+        Ok(self
+            .state
+            .gateway
+            .fetch_models(base_url.to_string(), api_key.to_string())
+            .await?)
+    }
+
+    pub async fn test_gateway_endpoint(
+        &self,
+        base_url: &str,
+        api_key: &str,
+    ) -> ApplicationResult<GatewayEndpointTestResult> {
+        validate_http_url(base_url)?;
+        Ok(self
+            .state
+            .gateway
+            .test_endpoint(base_url.to_string(), api_key.to_string())
+            .await?)
+    }
+
     pub fn list_gateway_channels(&self) -> ApplicationResult<Vec<GatewayChannel>> {
         Ok(self.state.db.get_gateway_channels()?)
     }
@@ -581,9 +607,32 @@ impl Application {
 
     pub fn delete_gateway_station(&self, id: &str) -> ApplicationResult<()> {
         let station = self.get_gateway_station(id)?;
-        self.state
-            .db
-            .delete_gateway_route(&apply::station_route_id(&station.id))?;
+        let route_id = apply::station_route_id(&station.id);
+        let active_apps = apply::supported_apps()
+            .iter()
+            .copied()
+            .filter(|app_type| {
+                ProviderService::list(&self.state, *app_type)
+                    .ok()
+                    .is_some_and(|providers| {
+                        providers.values().any(|provider| {
+                            provider
+                                .meta
+                                .as_ref()
+                                .and_then(|meta| meta.gateway_route_id.as_deref())
+                                == Some(route_id.as_str())
+                        })
+                    })
+            })
+            .map(|app_type| app_type.as_str())
+            .collect::<Vec<_>>();
+        if !active_apps.is_empty() {
+            return Err(ApplicationError::InvalidInput(format!(
+                "gateway station is still used by: {}",
+                active_apps.join(", ")
+            )));
+        }
+        self.state.db.delete_gateway_route(&route_id)?;
         for channel in station.channels {
             self.state.db.delete_gateway_channel(&channel.id)?;
         }

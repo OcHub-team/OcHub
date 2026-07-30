@@ -40,6 +40,14 @@ pub struct StatusSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PricingDefault {
+    pub app: String,
+    pub multiplier: String,
+    pub model_source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderListItem {
     pub id: String,
     pub name: String,
@@ -70,14 +78,14 @@ pub struct ProviderSwitchPlan {
     pub would_change: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigSchemaDto {
     pub app: String,
     pub sections: Vec<ConfigSectionDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigSectionDto {
     pub title: String,
@@ -85,7 +93,7 @@ pub struct ConfigSectionDto {
     pub fields: Vec<ConfigFieldDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFieldDto {
     pub id: String,
@@ -96,7 +104,7 @@ pub struct ConfigFieldDto {
     pub kind: ConfigFieldKindDto,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ConfigFieldKindDto {
     Text {

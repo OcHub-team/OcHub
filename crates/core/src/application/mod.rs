@@ -33,8 +33,9 @@ use crate::{AppState, Database};
 pub use declarative::{DeclarativeAction, DeclarativeDocument, DeclarativePlan};
 pub use dto::{
     AppModeDto, AppSummary, ConfigFieldDto, ConfigFieldKindDto, ConfigSchemaDto, ConfigSectionDto,
-    DoctorCheck, DoctorReport, OperationOutcome, PluginDetails, PluginSummary, ProviderDetails,
-    ProviderListItem, ProviderSwitchPlan, StatusSummary, UsageFilter, UsageLimitItem,
+    DoctorCheck, DoctorReport, OperationOutcome, PluginDetails, PluginSummary, PricingDefault,
+    ProviderDetails, ProviderListItem, ProviderSwitchPlan, StatusSummary, UsageFilter,
+    UsageLimitItem,
 };
 pub use error::{ApplicationError, ApplicationResult};
 pub use gateway::GatewayStation;

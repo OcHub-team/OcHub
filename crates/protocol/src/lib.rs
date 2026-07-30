@@ -18,13 +18,14 @@ pub use frame::{
 };
 pub use handshake::{NodeDescriptor, RuntimeDescriptor, negotiate_protocol};
 pub use operation::{
-    ApplyPlanParams, ProviderSwitchParams, methods, require_non_empty, validate_request_id,
+    ApplyPlanParams, ProviderCreateParams, ProviderSwitchParams, ProviderUpdateParams, methods,
+    require_non_empty, validate_request_id,
 };
 
 /// First protocol version implemented by this build.
 pub const PROTOCOL_MIN: u32 = 1;
 /// Newest protocol version implemented by this build.
-pub const PROTOCOL_MAX: u32 = 1;
+pub const PROTOCOL_MAX: u32 = 2;
 /// Schema version for stable DTOs nested in protocol responses.
 pub const SCHEMA_VERSION: u32 = 1;
 /// Maximum serialized size of one JSONL frame.
@@ -68,8 +69,8 @@ mod tests {
     #[test]
     fn hello_round_trips_as_camel_case_jsonl() {
         let frame = Frame::Hello(HelloFrame {
-            protocol_min: 1,
-            protocol_max: 1,
+            protocol_min: PROTOCOL_MIN,
+            protocol_max: PROTOCOL_MAX,
             client_version: "0.5.0".to_string(),
             locale: Some("zh-CN".to_string()),
             device_id: Some("desktop-1".to_string()),
@@ -78,14 +79,14 @@ mod tests {
         assert!(bytes.ends_with(b"\n"));
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["type"], "hello");
-        assert_eq!(value["protocolMin"], 1);
+        assert_eq!(value["protocolMin"], PROTOCOL_MIN);
         assert_eq!(decode_frame(&bytes).unwrap(), frame);
     }
 
     #[test]
     fn response_error_contract_is_stable() {
         let frame = Frame::Response(ResponseFrame {
-            protocol_version: 1,
+            protocol_version: PROTOCOL_MAX,
             request_id: "request-1".to_string(),
             ok: false,
             data: serde_json::Value::Null,

@@ -69,4 +69,4 @@
 "sessions.search.titles_only" = "Searched titles only. Turn on the full-text index to search conversations."
 "sessions.status.delete_failed" = "Delete failed: {error}"
 "sessions.status.deleted" = "Session deleted"
-"sessions.status.not_found" = "Session not found"
+"sessions.status.load_failed" = "Couldn't load sessions: {error}"

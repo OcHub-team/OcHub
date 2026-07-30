@@ -20,12 +20,13 @@ use crate::command::{
     ClaudePluginCommand, Cli, CodexAuthCommand, CodexCommand, CodexHistoryCommand, Command,
     CommonConfigCommand, ConfigCommand, CopilotAuthCommand, DataDirCommand, DeclarativeApplyArgs,
     DeclarativePlanArgs, DeeplinkCommand, DesktopAutostartCommand, DesktopCommand, DriftPolicyArg,
-    EnvCommand, GatewayChannelCommand, GatewayCommand, GatewayConfigCommand, GatewayKeyCommand,
-    GatewayRouteCommand, GatewayRouteRuleCommand, GetSetCommand, HermesCommand,
-    HermesMemoryCommand, LightweightCommand, McpCommand, MigrateCommand, OmoCommand,
-    OpenclawCommand, OpenclawModelCommand, OpencodeCommand, OperationCommand, PluginCommand,
-    PricingCommand, PricingOverrideCommand, ProviderCommand, ProviderEndpointCommand,
-    ProviderUsageScriptCommand, QuotaCommand, RuntimeCommand, SessionCommand, SettingsCommand,
+    EnvCommand, GatewayChannelCommand, GatewayCommand, GatewayConfigCommand,
+    GatewayEndpointCommand, GatewayKeyCommand, GatewayRouteCommand, GatewayRouteRuleCommand,
+    GetSetCommand, HermesCommand, HermesMemoryCommand, LightweightCommand, McpCommand,
+    MigrateCommand, OmoCommand, OpenclawCommand, OpenclawModelCommand, OpencodeCommand,
+    OperationCommand, PluginCommand, PricingCommand, PricingDefaultsCommand,
+    PricingOverrideCommand, ProviderCommand, ProviderEndpointCommand, ProviderUsageScriptCommand,
+    QuotaCommand, RuntimeCommand, SessionCommand, SettingsCommand, SettingsProxyCommand,
     SkillCommand, SkillRepoCommand, StationCommand, SyncBackendCommand, SyncCommand, ThemeCommand,
     ToolCommand, UpdateCommand, UsageCommand, UsageIntervalArg, UsageQueryArgs,
 };
@@ -380,6 +381,9 @@ fn mutation_name(command: &Command) -> Option<&'static str> {
             SettingsCommand::Set { .. } => Some("settings.set"),
             SettingsCommand::Unset { .. } => Some("settings.unset"),
             SettingsCommand::Import { .. } => Some("settings.import"),
+            SettingsCommand::Proxy {
+                command: SettingsProxyCommand::Set { .. },
+            } => Some("settings.proxy.set"),
             _ => None,
         },
         Command::Config(args) => match &args.command {
@@ -396,6 +400,7 @@ fn mutation_name(command: &Command) -> Option<&'static str> {
             ProviderCommand::Add { .. } => Some("provider.add"),
             ProviderCommand::Edit { .. } => Some("provider.edit"),
             ProviderCommand::Delete { .. } => Some("provider.delete"),
+            ProviderCommand::Duplicate { .. } => Some("provider.duplicate"),
             ProviderCommand::SeedOfficial { .. } => Some("provider.seed-official"),
             ProviderCommand::ImportLive { .. } => Some("provider.import-live"),
             ProviderCommand::SyncLive { .. } => Some("provider.sync-live"),
@@ -557,6 +562,9 @@ fn mutation_name(command: &Command) -> Option<&'static str> {
             SessionCommand::Delete { .. } => Some("session.delete"),
             SessionCommand::DeleteBatch { .. } => Some("session.delete-batch"),
             SessionCommand::Resume { .. } => Some("session.resume"),
+            SessionCommand::IndexBuild => Some("session.index-build"),
+            SessionCommand::IndexMaintain { .. } => Some("session.index-maintain"),
+            SessionCommand::IndexDelete => Some("session.index-delete"),
             _ => None,
         },
         Command::Tool(args) => match &args.command {
@@ -572,6 +580,9 @@ fn mutation_name(command: &Command) -> Option<&'static str> {
         Command::Pricing(args) => match &args.command {
             PricingCommand::Refresh { .. } => Some("pricing.refresh"),
             PricingCommand::Backfill => Some("pricing.backfill"),
+            PricingCommand::Defaults {
+                command: PricingDefaultsCommand::Set { .. },
+            } => Some("pricing.defaults.set"),
             PricingCommand::Override { command } => match command {
                 PricingOverrideCommand::Set { .. } => Some("pricing.override.set"),
                 PricingOverrideCommand::Remove { .. } => Some("pricing.override.remove"),
@@ -849,9 +860,15 @@ async fn run_webdav_sync(
                 )
             }
         }
-        SyncBackendCommand::Test => {
+        SyncBackendCommand::Test { from } => {
             require_online(cli, "WebDAV connection test")?;
-            output.success(&application.test_webdav_sync().await?, &[])
+            let result = if let Some(path) = from {
+                let settings: ochub_core::settings::WebDavSyncSettings = read_structured(path)?;
+                application.test_webdav_sync_settings(settings).await?
+            } else {
+                application.test_webdav_sync().await?
+            };
+            output.success(&result, &[])
         }
         SyncBackendCommand::Upload => {
             require_online(cli, "WebDAV upload")?;
@@ -919,9 +936,15 @@ async fn run_s3_sync(
                 )
             }
         }
-        SyncBackendCommand::Test => {
+        SyncBackendCommand::Test { from } => {
             require_online(cli, "S3 connection test")?;
-            output.success(&application.test_s3_sync().await?, &[])
+            let result = if let Some(path) = from {
+                let settings: ochub_core::settings::S3SyncSettings = read_structured(path)?;
+                application.test_s3_sync_settings(settings).await?
+            } else {
+                application.test_s3_sync().await?
+            };
+            output.success(&result, &[])
         }
         SyncBackendCommand::Upload => {
             require_online(cli, "S3 upload")?;
@@ -1291,6 +1314,26 @@ async fn run_pricing(
                 output.success(&json!({ "model": model, "deleted": true }), &[])
             }
         },
+        PricingCommand::Defaults { command } => match command {
+            PricingDefaultsCommand::Get => {
+                output.success(&application.pricing_defaults().await?, &[])
+            }
+            PricingDefaultsCommand::Set { from } => {
+                let defaults: Vec<ochub_core::application::PricingDefault> = read_structured(from)?;
+                if cli.dry_run {
+                    output.success(
+                        &json!({
+                            "action": "set-pricing-defaults",
+                            "defaults": defaults,
+                            "dryRun": true
+                        }),
+                        &[],
+                    )
+                } else {
+                    output.success(&application.set_pricing_defaults(&defaults).await?, &[])
+                }
+            }
+        },
         PricingCommand::Backfill => {
             if cli.dry_run {
                 output.success(
@@ -1528,6 +1571,25 @@ async fn run_session(
                 .map(|raw| app_id(raw))
                 .collect::<Result<Vec<_>, _>>()?;
             output.success(&application.list_sessions(&apps, None)?, &[])
+        }
+        SessionCommand::Search { query, limit } => {
+            output.success(&application.search_session_index(query, *limit)?, &[])
+        }
+        SessionCommand::IndexStatus => output.success(
+            &json!({
+                "enabled": ochub_core::settings::get_settings().session_index_enabled,
+                "stats": application.session_index_status()?
+            }),
+            &[],
+        ),
+        SessionCommand::IndexBuild => output.success(&application.sync_session_index()?, &[]),
+        SessionCommand::IndexMaintain { budget_seconds } => output.success(
+            &application.maintain_session_index(std::time::Duration::from_secs(*budget_seconds))?,
+            &[],
+        ),
+        SessionCommand::IndexDelete => {
+            require_yes(cli, "session index delete")?;
+            output.success(&application.delete_session_index()?, &[])
         }
     }
 }
@@ -1878,9 +1940,20 @@ fn run_mcp(
                 output.success(&application.upsert_mcp_server(server)?, &[])
             }
         }
-        McpCommand::Edit { id, from } => {
-            application.get_mcp_server(id, false)?;
-            let mut server: McpServer = read_structured(from)?;
+        McpCommand::Edit { id, from, patch } => {
+            let mut server: McpServer = if let Some(path) = patch {
+                let mut value = application.get_mcp_server(id, true)?;
+                let patch: serde_json::Value = read_structured(path)?;
+                merge_json_patch(&mut value, &patch);
+                serde_json::from_value(value)?
+            } else {
+                let path = from.as_ref().ok_or_else(|| {
+                    CliError::InvalidInput(
+                        "mcp edit requires either --from <file> or --patch <file>".to_string(),
+                    )
+                })?;
+                read_structured(path)?
+            };
             server.id = id.clone();
             if cli.dry_run {
                 application.validate_mcp_server(&server)?;
@@ -2107,8 +2180,22 @@ async fn run_settings(
             path,
             value,
             string,
+            from,
         } => {
-            let value = parse_value(value, *string);
+            let value = match (value, from) {
+                (Some(value), None) => parse_value(value, *string),
+                (None, Some(path)) => read_structured(path)?,
+                (None, None) => {
+                    return Err(CliError::InvalidInput(
+                        "settings set requires VALUE or --from".to_string(),
+                    ));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(CliError::InvalidInput(
+                        "settings set accepts either VALUE or --from, not both".to_string(),
+                    ));
+                }
+            };
             if cli.dry_run {
                 output.success(
                     &json!({
@@ -2159,6 +2246,31 @@ async fn run_settings(
                 output.success(&application.settings(false)?, &[])
             }
         }
+        SettingsCommand::Proxy { command } => match command {
+            SettingsProxyCommand::Show => {
+                output.success(&application.proxy_settings(cli.show_secrets), &[])
+            }
+            SettingsProxyCommand::Set { from } => {
+                let proxy: ochub_core::settings::ProxySettings = read_structured(from)?;
+                if cli.dry_run {
+                    output.success(
+                        &json!({
+                            "action": "set-proxy-settings",
+                            "proxy": redact_json(&serde_json::to_value(proxy)?),
+                            "dryRun": true
+                        }),
+                        &[],
+                    )
+                } else {
+                    output.success(&application.set_proxy_settings(proxy)?, &[])
+                }
+            }
+            SettingsProxyCommand::Test { from } => {
+                require_online(cli, "proxy connection test")?;
+                let proxy: ochub_core::settings::ProxySettings = read_structured(from)?;
+                output.success(&application.test_proxy_settings(proxy).await?, &[])
+            }
+        },
     }
 }
 
@@ -2188,7 +2300,8 @@ async fn run_provider(
             secret_values,
             add_to_live,
         } => {
-            let provider = provider_from_input(None, from.as_deref(), set_values, secret_values)?;
+            let provider =
+                provider_from_input(None, from.as_deref(), None, set_values, secret_values)?;
             if cli.dry_run {
                 output.success(
                     &json!({
@@ -2210,13 +2323,19 @@ async fn run_provider(
         ProviderCommand::Edit {
             id,
             app,
+            patch,
             from,
             set_values,
             secret_values,
         } => {
             let existing = application.get_provider(&app_id(app)?, id, true)?.provider;
-            let provider =
-                provider_from_input(Some(&existing), from.as_deref(), set_values, secret_values)?;
+            let provider = provider_from_input(
+                Some(&existing),
+                from.as_deref(),
+                patch.as_deref(),
+                set_values,
+                secret_values,
+            )?;
             if cli.dry_run {
                 output.success(
                     &json!({
@@ -2250,6 +2369,21 @@ async fn run_provider(
             require_yes(cli, "provider delete")?;
             application.delete_provider(&app_id(app)?, id)?;
             output.success(&json!({ "deleted": true, "app": app, "id": id }), &[])
+        }
+        ProviderCommand::Duplicate { id, app } => {
+            if cli.dry_run {
+                output.success(
+                    &json!({
+                        "action": "duplicate-provider",
+                        "app": app,
+                        "providerId": id,
+                        "dryRun": true
+                    }),
+                    &[],
+                )
+            } else {
+                output.success(&application.duplicate_provider(&app_id(app)?, id)?, &[])
+            }
         }
         ProviderCommand::Export { id, app, to } => {
             let details = application.get_provider(&app_id(app)?, id, cli.show_secrets)?;
@@ -3041,6 +3175,13 @@ fn run_claude(
                 ClaudeMcpPathCommand::Validate => {
                     output.success(&application.validate_claude_mcp_paths()?, &[])
                 }
+                ClaudeMcpPathCommand::ValidateCommand { command } => output.success(
+                    &json!({
+                        "command": command,
+                        "valid": ochub_core::mcp::validate_command_in_path(command)?
+                    }),
+                    &[],
+                ),
             },
             ClaudeMcpCommand::Onboarding { command } => match command {
                 ClaudeOnboardingCommand::Status => {
@@ -3544,8 +3685,16 @@ async fn run_backup(
             }
             require_yes(cli, "SQL import")?;
             let safety_backup = db.import_sql(file)?;
+            let sync_warning =
+                ochub_core::services::ProviderService::sync_current_to_live(application.state())
+                    .err()
+                    .map(|error| error.to_string());
             output.success(
-                &json!({ "imported": file, "safetyBackup": safety_backup }),
+                &json!({
+                    "imported": file,
+                    "safetyBackup": safety_backup,
+                    "syncWarning": sync_warning
+                }),
                 &[],
             )
         }
@@ -3646,17 +3795,58 @@ async fn run_gateway(
             let value = application.gateway_connection_info(app.as_ref())?;
             output.success(&maybe_redacted_value(value, cli.show_secrets)?, &[])
         }
-        GatewayCommand::ProbeDialect { url, api_key_file } => {
+        GatewayCommand::ProbeDialect {
+            url,
+            station,
+            api_key_file,
+        } => {
             require_online(cli, "gateway dialect probe")?;
-            let api_key = api_key_file
-                .as_deref()
-                .map(read_secret_file)
-                .transpose()?
-                .unwrap_or_default();
+            let api_key = gateway_endpoint_key(
+                application,
+                url,
+                station.as_deref(),
+                api_key_file.as_deref(),
+            )?;
             output.success(
                 &application.probe_gateway_dialects(url, &api_key).await?,
                 &[],
             )
+        }
+        GatewayCommand::Endpoint { command } => {
+            let (url, station, api_key_file, operation) = match command {
+                GatewayEndpointCommand::Models {
+                    url,
+                    station,
+                    api_key_file,
+                } => (
+                    url,
+                    station,
+                    api_key_file,
+                    "gateway endpoint model discovery",
+                ),
+                GatewayEndpointCommand::Test {
+                    url,
+                    station,
+                    api_key_file,
+                } => (url, station, api_key_file, "gateway endpoint test"),
+            };
+            require_online(cli, operation)?;
+            let api_key = gateway_endpoint_key(
+                application,
+                url,
+                station.as_deref(),
+                api_key_file.as_deref(),
+            )?;
+            match command {
+                GatewayEndpointCommand::Models { .. } => output.success(
+                    &application.gateway_endpoint_models(url, &api_key).await?,
+                    &[],
+                ),
+                GatewayEndpointCommand::Test { .. } => output.success(
+                    &application.test_gateway_endpoint(url, &api_key).await?,
+                    &[],
+                ),
+            }
         }
         GatewayCommand::Config { command } => match command {
             GatewayConfigCommand::Show => output.success(&application.gateway_config()?, &[]),
@@ -3695,6 +3885,29 @@ async fn run_gateway(
         GatewayCommand::Route { command } => run_gateway_route(application, command, cli, output),
         GatewayCommand::Key { command } => run_gateway_key(application, command, cli, output),
     }
+}
+
+fn gateway_endpoint_key(
+    application: &Application,
+    url: &str,
+    station: Option<&str>,
+    api_key_file: Option<&std::path::Path>,
+) -> Result<String, CliError> {
+    if let Some(path) = api_key_file {
+        return read_secret_file(path);
+    }
+    let Some(station) = station else {
+        return Ok(String::new());
+    };
+    application
+        .get_gateway_station(station)?
+        .channels
+        .into_iter()
+        .find(|channel| channel.base_url.trim_end_matches('/') == url.trim_end_matches('/'))
+        .map(|channel| channel.api_key)
+        .ok_or_else(|| {
+            CliError::InvalidInput(format!("station {station} has no endpoint matching {url}"))
+        })
 }
 
 async fn run_gateway_channel(
@@ -4076,7 +4289,8 @@ async fn run_station(
         StationCommand::Edit { id, patch } => {
             let current = application.get_gateway_station(id)?;
             let mut value = serde_json::to_value(current)?;
-            let patch: Value = read_structured(patch)?;
+            let mut patch: Value = read_structured(patch)?;
+            restore_redacted_secrets(&mut patch, &value);
             merge_json_patch(&mut value, &patch);
             value["id"] = Value::String(id.clone());
             let station: GatewayStation = serde_json::from_value(value)?;
@@ -4284,10 +4498,16 @@ fn maybe_redacted_value<T: Serialize>(value: T, show_secrets: bool) -> Result<Va
 fn provider_from_input(
     base: Option<&Provider>,
     from: Option<&std::path::Path>,
+    patch: Option<&std::path::Path>,
     set_values: &[String],
     secret_values: &[String],
 ) -> Result<Provider, CliError> {
-    if base.is_none() && from.is_none() && set_values.is_empty() && secret_values.is_empty() {
+    if base.is_none()
+        && from.is_none()
+        && patch.is_none()
+        && set_values.is_empty()
+        && secret_values.is_empty()
+    {
         return Err(CliError::InvalidInput(
             "provider add requires --from, --set, or --secret".to_string(),
         ));
@@ -4299,6 +4519,10 @@ fn provider_from_input(
             .transpose()?
             .unwrap_or_else(|| Value::Object(Default::default())),
     };
+    if let Some(path) = patch {
+        let patch = read_structured::<Value>(path)?;
+        merge_json_patch(&mut value, &patch);
+    }
     for assignment in set_values {
         let (path, raw) = split_assignment(assignment, "--set")?;
         set_dotted_value(&mut value, path, parse_value(raw, false))?;
@@ -4410,6 +4634,51 @@ fn merge_json_patch(target: &mut Value, patch: &Value) {
     }
 }
 
+fn restore_redacted_secrets(patch: &mut Value, current: &Value) {
+    match (patch, current) {
+        (Value::Object(patch), Value::Object(current)) => {
+            for (key, value) in patch {
+                let existing = current.get(key).unwrap_or(&Value::Null);
+                if station_secret_key(key)
+                    && value.as_str().is_some_and(|value| {
+                        !value.is_empty() && value.chars().all(|character| character == '*')
+                    })
+                {
+                    *value = existing.clone();
+                } else {
+                    restore_redacted_secrets(value, existing);
+                }
+            }
+        }
+        (Value::Array(patch), Value::Array(current)) => {
+            for (index, value) in patch.iter_mut().enumerate() {
+                let existing = value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| {
+                        current.iter().find(|candidate| {
+                            candidate.get("id").and_then(Value::as_str) == Some(id)
+                        })
+                    })
+                    .or_else(|| current.get(index))
+                    .unwrap_or(&Value::Null);
+                restore_redacted_secrets(value, existing);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn station_secret_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase().replace(['-', '.'], "_");
+    key.contains("password")
+        || key.contains("secret")
+        || key.contains("token")
+        || key == "api_key"
+        || key == "apikey"
+        || key.ends_with("_api_key")
+}
+
 #[allow(dead_code)]
 fn _path_for_output(path: PathBuf) -> Value {
     Value::String(path.to_string_lossy().into_owned())
@@ -4418,4 +4687,54 @@ fn _path_for_output(path: PathBuf) -> Value {
 #[allow(dead_code)]
 fn _application_result<T>(result: ApplicationResult<T>) -> Result<T, CliError> {
     result.map_err(CliError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{merge_json_patch, restore_redacted_secrets};
+    use serde_json::json;
+
+    #[test]
+    fn provider_merge_patch_preserves_omitted_secrets() {
+        let mut provider = json!({
+            "id": "team",
+            "name": "Team",
+            "settingsConfig": {
+                "apiKey": "sk-existing",
+                "baseUrl": "https://old.example.com"
+            }
+        });
+        merge_json_patch(
+            &mut provider,
+            &json!({
+                "name": "Team Updated",
+                "settingsConfig": {
+                    "baseUrl": "https://new.example.com"
+                }
+            }),
+        );
+        assert_eq!(provider["name"], "Team Updated");
+        assert_eq!(provider["settingsConfig"]["apiKey"], "sk-existing");
+        assert_eq!(
+            provider["settingsConfig"]["baseUrl"],
+            "https://new.example.com"
+        );
+    }
+
+    #[test]
+    fn station_patch_preserves_redacted_secrets_inside_channel_arrays() {
+        let current = json!({
+            "channels": [
+                { "id": "chat", "api_key": "real-secret", "base_url": "https://old.example" }
+            ]
+        });
+        let mut patch = json!({
+            "channels": [
+                { "id": "chat", "api_key": "******", "base_url": "https://new.example" }
+            ]
+        });
+        restore_redacted_secrets(&mut patch, &current);
+        assert_eq!(patch["channels"][0]["api_key"], "real-secret");
+        assert_eq!(patch["channels"][0]["base_url"], "https://new.example");
+    }
 }

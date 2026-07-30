@@ -36,6 +36,7 @@ use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::tf;
 use crate::theme;
@@ -171,6 +172,7 @@ impl ModelSuggestionTarget {
 
 pub struct ProviderEditor {
     app: Arc<AppState>,
+    backend: WorkspaceBackend,
     app_type: AppType,
     codec: Box<dyn AppConfig>,
     /// Shared so each frame's render iterates it without a deep clone.
@@ -306,12 +308,19 @@ impl ProviderEditor {
         }
     }
 
-    pub fn new_add(app: Arc<AppState>, app_type: AppType, cx: &mut Context<Self>) -> Self {
+    pub fn new_add(
+        app: Arc<AppState>,
+        backend: WorkspaceBackend,
+        app_type: AppType,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let codec = provider_config::config_for(app_type)
             .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
         let schema = codec.schema();
         let values = codec.decode(&Value::Null, None);
-        let mut this = Self::base(app, app_type, codec, schema, values, None, None, cx);
+        let mut this = Self::base(
+            app, backend, app_type, codec, schema, values, None, None, cx,
+        );
         Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
         this.load_station_options(cx);
@@ -321,6 +330,7 @@ impl ProviderEditor {
 
     pub fn new_edit(
         app: Arc<AppState>,
+        backend: WorkspaceBackend,
         app_type: AppType,
         provider: &Provider,
         cx: &mut Context<Self>,
@@ -329,13 +339,18 @@ impl ProviderEditor {
             .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
         let schema = codec.schema();
         let values = codec.decode(&provider.settings_config, provider.meta.as_ref());
-        let station_route = provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.gateway_route_id.clone())
-            .filter(|_| provider_config::station_source_supported(app_type));
+        let station_route = (!backend.is_remote())
+            .then(|| {
+                provider
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.gateway_route_id.clone())
+                    .filter(|_| provider_config::station_source_supported(app_type))
+            })
+            .flatten();
         let mut this = Self::base(
             app,
+            backend,
             app_type,
             codec,
             schema,
@@ -359,6 +374,7 @@ impl ProviderEditor {
     #[allow(clippy::too_many_arguments)]
     fn base(
         app: Arc<AppState>,
+        backend: WorkspaceBackend,
         app_type: AppType,
         codec: Box<dyn AppConfig>,
         schema: Vec<FormSection>,
@@ -389,6 +405,7 @@ impl ProviderEditor {
         });
         let mut this = Self {
             app,
+            backend,
             app_type,
             codec,
             schema: Arc::new(schema),
@@ -448,13 +465,13 @@ impl ProviderEditor {
         if !self.common_config_supported {
             return;
         }
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let app_type = self.app_type;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ConfigService::get_common_config_snippet(&app, app_type.as_str())
-                })
+            let result =
+                crate::core_async::run(
+                    async move { backend.common_config(&app_type.app_id()).await },
+                )
                 .await;
             this.update(cx, |this, cx| {
                 let snippet = match result {
@@ -504,7 +521,8 @@ impl ProviderEditor {
     /// Load the stations this app could draw from. Only runs for apps whose
     /// codec supports the station source; everyone else never sees the toggle.
     fn load_station_options(&mut self, cx: &mut Context<Self>) {
-        if !provider_config::station_source_supported(self.app_type) {
+        if self.backend.is_remote() || !provider_config::station_source_supported(self.app_type) {
+            self.station_options_loaded = true;
             return;
         }
         let app = self.app.clone();
@@ -1291,40 +1309,42 @@ impl ProviderEditor {
 
         self.saving = true;
         self.error = None;
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let app_type = self.app_type;
         cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_spawn(async move {
-                    let mut saved_snippet = None;
-                    if let Some(snippet) = snippet_update {
-                        if let Err(error) = ConfigService::set_common_config_snippet(
-                            &app,
-                            app_type.as_str(),
-                            snippet.clone(),
-                        ) {
-                            return ProviderSaveOutcome {
-                                saved_snippet,
-                                result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
-                            };
-                        }
-                        saved_snippet = Some(snippet);
+            let outcome = crate::core_async::run(async move {
+                let app_id = app_type.app_id();
+                let mut saved_snippet = None;
+                if let Some(snippet) = snippet_update {
+                    if let Err(error) = backend.set_common_config(&app_id, snippet.clone()).await {
+                        return ProviderSaveOutcome {
+                            saved_snippet,
+                            result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
+                        };
                     }
+                    saved_snippet = Some(snippet);
+                }
 
-                    let result = match original_id {
-                        Some(original_id) => {
-                            ProviderService::update(&app, app_type, Some(&original_id), provider)
-                                .map(|_| ())
-                        }
-                        None => ProviderService::add(&app, app_type, provider, true).map(|_| ()),
-                    }
-                    .map_err(|error| ProviderSaveFailure::Provider(error.to_string()));
-                    ProviderSaveOutcome {
-                        saved_snippet,
-                        result,
-                    }
-                })
-                .await;
+                let result = match original_id {
+                    Some(original_id) => match serde_json::to_value(provider) {
+                        Ok(patch) => backend
+                            .update_provider(&app_id, &original_id, patch)
+                            .await
+                            .map(|_| ()),
+                        Err(error) => Err(error.into()),
+                    },
+                    None => backend
+                        .create_provider(&app_id, provider, true)
+                        .await
+                        .map(|_| ()),
+                }
+                .map_err(|error| ProviderSaveFailure::Provider(error.to_string()));
+                ProviderSaveOutcome {
+                    saved_snippet,
+                    result,
+                }
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.saving = false;
                 if let Some(snippet) = outcome.saved_snippet {
@@ -1569,6 +1589,39 @@ impl ProviderEditor {
     }
 
     fn fetch_models(&mut self, cx: &mut Context<Self>) {
+        if let Some(provider_id) = self.original_id.clone() {
+            let backend = self.backend.clone();
+            let app_id = self.app_type.app_id();
+            self.error = None;
+            self.set_status(
+                NotificationLevel::Info,
+                t(k::PROVIDER_EDITOR_MODELS_FETCHING),
+            );
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = crate::core_async::run(async move {
+                    backend
+                        .provider_network_operation(
+                            ochub_protocol::methods::PROVIDER_MODELS,
+                            &app_id,
+                            &provider_id,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|value| {
+                            serde_json::from_value(value).map_err(|error| error.to_string())
+                        })
+                })
+                .await;
+                this.update(cx, |this, cx| {
+                    this.finish_models(result);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let base_url = self.field_text("base_url", cx);
         let api_key = self.field_text("api_key", cx);
         if base_url.is_empty() || api_key.is_empty() {
@@ -1588,37 +1641,7 @@ impl ProviderEditor {
             )
             .await;
             this.update(cx, |this, cx| {
-                match result {
-                    Ok(models) => {
-                        let preview = models
-                            .iter()
-                            .take(6)
-                            .map(|m| m.id.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        // An empty list is a successful call with nothing to
-                        // show, not a failure and not a plain progress note.
-                        if preview.is_empty() {
-                            this.set_status(
-                                NotificationLevel::Warning,
-                                t(k::PROVIDER_EDITOR_MODELS_NONE),
-                            );
-                        } else {
-                            this.set_status(
-                                NotificationLevel::Success,
-                                tf!(
-                                    k::PROVIDER_EDITOR_MODELS_FETCHED,
-                                    count = models.len(),
-                                    models = preview
-                                ),
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        this.set_error(tf!(k::PROVIDER_EDITOR_MODELS_FETCH_FAILED, error = err));
-                        this.status = None;
-                    }
-                }
+                this.finish_models(result.map_err(|error| error.to_string()));
                 cx.notify();
             })
             .ok();
@@ -1626,7 +1649,75 @@ impl ProviderEditor {
         .detach();
     }
 
+    fn finish_models(
+        &mut self,
+        result: Result<Vec<ochub_core::services::model_fetch::FetchedModel>, String>,
+    ) {
+        match result {
+            Ok(models) => {
+                let preview = models
+                    .iter()
+                    .take(6)
+                    .map(|model| model.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if preview.is_empty() {
+                    self.set_status(
+                        NotificationLevel::Warning,
+                        t(k::PROVIDER_EDITOR_MODELS_NONE),
+                    );
+                } else {
+                    self.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::PROVIDER_EDITOR_MODELS_FETCHED,
+                            count = models.len(),
+                            models = preview
+                        ),
+                    );
+                }
+            }
+            Err(error) => {
+                self.set_error(tf!(k::PROVIDER_EDITOR_MODELS_FETCH_FAILED, error = error));
+                self.status = None;
+            }
+        }
+    }
+
     fn speedtest_base_url(&mut self, cx: &mut Context<Self>) {
+        if let Some(provider_id) = self.original_id.clone() {
+            let backend = self.backend.clone();
+            let app_id = self.app_type.app_id();
+            self.error = None;
+            self.set_status(
+                NotificationLevel::Info,
+                t(k::PROVIDER_EDITOR_SPEEDTEST_TESTING),
+            );
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = crate::core_async::run(async move {
+                    backend
+                        .provider_network_operation(
+                            ochub_protocol::methods::PROVIDER_SPEED_TEST,
+                            &app_id,
+                            &provider_id,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|value| {
+                            serde_json::from_value(value).map_err(|error| error.to_string())
+                        })
+                })
+                .await;
+                this.update(cx, |this, cx| {
+                    this.finish_speedtest(result);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let base_url = self.field_text("base_url", cx);
         if base_url.is_empty() {
             self.set_error(t(k::PROVIDER_EDITOR_SPEEDTEST_NEEDS_BASE_URL));
@@ -1644,49 +1735,7 @@ impl ProviderEditor {
                 ochub_core::services::SpeedtestService::test_endpoints(vec![base_url], Some(8))
                     .await;
             this.update(cx, |this, cx| {
-                match result {
-                    Ok(results) => {
-                        let (level, msg) = results
-                            .first()
-                            .map(|item| {
-                                if let Some(err) = &item.error {
-                                    (
-                                        NotificationLevel::Error,
-                                        tf!(k::PROVIDER_EDITOR_SPEEDTEST_FAILED, error = err),
-                                    )
-                                } else {
-                                    let unknown = raw(k::PROVIDER_EDITOR_COMMON_UNKNOWN);
-                                    (
-                                        NotificationLevel::Success,
-                                        tf!(
-                                            k::PROVIDER_EDITOR_SPEEDTEST_OK,
-                                            status = item
-                                                .status
-                                                .map(|s| s.to_string())
-                                                .unwrap_or_else(|| unknown.to_string()),
-                                            latency = item
-                                                .latency
-                                                .map(|v| v.to_string())
-                                                .unwrap_or_else(|| unknown.to_string())
-                                        ),
-                                    )
-                                }
-                            })
-                            // The call came back with nothing to report: a
-                            // caveat, not a failed request.
-                            .unwrap_or_else(|| {
-                                (
-                                    NotificationLevel::Warning,
-                                    raw(k::PROVIDER_EDITOR_SPEEDTEST_NO_RESULT).to_string(),
-                                )
-                            });
-                        this.set_status(level, msg);
-                    }
-                    Err(err) => {
-                        this.set_error(tf!(k::PROVIDER_EDITOR_SPEEDTEST_FAILED, error = err));
-                        this.status = None;
-                    }
-                }
+                this.finish_speedtest(result.map_err(|error| error.to_string()));
                 cx.notify();
             })
             .ok();
@@ -1694,7 +1743,87 @@ impl ProviderEditor {
         .detach();
     }
 
+    fn finish_speedtest(
+        &mut self,
+        result: Result<Vec<ochub_core::services::speedtest::EndpointLatency>, String>,
+    ) {
+        match result {
+            Ok(results) => {
+                let (level, message) = results
+                    .first()
+                    .map(|item| {
+                        if let Some(error) = &item.error {
+                            (
+                                NotificationLevel::Error,
+                                tf!(k::PROVIDER_EDITOR_SPEEDTEST_FAILED, error = error),
+                            )
+                        } else {
+                            let unknown = raw(k::PROVIDER_EDITOR_COMMON_UNKNOWN);
+                            (
+                                NotificationLevel::Success,
+                                tf!(
+                                    k::PROVIDER_EDITOR_SPEEDTEST_OK,
+                                    status = item
+                                        .status
+                                        .map(|status| status.to_string())
+                                        .unwrap_or_else(|| unknown.to_string()),
+                                    latency = item
+                                        .latency
+                                        .map(|latency| latency.to_string())
+                                        .unwrap_or_else(|| unknown.to_string())
+                                ),
+                            )
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            NotificationLevel::Warning,
+                            raw(k::PROVIDER_EDITOR_SPEEDTEST_NO_RESULT).to_string(),
+                        )
+                    });
+                self.set_status(level, message);
+            }
+            Err(error) => {
+                self.set_error(tf!(k::PROVIDER_EDITOR_SPEEDTEST_FAILED, error = error));
+                self.status = None;
+            }
+        }
+    }
+
     fn query_balance(&mut self, cx: &mut Context<Self>) {
+        if let Some(provider_id) = self.original_id.clone() {
+            let backend = self.backend.clone();
+            let app_id = self.app_type.app_id();
+            self.error = None;
+            self.set_status(
+                NotificationLevel::Info,
+                t(k::PROVIDER_EDITOR_BALANCE_QUERYING),
+            );
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = crate::core_async::run(async move {
+                    backend
+                        .provider_network_operation(
+                            ochub_protocol::methods::PROVIDER_BALANCE,
+                            &app_id,
+                            &provider_id,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|value| {
+                            serde_json::from_value(value).map_err(|error| error.to_string())
+                        })
+                })
+                .await;
+                this.update(cx, |this, cx| {
+                    this.finish_balance(result);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let base_url = self.field_text("base_url", cx);
         let api_key = self.field_text("api_key", cx);
         if base_url.is_empty() || api_key.is_empty() {
@@ -1711,23 +1840,25 @@ impl ProviderEditor {
         cx.spawn(async move |this, cx| {
             let result = ochub_core::services::balance::get_balance(&base_url, &api_key).await;
             this.update(cx, |this, cx| {
-                match result {
-                    Ok(result) => {
-                        // The call succeeded; the payload decides whether that
-                        // is a balance, an empty quota, or a reported failure.
-                        let (level, text) = format_usage_result(&result);
-                        this.set_status(level, text);
-                    }
-                    Err(err) => {
-                        this.set_error(tf!(k::PROVIDER_EDITOR_BALANCE_FAILED, error = err));
-                        this.status = None;
-                    }
-                }
+                this.finish_balance(result);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn finish_balance(&mut self, result: Result<UsageResult, String>) {
+        match result {
+            Ok(result) => {
+                let (level, text) = format_usage_result(&result);
+                self.set_status(level, text);
+            }
+            Err(error) => {
+                self.set_error(tf!(k::PROVIDER_EDITOR_BALANCE_FAILED, error = error));
+                self.status = None;
+            }
+        }
     }
 
     fn toggle_common_config(&mut self, cx: &mut Context<Self>) {
@@ -1736,6 +1867,41 @@ impl ProviderEditor {
     }
 
     fn extract_common_config(&mut self, cx: &mut Context<Self>) {
+        if self.backend.is_remote() {
+            let backend = self.backend.clone();
+            let app_id = self.app_type.app_id();
+            cx.spawn(async move |this, cx| {
+                let result =
+                    crate::core_async::run(
+                        async move { backend.extract_common_config(&app_id).await },
+                    )
+                    .await;
+                this.update(cx, |this, cx| {
+                    match result {
+                        Ok(snippet) => {
+                            this.common_snippet
+                                .update(cx, |input, cx| input.set_content(snippet, cx));
+                            this.set_status(
+                                NotificationLevel::Success,
+                                t(k::PROVIDER_EDITOR_COMMON_CONFIG_EXTRACTED),
+                            );
+                            this.error = None;
+                        }
+                        Err(err) => {
+                            this.set_error(tf!(
+                                k::PROVIDER_EDITOR_COMMON_CONFIG_EXTRACT_FAILED,
+                                error = err
+                            ));
+                            this.status = None;
+                        }
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         self.pull_values(cx);
         let prior_meta = self.original_provider.as_ref().and_then(|p| p.meta.clone());
         let settings = self
@@ -1808,15 +1974,16 @@ impl ProviderEditor {
         provider.notes = nonempty(self.notes.read(cx).content().trim().to_string());
         provider.created_at = Some(chrono_now_millis());
         self.saving = true;
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    ProviderService::add(&app, target, provider, false)
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .create_provider(&target.app_id(), provider, false)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.saving = false;
                 match result {
@@ -3271,7 +3438,8 @@ impl ProviderEditor {
             .gap_4()
             .w_full()
             .when(
-                provider_config::station_source_supported(self.app_type),
+                !self.backend.is_remote()
+                    && provider_config::station_source_supported(self.app_type),
                 |column| {
                     column.child(components::field(
                         t(k::PROVIDER_EDITOR_SOURCE_LABEL),

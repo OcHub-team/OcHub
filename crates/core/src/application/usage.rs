@@ -5,7 +5,7 @@ use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 
 use crate::application::{
-    Application, ApplicationError, ApplicationResult, UsageFilter, UsageLimitItem,
+    Application, ApplicationError, ApplicationResult, PricingDefault, UsageFilter, UsageLimitItem,
 };
 use crate::services::pricing_catalog::{
     PricingCatalogEntry, PricingCatalogRefreshOutcome, PricingCatalogStatus,
@@ -203,6 +203,41 @@ impl Application {
             }
         }
         Ok(combined)
+    }
+
+    pub async fn pricing_defaults(&self) -> ApplicationResult<Vec<PricingDefault>> {
+        let mut defaults = Vec::new();
+        for app in ["claude", "codex"] {
+            defaults.push(PricingDefault {
+                app: app.to_string(),
+                multiplier: self.state.db.get_default_cost_multiplier(app).await?,
+                model_source: self.state.db.get_pricing_model_source(app).await?,
+            });
+        }
+        Ok(defaults)
+    }
+
+    pub async fn set_pricing_defaults(
+        &self,
+        defaults: &[PricingDefault],
+    ) -> ApplicationResult<Vec<PricingDefault>> {
+        for item in defaults {
+            if !matches!(item.app.as_str(), "claude" | "codex") {
+                return Err(ApplicationError::InvalidInput(format!(
+                    "unsupported pricing defaults app: {}",
+                    item.app
+                )));
+            }
+            self.state
+                .db
+                .set_default_cost_multiplier(&item.app, &item.multiplier)
+                .await?;
+            self.state
+                .db
+                .set_pricing_model_source(&item.app, &item.model_source)
+                .await?;
+        }
+        self.pricing_defaults().await
     }
 
     pub fn pricing_status(&self) -> ApplicationResult<PricingCatalogStatus> {

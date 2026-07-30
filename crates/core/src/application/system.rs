@@ -6,9 +6,56 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::application::ApplicationError;
 use crate::application::{Application, ApplicationResult, DoctorCheck, DoctorReport};
 
 impl Application {
+    pub fn data_dir_status(&self) -> ApplicationResult<Value> {
+        Ok(json!({
+            "effective": crate::paths::get_app_config_dir(),
+            "persistentOverride": crate::app_store::refresh_app_config_dir_override()
+        }))
+    }
+
+    pub fn set_data_dir(&self, path: &Path) -> ApplicationResult<Value> {
+        if path.as_os_str().is_empty() {
+            return Err(ApplicationError::InvalidInput(
+                "data directory cannot be empty".to_string(),
+            ));
+        }
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|error| ApplicationError::OperationFailed(error.to_string()))?
+                .join(path)
+        };
+        if absolute.exists() && !absolute.is_dir() {
+            return Err(ApplicationError::InvalidInput(format!(
+                "data directory is not a directory: {}",
+                absolute.display()
+            )));
+        }
+        std::fs::create_dir_all(&absolute)
+            .map_err(|error| ApplicationError::OperationFailed(error.to_string()))?;
+        let canonical = absolute
+            .canonicalize()
+            .map_err(|error| ApplicationError::OperationFailed(error.to_string()))?;
+        crate::app_store::set_app_config_dir_to_store(Some(&canonical.to_string_lossy()))?;
+        Ok(json!({
+            "path": canonical,
+            "takesEffectAfterRestart": true
+        }))
+    }
+
+    pub fn reset_data_dir(&self) -> ApplicationResult<Value> {
+        crate::app_store::set_app_config_dir_to_store(None)?;
+        Ok(json!({
+            "path": crate::paths::get_home_dir().join(".ochub"),
+            "takesEffectAfterRestart": true
+        }))
+    }
+
     pub async fn doctor(&self, network: bool) -> ApplicationResult<DoctorReport> {
         let mut checks = Vec::new();
         checks.push(ok(

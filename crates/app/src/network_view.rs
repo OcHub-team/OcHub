@@ -14,12 +14,15 @@
 use gpui::{
     AnyElement, App, Context, Entity, ScrollHandle, SharedString, Window, div, prelude::*, px,
 };
-use ochub_core::settings::{self, AppSettings, ProxyProtocol, ProxySettings};
+use ochub_core::AppState;
+use ochub_core::settings::{self, ProxyProtocol, ProxySettings};
+use std::sync::Arc;
 
 use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{Key, k, raw, t};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::tf;
 
@@ -30,7 +33,9 @@ enum FieldError {
 }
 
 pub struct NetworkView {
-    settings: AppSettings,
+    backend: WorkspaceBackend,
+    workspace_available: bool,
+    stored_proxy: ProxySettings,
     enabled: bool,
     protocol: ProxyProtocol,
     host_input: Entity<TextInput>,
@@ -50,10 +55,11 @@ pub struct NetworkView {
     scroll: ScrollHandle,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
+    workspace_generation: u64,
 }
 
 impl NetworkView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings = settings::get_settings();
         let proxy = settings.proxy.clone().unwrap_or_default();
         let port_text = port_to_string(proxy.port);
@@ -99,7 +105,9 @@ impl NetworkView {
         .detach();
 
         Self {
-            settings,
+            backend: WorkspaceBackend::local(app),
+            workspace_available: true,
+            stored_proxy: proxy.clone(),
             enabled: proxy.enabled,
             protocol: proxy.protocol,
             host_input,
@@ -119,22 +127,12 @@ impl NetworkView {
             scroll: ScrollHandle::new(),
             status: None,
             status_level: None,
+            workspace_generation: 0,
         }
-    }
-
-    /// Re-read after an external write (a language switch repaints every
-    /// view). A dirty draft is left exactly as typed, matching the sync page.
-    pub fn reload(&mut self, cx: &mut Context<Self>) {
-        self.settings = settings::get_settings();
-        if self.dirty(cx) {
-            cx.notify();
-            return;
-        }
-        self.reseed(cx);
     }
 
     fn reseed(&mut self, cx: &mut Context<Self>) {
-        let proxy = self.settings.proxy.clone().unwrap_or_default();
+        let proxy = self.stored_proxy.clone();
         let port_text = port_to_string(proxy.port);
         self.host_input
             .update(cx, |input, cx| input.set_content(proxy.host.clone(), cx));
@@ -157,6 +155,64 @@ impl NetworkView {
         self.host_error = None;
         self.port_error = None;
         cx.notify();
+    }
+
+    fn load_proxy(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            self.stored_proxy = ProxySettings::default();
+            self.reseed(cx);
+            return;
+        }
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
+        cx.spawn(async move |this, cx| {
+            let result = backend
+                .proxy_settings()
+                .await
+                .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
+                match result {
+                    Ok(proxy) => {
+                        this.stored_proxy = proxy;
+                        this.reseed(cx);
+                    }
+                    Err(error) => {
+                        this.stored_proxy = ProxySettings::default();
+                        this.reseed(cx);
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::NETWORK_STATUS_LOAD_FAILED, error = error),
+                            cx,
+                        );
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.backend = backend;
+        self.workspace_available = true;
+        self.saving = false;
+        self.testing = false;
+        self.stored_proxy = ProxySettings::default();
+        self.reseed(cx);
+        self.load_proxy(cx);
+    }
+
+    pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.workspace_available = false;
+        self.saving = false;
+        self.testing = false;
+        self.stored_proxy = ProxySettings::default();
+        self.reseed(cx);
     }
 
     fn dirty(&self, cx: &App) -> bool {
@@ -240,7 +296,7 @@ impl NetworkView {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
-        if self.saving {
+        if self.saving || !self.workspace_available {
             return;
         }
         let Some(mut candidate) = self.validated_candidate(cx) else {
@@ -249,21 +305,21 @@ impl NetworkView {
         candidate.normalize();
         self.saving = true;
         cx.notify();
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    settings::mutate_settings(move |settings| {
-                        settings.proxy = Some(candidate);
-                    })
-                    .map(|_| settings::get_settings())
-                    .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = backend
+                .set_proxy_settings(&candidate)
+                .await
+                .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.saving = false;
                 match result {
                     Ok(stored) => {
-                        this.settings = stored;
+                        this.stored_proxy = stored;
                         this.reseed(cx);
                         this.set_status(
                             NotificationLevel::Success,
@@ -288,7 +344,7 @@ impl NetworkView {
     /// testing connectivity for a host/port is meaningful even before the
     /// user has committed to turning the proxy on for real traffic.
     fn test_connection(&mut self, cx: &mut Context<Self>) {
-        if self.testing {
+        if self.testing || !self.workspace_available {
             return;
         }
         let Some(mut candidate) = self.validated_candidate(cx) else {
@@ -298,17 +354,20 @@ impl NetworkView {
         candidate.normalize();
         self.testing = true;
         self.set_status(NotificationLevel::Info, t(k::NETWORK_TEST_TESTING), cx);
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let outcome = crate::core_async::run(async move {
-                ochub_core::services::network_proxy::check_connection(&candidate).await
-            })
-            .await;
+            let outcome = backend
+                .test_proxy_settings(&candidate)
+                .await
+                .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.testing = false;
                 match outcome {
-                    Ok(()) => {
-                        this.set_status(NotificationLevel::Success, t(k::NETWORK_TEST_OK), cx)
-                    }
+                    Ok(_) => this.set_status(NotificationLevel::Success, t(k::NETWORK_TEST_OK), cx),
                     Err(error) => this.set_status(
                         NotificationLevel::Error,
                         tf!(k::NETWORK_TEST_FAILED, error = error),
@@ -442,7 +501,7 @@ impl NetworkView {
             t(k::NETWORK_TEST_DESC),
             t(k::NETWORK_TEST_ACTION),
             ButtonTone::Neutral,
-            self.saving || self.testing || incomplete,
+            self.saving || self.testing || incomplete || !self.workspace_available,
             move |window, cx| test(&(), window, cx),
         );
         section(
@@ -457,7 +516,7 @@ impl Render for NetworkView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty = self.dirty(cx);
         let saving = self.saving;
-        let live = dirty && !saving;
+        let live = dirty && !saving && self.workspace_available;
         let discard = cx.listener(|this: &mut Self, _: &(), _window, cx| this.discard(cx));
         let save = cx.listener(|this: &mut Self, _: &(), _window, cx| this.save(cx));
 

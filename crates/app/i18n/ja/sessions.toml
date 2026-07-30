@@ -69,4 +69,4 @@
 "sessions.search.titles_only" = "タイトルのみ検索しました。全文インデックスを有効にすると会話本文も検索できます。"
 "sessions.status.delete_failed" = "削除に失敗しました: {error}"
 "sessions.status.deleted" = "セッションを削除しました"
-"sessions.status.not_found" = "セッションが見つかりませんでした"
+"sessions.status.load_failed" = "セッションを読み込めませんでした: {error}"

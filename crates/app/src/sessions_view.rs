@@ -18,15 +18,16 @@ use gpui::{
     MouseButton, ScrollHandle, SharedString, Task, Window, anchored, deferred, div, point,
     prelude::*, px, relative,
 };
-use ochub_core::AppState;
 use ochub_core::session_index::{SearchHit, SessionIndex};
-use ochub_core::session_manager::{self, SessionMessage, SessionMeta};
+use ochub_core::session_manager::{SessionMessage, SessionMeta};
+use ochub_core::{AppId, AppState};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme;
@@ -186,8 +187,8 @@ struct SessionDetail {
 }
 
 pub struct SessionsView {
-    #[allow(dead_code)]
-    app: Arc<AppState>,
+    backend: WorkspaceBackend,
+    workspace_available: bool,
     sessions: Vec<SessionMeta>,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
@@ -251,6 +252,7 @@ pub struct SessionsView {
     /// the feature off.
     index_cancel: Arc<AtomicBool>,
     index_task: Option<Task<()>>,
+    workspace_generation: u64,
 }
 
 impl SessionsView {
@@ -274,7 +276,8 @@ impl SessionsView {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let now = Local::now();
         let this = Self {
-            app,
+            backend: WorkspaceBackend::local(app),
+            workspace_available: true,
             sessions: Vec::new(),
             status: None,
             status_level: None,
@@ -319,6 +322,7 @@ impl SessionsView {
             index_wait_dismissed: false,
             index_cancel: Arc::new(AtomicBool::new(false)),
             index_task: None,
+            workspace_generation: 0,
         };
         // Do not scan here: AppRoot eagerly constructs every section. The
         // shell calls `reload` when Sessions is actually selected.
@@ -366,6 +370,19 @@ impl SessionsView {
     /// shows instantly with no IO at all.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.detail = None;
+        if !self.workspace_available {
+            self.sessions.clear();
+            self.rebuild_session_index();
+            self.set_status(
+                tf!(
+                    k::SESSIONS_STATUS_LOAD_FAILED,
+                    error = "remote workspace is not connected"
+                ),
+                NotificationLevel::Error,
+            );
+            cx.notify();
+            return;
+        }
         self.refresh_index_enabled(cx);
         let fresh = self.last_scan.is_some_and(|at| at.elapsed() < SCAN_TTL);
         if fresh || self.scanning {
@@ -378,8 +395,43 @@ impl SessionsView {
         self.start_scan(cx);
     }
 
+    pub(crate) fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.backend = backend;
+        self.workspace_available = true;
+        self.scanning = false;
+        self.loading_detail = None;
+        self.searching = false;
+        self.search_task = None;
+        self.last_scan = None;
+        self.sessions.clear();
+        self.detail = None;
+        self.confirm_delete = None;
+        self.content_hits.clear();
+        self.rebuild_session_index();
+        self.reload(cx);
+    }
+
+    pub(crate) fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.workspace_available = false;
+        self.scanning = false;
+        self.loading_detail = None;
+        self.searching = false;
+        self.search_task = None;
+        self.last_scan = None;
+        self.detail = None;
+        self.confirm_delete = None;
+        self.reload(cx);
+    }
+
     /// The refresh button: always rescan, ignoring the TTL.
     fn force_reload(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
         self.detail = None;
         if !self.scanning {
             self.start_scan(cx);
@@ -387,14 +439,31 @@ impl SessionsView {
     }
 
     fn start_scan(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
         self.scanning = true;
         cx.notify();
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let sessions = cx
-                .background_spawn(async move { session_manager::scan_sessions() })
-                .await;
+            let sessions =
+                crate::core_async::run(async move { backend.list_sessions(None, None).await })
+                    .await;
             this.update(cx, |this, cx| {
-                this.sessions = sessions;
+                if generation != this.workspace_generation {
+                    return;
+                }
+                match sessions {
+                    Ok(sessions) => this.sessions = sessions,
+                    Err(error) => {
+                        this.sessions.clear();
+                        this.set_status(
+                            tf!(k::SESSIONS_STATUS_LOAD_FAILED, error = error),
+                            NotificationLevel::Error,
+                        );
+                    }
+                }
                 this.scanning = false;
                 this.last_scan = Some(Instant::now());
                 this.rebuild_session_index();
@@ -461,7 +530,7 @@ impl SessionsView {
         self.search_generation = self.search_generation.wrapping_add(1);
         self.rebuild_session_index();
 
-        if self.query.is_empty() || !self.index_enabled {
+        if self.query.is_empty() || !self.index_enabled || !self.workspace_available {
             self.searching = false;
             self.search_task = None;
             cx.notify();
@@ -471,13 +540,24 @@ impl SessionsView {
         self.searching = true;
         let generation = self.search_generation;
         let query = self.query.clone();
+        let backend = self.backend.clone();
+        let remote = self.backend.is_remote();
         self.search_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SEARCH_DEBOUNCE).await;
-            let hits = cx
-                .background_spawn(async move {
+            let hits = if remote {
+                crate::core_async::run(async move {
+                    backend
+                        .search_session_index(&query, SEARCH_HIT_LIMIT)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await
+            } else {
+                cx.background_spawn(async move {
                     SessionIndex::open().and_then(|index| index.search(&query, SEARCH_HIT_LIMIT))
                 })
-                .await;
+                .await
+            };
             this.update(cx, |this, cx| {
                 // A later keystroke has already superseded this query.
                 if this.search_generation != generation {
@@ -505,10 +585,39 @@ impl SessionsView {
     /// sync needs, and because that is the moment the user is demonstrably
     /// looking at this panel.
     fn start_index_sync(&mut self, cx: &mut Context<Self>) {
-        if !self.index_enabled || self.sessions.is_empty() {
+        if !self.workspace_available || !self.index_enabled || self.sessions.is_empty() {
             return;
         }
         if matches!(self.index_state, IndexSyncState::Syncing { .. }) {
+            return;
+        }
+        if self.backend.is_remote() {
+            let backend = self.backend.clone();
+            let total = self.sessions.len();
+            self.index_wait_dismissed = false;
+            self.index_state = IndexSyncState::Syncing {
+                done: 0,
+                total,
+                cold: self.content_hits.is_empty(),
+            };
+            self.index_task = Some(cx.spawn(async move |this, cx| {
+                let result =
+                    crate::core_async::run(async move { backend.build_session_index().await })
+                        .await;
+                this.update(cx, |this, cx| {
+                    this.index_state = match result {
+                        Ok(_) => IndexSyncState::Idle,
+                        Err(error) => IndexSyncState::Failed(SharedString::from(error.to_string())),
+                    };
+                    if !this.query.is_empty() {
+                        let query = std::mem::take(&mut this.query);
+                        this.set_query(query, cx);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }));
+            cx.notify();
             return;
         }
 
@@ -698,7 +807,36 @@ impl SessionsView {
     /// Pick up an index setting changed elsewhere (the settings page), without
     /// making the two views talk to each other directly.
     fn refresh_index_enabled(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
+        if self.backend.is_remote() {
+            let backend = self.backend.clone();
+            cx.spawn(async move |this, cx| {
+                let enabled = crate::core_async::run(async move {
+                    backend
+                        .setting("sessionIndexEnabled")
+                        .await
+                        .map(|value| value.as_bool().unwrap_or(false))
+                })
+                .await
+                .unwrap_or(false);
+                this.update(cx, |this, cx| {
+                    this.apply_index_enabled(enabled, cx);
+                    if enabled {
+                        this.start_index_sync(cx);
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let enabled = ochub_core::settings::get_settings().session_index_enabled;
+        self.apply_index_enabled(enabled, cx);
+    }
+
+    fn apply_index_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if enabled == self.index_enabled {
             return;
         }
@@ -1012,33 +1150,45 @@ impl SessionsView {
     }
 
     fn do_delete(&mut self, idx: usize, cx: &mut Context<Self>) {
-        let Some(session) = self.sessions.get(idx) else {
+        let Some(session) = self.sessions.get(idx).cloned() else {
             return;
         };
-        let source_path = session.source_path.clone().unwrap_or_default();
-        match session_manager::delete_session(
-            &session.provider_id,
-            &session.session_id,
-            &source_path,
-        ) {
-            Ok(true) => {
-                self.set_status(t(k::SESSIONS_STATUS_DELETED), NotificationLevel::Success);
-                // 列表本地同步移除即可，无需整库重扫。
-                self.sessions.remove(idx);
-                self.rebuild_session_index();
-            }
-            // The row was already gone on disk: the delete was a no-op, and the
-            // list the user clicked was stale.
-            Ok(false) => {
-                self.set_status(t(k::SESSIONS_STATUS_NOT_FOUND), NotificationLevel::Warning);
-                self.force_reload(cx);
-            }
-            Err(err) => self.set_status(
-                tf!(k::SESSIONS_STATUS_DELETE_FAILED, error = err),
+        let Ok(app) = AppId::parse(&session.provider_id) else {
+            self.set_status(
+                tf!(
+                    k::SESSIONS_STATUS_DELETE_FAILED,
+                    error = "invalid session app"
+                ),
                 NotificationLevel::Error,
-            ),
-        }
-        cx.notify();
+            );
+            cx.notify();
+            return;
+        };
+        let id = session.session_id.clone();
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let result =
+                crate::core_async::run(async move { backend.delete_session(&app, &id).await })
+                    .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(_) => {
+                        this.set_status(t(k::SESSIONS_STATUS_DELETED), NotificationLevel::Success);
+                        if idx < this.sessions.len() {
+                            this.sessions.remove(idx);
+                        }
+                        this.rebuild_session_index();
+                    }
+                    Err(error) => this.set_status(
+                        tf!(k::SESSIONS_STATUS_DELETE_FAILED, error = error),
+                        NotificationLevel::Error,
+                    ),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn prepare_messages(
@@ -1097,26 +1247,42 @@ impl SessionsView {
         };
         self.loading_detail = Some(idx);
         cx.notify();
+        let app = match AppId::parse(&session.provider_id) {
+            Ok(app) => app,
+            Err(error) => {
+                self.loading_detail = None;
+                self.set_status(
+                    tf!(k::SESSIONS_DETAIL_ERROR_LOAD_FAILED, error = error),
+                    NotificationLevel::Error,
+                );
+                cx.notify();
+                return;
+            }
+        };
+        let id = session.session_id.clone();
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let source_path = session.source_path.clone().unwrap_or_default();
-            let provider_id = session.provider_id.clone();
-            let loaded = cx
-                .background_spawn(async move {
-                    session_manager::load_messages(&provider_id, &source_path)
-                        .map(Self::prepare_messages)
-                })
-                .await;
+            let loaded = crate::core_async::run(async move {
+                backend
+                    .get_session_messages(&app, &id)
+                    .await
+                    .map(|(meta, messages)| {
+                        let prepared = Self::prepare_messages(messages);
+                        (meta, prepared)
+                    })
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.loading_detail = None;
                 let detail = match loaded {
-                    Ok((messages, stats)) => {
+                    Ok((meta, (messages, stats))) => {
                         // The index stores a position in the full transcript,
                         // but the file may have been trimmed since; ignore a
                         // target that no longer exists rather than scrolling
                         // somewhere arbitrary.
                         let focused_message = focus.filter(|&position| position < messages.len());
                         SessionDetail {
-                            meta: session,
+                            meta,
                             messages,
                             stats,
                             error: None,
@@ -2053,7 +2219,9 @@ impl SessionsView {
             }
         };
 
-        let enable = !self.index_enabled && matches!(self.index_state, IndexSyncState::Idle);
+        let enable = !self.backend.is_remote()
+            && !self.index_enabled
+            && matches!(self.index_state, IndexSyncState::Idle);
         Some(
             div()
                 .pt_2()
@@ -2083,6 +2251,41 @@ impl SessionsView {
 
     /// Switch the index on from the Sessions panel and start filling it.
     fn enable_index(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
+        if self.backend.is_remote() {
+            let backend = self.backend.clone();
+            cx.spawn(async move |this, cx| {
+                let result = crate::core_async::run(async move {
+                    backend
+                        .set_setting("sessionIndexEnabled", serde_json::json!(true))
+                        .await?;
+                    backend
+                        .set_setting("sessionIndexDisabledAt", serde_json::Value::Null)
+                        .await?;
+                    Ok::<_, crate::remote::WorkspaceBackendError>(())
+                })
+                .await;
+                this.update(cx, |this, cx| match result {
+                    Ok(()) => {
+                        this.index_enabled = true;
+                        this.start_index_sync(cx);
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        this.set_status(
+                            tf!(k::SESSIONS_SEARCH_INDEX_FAILED, error = error),
+                            NotificationLevel::Error,
+                        );
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let mut settings = ochub_core::settings::get_settings();
         settings.session_index_enabled = true;
         settings.session_index_disabled_at = None;

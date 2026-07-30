@@ -46,7 +46,7 @@ pub fn gateway_key_label(app_type: AppType, route_id: &str) -> String {
 }
 
 /// Result surfaced to the UI after a one-click apply (or for manual clients).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ApplyResult {
     pub base_url: String,
     pub key_name: String,

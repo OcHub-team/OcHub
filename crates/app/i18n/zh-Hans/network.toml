@@ -23,6 +23,7 @@
 "network.section.connection.title" = "代理配置"
 "network.section.test.desc" = "使用当前表单中的配置发起一次真实请求，不会写入任何内容"
 "network.section.test.title" = "测试连接"
+"network.status.load_failed" = "无法加载代理设置: {error}"
 "network.test.action" = "测试"
 "network.test.desc" = "通过该代理请求 api.github.com"
 "network.test.failed" = "代理连接失败: {error}"

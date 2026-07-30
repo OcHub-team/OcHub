@@ -31,6 +31,7 @@ pub(crate) use dao::usage_config::{
     validate_pricing_source,
 };
 
+pub use backup::BackupEntry;
 pub use legacy_json::{
     CommonConfigSnippets, InstalledSkill, McpApps, McpConfig, McpRoot, McpServer, MultiAppConfig,
     SkillApps, SkillRepo, SkillState, SkillStore,

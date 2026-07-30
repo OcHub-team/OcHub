@@ -129,7 +129,7 @@ pub struct LogFilters {
 }
 
 /// 分页请求日志响应
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaginatedLogs {
     pub data: Vec<RequestLogDetail>,

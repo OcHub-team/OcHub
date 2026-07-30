@@ -23,6 +23,7 @@
 "network.section.connection.title" = "プロキシ設定"
 "network.section.test.desc" = "このフォームの設定で実際に1回リクエストを送信します。何も保存されません。"
 "network.section.test.title" = "接続テスト"
+"network.status.load_failed" = "プロキシ設定を読み込めませんでした: {error}"
 "network.test.action" = "テスト"
 "network.test.desc" = "このプロキシ経由で api.github.com にリクエストします"
 "network.test.failed" = "プロキシ接続に失敗しました: {error}"

@@ -398,10 +398,13 @@ pub enum SettingsCommand {
     },
     Set {
         path: String,
-        value: String,
+        value: Option<String>,
         /// Always treat VALUE as a string instead of parsing JSON scalars.
-        #[arg(long)]
+        #[arg(long, requires = "value")]
         string: bool,
+        /// Read the JSON value from a file instead of the command line.
+        #[arg(long, conflicts_with = "value")]
+        from: Option<PathBuf>,
     },
     Unset {
         path: String,
@@ -412,6 +415,23 @@ pub enum SettingsCommand {
     },
     Import {
         file: PathBuf,
+    },
+    Proxy {
+        #[command(subcommand)]
+        command: SettingsProxyCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SettingsProxyCommand {
+    Show,
+    Set {
+        #[arg(long)]
+        from: PathBuf,
+    },
+    Test {
+        #[arg(long)]
+        from: PathBuf,
     },
 }
 
@@ -454,6 +474,9 @@ pub enum ProviderCommand {
         id: String,
         #[arg(long)]
         app: String,
+        /// Apply a JSON Merge Patch to the stored Provider.
+        #[arg(long, conflicts_with = "from")]
+        patch: Option<PathBuf>,
         #[arg(long)]
         from: Option<PathBuf>,
         /// Set a dotted Provider field using FIELD=JSON_OR_STRING.
@@ -464,6 +487,11 @@ pub enum ProviderCommand {
         secret_values: Vec<String>,
     },
     Delete {
+        id: String,
+        #[arg(long)]
+        app: String,
+    },
+    Duplicate {
         id: String,
         #[arg(long)]
         app: String,
@@ -822,6 +850,7 @@ pub enum ClaudeMcpServerCommand {
 #[derive(Debug, Subcommand)]
 pub enum ClaudeMcpPathCommand {
     Validate,
+    ValidateCommand { command: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1149,7 +1178,10 @@ pub enum McpCommand {
     Edit {
         id: String,
         #[arg(long)]
-        from: PathBuf,
+        from: Option<PathBuf>,
+        /// Apply a JSON Merge Patch to the stored MCP server.
+        #[arg(long, conflicts_with = "from")]
+        patch: Option<PathBuf>,
     },
     Delete {
         id: String,
@@ -1246,7 +1278,7 @@ pub enum SkillRepoCommand {
         url: String,
         #[arg(long)]
         branch: Option<String>,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         enabled: bool,
     },
     Update {
@@ -1305,6 +1337,18 @@ pub enum SessionCommand {
         #[arg(long)]
         app: Vec<String>,
     },
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
+    IndexStatus,
+    IndexBuild,
+    IndexMaintain {
+        #[arg(long, default_value_t = 20)]
+        budget_seconds: u64,
+    },
+    IndexDelete,
 }
 
 #[derive(Debug, Args)]
@@ -1441,7 +1485,20 @@ pub enum PricingCommand {
         #[command(subcommand)]
         command: PricingOverrideCommand,
     },
+    Defaults {
+        #[command(subcommand)]
+        command: PricingDefaultsCommand,
+    },
     Backfill,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PricingDefaultsCommand {
+    Get,
+    Set {
+        #[arg(long)]
+        from: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1487,7 +1544,11 @@ pub enum SyncBackendCommand {
         #[arg(long)]
         clear_secret: bool,
     },
-    Test,
+    Test {
+        /// Test candidate settings from a file without saving them.
+        #[arg(long)]
+        from: Option<PathBuf>,
+    },
     Upload,
     Download,
     RemoteInfo,
@@ -1598,9 +1659,16 @@ pub enum GatewayCommand {
     ProbeDialect {
         #[arg(long)]
         url: String,
+        /// Resolve an existing endpoint credential from this station.
+        #[arg(long)]
+        station: Option<String>,
         /// Read the upstream credential from a file.
         #[arg(long)]
         api_key_file: Option<PathBuf>,
+    },
+    Endpoint {
+        #[command(subcommand)]
+        command: GatewayEndpointCommand,
     },
     Config {
         #[command(subcommand)]
@@ -1617,6 +1685,26 @@ pub enum GatewayCommand {
     Key {
         #[command(subcommand)]
         command: GatewayKeyCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GatewayEndpointCommand {
+    Models {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        station: Option<String>,
+        #[arg(long)]
+        api_key_file: Option<PathBuf>,
+    },
+    Test {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        station: Option<String>,
+        #[arg(long)]
+        api_key_file: Option<PathBuf>,
     },
 }
 

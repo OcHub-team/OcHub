@@ -129,7 +129,6 @@
 "tools.db.hidden_count" = "还有 {count} 个历史备份已收起。"
 "tools.db.refresh" = "刷新备份"
 "tools.db.rename_required" = "请输入新的备份名称"
-"tools.db.serialize_failed" = "序列化数据库备份失败: {error}"
 "tools.db.show_all" = "显示全部备份"
 "tools.env.delete" = "删除并备份"
 "tools.env.delete_failed" = "删除环境变量冲突失败: {error}"

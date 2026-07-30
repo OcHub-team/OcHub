@@ -1022,7 +1022,7 @@ pub fn write_memory(kind: MemoryKind, content: &str) -> Result<(), AppError> {
 /// Character budget + enable flags for the two memory blobs, as configured
 /// in Hermes' `config.yaml`. Defaults mirror `~/.hermes`'s own defaults so
 /// callers get a usable budget bar even before the user edits config.yaml.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HermesMemoryLimits {
     pub memory: usize,

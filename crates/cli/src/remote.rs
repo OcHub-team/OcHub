@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,9 +16,9 @@ use ochub_core::application::{Application, OpenOptions as ApplicationOpenOptions
 use ochub_core::runtime::{IpcError, OwnerGuard, OwnerKind};
 use ochub_protocol::{
     ApplyPlanParams, Capability, Frame, HelloAckFrame, HelloFrame, MAX_FRAME_SIZE, NodeDescriptor,
-    PROTOCOL_MAX, PROTOCOL_MIN, PingFrame, PongFrame, ProtocolErrorFrame, RemoteError,
-    RequestFrame, ResponseFrame, RuntimeDescriptor, SCHEMA_VERSION, decode_frame, encode_frame,
-    methods, negotiate_protocol, validate_request_id,
+    PROTOCOL_MAX, PROTOCOL_MIN, PingFrame, PongFrame, ProtocolErrorFrame, ProviderCreateParams,
+    ProviderUpdateParams, RemoteError, RequestFrame, ResponseFrame, RuntimeDescriptor,
+    SCHEMA_VERSION, decode_frame, encode_frame, methods, negotiate_protocol, validate_request_id,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -378,6 +379,172 @@ struct ExecutionResult {
     error: Option<IpcError>,
 }
 
+enum Payload {
+    Json(Value),
+    Text(String),
+    None,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdvancedParams {
+    action: String,
+    #[serde(default)]
+    params: Value,
+}
+
+fn advanced_params(value: &Value, method: &str) -> Result<AdvancedParams, String> {
+    let params: AdvancedParams = serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid {method} parameters: {error}"))?;
+    validate_text(&params.action, "action")?;
+    Ok(params)
+}
+
+fn advanced_read_argv(value: &Value) -> Result<Vec<String>, String> {
+    let params = advanced_params(value, methods::TOOL_ADVANCED_READ)?;
+    let argv = match params.action.as_str() {
+        "env.scan" => vec!["env", "scan"],
+        "omo.localFile" => vec!["opencode", "omo", "local-file"],
+        "omoSlim.localFile" => vec!["opencode", "omo-slim", "local-file"],
+        "claude.mcp.config" => vec!["claude", "mcp", "config", "show"],
+        "claude.mcp.validatePaths" => vec!["claude", "mcp", "path", "validate"],
+        "claude.mcp.validateCommand" => {
+            let command = params.params["command"]
+                .as_str()
+                .ok_or_else(|| "advanced command validation requires params.command".to_string())?;
+            validate_text(command, "params.command")?;
+            return Ok(vec![
+                "claude".into(),
+                "mcp".into(),
+                "path".into(),
+                "validate-command".into(),
+                command.to_string(),
+            ]);
+        }
+        "codex.history.status" => vec!["codex", "history", "status"],
+        "openclaw.health" => vec!["openclaw", "health"],
+        "openclaw.defaultModel" => vec!["openclaw", "model", "default", "get"],
+        "openclaw.env" => vec!["openclaw", "env", "get"],
+        "openclaw.tools" => vec!["openclaw", "tools", "get"],
+        "hermes.models" => vec!["hermes", "models", "get"],
+        "hermes.memory.status" => vec!["hermes", "memory", "status"],
+        "hermes.memory.limits" => vec!["hermes", "memory", "limits"],
+        "hermes.memory.read" | "hermes.user.read" => vec![
+            "hermes",
+            "memory",
+            "read",
+            if params.action == "hermes.memory.read" {
+                "memory"
+            } else {
+                "user"
+            },
+        ],
+        _ => {
+            return Err(format!(
+                "unsupported advanced read action: {}",
+                params.action
+            ));
+        }
+    };
+    Ok(argv.into_iter().map(str::to_string).collect())
+}
+
+fn advanced_write_payload(value: &Value) -> Result<(Payload, Vec<String>), String> {
+    let params = advanced_params(value, methods::TOOL_ADVANCED_WRITE)?;
+    let (payload, argv): (Payload, Vec<&str>) = match params.action.as_str() {
+        "env.clean" | "env.restore" => {
+            let id = params.params["id"]
+                .as_str()
+                .ok_or_else(|| "advanced environment action requires params.id".to_string())?;
+            validate_text(id, "params.id")?;
+            return Ok((
+                Payload::None,
+                vec![
+                    "--yes".into(),
+                    "env".into(),
+                    if params.action == "env.clean" {
+                        "clean".into()
+                    } else {
+                        "restore".into()
+                    },
+                    id.to_string(),
+                ],
+            ));
+        }
+        "omo.disable" => (Payload::None, vec!["--yes", "opencode", "omo", "disable"]),
+        "omoSlim.disable" => (
+            Payload::None,
+            vec!["--yes", "opencode", "omo-slim", "disable"],
+        ),
+        "claude.plugin.apply" => (
+            Payload::Json(json!({ "official": false })),
+            vec!["claude", "plugin", "apply", "--from"],
+        ),
+        "claude.plugin.restore" => (Payload::None, vec!["--yes", "claude", "plugin", "restore"]),
+        "claude.onboarding.skip" => (Payload::None, vec!["claude", "mcp", "onboarding", "skip"]),
+        "claude.onboarding.clear" => (Payload::None, vec!["claude", "mcp", "onboarding", "clear"]),
+        "codex.history.restore" => (Payload::None, vec!["--yes", "codex", "history", "restore"]),
+        "openclaw.defaultModel.set" => (
+            Payload::Json(params.params["value"].clone()),
+            vec!["openclaw", "model", "default", "set", "--from"],
+        ),
+        "openclaw.env.set" => (
+            Payload::Json(params.params["value"].clone()),
+            vec!["openclaw", "env", "set", "--from"],
+        ),
+        "openclaw.tools.set" => (
+            Payload::Json(params.params["value"].clone()),
+            vec!["openclaw", "tools", "set", "--from"],
+        ),
+        "hermes.models.set" => (
+            Payload::Json(params.params["value"].clone()),
+            vec!["hermes", "models", "set", "--from"],
+        ),
+        "hermes.memory.write" | "hermes.user.write" => (
+            Payload::Text(
+                params.params["content"]
+                    .as_str()
+                    .ok_or_else(|| "advanced Hermes write requires params.content".to_string())?
+                    .to_string(),
+            ),
+            vec![
+                "hermes",
+                "memory",
+                "write",
+                if params.action == "hermes.memory.write" {
+                    "memory"
+                } else {
+                    "user"
+                },
+                "--from",
+            ],
+        ),
+        "hermes.memory.enable"
+        | "hermes.memory.disable"
+        | "hermes.user.enable"
+        | "hermes.user.disable" => {
+            let user = params.action.starts_with("hermes.user");
+            let enabled = params.action.ends_with(".enable");
+            (
+                Payload::None,
+                vec![
+                    "hermes",
+                    "memory",
+                    if enabled { "enable" } else { "disable" },
+                    if user { "user" } else { "memory" },
+                ],
+            )
+        }
+        _ => {
+            return Err(format!(
+                "unsupported advanced write action: {}",
+                params.action
+            ));
+        }
+    };
+    Ok((payload, argv.into_iter().map(str::to_string).collect()))
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PlannedOperation {
@@ -393,6 +560,8 @@ struct CachedMutation {
     data: Value,
     warnings: Vec<String>,
     revision: Option<String>,
+    #[serde(default)]
+    request_hash: Option<String>,
     completed_at: i64,
 }
 
@@ -488,7 +657,31 @@ impl RemoteSession {
         if request.method == methods::PROVIDER_SWITCH_APPLY {
             return self.apply_provider_switch(request).await;
         }
-        let argv = match argv_for_request(&request) {
+        if matches!(
+            request.method.as_str(),
+            methods::PROVIDER_CREATE
+                | methods::PROVIDER_UPDATE
+                | methods::PROVIDER_COMMON_SET
+                | methods::MCP_UPSERT
+                | methods::SKILL_INSTALL
+                | methods::PRICING_OVERRIDE_SET
+                | methods::PRICING_DEFAULTS_SET
+                | methods::STATION_CREATE
+                | methods::STATION_UPDATE
+                | methods::STATION_APPLY
+                | methods::STATION_DETECT_DIALECTS
+                | methods::STATION_FETCH_MODELS
+                | methods::STATION_TEST_ENDPOINT
+                | methods::PROXY_SET
+                | methods::PROXY_TEST
+                | methods::SETTINGS_SET
+                | methods::SYNC_CONFIGURE
+                | methods::SYNC_TEST
+                | methods::TOOL_ADVANCED_WRITE
+        ) {
+            return self.execute_payload_request(request).await;
+        }
+        let mut argv = match argv_for_request(&request) {
             Ok(argv) => argv,
             Err(error) => {
                 return error_response(
@@ -501,7 +694,673 @@ impl RemoteSession {
                 );
             }
         };
-        self.execute_response(request, argv, None).await
+        if self.policy.allow_secrets_write
+            && matches!(
+                request.method.as_str(),
+                methods::GATEWAY_CONNECTION_INFO | methods::STATION_CONNECTION_INFO
+            )
+        {
+            argv.insert(0, "--show-secrets".into());
+        }
+        if is_direct_mutation(&request.method) {
+            self.execute_mutation_response(request, argv).await
+        } else {
+            self.execute_response(request, argv, None).await
+        }
+    }
+
+    async fn execute_payload_request(&self, request: RequestFrame) -> ResponseFrame {
+        let (payload, argv) = match request.method.as_str() {
+            methods::PROVIDER_CREATE => {
+                let mut params =
+                    match serde_json::from_value::<ProviderCreateParams>(request.params.clone()) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            return invalid_params_response(
+                                self.protocol_version,
+                                request.request_id,
+                                "provider.create",
+                                error,
+                            );
+                        }
+                    };
+                if let Err(error) = validate_text(&params.app, "app") {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                strip_redacted_secret_placeholders(&mut params.provider);
+                if !self.policy.allow_secrets_write && contains_secret_write(&params.provider) {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                let mut argv = vec!["provider".into(), "add".into(), "--app".into(), params.app];
+                if params.add_to_live {
+                    argv.push("--add-to-live".into());
+                }
+                argv.push("--from".into());
+                (Payload::Json(params.provider), argv)
+            }
+            methods::PROVIDER_UPDATE => {
+                let mut params =
+                    match serde_json::from_value::<ProviderUpdateParams>(request.params.clone()) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            return invalid_params_response(
+                                self.protocol_version,
+                                request.request_id,
+                                "provider.update",
+                                error,
+                            );
+                        }
+                    };
+                if let Err(error) = validate_text(&params.app, "app")
+                    .and_then(|_| validate_text(&params.provider_id, "providerId"))
+                {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                strip_redacted_secret_placeholders(&mut params.patch);
+                if !self.policy.allow_secrets_write && contains_secret_write(&params.patch) {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                (
+                    Payload::Json(params.patch),
+                    vec![
+                        "provider".into(),
+                        "edit".into(),
+                        params.provider_id,
+                        "--app".into(),
+                        params.app,
+                        "--patch".into(),
+                    ],
+                )
+            }
+            methods::PROVIDER_COMMON_SET => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    app: String,
+                    snippet: String,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "provider.common.set",
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) = validate_text(&params.app, "app") {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                if !self.policy.allow_secrets_write
+                    && common_config_may_contain_secret(&params.snippet)
+                {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                (
+                    Payload::Text(params.snippet),
+                    vec![
+                        "config".into(),
+                        "common".into(),
+                        "set".into(),
+                        "--app".into(),
+                        params.app,
+                        "--from".into(),
+                    ],
+                )
+            }
+            methods::MCP_UPSERT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    server: Value,
+                    #[serde(default)]
+                    original_id: Option<String>,
+                }
+                let mut params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "mcp.upsert",
+                            error,
+                        );
+                    }
+                };
+                if let Some(original_id) = params.original_id.as_deref()
+                    && let Err(error) = validate_text(original_id, "originalId")
+                {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                strip_redacted_secret_placeholders(&mut params.server);
+                if !self.policy.allow_secrets_write && contains_secret_write(&params.server) {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                let argv = if let Some(original_id) = params.original_id {
+                    vec!["mcp".into(), "edit".into(), original_id, "--patch".into()]
+                } else {
+                    vec!["mcp".into(), "add".into(), "--from".into()]
+                };
+                (Payload::Json(params.server), argv)
+            }
+            methods::SKILL_INSTALL => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    skill: Value,
+                    app: String,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "skill.install",
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) = validate_text(&params.app, "app") {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                (
+                    Payload::Json(params.skill),
+                    vec!["skill".into(), "install".into(), "--app".into(), params.app],
+                )
+            }
+            methods::PRICING_OVERRIDE_SET => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    model_id: String,
+                    pricing: Value,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "pricing.override.set",
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) = validate_text(&params.model_id, "modelId") {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                (
+                    Payload::Json(params.pricing),
+                    vec![
+                        "pricing".into(),
+                        "override".into(),
+                        "set".into(),
+                        "--model".into(),
+                        params.model_id,
+                        "--from".into(),
+                    ],
+                )
+            }
+            methods::PRICING_DEFAULTS_SET => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Params {
+                    defaults: Value,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "pricing.defaults.set",
+                            error,
+                        );
+                    }
+                };
+                (
+                    Payload::Json(params.defaults),
+                    vec![
+                        "pricing".into(),
+                        "defaults".into(),
+                        "set".into(),
+                        "--from".into(),
+                    ],
+                )
+            }
+            methods::STATION_CREATE => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Params {
+                    station: Value,
+                }
+                let mut params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "station.create",
+                            error,
+                        );
+                    }
+                };
+                strip_redacted_secret_placeholders(&mut params.station);
+                if !self.policy.allow_secrets_write && contains_secret_write(&params.station) {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                (
+                    Payload::Json(params.station),
+                    vec!["station".into(), "add".into(), "--from".into()],
+                )
+            }
+            methods::STATION_UPDATE => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    station_id: String,
+                    patch: Value,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "station.update",
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) = validate_text(&params.station_id, "stationId") {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                if !self.policy.allow_secrets_write && contains_secret_write(&params.patch) {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                (
+                    Payload::Json(params.patch),
+                    vec![
+                        "station".into(),
+                        "edit".into(),
+                        params.station_id,
+                        "--patch".into(),
+                    ],
+                )
+            }
+            methods::STATION_APPLY => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    station_id: String,
+                    app: String,
+                    policy: Value,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "station.apply",
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) = validate_text(&params.station_id, "stationId")
+                    .and_then(|_| validate_text(&params.app, "app"))
+                {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                (
+                    Payload::Json(params.policy),
+                    vec![
+                        "station".into(),
+                        "apply".into(),
+                        params.station_id,
+                        "--app".into(),
+                        params.app,
+                        "--from".into(),
+                    ],
+                )
+            }
+            methods::STATION_DETECT_DIALECTS
+            | methods::STATION_FETCH_MODELS
+            | methods::STATION_TEST_ENDPOINT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    url: String,
+                    #[serde(default)]
+                    api_key: String,
+                    #[serde(default)]
+                    station_id: Option<String>,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            request.method.as_str(),
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) = validate_url(&params.url) {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                if let Some(station_id) = params.station_id.as_deref()
+                    && let Err(error) = validate_text(station_id, "stationId")
+                {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                let redacted_key = !params.api_key.is_empty()
+                    && params.api_key.chars().all(|character| character == '*');
+                if redacted_key && params.station_id.is_none() {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        "a redacted apiKey requires stationId",
+                    );
+                }
+                if !params.api_key.is_empty() && !redacted_key && !self.policy.allow_secrets_write {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                let mut argv = match request.method.as_str() {
+                    methods::STATION_DETECT_DIALECTS => vec![
+                        "gateway".into(),
+                        "probe-dialect".into(),
+                        "--url".into(),
+                        params.url,
+                    ],
+                    methods::STATION_FETCH_MODELS => vec![
+                        "gateway".into(),
+                        "endpoint".into(),
+                        "models".into(),
+                        "--url".into(),
+                        params.url,
+                    ],
+                    methods::STATION_TEST_ENDPOINT => vec![
+                        "gateway".into(),
+                        "endpoint".into(),
+                        "test".into(),
+                        "--url".into(),
+                        params.url,
+                    ],
+                    _ => unreachable!(),
+                };
+                if let Some(station_id) = params.station_id {
+                    argv.extend(["--station".into(), station_id]);
+                }
+                if params.api_key.is_empty() || redacted_key {
+                    (Payload::None, argv)
+                } else {
+                    argv.push("--api-key-file".into());
+                    (Payload::Text(params.api_key), argv)
+                }
+            }
+            methods::PROXY_SET | methods::PROXY_TEST => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Params {
+                    proxy: Value,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            request.method.as_str(),
+                            error,
+                        );
+                    }
+                };
+                if !self.policy.allow_secrets_write && contains_secret_write(&params.proxy) {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                (
+                    Payload::Json(params.proxy),
+                    vec![
+                        "settings".into(),
+                        "proxy".into(),
+                        if request.method == methods::PROXY_SET {
+                            "set".into()
+                        } else {
+                            "test".into()
+                        },
+                        "--from".into(),
+                    ],
+                )
+            }
+            methods::SETTINGS_SET => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Params {
+                    path: String,
+                    value: Value,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "settings.set",
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) = validate_setting_path(&params.path) {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                if !self.policy.allow_secrets_write
+                    && (contains_secret_write(&params.value)
+                        || (is_secret_key(&params.path) && secret_value_is_present(&params.value)))
+                {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                (
+                    Payload::Json(params.value),
+                    vec![
+                        "settings".into(),
+                        "set".into(),
+                        params.path,
+                        "--from".into(),
+                    ],
+                )
+            }
+            methods::SYNC_CONFIGURE => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    backend: String,
+                    settings: Value,
+                    #[serde(default)]
+                    clear_secret: bool,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "sync.configure",
+                            error,
+                        );
+                    }
+                };
+                if !matches!(params.backend.as_str(), "webdav" | "s3") {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        "backend must be webdav or s3",
+                    );
+                }
+                if !self.policy.allow_secrets_write && contains_secret_write(&params.settings) {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                let mut settings = params.settings;
+                strip_redacted_secret_placeholders(&mut settings);
+                let mut argv = vec!["sync".into(), params.backend, "configure".into()];
+                if params.clear_secret {
+                    argv.push("--clear-secret".into());
+                }
+                argv.push("--from".into());
+                (Payload::Json(settings), argv)
+            }
+            methods::SYNC_TEST => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Params {
+                    backend: String,
+                    settings: Option<Value>,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "sync.test",
+                            error,
+                        );
+                    }
+                };
+                if !matches!(params.backend.as_str(), "webdav" | "s3") {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        "backend must be webdav or s3",
+                    );
+                }
+                let mut argv = vec!["sync".into(), params.backend, "test".into()];
+                match params.settings {
+                    Some(mut settings) => {
+                        if !self.policy.allow_secrets_write && contains_secret_write(&settings) {
+                            return secret_write_denied(self.protocol_version, request.request_id);
+                        }
+                        strip_redacted_secret_placeholders(&mut settings);
+                        argv.push("--from".into());
+                        (Payload::Json(settings), argv)
+                    }
+                    None => (Payload::None, argv),
+                }
+            }
+            methods::TOOL_ADVANCED_WRITE => {
+                let (payload, argv) = match advanced_write_payload(&request.params) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return invalid_argument_response(
+                            self.protocol_version,
+                            request.request_id,
+                            error,
+                        );
+                    }
+                };
+                if !self.policy.allow_secrets_write
+                    && matches!(&payload, Payload::Json(value) if contains_secret_write(value))
+                {
+                    return secret_write_denied(self.protocol_version, request.request_id);
+                }
+                (payload, argv)
+            }
+            _ => unreachable!("payload methods are filtered by handle_request"),
+        };
+
+        let mut argv = argv;
+        let mut file = if matches!(&payload, Payload::None) {
+            None
+        } else {
+            match tempfile::Builder::new()
+                .prefix("ochub-remote-")
+                .suffix(match &payload {
+                    Payload::Json(_) => ".json",
+                    Payload::Text(_) => ".txt",
+                    Payload::None => unreachable!(),
+                })
+                .tempfile_in(std::env::temp_dir())
+            {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    return cli_error_response(
+                        self.protocol_version,
+                        request.request_id,
+                        CliError::Io(error),
+                    );
+                }
+            }
+        };
+        let write_result = match (&payload, file.as_mut()) {
+            (Payload::Json(value), Some(file)) => serde_json::to_writer(&mut *file, value)
+                .map_err(CliError::from)
+                .and_then(|_| file.flush().map_err(CliError::from)),
+            (Payload::Text(value), Some(file)) => file
+                .write_all(value.as_bytes())
+                .and_then(|_| file.flush())
+                .map_err(CliError::from),
+            (Payload::None, None) => Ok(()),
+            _ => unreachable!("payload file state matches payload kind"),
+        };
+        if let Err(error) = write_result {
+            return cli_error_response(self.protocol_version, request.request_id, error);
+        }
+        if let Some(file) = &file {
+            argv.push(file.path().to_string_lossy().into_owned());
+        }
+        if is_direct_mutation(&request.method) {
+            self.execute_mutation_response(request, argv).await
+        } else {
+            self.execute_response(request, argv, None).await
+        }
     }
 
     async fn plan_provider_switch(&mut self, request: RequestFrame) -> ResponseFrame {
@@ -814,6 +1673,7 @@ impl RemoteSession {
             data: response.data.clone(),
             warnings: response.warnings.clone(),
             revision: response.revision.clone(),
+            request_hash: None,
             completed_at: chrono::Utc::now().timestamp(),
         };
         if let Err(error) =
@@ -845,6 +1705,93 @@ impl RemoteSession {
             }
             Err(error) => cli_error_response(self.protocol_version, request.request_id, error),
         }
+    }
+
+    async fn execute_mutation_response(
+        &self,
+        request: RequestFrame,
+        argv: Vec<String>,
+    ) -> ResponseFrame {
+        let Some(idempotency_key) = request.idempotency_key.as_deref() else {
+            return error_response(
+                self.protocol_version,
+                request.request_id,
+                "INVALID_ARGUMENT",
+                "remote mutations require idempotencyKey",
+                false,
+                json!({ "method": request.method }),
+            );
+        };
+        if let Err(error) = validate_request_id(idempotency_key) {
+            return invalid_argument_response(
+                self.protocol_version,
+                request.request_id,
+                format!("invalid idempotencyKey: {error}"),
+            );
+        }
+        let request_hash = revision_for(&json!({
+            "method": request.method,
+            "params": request.params,
+            "expectedRevision": request.expected_revision
+        }));
+        match cached_remote_mutation(idempotency_key) {
+            Ok(Some(cached)) if cached.request_hash.as_deref() == Some(request_hash.as_str()) => {
+                return ResponseFrame {
+                    protocol_version: self.protocol_version,
+                    request_id: request.request_id,
+                    ok: true,
+                    data: cached.data,
+                    warnings: cached.warnings,
+                    error: None,
+                    revision: cached.revision,
+                };
+            }
+            Ok(Some(_)) => {
+                return error_response(
+                    self.protocol_version,
+                    request.request_id,
+                    "RESOURCE_CONFLICT",
+                    "idempotencyKey was already used for a different mutation",
+                    false,
+                    json!({ "method": request.method }),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return cli_error_response(self.protocol_version, request.request_id, error);
+            }
+        }
+        let result = match self.execution.execute(traced_argv(&request, argv)).await {
+            Ok(result) if result.ok => result,
+            Ok(result) => {
+                return execution_error_response(self.protocol_version, request.request_id, result);
+            }
+            Err(error) => {
+                return cli_error_response(self.protocol_version, request.request_id, error);
+            }
+        };
+        let data = remote_safe_value(&result.data);
+        let revision = Some(revision_for(&data));
+        let response = ResponseFrame {
+            protocol_version: self.protocol_version,
+            request_id: request.request_id.clone(),
+            ok: true,
+            data: data.clone(),
+            warnings: result.warnings.clone(),
+            error: None,
+            revision: revision.clone(),
+        };
+        let cached = CachedMutation {
+            data,
+            warnings: result.warnings,
+            revision,
+            request_hash: Some(request_hash),
+            completed_at: chrono::Utc::now().timestamp(),
+        };
+        if let Err(error) = cache_remote_mutation(idempotency_key.to_string(), cached) {
+            return cli_error_response(self.protocol_version, request.request_id, error);
+        }
+        response
     }
 }
 
@@ -1006,11 +1953,102 @@ fn complete_remote_mutation(
     })
 }
 
+fn cache_remote_mutation(idempotency_key: String, cached: CachedMutation) -> Result<(), CliError> {
+    with_remote_state(|state| {
+        if state.idempotency.len() >= MAX_IDEMPOTENCY_RESULTS
+            && let Some(oldest) = state
+                .idempotency
+                .iter()
+                .min_by_key(|(_, value)| value.completed_at)
+                .map(|(key, _)| key.clone())
+        {
+            state.idempotency.remove(&oldest);
+        }
+        state.idempotency.insert(idempotency_key, cached);
+        Ok(())
+    })
+}
+
+fn is_direct_mutation(method: &str) -> bool {
+    matches!(
+        method,
+        methods::PROVIDER_CREATE
+            | methods::PROVIDER_UPDATE
+            | methods::PROVIDER_DELETE
+            | methods::PROVIDER_DUPLICATE
+            | methods::PROVIDER_SORT
+            | methods::PROVIDER_COPY
+            | methods::PROVIDER_SEED_OFFICIAL
+            | methods::PROVIDER_IMPORT_LIVE
+            | methods::PROVIDER_SYNC_LIVE
+            | methods::PROVIDER_ADD_TO_LIVE
+            | methods::PROVIDER_REMOVE_FROM_LIVE
+            | methods::PROVIDER_ENDPOINT_ADD
+            | methods::PROVIDER_ENDPOINT_REMOVE
+            | methods::PROVIDER_COMMON_SET
+            | methods::PROVIDER_COMMON_APPLY
+            | methods::MCP_UPSERT
+            | methods::MCP_DELETE
+            | methods::MCP_SET_APP
+            | methods::MCP_SYNC_ALL
+            | methods::MCP_IMPORT
+            | methods::SKILL_INSTALL
+            | methods::SKILL_UNINSTALL
+            | methods::SKILL_UPDATE
+            | methods::SKILL_UPDATE_ALL
+            | methods::SKILL_SET_APP
+            | methods::SKILL_REPO_UPSERT
+            | methods::SKILL_REPO_DELETE
+            | methods::USAGE_SYNC
+            | methods::PRICING_REFRESH
+            | methods::PRICING_OVERRIDE_SET
+            | methods::PRICING_OVERRIDE_DELETE
+            | methods::PRICING_DEFAULTS_SET
+            | methods::SESSION_DELETE
+            | methods::SESSION_INDEX_BUILD
+            | methods::SESSION_INDEX_MAINTAIN
+            | methods::SESSION_INDEX_DELETE
+            | methods::GATEWAY_START
+            | methods::GATEWAY_STOP
+            | methods::GATEWAY_CONNECTION_INFO
+            | methods::STATION_CREATE
+            | methods::STATION_UPDATE
+            | methods::STATION_DELETE
+            | methods::STATION_SET_ENABLED
+            | methods::STATION_SELECT
+            | methods::STATION_APPLY
+            | methods::STATION_DISCONNECT
+            | methods::STATION_CONNECTION_INFO
+            | methods::STATION_IMPORT_PROVIDER
+            | methods::PROXY_SET
+            | methods::SETTINGS_SET
+            | methods::SETTINGS_UNSET
+            | methods::SYNC_CONFIGURE
+            | methods::SYNC_UPLOAD
+            | methods::SYNC_DOWNLOAD
+            | methods::BACKUP_CREATE
+            | methods::BACKUP_RENAME
+            | methods::BACKUP_RESTORE
+            | methods::BACKUP_DELETE
+            | methods::BACKUP_EXPORT_SQL
+            | methods::BACKUP_IMPORT_SQL
+            | methods::BACKUP_POLICY_SET
+            | methods::TOOL_INSTALL
+            | methods::TOOL_UPDATE
+            | methods::TOOL_ADVANCED_WRITE
+            | methods::UPDATE_INSTALL
+            | methods::DATA_DIR_SET
+            | methods::DATA_DIR_RESET
+            | methods::MIGRATE_CCSWITCH_IMPORT
+            | methods::APP_SET_ENABLED
+    )
+}
+
 fn argv_for_request(request: &RequestFrame) -> Result<Vec<String>, String> {
     match request.method.as_str() {
         methods::STATUS_READ => expect_empty_params(&request.params).map(|_| vec!["status".into()]),
         methods::DOCTOR_RUN => {
-            #[derive(Deserialize)]
+            #[derive(Deserialize, Default)]
             #[serde(rename_all = "camelCase", deny_unknown_fields)]
             struct Params {
                 #[serde(default)]
@@ -1025,6 +2063,20 @@ fn argv_for_request(request: &RequestFrame) -> Result<Vec<String>, String> {
         }
         methods::APP_LIST => {
             expect_empty_params(&request.params).map(|_| vec!["app".into(), "list".into()])
+        }
+        methods::APP_GET | methods::APP_SCHEMA => {
+            let params = app_params(&request.params, request.method.as_str())?;
+            Ok(if request.method == methods::APP_GET {
+                vec!["app".into(), "show".into(), params.app]
+            } else {
+                vec![
+                    "app".into(),
+                    "schema".into(),
+                    params.app,
+                    "--resource".into(),
+                    "provider".into(),
+                ]
+            })
         }
         methods::PROVIDER_LIST => {
             let params: AppParams = serde_json::from_value(request.params.clone())
@@ -1050,6 +2102,707 @@ fn argv_for_request(request: &RequestFrame) -> Result<Vec<String>, String> {
                 params.app,
             ])
         }
+        methods::MCP_LIST => {
+            expect_empty_params(&request.params).map(|_| vec!["mcp".into(), "list".into()])
+        }
+        methods::MCP_GET => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid mcp.get parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            Ok(vec!["mcp".into(), "show".into(), params.id])
+        }
+        methods::MCP_DELETE => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid mcp.delete parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            Ok(vec![
+                "--yes".into(),
+                "mcp".into(),
+                "delete".into(),
+                params.id,
+            ])
+        }
+        methods::MCP_SET_APP => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                id: String,
+                app: String,
+                enabled: bool,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid mcp.setApp parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            validate_text(&params.app, "app")?;
+            Ok(vec![
+                "mcp".into(),
+                if params.enabled {
+                    "enable".into()
+                } else {
+                    "disable".into()
+                },
+                params.id,
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::MCP_SYNC_ALL => {
+            expect_empty_params(&request.params).map(|_| vec!["mcp".into(), "sync-all".into()])
+        }
+        methods::MCP_IMPORT => {
+            let params = app_params(&request.params, "mcp.import")?;
+            Ok(vec![
+                "mcp".into(),
+                "import".into(),
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::SKILL_LIST => {
+            expect_empty_params(&request.params).map(|_| vec!["skill".into(), "list".into()])
+        }
+        methods::SKILL_GET => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid skill.get parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            Ok(vec!["skill".into(), "show".into(), params.id])
+        }
+        methods::SKILL_SEARCH => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                query: String,
+                limit: usize,
+                offset: usize,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid skill.search parameters: {error}"))?;
+            validate_text(&params.query, "query")?;
+            if params.limit == 0 || params.limit > 100 {
+                return Err("limit must be between 1 and 100".to_string());
+            }
+            Ok(vec![
+                "skill".into(),
+                "search".into(),
+                params.query,
+                "--limit".into(),
+                params.limit.to_string(),
+                "--offset".into(),
+                params.offset.to_string(),
+            ])
+        }
+        methods::SKILL_DISCOVER => {
+            expect_empty_params(&request.params).map(|_| vec!["skill".into(), "discover".into()])
+        }
+        methods::SKILL_UNINSTALL => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid skill.uninstall parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            Ok(vec![
+                "--yes".into(),
+                "skill".into(),
+                "uninstall".into(),
+                params.id,
+            ])
+        }
+        methods::SKILL_CHECK_ALL => {
+            expect_empty_params(&request.params).map(|_| vec!["skill".into(), "check-all".into()])
+        }
+        methods::SKILL_UPDATE => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid skill.update parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            Ok(vec!["skill".into(), "update".into(), params.id])
+        }
+        methods::SKILL_UPDATE_ALL => {
+            expect_empty_params(&request.params).map(|_| vec!["skill".into(), "update-all".into()])
+        }
+        methods::SKILL_SET_APP => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                id: String,
+                app: String,
+                enabled: bool,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid skill.setApp parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            validate_text(&params.app, "app")?;
+            Ok(vec![
+                "skill".into(),
+                if params.enabled {
+                    "enable".into()
+                } else {
+                    "disable".into()
+                },
+                params.id,
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::SKILL_REPO_LIST => expect_empty_params(&request.params)
+            .map(|_| vec!["skill".into(), "repo".into(), "list".into()]),
+        methods::SKILL_REPO_UPSERT => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Repo {
+                owner: String,
+                name: String,
+                branch: String,
+                enabled: bool,
+            }
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                repo: Repo,
+                #[serde(default)]
+                original_id: Option<String>,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid skill.repo.upsert parameters: {error}"))?;
+            validate_text(&params.repo.owner, "repo.owner")?;
+            validate_text(&params.repo.name, "repo.name")?;
+            validate_text(&params.repo.branch, "repo.branch")?;
+            if let Some(id) = params.original_id {
+                validate_text(&id, "originalId")?;
+                Ok(vec![
+                    "skill".into(),
+                    "repo".into(),
+                    "update".into(),
+                    id,
+                    "--branch".into(),
+                    params.repo.branch,
+                    "--enabled".into(),
+                    params.repo.enabled.to_string(),
+                ])
+            } else {
+                Ok(vec![
+                    "skill".into(),
+                    "repo".into(),
+                    "add".into(),
+                    format!(
+                        "https://github.com/{}/{}.git",
+                        params.repo.owner, params.repo.name
+                    ),
+                    "--branch".into(),
+                    params.repo.branch,
+                    "--enabled".into(),
+                    params.repo.enabled.to_string(),
+                ])
+            }
+        }
+        methods::APP_SET_ENABLED => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                app: String,
+                enabled: bool,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid app.setEnabled parameters: {error}"))?;
+            validate_text(&params.app, "app")?;
+            Ok(vec![
+                "app".into(),
+                if params.enabled {
+                    "enable".into()
+                } else {
+                    "disable".into()
+                },
+                params.app,
+            ])
+        }
+        methods::SKILL_REPO_DELETE | methods::SKILL_REPO_CATALOG => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid {} parameters: {error}", request.method))?;
+            validate_text(&params.id, "id")?;
+            let mut argv = Vec::new();
+            if request.method == methods::SKILL_REPO_DELETE {
+                argv.push("--yes".into());
+            }
+            argv.extend([
+                "skill".into(),
+                "repo".into(),
+                if request.method == methods::SKILL_REPO_DELETE {
+                    "remove".into()
+                } else {
+                    "catalog".into()
+                },
+                params.id,
+            ]);
+            Ok(argv)
+        }
+        methods::USAGE_SUMMARY
+        | methods::USAGE_BY_APP
+        | methods::USAGE_PROVIDERS
+        | methods::USAGE_MODELS => {
+            let command = match request.method.as_str() {
+                methods::USAGE_SUMMARY => "summary",
+                methods::USAGE_BY_APP => "by-app",
+                methods::USAGE_PROVIDERS => "providers",
+                _ => "models",
+            };
+            usage_query_argv(&request.params, command)
+        }
+        methods::USAGE_SOURCES => {
+            expect_empty_params(&request.params).map(|_| vec!["usage".into(), "sources".into()])
+        }
+        methods::USAGE_TREND => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                #[serde(flatten)]
+                query: UsageQueryParams,
+                #[serde(default = "default_usage_interval")]
+                interval: String,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            if !matches!(params.interval.as_str(), "day" | "week" | "month") {
+                return Err("interval must be day, week, or month".to_string());
+            }
+            let mut argv = usage_query_argv_value(params.query, "trend")?;
+            argv.extend(["--interval".into(), params.interval]);
+            Ok(argv)
+        }
+        methods::USAGE_LOGS => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                #[serde(flatten)]
+                query: UsageQueryParams,
+                status: Option<u16>,
+                #[serde(default)]
+                page: u32,
+                #[serde(default = "default_usage_page_size")]
+                page_size: u32,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            if params.page_size == 0 || params.page_size > 1_000 {
+                return Err("pageSize must be between 1 and 1000".to_string());
+            }
+            let mut argv = usage_query_argv_value(params.query, "logs")?;
+            if let Some(status) = params.status {
+                argv.extend(["--status".into(), status.to_string()]);
+            }
+            argv.extend([
+                "--page".into(),
+                params.page.to_string(),
+                "--page-size".into(),
+                params.page_size.to_string(),
+            ]);
+            Ok(argv)
+        }
+        methods::USAGE_GET => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                request_id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid usage.get parameters: {error}"))?;
+            validate_text(&params.request_id, "requestId")?;
+            Ok(vec!["usage".into(), "show".into(), params.request_id])
+        }
+        methods::USAGE_SYNC => {
+            #[derive(Deserialize, Default)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                #[serde(default)]
+                apps: Vec<String>,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            let mut argv = vec!["usage".into(), "sync".into()];
+            for app in params.apps {
+                validate_text(&app, "apps")?;
+                argv.extend(["--app".into(), app]);
+            }
+            Ok(argv)
+        }
+        methods::USAGE_LIMITS => {
+            #[derive(Deserialize, Default)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                app: Option<String>,
+                provider: Option<String>,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            let mut argv = vec!["usage".into(), "limits".into()];
+            if let Some(app) = params.app {
+                validate_text(&app, "app")?;
+                argv.extend(["--app".into(), app]);
+            }
+            if let Some(provider) = params.provider {
+                validate_text(&provider, "provider")?;
+                argv.extend(["--provider".into(), provider]);
+            }
+            Ok(argv)
+        }
+        methods::PRICING_STATUS => {
+            expect_empty_params(&request.params).map(|_| vec!["pricing".into(), "status".into()])
+        }
+        methods::PRICING_REFRESH => {
+            #[derive(Deserialize, Default)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                #[serde(default)]
+                force: bool,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            let mut argv = vec!["pricing".into(), "refresh".into()];
+            if params.force {
+                argv.push("--force".into());
+            }
+            Ok(argv)
+        }
+        methods::PRICING_OVERRIDE_LIST => expect_empty_params(&request.params)
+            .map(|_| vec!["pricing".into(), "override".into(), "list".into()]),
+        methods::PRICING_OVERRIDE_DELETE => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                model_id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid pricing.override.delete parameters: {error}"))?;
+            validate_text(&params.model_id, "modelId")?;
+            Ok(vec![
+                "--yes".into(),
+                "pricing".into(),
+                "override".into(),
+                "remove".into(),
+                "--model".into(),
+                params.model_id,
+            ])
+        }
+        methods::PRICING_DEFAULTS_GET => expect_empty_params(&request.params)
+            .map(|_| vec!["pricing".into(), "defaults".into(), "get".into()]),
+        methods::SESSION_LIST => {
+            #[derive(Deserialize, Default)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                app: Option<String>,
+                query: Option<String>,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            let mut argv = vec!["session".into(), "list".into()];
+            if let Some(app) = params.app {
+                validate_text(&app, "app")?;
+                argv.extend(["--app".into(), app]);
+            }
+            if let Some(query) = params.query {
+                validate_text(&query, "query")?;
+                argv.extend(["--query".into(), query]);
+            }
+            Ok(argv)
+        }
+        methods::SESSION_GET | methods::SESSION_DELETE => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+                app: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid {} parameters: {error}", request.method))?;
+            validate_text(&params.id, "id")?;
+            validate_text(&params.app, "app")?;
+            let mut argv = Vec::new();
+            if request.method == methods::SESSION_DELETE {
+                argv.push("--yes".into());
+            }
+            argv.extend([
+                "session".into(),
+                if request.method == methods::SESSION_DELETE {
+                    "delete".into()
+                } else {
+                    "show".into()
+                },
+                params.id,
+                "--app".into(),
+                params.app,
+            ]);
+            Ok(argv)
+        }
+        methods::SESSION_SEARCH => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                query: String,
+                #[serde(default = "default_session_search_limit")]
+                limit: usize,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid session.search parameters: {error}"))?;
+            validate_text(&params.query, "query")?;
+            if !(1..=10_000).contains(&params.limit) {
+                return Err("limit must be between 1 and 10000".to_string());
+            }
+            Ok(vec![
+                "session".into(),
+                "search".into(),
+                params.query,
+                "--limit".into(),
+                params.limit.to_string(),
+            ])
+        }
+        methods::SESSION_INDEX_STATUS
+        | methods::SESSION_INDEX_BUILD
+        | methods::SESSION_INDEX_DELETE => expect_empty_params(&request.params).map(|_| {
+            let command = match request.method.as_str() {
+                methods::SESSION_INDEX_STATUS => "index-status",
+                methods::SESSION_INDEX_BUILD => "index-build",
+                methods::SESSION_INDEX_DELETE => "index-delete",
+                _ => unreachable!(),
+            };
+            let mut argv = vec!["session".into(), command.into()];
+            if request.method == methods::SESSION_INDEX_DELETE {
+                argv.insert(0, "--yes".into());
+            }
+            argv
+        }),
+        methods::SESSION_INDEX_MAINTAIN => {
+            #[derive(Deserialize, Default)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                #[serde(default = "default_session_index_budget")]
+                budget_seconds: u64,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            if !(1..=300).contains(&params.budget_seconds) {
+                return Err("budgetSeconds must be between 1 and 300".to_string());
+            }
+            Ok(vec![
+                "session".into(),
+                "index-maintain".into(),
+                "--budget-seconds".into(),
+                params.budget_seconds.to_string(),
+            ])
+        }
+        methods::PROVIDER_DELETE => {
+            let params = provider_params(&request.params, "provider.delete")?;
+            Ok(vec![
+                "--yes".into(),
+                "provider".into(),
+                "delete".into(),
+                params.provider_id,
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::PROVIDER_DUPLICATE => {
+            let params = provider_params(&request.params, "provider.duplicate")?;
+            Ok(vec![
+                "provider".into(),
+                "duplicate".into(),
+                params.provider_id,
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::PROVIDER_SORT => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                app: String,
+                ids: Vec<String>,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid provider.sort parameters: {error}"))?;
+            validate_text(&params.app, "app")?;
+            if params.ids.is_empty() {
+                return Err("ids must contain at least one provider".to_string());
+            }
+            for id in &params.ids {
+                validate_text(id, "ids")?;
+            }
+            let mut argv = vec!["provider".into(), "sort".into(), "--app".into(), params.app];
+            argv.extend(params.ids);
+            Ok(argv)
+        }
+        methods::PROVIDER_COPY => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                provider_id: String,
+                from_app: String,
+                to_app: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid provider.copy parameters: {error}"))?;
+            validate_text(&params.provider_id, "providerId")?;
+            validate_text(&params.from_app, "fromApp")?;
+            validate_text(&params.to_app, "toApp")?;
+            Ok(vec![
+                "provider".into(),
+                "copy".into(),
+                params.provider_id,
+                "--from-app".into(),
+                params.from_app,
+                "--to-app".into(),
+                params.to_app,
+            ])
+        }
+        methods::PROVIDER_SEED_OFFICIAL => {
+            let params = app_params(&request.params, "provider.seedOfficial")?;
+            Ok(vec![
+                "provider".into(),
+                "seed-official".into(),
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::PROVIDER_IMPORT_LIVE => {
+            let params = app_params(&request.params, "provider.importLive")?;
+            Ok(vec![
+                "provider".into(),
+                "import-live".into(),
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::PROVIDER_SYNC_LIVE => {
+            let params = app_params(&request.params, "provider.syncLive")?;
+            Ok(vec![
+                "provider".into(),
+                "sync-live".into(),
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::PROVIDER_ADD_TO_LIVE
+        | methods::PROVIDER_REMOVE_FROM_LIVE
+        | methods::PROVIDER_TEST
+        | methods::PROVIDER_SPEED_TEST
+        | methods::PROVIDER_MODELS
+        | methods::PROVIDER_BALANCE
+        | methods::PROVIDER_QUOTA
+        | methods::PROVIDER_ENDPOINT_LIST => {
+            let params = provider_params(&request.params, request.method.as_str())?;
+            let command = match request.method.as_str() {
+                methods::PROVIDER_ADD_TO_LIVE => "add-to-live",
+                methods::PROVIDER_REMOVE_FROM_LIVE => "remove-from-live",
+                methods::PROVIDER_TEST => "test",
+                methods::PROVIDER_SPEED_TEST => "speed-test",
+                methods::PROVIDER_MODELS => "models",
+                methods::PROVIDER_BALANCE => "balance",
+                methods::PROVIDER_QUOTA => "quota",
+                methods::PROVIDER_ENDPOINT_LIST => "endpoint",
+                _ => unreachable!(),
+            };
+            if request.method == methods::PROVIDER_ENDPOINT_LIST {
+                Ok(vec![
+                    "provider".into(),
+                    "endpoint".into(),
+                    "list".into(),
+                    params.provider_id,
+                    "--app".into(),
+                    params.app,
+                ])
+            } else {
+                Ok(vec![
+                    "provider".into(),
+                    command.into(),
+                    params.provider_id,
+                    "--app".into(),
+                    params.app,
+                ])
+            }
+        }
+        methods::PROVIDER_ENDPOINT_ADD | methods::PROVIDER_ENDPOINT_REMOVE => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                app: String,
+                provider_id: String,
+                url: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid provider endpoint parameters: {error}"))?;
+            validate_text(&params.app, "app")?;
+            validate_text(&params.provider_id, "providerId")?;
+            validate_url(&params.url)?;
+            Ok(vec![
+                "provider".into(),
+                "endpoint".into(),
+                if request.method == methods::PROVIDER_ENDPOINT_ADD {
+                    "add".into()
+                } else {
+                    "remove".into()
+                },
+                params.provider_id,
+                params.url,
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::PROVIDER_COMMON_GET | methods::PROVIDER_COMMON_EXTRACT => {
+            let params = app_params(&request.params, request.method.as_str())?;
+            Ok(vec![
+                "config".into(),
+                "common".into(),
+                if request.method == methods::PROVIDER_COMMON_GET {
+                    "get".into()
+                } else {
+                    "extract".into()
+                },
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::PROVIDER_COMMON_APPLY => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                app: String,
+                #[serde(default)]
+                provider_ids: Vec<String>,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid provider.common.apply parameters: {error}"))?;
+            validate_text(&params.app, "app")?;
+            let mut argv = vec![
+                "config".into(),
+                "common".into(),
+                "apply".into(),
+                "--app".into(),
+                params.app,
+            ];
+            for id in params.provider_ids {
+                validate_text(&id, "providerIds")?;
+                argv.extend(["--provider".into(), id]);
+            }
+            Ok(argv)
+        }
         methods::GATEWAY_STATUS => {
             expect_empty_params(&request.params).map(|_| vec!["gateway".into(), "status".into()])
         }
@@ -1059,6 +2812,372 @@ fn argv_for_request(request: &RequestFrame) -> Result<Vec<String>, String> {
         methods::GATEWAY_STOP => {
             expect_empty_params(&request.params).map(|_| vec!["gateway".into(), "stop".into()])
         }
+        methods::GATEWAY_CONNECTION_INFO => expect_empty_params(&request.params)
+            .map(|_| vec!["gateway".into(), "connection-info".into()]),
+        methods::STATION_LIST => {
+            expect_empty_params(&request.params).map(|_| vec!["station".into(), "list".into()])
+        }
+        methods::STATION_GET
+        | methods::STATION_DELETE
+        | methods::STATION_PROBE
+        | methods::STATION_MODELS => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                station_id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid station parameters: {error}"))?;
+            validate_text(&params.station_id, "stationId")?;
+            let command = match request.method.as_str() {
+                methods::STATION_GET => "show",
+                methods::STATION_DELETE => "delete",
+                methods::STATION_PROBE => "probe",
+                methods::STATION_MODELS => "models",
+                _ => unreachable!(),
+            };
+            let mut argv = vec!["station".into(), command.into(), params.station_id];
+            if request.method == methods::STATION_DELETE {
+                argv.insert(0, "--yes".into());
+            }
+            Ok(argv)
+        }
+        methods::STATION_SET_ENABLED => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                station_id: String,
+                enabled: bool,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid station.setEnabled parameters: {error}"))?;
+            validate_text(&params.station_id, "stationId")?;
+            Ok(vec![
+                "station".into(),
+                if params.enabled {
+                    "enable".into()
+                } else {
+                    "disable".into()
+                },
+                params.station_id,
+            ])
+        }
+        methods::STATION_SELECT => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                station_id: String,
+                app: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid station.select parameters: {error}"))?;
+            validate_text(&params.station_id, "stationId")?;
+            validate_text(&params.app, "app")?;
+            Ok(vec![
+                "station".into(),
+                "select".into(),
+                params.station_id,
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::STATION_DISCONNECT => {
+            let params = app_params(&request.params, request.method.as_str())?;
+            Ok(vec![
+                "station".into(),
+                "disconnect".into(),
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::STATION_CONNECTION_INFO => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                station_id: String,
+                app: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid station.connectionInfo parameters: {error}"))?;
+            validate_text(&params.station_id, "stationId")?;
+            validate_text(&params.app, "app")?;
+            Ok(vec![
+                "station".into(),
+                "connection-info".into(),
+                params.station_id,
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::STATION_IMPORT_PROVIDER => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                app: String,
+                provider_id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid station.importProvider parameters: {error}"))?;
+            validate_text(&params.app, "app")?;
+            validate_text(&params.provider_id, "providerId")?;
+            Ok(vec![
+                "gateway".into(),
+                "channel".into(),
+                "import-provider".into(),
+                "--app".into(),
+                params.app,
+                "--provider".into(),
+                params.provider_id,
+            ])
+        }
+        methods::PROXY_GET => expect_empty_params(&request.params)
+            .map(|_| vec!["settings".into(), "proxy".into(), "show".into()]),
+        methods::SETTINGS_LIST => {
+            expect_empty_params(&request.params).map(|_| vec!["settings".into(), "list".into()])
+        }
+        methods::SETTINGS_GET | methods::SETTINGS_UNSET => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                path: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid settings parameters: {error}"))?;
+            validate_setting_path(&params.path)?;
+            Ok(vec![
+                "settings".into(),
+                if request.method == methods::SETTINGS_GET {
+                    "get".into()
+                } else {
+                    "unset".into()
+                },
+                params.path,
+            ])
+        }
+        methods::SYNC_STATUS
+        | methods::SYNC_TEST
+        | methods::SYNC_UPLOAD
+        | methods::SYNC_DOWNLOAD
+        | methods::SYNC_REMOTE_INFO => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                backend: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid sync parameters: {error}"))?;
+            if !matches!(params.backend.as_str(), "webdav" | "s3") {
+                return Err("backend must be webdav or s3".to_string());
+            }
+            let command = match request.method.as_str() {
+                methods::SYNC_STATUS => "status",
+                methods::SYNC_TEST => "test",
+                methods::SYNC_UPLOAD => "upload",
+                methods::SYNC_DOWNLOAD => "download",
+                methods::SYNC_REMOTE_INFO => "remote-info",
+                _ => unreachable!(),
+            };
+            let mut argv = vec!["sync".into(), params.backend, command.into()];
+            if request.method == methods::SYNC_DOWNLOAD {
+                argv.insert(0, "--yes".into());
+            }
+            Ok(argv)
+        }
+        methods::BACKUP_LIST | methods::BACKUP_POLICY_GET => expect_empty_params(&request.params)
+            .map(|_| {
+                if request.method == methods::BACKUP_LIST {
+                    vec!["backup".into(), "list".into()]
+                } else {
+                    vec!["backup".into(), "policy".into(), "show".into()]
+                }
+            }),
+        methods::BACKUP_CREATE => {
+            #[derive(Deserialize, Default)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                name: Option<String>,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            let mut argv = vec!["backup".into(), "create".into()];
+            if let Some(name) = params.name {
+                validate_text(&name, "name")?;
+                argv.extend(["--name".into(), name]);
+            }
+            Ok(argv)
+        }
+        methods::BACKUP_RENAME => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+                name: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid backup.rename parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            validate_text(&params.name, "name")?;
+            Ok(vec![
+                "backup".into(),
+                "rename".into(),
+                params.id,
+                params.name,
+            ])
+        }
+        methods::BACKUP_RESTORE | methods::BACKUP_DELETE => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                id: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid backup mutation parameters: {error}"))?;
+            validate_text(&params.id, "id")?;
+            Ok(vec![
+                "--yes".into(),
+                "backup".into(),
+                if request.method == methods::BACKUP_RESTORE {
+                    "restore".into()
+                } else {
+                    "delete".into()
+                },
+                params.id,
+            ])
+        }
+        methods::BACKUP_EXPORT_SQL | methods::BACKUP_IMPORT_SQL => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                path: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid backup SQL parameters: {error}"))?;
+            validate_remote_path(&params.path)?;
+            let mut argv = vec![
+                "backup".into(),
+                if request.method == methods::BACKUP_EXPORT_SQL {
+                    "export-sql".into()
+                } else {
+                    "import-sql".into()
+                },
+                params.path,
+            ];
+            if request.method == methods::BACKUP_IMPORT_SQL {
+                argv.insert(0, "--yes".into());
+            }
+            Ok(argv)
+        }
+        methods::BACKUP_POLICY_SET => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                interval_hours: u32,
+                retain: u32,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid backup policy parameters: {error}"))?;
+            if params.interval_hours == 0 || params.retain == 0 || params.retain > 1_000 {
+                return Err(
+                    "intervalHours must be positive and retain must be between 1 and 1000"
+                        .to_string(),
+                );
+            }
+            Ok(vec![
+                "backup".into(),
+                "policy".into(),
+                "set".into(),
+                "--interval".into(),
+                format!("{}h", params.interval_hours),
+                "--retain".into(),
+                params.retain.to_string(),
+            ])
+        }
+        methods::TOOL_VERSIONS => {
+            #[derive(Deserialize, Default)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                #[serde(default)]
+                tools: Vec<String>,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            for tool in &params.tools {
+                validate_text(tool, "tool")?;
+            }
+            let mut argv = vec!["tool".into(), "versions".into()];
+            argv.extend(params.tools);
+            Ok(argv)
+        }
+        methods::TOOL_PROBE | methods::TOOL_INSTALL | methods::TOOL_UPDATE => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                tool: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid tool parameters: {error}"))?;
+            validate_text(&params.tool, "tool")?;
+            Ok(vec![
+                "tool".into(),
+                match request.method.as_str() {
+                    methods::TOOL_PROBE => "probe".into(),
+                    methods::TOOL_INSTALL => "install".into(),
+                    methods::TOOL_UPDATE => "update".into(),
+                    _ => unreachable!(),
+                },
+                params.tool,
+            ])
+        }
+        methods::TOOL_ADVANCED_READ => advanced_read_argv(&request.params),
+        methods::UPDATE_STATUS | methods::UPDATE_CHECK | methods::UPDATE_INSTALL => {
+            expect_empty_params(&request.params).map(|_| {
+                let command = match request.method.as_str() {
+                    methods::UPDATE_STATUS => "status",
+                    methods::UPDATE_CHECK => "check",
+                    methods::UPDATE_INSTALL => "install",
+                    _ => unreachable!(),
+                };
+                let mut argv = vec!["update".into(), command.into()];
+                if request.method == methods::UPDATE_INSTALL {
+                    argv.insert(0, "--yes".into());
+                }
+                argv
+            })
+        }
+        methods::DATA_DIR_SHOW | methods::DATA_DIR_RESET => expect_empty_params(&request.params)
+            .map(|_| {
+                vec![
+                    "data-dir".into(),
+                    if request.method == methods::DATA_DIR_SHOW {
+                        "show".into()
+                    } else {
+                        "reset".into()
+                    },
+                ]
+            }),
+        methods::DATA_DIR_SET => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                path: String,
+            }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid dataDir.set parameters: {error}"))?;
+            validate_remote_path(&params.path)?;
+            Ok(vec!["data-dir".into(), "set".into(), params.path])
+        }
+        methods::MIGRATE_CCSWITCH_DETECT
+        | methods::MIGRATE_CCSWITCH_PLAN
+        | methods::MIGRATE_CCSWITCH_IMPORT => expect_empty_params(&request.params).map(|_| {
+            vec![
+                "migrate".into(),
+                "ccswitch".into(),
+                match request.method.as_str() {
+                    methods::MIGRATE_CCSWITCH_DETECT => "detect".into(),
+                    methods::MIGRATE_CCSWITCH_PLAN => "plan".into(),
+                    methods::MIGRATE_CCSWITCH_IMPORT => "import".into(),
+                    _ => unreachable!(),
+                },
+            ]
+        }),
         methods::OPERATION_LIST => {
             expect_empty_params(&request.params).map(|_| vec!["operation".into(), "list".into()])
         }
@@ -1088,6 +3207,72 @@ struct AppParams {
 struct ProviderParams {
     app: String,
     provider_id: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct UsageQueryParams {
+    from: Option<i64>,
+    to: Option<i64>,
+    app: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+fn default_usage_interval() -> String {
+    "day".to_string()
+}
+
+fn default_usage_page_size() -> u32 {
+    50
+}
+
+fn usage_query_argv(value: &Value, command: &str) -> Result<Vec<String>, String> {
+    let params: UsageQueryParams = params_or_default(value)?;
+    usage_query_argv_value(params, command)
+}
+
+fn usage_query_argv_value(params: UsageQueryParams, command: &str) -> Result<Vec<String>, String> {
+    if params
+        .from
+        .zip(params.to)
+        .is_some_and(|(from, to)| from > to)
+    {
+        return Err("from must not be later than to".to_string());
+    }
+    let mut argv = vec!["usage".into(), command.into()];
+    if let Some(from) = params.from {
+        argv.extend(["--from".into(), from.to_string()]);
+    }
+    if let Some(to) = params.to {
+        argv.extend(["--to".into(), to.to_string()]);
+    }
+    for (flag, value) in [
+        ("--app", params.app),
+        ("--provider", params.provider),
+        ("--model", params.model),
+    ] {
+        if let Some(value) = value {
+            validate_text(&value, flag.trim_start_matches("--"))?;
+            argv.extend([flag.into(), value]);
+        }
+    }
+    Ok(argv)
+}
+
+fn app_params(value: &Value, method: &str) -> Result<AppParams, String> {
+    let params: AppParams = serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid {method} parameters: {error}"))?;
+    validate_text(&params.app, "app")?;
+    Ok(params)
+}
+
+fn provider_params(value: &Value, method: &str) -> Result<ProviderParams, String> {
+    let params: ProviderParams = serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid {method} parameters: {error}"))?;
+    validate_text(&params.app, "app")?;
+    validate_text(&params.provider_id, "providerId")?;
+    Ok(params)
 }
 
 fn params_or_default<T>(value: &Value) -> Result<T, String>
@@ -1120,6 +3305,172 @@ fn validate_text(value: &str, field: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_setting_path(path: &str) -> Result<(), String> {
+    validate_text(path, "path")?;
+    if path.starts_with('-')
+        || path
+            .chars()
+            .any(|character| !(character.is_ascii_alphanumeric() || "_-.".contains(character)))
+    {
+        return Err("path contains unsupported characters".to_string());
+    }
+    Ok(())
+}
+
+fn validate_remote_path(path: &str) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty()
+        || path.len() > 4096
+        || path.starts_with('-')
+        || path.chars().any(char::is_control)
+    {
+        return Err("path must contain 1 to 4096 printable characters".to_string());
+    }
+    Ok(())
+}
+
+const fn default_session_search_limit() -> usize {
+    500
+}
+
+const fn default_session_index_budget() -> u64 {
+    20
+}
+
+fn validate_url(value: &str) -> Result<(), String> {
+    validate_text(value, "url")?;
+    let url = url::Url::parse(value).map_err(|error| format!("url is invalid: {error}"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err("url must be an absolute http or https URL".to_string());
+    }
+    Ok(())
+}
+
+fn invalid_params_response(
+    protocol_version: u32,
+    request_id: String,
+    method: &str,
+    error: serde_json::Error,
+) -> ResponseFrame {
+    invalid_argument_response(
+        protocol_version,
+        request_id,
+        format!("invalid {method} parameters: {error}"),
+    )
+}
+
+fn invalid_argument_response(
+    protocol_version: u32,
+    request_id: String,
+    message: impl AsRef<str>,
+) -> ResponseFrame {
+    error_response(
+        protocol_version,
+        request_id,
+        "INVALID_ARGUMENT",
+        message.as_ref(),
+        false,
+        Value::Null,
+    )
+}
+
+fn secret_write_denied(protocol_version: u32, request_id: String) -> ResponseFrame {
+    error_response(
+        protocol_version,
+        request_id,
+        "PERMISSION_DENIED",
+        "the remote policy does not allow writing secrets",
+        false,
+        json!({ "capability": "secrets.write" }),
+    )
+}
+
+fn contains_secret_write(value: &Value) -> bool {
+    match value {
+        Value::Object(values) => values.iter().any(|(key, value)| {
+            (is_secret_key(key) && secret_value_is_present(value)) || contains_secret_write(value)
+        }),
+        Value::Array(values) => {
+            (values.len() == 2
+                && values[0].as_str().is_some_and(is_secret_key)
+                && secret_value_is_present(&values[1]))
+                || values.iter().any(contains_secret_write)
+        }
+        _ => false,
+    }
+}
+
+fn strip_redacted_secret_placeholders(value: &mut Value) {
+    match value {
+        Value::Object(values) => {
+            values.retain(|key, value| {
+                !(is_secret_key(key)
+                    && value.as_str().is_some_and(|value| {
+                        !value.is_empty() && value.chars().all(|character| character == '*')
+                    }))
+            });
+            for value in values.values_mut() {
+                strip_redacted_secret_placeholders(value);
+            }
+        }
+        Value::Array(values) => {
+            if values.len() == 2
+                && values[0].as_str().is_some_and(is_secret_key)
+                && values[1].as_str().is_some_and(|value| {
+                    !value.is_empty() && value.chars().all(|character| character == '*')
+                })
+            {
+                values[1] = Value::Null;
+            } else {
+                for value in values {
+                    strip_redacted_secret_placeholders(value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn secret_value_is_present(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => {
+            !value.is_empty() && !value.chars().all(|character| character == '*')
+        }
+        _ => true,
+    }
+}
+
+fn is_secret_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
+    normalized.contains("password")
+        || normalized.contains("secret")
+        || normalized.contains("token")
+        || normalized.contains("authorization")
+        || normalized.contains("cookie")
+        || normalized == "key"
+        || normalized == "api_key"
+        || normalized == "apikey"
+        || normalized.ends_with("_api_key")
+        || normalized.ends_with("_key")
+}
+
+fn common_config_may_contain_secret(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase().replace(['-', '.'], "_");
+    [
+        "api_key",
+        "apikey",
+        "auth_token",
+        "access_token",
+        "authorization",
+        "password",
+        "secret",
+        "cookie",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
 fn validate_switch_params(params: &ochub_protocol::ProviderSwitchParams) -> Result<(), String> {
     validate_text(&params.app, "app")?;
     validate_text(&params.provider_id, "providerId")?;
@@ -1133,13 +3484,129 @@ fn required_capability(method: &str) -> Option<Capability> {
     match method {
         methods::STATUS_READ => Some(Capability::StatusRead),
         methods::DOCTOR_RUN => Some(Capability::DoctorRun),
-        methods::APP_LIST => Some(Capability::AppRead),
-        methods::PROVIDER_LIST | methods::PROVIDER_GET => Some(Capability::ProviderRead),
-        methods::PROVIDER_SWITCH_PLAN | methods::PROVIDER_SWITCH_APPLY => {
-            Some(Capability::ProviderWrite)
+        methods::APP_LIST | methods::APP_GET | methods::APP_SCHEMA => Some(Capability::AppRead),
+        methods::APP_SET_ENABLED => Some(Capability::AppWrite),
+        methods::PROVIDER_LIST
+        | methods::PROVIDER_GET
+        | methods::PROVIDER_ENDPOINT_LIST
+        | methods::PROVIDER_COMMON_GET
+        | methods::PROVIDER_COMMON_EXTRACT => Some(Capability::ProviderRead),
+        methods::PROVIDER_CREATE
+        | methods::PROVIDER_UPDATE
+        | methods::PROVIDER_DELETE
+        | methods::PROVIDER_DUPLICATE
+        | methods::PROVIDER_SORT
+        | methods::PROVIDER_COPY
+        | methods::PROVIDER_SEED_OFFICIAL
+        | methods::PROVIDER_IMPORT_LIVE
+        | methods::PROVIDER_SYNC_LIVE
+        | methods::PROVIDER_ADD_TO_LIVE
+        | methods::PROVIDER_REMOVE_FROM_LIVE
+        | methods::PROVIDER_ENDPOINT_ADD
+        | methods::PROVIDER_ENDPOINT_REMOVE
+        | methods::PROVIDER_COMMON_SET
+        | methods::PROVIDER_COMMON_APPLY
+        | methods::PROVIDER_SWITCH_PLAN
+        | methods::PROVIDER_SWITCH_APPLY => Some(Capability::ProviderWrite),
+        methods::PROVIDER_TEST
+        | methods::PROVIDER_SPEED_TEST
+        | methods::PROVIDER_MODELS
+        | methods::PROVIDER_BALANCE
+        | methods::PROVIDER_QUOTA => Some(Capability::ProviderNetwork),
+        methods::MCP_LIST | methods::MCP_GET => Some(Capability::McpRead),
+        methods::MCP_UPSERT
+        | methods::MCP_DELETE
+        | methods::MCP_SET_APP
+        | methods::MCP_SYNC_ALL
+        | methods::MCP_IMPORT => Some(Capability::McpWrite),
+        methods::SKILL_LIST | methods::SKILL_GET | methods::SKILL_REPO_LIST => {
+            Some(Capability::SkillRead)
         }
+        methods::SKILL_SEARCH
+        | methods::SKILL_DISCOVER
+        | methods::SKILL_CHECK_ALL
+        | methods::SKILL_REPO_CATALOG => Some(Capability::SkillNetwork),
+        methods::SKILL_INSTALL
+        | methods::SKILL_UNINSTALL
+        | methods::SKILL_UPDATE
+        | methods::SKILL_UPDATE_ALL
+        | methods::SKILL_SET_APP
+        | methods::SKILL_REPO_UPSERT
+        | methods::SKILL_REPO_DELETE => Some(Capability::SkillWrite),
+        methods::USAGE_SUMMARY
+        | methods::USAGE_SOURCES
+        | methods::USAGE_BY_APP
+        | methods::USAGE_TREND
+        | methods::USAGE_PROVIDERS
+        | methods::USAGE_MODELS
+        | methods::USAGE_LOGS
+        | methods::USAGE_GET
+        | methods::USAGE_LIMITS
+        | methods::PRICING_STATUS
+        | methods::PRICING_OVERRIDE_LIST
+        | methods::PRICING_DEFAULTS_GET => Some(Capability::UsageRead),
+        methods::USAGE_SYNC
+        | methods::PRICING_OVERRIDE_SET
+        | methods::PRICING_OVERRIDE_DELETE
+        | methods::PRICING_DEFAULTS_SET => Some(Capability::UsageWrite),
+        methods::PRICING_REFRESH => Some(Capability::UsageNetwork),
+        methods::SESSION_LIST
+        | methods::SESSION_GET
+        | methods::SESSION_SEARCH
+        | methods::SESSION_INDEX_STATUS => Some(Capability::SessionRead),
+        methods::SESSION_DELETE
+        | methods::SESSION_INDEX_BUILD
+        | methods::SESSION_INDEX_MAINTAIN
+        | methods::SESSION_INDEX_DELETE => Some(Capability::SessionWrite),
+        methods::PROXY_GET => Some(Capability::ProxyRead),
+        methods::PROXY_SET => Some(Capability::ProxyWrite),
+        methods::PROXY_TEST => Some(Capability::ProxyNetwork),
+        methods::SETTINGS_LIST | methods::SETTINGS_GET => Some(Capability::SettingsRead),
+        methods::SETTINGS_SET | methods::SETTINGS_UNSET => Some(Capability::SettingsWrite),
+        methods::SYNC_STATUS => Some(Capability::SyncRead),
+        methods::SYNC_CONFIGURE | methods::SYNC_UPLOAD => Some(Capability::SyncWrite),
+        methods::SYNC_TEST | methods::SYNC_REMOTE_INFO => Some(Capability::SyncNetwork),
+        methods::SYNC_DOWNLOAD => Some(Capability::BackupRestore),
+        methods::BACKUP_LIST | methods::BACKUP_POLICY_GET => Some(Capability::BackupRead),
+        methods::BACKUP_CREATE
+        | methods::BACKUP_RENAME
+        | methods::BACKUP_DELETE
+        | methods::BACKUP_EXPORT_SQL
+        | methods::BACKUP_POLICY_SET => Some(Capability::BackupWrite),
+        methods::BACKUP_RESTORE | methods::BACKUP_IMPORT_SQL => Some(Capability::BackupRestore),
+        methods::TOOL_VERSIONS | methods::TOOL_PROBE | methods::TOOL_ADVANCED_READ => {
+            Some(Capability::ToolRead)
+        }
+        methods::TOOL_INSTALL | methods::TOOL_UPDATE | methods::TOOL_ADVANCED_WRITE => {
+            Some(Capability::ToolWrite)
+        }
+        methods::UPDATE_STATUS | methods::UPDATE_CHECK => Some(Capability::UpdateRead),
+        methods::UPDATE_INSTALL => Some(Capability::UpdateInstall),
+        methods::DATA_DIR_SHOW
+        | methods::MIGRATE_CCSWITCH_DETECT
+        | methods::MIGRATE_CCSWITCH_PLAN => Some(Capability::DataRead),
+        methods::DATA_DIR_SET | methods::DATA_DIR_RESET => Some(Capability::DataWrite),
+        methods::MIGRATE_CCSWITCH_IMPORT => Some(Capability::DataImport),
         methods::GATEWAY_STATUS => Some(Capability::GatewayRead),
-        methods::GATEWAY_START | methods::GATEWAY_STOP => Some(Capability::GatewayLifecycle),
+        methods::GATEWAY_START | methods::GATEWAY_STOP | methods::GATEWAY_CONNECTION_INFO => {
+            Some(Capability::GatewayLifecycle)
+        }
+        methods::STATION_LIST | methods::STATION_GET | methods::STATION_MODELS => {
+            Some(Capability::StationRead)
+        }
+        methods::STATION_PROBE
+        | methods::STATION_DETECT_DIALECTS
+        | methods::STATION_FETCH_MODELS
+        | methods::STATION_TEST_ENDPOINT => Some(Capability::StationNetwork),
+        methods::STATION_CREATE
+        | methods::STATION_UPDATE
+        | methods::STATION_DELETE
+        | methods::STATION_SET_ENABLED
+        | methods::STATION_SELECT
+        | methods::STATION_APPLY
+        | methods::STATION_DISCONNECT
+        | methods::STATION_CONNECTION_INFO
+        | methods::STATION_IMPORT_PROVIDER => Some(Capability::StationWrite),
         methods::OPERATION_LIST | methods::OPERATION_INSPECT => Some(Capability::OperationRead),
         _ => None,
     }
@@ -1154,11 +3621,48 @@ fn capabilities(policy: &ochub_core::remote_policy::RemotePolicy) -> Vec<Capabil
         Capability::DoctorRun,
         Capability::AppRead,
         Capability::ProviderRead,
+        Capability::ProviderNetwork,
+        Capability::McpRead,
+        Capability::SkillRead,
+        Capability::SkillNetwork,
+        Capability::UsageRead,
+        Capability::UsageNetwork,
+        Capability::SessionRead,
+        Capability::ProxyRead,
+        Capability::ProxyNetwork,
+        Capability::SettingsRead,
+        Capability::SyncRead,
+        Capability::SyncNetwork,
+        Capability::BackupRead,
+        Capability::ToolRead,
+        Capability::UpdateRead,
+        Capability::DataRead,
         Capability::GatewayRead,
+        Capability::StationRead,
+        Capability::StationNetwork,
         Capability::OperationRead,
     ]);
     if policy.allow_write {
         values.insert(Capability::ProviderWrite);
+        values.insert(Capability::AppWrite);
+        values.insert(Capability::McpWrite);
+        values.insert(Capability::SkillWrite);
+        values.insert(Capability::UsageWrite);
+        values.insert(Capability::SessionWrite);
+        values.insert(Capability::ProxyWrite);
+        values.insert(Capability::SettingsWrite);
+        values.insert(Capability::SyncWrite);
+        values.insert(Capability::BackupWrite);
+        values.insert(Capability::ToolWrite);
+        values.insert(Capability::DataWrite);
+        values.insert(Capability::StationWrite);
+    }
+    if policy.allow_backup_restore {
+        values.insert(Capability::BackupRestore);
+        values.insert(Capability::DataImport);
+    }
+    if policy.allow_update_install {
+        values.insert(Capability::UpdateInstall);
     }
     if policy.allow_gateway_lifecycle {
         values.insert(Capability::GatewayLifecycle);
@@ -1322,7 +3826,7 @@ mod tests {
 
     fn request(method: &str, params: Value) -> RequestFrame {
         RequestFrame {
-            protocol_version: 1,
+            protocol_version: PROTOCOL_MAX,
             request_id: "request-1".to_string(),
             method: method.to_string(),
             params,
@@ -1353,18 +3857,305 @@ mod tests {
             ))
             .is_err()
         );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::PROVIDER_DELETE,
+                json!({"app": "codex", "providerId": "team"})
+            ))
+            .unwrap(),
+            vec!["--yes", "provider", "delete", "team", "--app", "codex"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::PROVIDER_DUPLICATE,
+                json!({"app": "codex", "providerId": "team"})
+            ))
+            .unwrap(),
+            vec!["provider", "duplicate", "team", "--app", "codex"]
+        );
+        assert_eq!(
+            argv_for_request(&request(methods::MCP_LIST, Value::Null)).unwrap(),
+            vec!["mcp", "list"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::MCP_SET_APP,
+                json!({"id": "context7", "app": "claude", "enabled": true})
+            ))
+            .unwrap(),
+            vec!["mcp", "enable", "context7", "--app", "claude"]
+        );
+        assert_eq!(
+            argv_for_request(&request(methods::SKILL_LIST, Value::Null)).unwrap(),
+            vec!["skill", "list"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::SKILL_SET_APP,
+                json!({"id": "review", "app": "codex", "enabled": false})
+            ))
+            .unwrap(),
+            vec!["skill", "disable", "review", "--app", "codex"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::SKILL_REPO_UPSERT,
+                json!({
+                    "repo": {
+                        "owner": "openai",
+                        "name": "skills",
+                        "branch": "main",
+                        "enabled": true
+                    }
+                })
+            ))
+            .unwrap(),
+            vec![
+                "skill",
+                "repo",
+                "add",
+                "https://github.com/openai/skills.git",
+                "--branch",
+                "main",
+                "--enabled",
+                "true"
+            ]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::USAGE_LOGS,
+                json!({
+                    "from": 100,
+                    "to": 200,
+                    "app": "claude",
+                    "status": 200,
+                    "page": 2,
+                    "pageSize": 20
+                })
+            ))
+            .unwrap(),
+            vec![
+                "usage",
+                "logs",
+                "--from",
+                "100",
+                "--to",
+                "200",
+                "--app",
+                "claude",
+                "--status",
+                "200",
+                "--page",
+                "2",
+                "--page-size",
+                "20"
+            ]
+        );
+        assert_eq!(
+            argv_for_request(&request(methods::PRICING_DEFAULTS_GET, Value::Null)).unwrap(),
+            vec!["pricing", "defaults", "get"]
+        );
+        assert_eq!(
+            argv_for_request(&request(methods::PROXY_GET, Value::Null)).unwrap(),
+            vec!["settings", "proxy", "show"]
+        );
+        assert_eq!(
+            argv_for_request(&request(methods::SYNC_DOWNLOAD, json!({"backend": "s3"}))).unwrap(),
+            vec!["--yes", "sync", "s3", "download"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::BACKUP_POLICY_SET,
+                json!({"intervalHours": 12, "retain": 8})
+            ))
+            .unwrap(),
+            vec![
+                "backup",
+                "policy",
+                "set",
+                "--interval",
+                "12h",
+                "--retain",
+                "8"
+            ]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::TOOL_VERSIONS,
+                json!({"tools": ["codex", "claude"]})
+            ))
+            .unwrap(),
+            vec!["tool", "versions", "codex", "claude"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::TOOL_ADVANCED_READ,
+                json!({
+                    "action": "claude.mcp.validateCommand",
+                    "params": { "command": "npx" }
+                })
+            ))
+            .unwrap(),
+            vec!["claude", "mcp", "path", "validate-command", "npx"]
+        );
+        let (payload, argv) = advanced_write_payload(&json!({
+            "action": "hermes.memory.write",
+            "params": { "content": "remember this" }
+        }))
+        .unwrap();
+        assert!(matches!(payload, Payload::Text(value) if value == "remember this"));
+        assert_eq!(argv, vec!["hermes", "memory", "write", "memory", "--from"]);
+        assert_eq!(
+            argv_for_request(&request(methods::UPDATE_INSTALL, Value::Null)).unwrap(),
+            vec!["--yes", "update", "install"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::DATA_DIR_SET,
+                json!({"path": "/srv/ochub"})
+            ))
+            .unwrap(),
+            vec!["data-dir", "set", "/srv/ochub"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::SESSION_DELETE,
+                json!({"app": "codex", "id": "session-1"})
+            ))
+            .unwrap(),
+            vec!["--yes", "session", "delete", "session-1", "--app", "codex"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::STATION_SET_ENABLED,
+                json!({"stationId": "station-1", "enabled": false})
+            ))
+            .unwrap(),
+            vec!["station", "disable", "station-1"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::STATION_CONNECTION_INFO,
+                json!({"stationId": "station-1", "app": "codex"})
+            ))
+            .unwrap(),
+            vec!["station", "connection-info", "station-1", "--app", "codex"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::STATION_IMPORT_PROVIDER,
+                json!({"app": "codex", "providerId": "team"})
+            ))
+            .unwrap(),
+            vec![
+                "gateway",
+                "channel",
+                "import-provider",
+                "--app",
+                "codex",
+                "--provider",
+                "team"
+            ]
+        );
+        assert_eq!(
+            argv_for_request(&request(methods::GATEWAY_CONNECTION_INFO, Value::Null)).unwrap(),
+            vec!["gateway", "connection-info"]
+        );
+        assert!(
+            argv_for_request(&request(
+                methods::STATION_GET,
+                json!({"stationId": "station-1", "extra": true})
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::PROVIDER_ENDPOINT_ADD,
+                json!({
+                    "app": "claude",
+                    "providerId": "team",
+                    "url": "https://api.example.com"
+                })
+            ))
+            .unwrap(),
+            vec![
+                "provider",
+                "endpoint",
+                "add",
+                "team",
+                "https://api.example.com",
+                "--app",
+                "claude"
+            ]
+        );
     }
 
     #[test]
     fn policy_capabilities_keep_high_risk_features_out_by_default() {
         let capabilities = capabilities(&ochub_core::remote_policy::RemotePolicy::default());
+        assert!(capabilities.contains(&Capability::AppWrite));
         assert!(capabilities.contains(&Capability::ProviderWrite));
+        assert!(capabilities.contains(&Capability::ProviderNetwork));
+        assert!(capabilities.contains(&Capability::McpRead));
+        assert!(capabilities.contains(&Capability::McpWrite));
+        assert!(capabilities.contains(&Capability::SkillRead));
+        assert!(capabilities.contains(&Capability::SkillWrite));
+        assert!(capabilities.contains(&Capability::SkillNetwork));
+        assert!(capabilities.contains(&Capability::UsageRead));
+        assert!(capabilities.contains(&Capability::UsageWrite));
+        assert!(capabilities.contains(&Capability::UsageNetwork));
+        assert!(capabilities.contains(&Capability::SessionRead));
+        assert!(capabilities.contains(&Capability::SessionWrite));
+        assert!(capabilities.contains(&Capability::ProxyRead));
+        assert!(capabilities.contains(&Capability::ProxyWrite));
+        assert!(capabilities.contains(&Capability::ProxyNetwork));
+        assert!(capabilities.contains(&Capability::SyncRead));
+        assert!(capabilities.contains(&Capability::SyncWrite));
+        assert!(capabilities.contains(&Capability::SyncNetwork));
+        assert!(capabilities.contains(&Capability::BackupRead));
+        assert!(capabilities.contains(&Capability::BackupWrite));
+        assert!(capabilities.contains(&Capability::ToolRead));
+        assert!(capabilities.contains(&Capability::ToolWrite));
+        assert!(capabilities.contains(&Capability::UpdateRead));
+        assert!(capabilities.contains(&Capability::DataRead));
+        assert!(capabilities.contains(&Capability::DataWrite));
         assert!(capabilities.contains(&Capability::GatewayLifecycle));
+        assert!(capabilities.contains(&Capability::StationRead));
+        assert!(capabilities.contains(&Capability::StationWrite));
+        assert!(capabilities.contains(&Capability::StationNetwork));
         assert!(
             !capabilities
                 .iter()
                 .any(|value| value.as_str() == "backup.restore")
         );
+        assert!(!capabilities.contains(&Capability::UpdateInstall));
+        assert!(!capabilities.contains(&Capability::DataImport));
+    }
+
+    #[test]
+    fn secret_detection_matches_nested_provider_fields() {
+        assert!(contains_secret_write(&json!({
+            "settingsConfig": {
+                "env": { "ANTHROPIC_API_KEY": "sk-secret" }
+            }
+        })));
+        assert!(contains_secret_write(&json!({
+            "settingsConfig": {
+                "headers": [["Authorization", "Bearer secret"]]
+            }
+        })));
+        assert!(!contains_secret_write(&json!({
+            "settingsConfig": {
+                "apiKey": "******",
+                "model": "claude"
+            }
+        })));
+        assert!(common_config_may_contain_secret(
+            "ANTHROPIC_API_KEY = \"secret\""
+        ));
+        assert!(!common_config_may_contain_secret(
+            "model_reasoning_effort = \"high\""
+        ));
     }
 
     #[test]

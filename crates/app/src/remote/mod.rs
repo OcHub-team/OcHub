@@ -9,7 +9,7 @@ mod ssh;
 mod ssh_config;
 mod store;
 
-pub(crate) use backend::{ProviderSwitchHandle, WorkspaceBackend};
+pub(crate) use backend::{ProviderSwitchHandle, WorkspaceBackend, WorkspaceBackendError};
 pub(crate) use client::{RemoteClient, RemoteClientError, RemoteRequestOptions};
 pub(crate) use ssh::{ScannedHostKey, scan_host_keys, trust_host_key};
 pub(crate) use ssh_config::{SshConfigEntry, discover_ssh_connections};

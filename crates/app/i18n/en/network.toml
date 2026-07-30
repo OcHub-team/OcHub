@@ -23,6 +23,7 @@
 "network.section.connection.title" = "Proxy configuration"
 "network.section.test.desc" = "Sends one real request through the settings in this form. Nothing is written."
 "network.section.test.title" = "Test connection"
+"network.status.load_failed" = "Could not load the proxy settings: {error}"
 "network.test.action" = "Test"
 "network.test.desc" = "Requests api.github.com through this proxy"
 "network.test.failed" = "Proxy connection failed: {error}"

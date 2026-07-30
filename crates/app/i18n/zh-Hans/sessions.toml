@@ -71,4 +71,4 @@
 "sessions.search.titles_only" = "仅搜索了标题。开启全文索引可搜索对话正文。"
 "sessions.status.delete_failed" = "删除失败: {error}"
 "sessions.status.deleted" = "会话已删除"
-"sessions.status.not_found" = "未找到会话"
+"sessions.status.load_failed" = "无法加载会话: {error}"

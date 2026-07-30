@@ -1,6 +1,7 @@
 //! MCP servers panel. Manages the unified MCP server registry and syncs enabled
 //! servers into each supported client configuration.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use gpui::{
@@ -8,7 +9,6 @@ use gpui::{
     prelude::*, px,
 };
 use ochub_core::db::legacy_json::{McpApps, McpServer};
-use ochub_core::services::McpService;
 use ochub_core::{AppState, AppType};
 
 use crate::components::{self, ButtonSize, ButtonTone};
@@ -16,6 +16,7 @@ use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme;
@@ -28,7 +29,7 @@ enum FormMode {
 }
 
 pub struct McpView {
-    app: Arc<AppState>,
+    backend: WorkspaceBackend,
     servers: Vec<McpServer>,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
@@ -44,6 +45,7 @@ pub struct McpView {
     form_scroll_handle: ScrollHandle,
     reload_generation: u64,
     io_busy: bool,
+    workspace_available: bool,
     enabled_apps: Arc<[AppType]>,
 }
 
@@ -92,7 +94,7 @@ impl McpView {
         let spec_json = cx
             .new(|cx| TextInput::new(cx, r#"{"type":"stdio","command":"","args":[]}"#).code(true));
         Self {
-            app,
+            backend: WorkspaceBackend::local(app.clone()),
             servers: Vec::new(),
             status: None,
             status_level: None,
@@ -107,6 +109,7 @@ impl McpView {
             form_scroll_handle: ScrollHandle::new(),
             reload_generation: 0,
             io_busy: false,
+            workspace_available: true,
             enabled_apps: crate::app_meta::enabled_mcp_apps().into(),
         }
     }
@@ -126,18 +129,17 @@ impl McpView {
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        self.enabled_apps = crate::app_meta::enabled_mcp_apps().into();
         self.reload_generation = self.reload_generation.wrapping_add(1);
         let generation = self.reload_generation;
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let servers = cx
-                .background_spawn(async move {
-                    McpService::get_all_servers(&app)
-                        .map(|map| map.into_values().collect::<Vec<_>>())
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let servers = crate::core_async::run(async move {
+                backend
+                    .list_mcp_servers()
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 if generation != this.reload_generation {
                     return;
@@ -160,24 +162,65 @@ impl McpView {
         .detach();
     }
 
+    pub(crate) fn set_workspace(
+        &mut self,
+        backend: WorkspaceBackend,
+        enabled_apps: Vec<AppType>,
+        cx: &mut Context<Self>,
+    ) {
+        self.backend = backend;
+        self.workspace_available = true;
+        self.io_busy = false;
+        self.enabled_apps = enabled_apps.into();
+        self.servers.clear();
+        self.form_mode = FormMode::List;
+        self.confirm_delete = None;
+        self.list_state.remeasure();
+        self.reload(cx);
+    }
+
+    pub(crate) fn set_workspace_unavailable(
+        &mut self,
+        enabled_apps: Vec<AppType>,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_available = false;
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        self.io_busy = false;
+        self.enabled_apps = enabled_apps.into();
+        self.servers.clear();
+        self.form_mode = FormMode::List;
+        self.confirm_delete = None;
+        self.set_status(
+            NotificationLevel::Error,
+            tf!(
+                k::MCP_STATUS_LOAD_FAILED,
+                error = "remote workspace is not connected"
+            ),
+        );
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
     pub fn refresh_apps(&mut self, cx: &mut Context<Self>) {
         self.enabled_apps = crate::app_meta::enabled_mcp_apps().into();
         self.list_state.remeasure();
         cx.notify();
     }
 
-    fn run_io<R, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
+    fn run_backend<R, Fut, Work, Apply>(&mut self, cx: &mut Context<Self>, work: Work, apply: Apply)
     where
         R: Send + 'static,
-        Work: FnOnce() -> R + Send + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        Work: FnOnce() -> Fut + Send + 'static,
         Apply: FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
     {
-        if self.io_busy {
+        if self.io_busy || !self.workspace_available {
             return;
         }
         self.io_busy = true;
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { work() }).await;
+            let result = crate::core_async::run(work()).await;
             this.update(cx, |this, cx| {
                 this.io_busy = false;
                 apply(this, result, cx);
@@ -291,6 +334,17 @@ impl McpView {
     }
 
     fn do_save(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            self.set_status(
+                NotificationLevel::Error,
+                tf!(
+                    k::MCP_STATUS_SAVE_FAILED,
+                    error = "remote workspace is not connected"
+                ),
+            );
+            cx.notify();
+            return;
+        }
         let name = self.name.read(cx).content().trim().to_string();
         if name.is_empty() {
             self.set_status(NotificationLevel::Error, t(k::MCP_STATUS_NAME_REQUIRED));
@@ -332,11 +386,18 @@ impl McpView {
             tags: Vec::new(),
         };
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
+        let original_id = self.editing_id.clone();
         let editing = self.form_mode == FormMode::Edit;
-        self.run_io(
+        self.run_backend(
             cx,
-            move || McpService::upsert_server(&app, server).map_err(|error| error.to_string()),
+            move || async move {
+                backend
+                    .upsert_mcp_server(original_id.as_deref(), server)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
             move |this, result, cx| match result {
                 Ok(()) => {
                     let saved = if editing {
@@ -358,18 +419,18 @@ impl McpView {
     }
 
     fn do_delete(&mut self, id: String, cx: &mut Context<Self>) {
-        let app = self.app.clone();
-        self.run_io(
+        let backend = self.backend.clone();
+        self.run_backend(
             cx,
-            move || McpService::delete_server(&app, &id).map_err(|error| error.to_string()),
+            move || async move {
+                backend
+                    .delete_mcp_server(&id)
+                    .await
+                    .map_err(|error| error.to_string())
+            },
             |this, result, cx| {
                 match result {
-                    Ok(true) => {
-                        this.set_status(NotificationLevel::Success, t(k::MCP_STATUS_DELETED))
-                    }
-                    Ok(false) => {
-                        this.set_status(NotificationLevel::Warning, t(k::MCP_STATUS_MISSING))
-                    }
+                    Ok(()) => this.set_status(NotificationLevel::Success, t(k::MCP_STATUS_DELETED)),
                     Err(error) => this.set_status(
                         NotificationLevel::Error,
                         tf!(k::MCP_STATUS_DELETE_FAILED, error = error),
@@ -381,12 +442,17 @@ impl McpView {
     }
 
     fn do_sync(&mut self, cx: &mut Context<Self>) {
-        let app = self.app.clone();
-        self.run_io(
+        let backend = self.backend.clone();
+        self.run_backend(
             cx,
-            move || McpService::sync_all_enabled(&app).map_err(|error| error.to_string()),
+            move || async move {
+                backend
+                    .sync_all_mcp_servers()
+                    .await
+                    .map_err(|error| error.to_string())
+            },
             |this, result, _cx| match result {
-                Ok(()) => this.set_status(NotificationLevel::Success, t(k::MCP_STATUS_SYNCED)),
+                Ok(_) => this.set_status(NotificationLevel::Success, t(k::MCP_STATUS_SYNCED)),
                 Err(error) => this.set_status(
                     NotificationLevel::Error,
                     tf!(k::MCP_STATUS_SYNC_FAILED, error = error),
@@ -396,11 +462,15 @@ impl McpView {
     }
 
     fn do_toggle_app(&mut self, id: String, app: AppType, enabled: bool, cx: &mut Context<Self>) {
-        let state = self.app.clone();
-        self.run_io(
+        let backend = self.backend.clone();
+        self.run_backend(
             cx,
-            move || {
-                McpService::toggle_app(&state, &id, app, enabled).map_err(|error| error.to_string())
+            move || async move {
+                backend
+                    .set_mcp_app(&id, &app.app_id(), enabled)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
             },
             |this, result, cx| {
                 match result {
@@ -418,20 +488,16 @@ impl McpView {
     }
 
     fn do_import_all(&mut self, cx: &mut Context<Self>) {
-        let app = self.app.clone();
-        self.run_io(
+        let backend = self.backend.clone();
+        let apps = self.enabled_apps.clone();
+        self.run_backend(
             cx,
-            move || {
-                let imports = [
-                    ("Claude", McpService::import_from_claude(&app)),
-                    ("Codex", McpService::import_from_codex(&app)),
-                    ("Grok Build", McpService::import_from_grokbuild(&app)),
-                    ("OpenCode", McpService::import_from_opencode(&app)),
-                    ("Hermes", McpService::import_from_hermes(&app)),
-                ];
+            move || async move {
                 let mut total = 0usize;
                 let mut failures = Vec::new();
-                for (label, result) in imports {
+                for app in apps.iter().copied() {
+                    let label = Self::app_label(app).to_string();
+                    let result = backend.import_mcp_from_app(&app.app_id()).await;
                     match result {
                         Ok(count) => total += count,
                         Err(error) => failures.push(format!("{label}: {error}")),

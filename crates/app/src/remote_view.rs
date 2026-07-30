@@ -127,6 +127,11 @@ pub(crate) struct RemoteScopeItem {
     pub target: String,
 }
 
+#[derive(Clone)]
+pub(crate) enum RemoteEvent {
+    ConnectionChanged { id: String, connected: bool },
+}
+
 pub struct RemoteView {
     store: RemoteHostStore,
     selected_id: Option<String>,
@@ -163,6 +168,8 @@ pub struct RemoteView {
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
 }
+
+impl gpui::EventEmitter<RemoteEvent> for RemoteView {}
 
 impl RemoteView {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -263,8 +270,19 @@ impl RemoteView {
             .collect()
     }
 
-    pub(crate) fn active_scope_id(&self) -> Option<&str> {
-        self.selected_id.as_deref()
+    pub(crate) fn backend_for_scope(&self, id: &str) -> Option<WorkspaceBackend> {
+        (self.selected_id.as_deref() == Some(id)
+            && self.connection_state == ConnectionState::Connected)
+            .then(|| self.backend.clone())
+            .flatten()
+    }
+
+    pub(crate) fn enabled_builtin_apps(&self) -> Vec<ochub_core::AppType> {
+        self.apps
+            .iter()
+            .filter(|app| app.enabled && app.supports_provider)
+            .filter_map(|app| app.id.parse().ok())
+            .collect()
     }
 
     pub(crate) fn activate_scope(&mut self, id: String, cx: &mut Context<Self>) {
@@ -596,6 +614,10 @@ impl RemoteView {
                                 );
                             }
                         }
+                        cx.emit(RemoteEvent::ConnectionChanged {
+                            id: host_id,
+                            connected: true,
+                        });
                     }
                     Err(error) => {
                         this.connection_state = ConnectionState::Disconnected;
@@ -605,6 +627,10 @@ impl RemoteView {
                             tf!(k::REMOTE_ERROR_CONNECT, error = error),
                             NotificationLevel::Error,
                         );
+                        cx.emit(RemoteEvent::ConnectionChanged {
+                            id,
+                            connected: false,
+                        });
                     }
                 }
                 cx.notify();
@@ -615,6 +641,7 @@ impl RemoteView {
     }
 
     fn disconnect(&mut self, cx: &mut Context<Self>) {
+        let disconnected_id = self.selected_id.clone();
         self.connection_generation = self.connection_generation.wrapping_add(1);
         self.busy = false;
         self.connection_state = ConnectionState::Disconnected;
@@ -634,6 +661,12 @@ impl RemoteView {
                 let _ = crate::core_async::run(async move { client.close().await }).await;
             })
             .detach();
+        }
+        if let Some(id) = disconnected_id {
+            cx.emit(RemoteEvent::ConnectionChanged {
+                id,
+                connected: false,
+            });
         }
         cx.notify();
     }

@@ -103,7 +103,7 @@ impl SettingsView {
             }
             3 => {
                 let mut group = vec![self.render_row(RowId::DataDir, cx)];
-                if app_store::get_app_config_dir_override().is_some() {
+                if self.data_dir_has_override {
                     group.push(self.render_row(RowId::DataDirReset, cx));
                 }
                 if self.ccswitch_source.is_some() {
@@ -148,7 +148,7 @@ impl SettingsView {
             RowId::AppsOpen,
             RowId::DataDir,
         ];
-        if app_store::get_app_config_dir_override().is_some() {
+        if self.data_dir_has_override {
             rows.push(RowId::DataDirReset);
         }
         if self.ccswitch_source.is_some() {
@@ -325,8 +325,9 @@ impl SettingsView {
                         let Some(hours) = values.get(index).copied() else {
                             return;
                         };
-                        this.write(
-                            move |settings| settings.backup_interval_hours = Some(hours),
+                        this.write_workspace(
+                            vec![("backupIntervalHours", serde_json::json!(hours))],
+                            |_this, _cx| {},
                             cx,
                         );
                     },
@@ -347,8 +348,9 @@ impl SettingsView {
                         let Some(count) = values.get(index).copied() else {
                             return;
                         };
-                        this.write(
-                            move |settings| settings.backup_retain_count = Some(count),
+                        this.write_workspace(
+                            vec![("backupRetainCount", serde_json::json!(count))],
+                            |_this, _cx| {},
                             cx,
                         );
                     },
@@ -581,6 +583,9 @@ impl SettingsView {
     // ── Data directory ──────────────────────────────────────────────────────
 
     fn data_dir_description(&self) -> SharedString {
+        if !self.data_dir_value.is_empty() {
+            return self.data_dir_value.clone();
+        }
         match app_store::get_app_config_dir_override() {
             Some(path) => SharedString::from(path.to_string_lossy().to_string()),
             None => SharedString::from(tf!(
@@ -594,6 +599,14 @@ impl SettingsView {
     /// that is not a directory, so the "is this a valid path?" rule and the
     /// form that used to host it both disappear.
     fn pick_data_dir(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            let current = self.data_dir_value.clone();
+            self.data_dir_input
+                .update(cx, |input, cx| input.set_content(current, cx));
+            self.data_dir_editing = true;
+            cx.notify();
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -637,29 +650,24 @@ impl SettingsView {
     /// Import off the main thread — a cc-switch database can carry months of
     /// usage history, and the settings page has to stay responsive.
     pub(super) fn start_ccswitch_import(&mut self, cx: &mut Context<Self>) {
-        let Some(source) = self.ccswitch_source.clone() else {
+        if self.ccswitch_source.is_none() || !self.workspace_available {
             return;
-        };
+        }
         if self.ccswitch_busy {
             return;
         }
         self.ccswitch_busy = true;
         cx.notify();
 
-        let app = self.app.clone();
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let result = app.db.import_from_ccswitch_source(&source);
-                    if result.is_ok()
-                        && let Err(error) = app.db.set_ccswitch_import_decision("imported")
-                    {
-                        log::warn!("保存 cc-switch 导入选择失败: {error}");
-                    }
-                    result
-                })
-                .await;
+            let result =
+                crate::core_async::run(async move { backend.import_ccswitch().await }).await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.ccswitch_busy = false;
                 match result {
                     Ok(report) => {
@@ -687,25 +695,33 @@ impl SettingsView {
         .detach();
     }
 
-    fn apply_data_dir(&mut self, path: Option<String>, cx: &mut Context<Self>) {
-        if self.settings_busy {
+    pub(super) fn apply_data_dir(&mut self, path: Option<String>, cx: &mut Context<Self>) {
+        if self.settings_busy || !self.workspace_available {
             return;
         }
         self.settings_busy = true;
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
         cx.notify();
         // The override lives in its own bootstrap file, not in settings.json,
         // so this failure has no field to attach to — it is plain I/O.
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    app_store::set_app_config_dir_to_store(path.as_deref())
-                        .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                match path {
+                    Some(path) => backend.set_data_dir(&path).await,
+                    None => backend.reset_data_dir().await,
+                }
+            })
+            .await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.settings_busy = false;
                 match result {
-                    Ok(()) => {
+                    Ok(_) => {
+                        this.data_dir_editing = false;
+                        this.load_workspace_metadata(cx);
                         this.reload(cx);
                         this.set_status(
                             NotificationLevel::Success,
@@ -833,37 +849,46 @@ impl SettingsView {
         // Touching the select resolves a legacy both-enabled config, so the
         // warning has nothing left to say.
         self.warned_dual_target = true;
-        self.write(
-            move |settings| match target {
-                Some(SyncTarget::WebDav) => {
-                    settings
-                        .webdav_sync
-                        .get_or_insert_with(Default::default)
-                        .enabled = true;
-                    if let Some(s3) = settings.s3_sync.as_mut() {
-                        s3.enabled = false;
-                    }
+        let mut values = Vec::new();
+        match target {
+            Some(SyncTarget::WebDav) => {
+                if self.settings.webdav_sync.is_some() {
+                    values.push(("webdavSync.enabled", serde_json::json!(true)));
+                } else {
+                    let sync = ochub_core::settings::WebDavSyncSettings {
+                        enabled: true,
+                        ..Default::default()
+                    };
+                    values.push(("webdavSync", serde_json::json!(sync)));
                 }
-                Some(SyncTarget::S3) => {
-                    settings
-                        .s3_sync
-                        .get_or_insert_with(Default::default)
-                        .enabled = true;
-                    if let Some(webdav) = settings.webdav_sync.as_mut() {
-                        webdav.enabled = false;
-                    }
+                if self.settings.s3_sync.is_some() {
+                    values.push(("s3Sync.enabled", serde_json::json!(false)));
                 }
-                None => {
-                    if let Some(webdav) = settings.webdav_sync.as_mut() {
-                        webdav.enabled = false;
-                    }
-                    if let Some(s3) = settings.s3_sync.as_mut() {
-                        s3.enabled = false;
-                    }
+            }
+            Some(SyncTarget::S3) => {
+                if self.settings.s3_sync.is_some() {
+                    values.push(("s3Sync.enabled", serde_json::json!(true)));
+                } else {
+                    let sync = ochub_core::settings::S3SyncSettings {
+                        enabled: true,
+                        ..Default::default()
+                    };
+                    values.push(("s3Sync", serde_json::json!(sync)));
                 }
-            },
-            cx,
-        );
+                if self.settings.webdav_sync.is_some() {
+                    values.push(("webdavSync.enabled", serde_json::json!(false)));
+                }
+            }
+            None => {
+                if self.settings.webdav_sync.is_some() {
+                    values.push(("webdavSync.enabled", serde_json::json!(false)));
+                }
+                if self.settings.s3_sync.is_some() {
+                    values.push(("s3Sync.enabled", serde_json::json!(false)));
+                }
+            }
+        }
+        self.write_workspace(values, |_this, _cx| {}, cx);
     }
 
     fn toggle_sync_auto(&mut self, cx: &mut Context<Self>) {
@@ -871,19 +896,15 @@ impl SettingsView {
             return;
         };
         let next = !self.sync_auto();
-        self.write(
-            move |settings| match target {
-                SyncTarget::WebDav => {
-                    if let Some(sync) = settings.webdav_sync.as_mut() {
-                        sync.auto_sync = next;
-                    }
-                }
-                SyncTarget::S3 => {
-                    if let Some(sync) = settings.s3_sync.as_mut() {
-                        sync.auto_sync = next;
-                    }
-                }
-            },
+        self.write_workspace(
+            vec![(
+                match target {
+                    SyncTarget::WebDav => "webdavSync.autoSync",
+                    SyncTarget::S3 => "s3Sync.autoSync",
+                },
+                serde_json::json!(next),
+            )],
+            |_this, _cx| {},
             cx,
         );
     }

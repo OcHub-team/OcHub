@@ -48,6 +48,20 @@ impl Application {
 
     pub async fn test_webdav_sync(&self) -> ApplicationResult<serde_json::Value> {
         let settings = require_webdav(false)?;
+        self.test_webdav_sync_settings(settings).await
+    }
+
+    pub async fn test_webdav_sync_settings(
+        &self,
+        mut settings: WebDavSyncSettings,
+    ) -> ApplicationResult<serde_json::Value> {
+        if settings.password.is_empty()
+            && let Some(existing) = crate::settings::get_webdav_sync_settings()
+        {
+            settings.password = existing.password;
+        }
+        settings.normalize();
+        settings.validate()?;
         crate::services::webdav_sync::check_connection(&settings)
             .await
             .map_err(map_sync_error)?;
@@ -56,6 +70,20 @@ impl Application {
 
     pub async fn test_s3_sync(&self) -> ApplicationResult<serde_json::Value> {
         let settings = require_s3(false)?;
+        self.test_s3_sync_settings(settings).await
+    }
+
+    pub async fn test_s3_sync_settings(
+        &self,
+        mut settings: S3SyncSettings,
+    ) -> ApplicationResult<serde_json::Value> {
+        if settings.secret_access_key.is_empty()
+            && let Some(existing) = crate::settings::get_s3_sync_settings()
+        {
+            settings.secret_access_key = existing.secret_access_key;
+        }
+        settings.normalize();
+        settings.validate()?;
         crate::services::s3_sync::check_connection(&settings)
             .await
             .map_err(map_sync_error)?;

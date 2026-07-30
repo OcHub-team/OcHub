@@ -14,10 +14,7 @@
 //!   `relocalize` therefore has nothing at all to do for them, instead of
 //!   having to remember to re-resolve each one.
 
-use std::sync::Arc;
-
 use gpui::{App, Context, Entity, SharedString, Window, div, prelude::*};
-use ochub_core::db::Database;
 use ochub_core::settings::{self, S3SyncSettings, WebDavSyncSettings};
 
 use crate::components::{self, ButtonTone};
@@ -269,8 +266,6 @@ impl SettingsView {
     /// sixteen startup-built inputs that were snapshotted once and never
     /// resynced.
     pub(super) fn open_sync(&mut self, cx: &mut Context<Self>) {
-        let stored = settings::get_settings();
-        self.settings = stored;
         let Some(target) = self.sync_target() else {
             return;
         };
@@ -467,41 +462,66 @@ impl SettingsView {
         // Only the credential fields are written. `enabled`, `auto_sync` and
         // `status` belong to the store, and a sync running right now is writing
         // `status` into the same struct.
-        let values_for_write = normalized.clone();
+        let candidate = match target {
+            SyncTarget::WebDav => {
+                let mut stored = self.settings.webdav_sync.clone().unwrap_or_default();
+                stored.base_url = normalized[0].clone();
+                stored.username = normalized[1].clone();
+                stored.password = normalized[2].clone();
+                stored.remote_root = normalized[3].clone();
+                stored.profile = normalized[4].clone();
+                serde_json::json!(stored)
+            }
+            SyncTarget::S3 => {
+                let mut stored = self.settings.s3_sync.clone().unwrap_or_default();
+                stored.region = normalized[0].clone();
+                stored.bucket = normalized[1].clone();
+                stored.access_key_id = normalized[2].clone();
+                stored.secret_access_key = normalized[3].clone();
+                stored.endpoint = normalized[4].clone();
+                stored.remote_root = normalized[5].clone();
+                stored.profile = normalized[6].clone();
+                serde_json::json!(stored)
+            }
+        };
+        if !self.workspace_available {
+            return;
+        }
+        let backend = self.backend.clone();
+        let remote = self.workspace_remote;
+        let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    settings::mutate_settings(move |settings| match target {
-                        SyncTarget::WebDav => {
-                            let stored = settings.webdav_sync.get_or_insert_with(Default::default);
-                            stored.base_url = values_for_write[0].clone();
-                            stored.username = values_for_write[1].clone();
-                            stored.password = values_for_write[2].clone();
-                            stored.remote_root = values_for_write[3].clone();
-                            stored.profile = values_for_write[4].clone();
-                        }
-                        SyncTarget::S3 => {
-                            let stored = settings.s3_sync.get_or_insert_with(Default::default);
-                            stored.region = values_for_write[0].clone();
-                            stored.bucket = values_for_write[1].clone();
-                            stored.access_key_id = values_for_write[2].clone();
-                            stored.secret_access_key = values_for_write[3].clone();
-                            stored.endpoint = values_for_write[4].clone();
-                            stored.remote_root = values_for_write[5].clone();
-                            stored.profile = values_for_write[6].clone();
-                        }
-                    })
-                    .map(|_| settings::get_settings())
-                    .map_err(|error| error.to_string())
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .configure_sync(
+                        match target {
+                            SyncTarget::WebDav => "webdav",
+                            SyncTarget::S3 => "s3",
+                        },
+                        candidate,
+                        false,
+                    )
+                    .await?;
+                let value = backend.settings().await?;
+                serde_json::from_value::<ochub_core::settings::AppSettings>(value)
+                    .map_err(super::WorkspaceBackendError::from)
+            })
+            .await
+            .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 if let Some(draft) = this.draft.as_mut() {
                     draft.saving = false;
                 }
                 match result {
                     Ok(stored) => {
-                        this.settings = stored;
+                        this.settings = if remote {
+                            super::merge_workspace_settings(settings::get_settings(), stored)
+                        } else {
+                            stored
+                        };
                         // Re-seed from the *normalized* values, so an empty 远端目录
                         // becoming `ochub-sync` lands in the input the user is looking
                         // at rather than only on disk.
@@ -642,7 +662,7 @@ impl SettingsView {
     }
 
     fn start_sync(&mut self, action: Action, cx: &mut Context<Self>) {
-        if self.sync_busy {
+        if self.sync_busy || !self.workspace_available {
             return;
         }
         // Test names its own destination; upload and restore act on whatever
@@ -657,44 +677,59 @@ impl SettingsView {
         self.sync_busy = true;
         self.set_status(NotificationLevel::Info, start_message(&action, target), cx);
 
-        let db = self.app.db.clone();
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let backup = if matches!(action, Action::Restore) {
-                // Copying the database is real file I/O; it does not belong on
-                // the render thread. A failed pre-backup **refuses** the
-                // restore rather than proceeding, which is what makes the one
-                // irreversible action in the app recoverable.
-                let db = db.clone();
-                match cx
-                    .background_spawn(async move { db.create_backup_file() })
-                    .await
-                {
-                    Ok(file) => Some(file),
-                    Err(err) => {
-                        this.update(cx, |this, cx| {
-                            this.sync_busy = false;
-                            this.set_status(
-                                NotificationLevel::Error,
-                                tf!(k::SETTINGS_RESTORE_BACKUP_FAILED, error = err),
-                                cx,
-                            );
-                        })
-                        .ok();
-                        return;
+            let provider = target.provider();
+            let backend_name = match target {
+                SyncTarget::WebDav => "webdav",
+                SyncTarget::S3 => "s3",
+            };
+            let outcome = crate::core_async::run(async move {
+                match action {
+                    Action::Test(Candidate::WebDav(sync)) => {
+                        backend
+                            .test_sync(backend_name, Some(serde_json::to_value(*sync)?))
+                            .await?;
+                        Ok::<_, super::WorkspaceBackendError>(SharedString::from(tf!(
+                            k::SETTINGS_SYNC_TEST_OK,
+                            provider = provider
+                        )))
+                    }
+                    Action::Test(Candidate::S3(sync)) => {
+                        backend
+                            .test_sync(backend_name, Some(serde_json::to_value(*sync)?))
+                            .await?;
+                        Ok(SharedString::from(tf!(
+                            k::SETTINGS_SYNC_TEST_OK,
+                            provider = provider
+                        )))
+                    }
+                    Action::Upload => {
+                        backend.upload_sync(backend_name).await?;
+                        Ok(SharedString::from(tf!(
+                            k::SETTINGS_SYNC_UPLOAD_OK,
+                            provider = provider
+                        )))
+                    }
+                    Action::Restore => {
+                        backend.download_sync(backend_name).await?;
+                        Ok(restored(provider, None))
                     }
                 }
-            } else {
-                None
-            };
-
-            // `perform` reaches the network through reqwest, which needs a
-            // tokio reactor. Awaited on gpui's executor it does not fail
-            // gracefully — it panics with "there is no reactor running", and a
-            // panic crossing the objc stack aborts the process.
-            let outcome =
-                crate::core_async::run(async move { perform(action, target, &db, backup).await })
-                    .await;
+            })
+            .await
+            .map_err(|error| {
+                SharedString::from(tf!(
+                    k::SETTINGS_SYNC_FAILED,
+                    provider = provider,
+                    error = error
+                ))
+            });
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.sync_busy = false;
                 this.reload(cx);
                 match outcome {
@@ -972,83 +1007,6 @@ fn start_message(action: &Action, target: SyncTarget) -> String {
         Action::Test(_) => tf!(k::SETTINGS_SYNC_START_TEST, provider = provider),
         Action::Upload => tf!(k::SETTINGS_SYNC_START_UPLOAD, provider = provider),
         Action::Restore => tf!(k::SETTINGS_SYNC_START_DOWNLOAD, provider = provider),
-    }
-}
-
-/// Run one manual action and phrase the result.
-///
-/// Test probes `probe` and writes nothing — the old code called
-/// `set_webdav_sync_settings` *before* probing, so a failed test still saved
-/// the credentials that failed. Upload and restore read the stored settings
-/// here, inside the task, so they act on what was actually committed.
-async fn perform(
-    action: Action,
-    target: SyncTarget,
-    db: &Arc<Database>,
-    backup: Option<String>,
-) -> Result<SharedString, SharedString> {
-    let provider = target.provider();
-    let failed = |err: ochub_core::AppError| -> SharedString {
-        SharedString::from(tf!(
-            k::SETTINGS_SYNC_FAILED,
-            provider = provider,
-            error = err
-        ))
-    };
-    let tested = || SharedString::from(tf!(k::SETTINGS_SYNC_TEST_OK, provider = provider));
-    let uploaded = || SharedString::from(tf!(k::SETTINGS_SYNC_UPLOAD_OK, provider = provider));
-
-    match action {
-        Action::Test(Candidate::WebDav(sync)) => {
-            ochub_core::services::webdav_sync::check_connection(&sync)
-                .await
-                .map(|_| tested())
-                .map_err(failed)
-        }
-        Action::Test(Candidate::S3(sync)) => ochub_core::services::s3_sync::check_connection(&sync)
-            .await
-            .map(|_| tested())
-            .map_err(failed),
-        Action::Upload => match target {
-            SyncTarget::WebDav => {
-                let mut sync = settings::get_webdav_sync_settings().unwrap_or_default();
-                ochub_core::services::webdav_sync::run_with_sync_lock(
-                    ochub_core::services::webdav_sync::upload(db, &mut sync),
-                )
-                .await
-                .map(|_| uploaded())
-                .map_err(failed)
-            }
-            SyncTarget::S3 => {
-                let mut sync = settings::get_s3_sync_settings().unwrap_or_default();
-                ochub_core::services::s3_sync::run_with_sync_lock(
-                    ochub_core::services::s3_sync::upload(db, &mut sync),
-                )
-                .await
-                .map(|_| uploaded())
-                .map_err(failed)
-            }
-        },
-        Action::Restore => match target {
-            SyncTarget::WebDav => {
-                let mut sync = settings::get_webdav_sync_settings().unwrap_or_default();
-                ochub_core::services::webdav_sync::run_with_sync_lock(
-                    ochub_core::services::webdav_sync::download(db, &mut sync),
-                )
-                .await
-                .map(|_| restored(provider, backup))
-                .map_err(failed)
-            }
-            SyncTarget::S3 => {
-                let mut sync = settings::get_s3_sync_settings().unwrap_or_default();
-                ochub_core::services::s3_sync::run_with_sync_lock(
-                    ochub_core::services::s3_sync::download(db, &mut sync),
-                )
-                .await
-                .map(|_| restored(provider, backup))
-                .map_err(failed)
-            }
-        },
     }
 }
 

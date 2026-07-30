@@ -10,7 +10,7 @@ use gpui::{
     App, Context, Entity, Focusable, FontWeight, ListAlignment, ListState, SharedString, Window,
     div, prelude::*, px,
 };
-use ochub_core::apps::{claude_desktop, claude_plugin, codex, hermes, openclaw, opencode};
+use ochub_core::apps::{claude_plugin, hermes, openclaw};
 use ochub_core::services::OmoService;
 use ochub_core::{AppError, AppState, AppType};
 use serde_json::Value;
@@ -20,6 +20,7 @@ use crate::i18n::{Key, k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::remote::WorkspaceBackend;
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme;
@@ -75,6 +76,9 @@ const TOOLS_BLOCK_COUNT: usize = 7;
 
 pub struct ToolsView {
     app: Arc<AppState>,
+    backend: WorkspaceBackend,
+    workspace_available: bool,
+    workspace_remote: bool,
     config_rows: Vec<ConfigRow>,
     auto_launch: Option<bool>,
     tool_versions: Vec<ochub_core::session_manager::ToolVersion>,
@@ -83,6 +87,7 @@ pub struct ToolsView {
     io_busy: bool,
     env_app: AppType,
     env_conflicts: Vec<ochub_core::EnvConflict>,
+    env_conflict_ids: Vec<String>,
     db_backups: Vec<BackupRow>,
     show_all_backups: bool,
     show_advanced_tools: bool,
@@ -182,6 +187,9 @@ impl ToolsView {
         let backup_rename = cx.new(|cx| TextInput::new(cx, "backup-name"));
 
         Self {
+            backend: WorkspaceBackend::local(app.clone()),
+            workspace_available: true,
+            workspace_remote: false,
             app,
             config_rows: Vec::new(),
             auto_launch: None,
@@ -191,6 +199,7 @@ impl ToolsView {
             io_busy: false,
             env_app: AppType::Claude,
             env_conflicts: Vec::new(),
+            env_conflict_ids: Vec::new(),
             db_backups: Vec::new(),
             show_all_backups: false,
             show_advanced_tools: false,
@@ -216,34 +225,58 @@ impl ToolsView {
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            self.clear_workspace_data(cx);
+            cx.notify();
+            return;
+        }
         self.reload_generation = self.reload_generation.wrapping_add(1);
         let generation = self.reload_generation;
-        let app = self.app.clone();
+        let backend = self.backend.clone();
+        let remote = self.workspace_remote;
         cx.spawn(async move |this, cx| {
-            let data = cx
-                .background_spawn(async move {
-                    let config_rows = Self::all_apps()
+            let data = crate::core_async::run(async move {
+                let apps = backend.list_apps().await.unwrap_or_default();
+                let backups = backend.list_backups().await.unwrap_or_default();
+                let config_rows = apps
+                    .iter()
+                    .filter(|app| app.enabled)
+                    .filter_map(|summary| {
+                        let app_type = summary.id.parse::<AppType>().ok()?;
+                        Some((app_type, crate::app_meta::label(app_type), summary))
+                    })
+                    .map(|(app_type, label, summary)| {
+                        let path = summary
+                            .config_dir
+                            .clone()
+                            .or_else(|| summary.config_error.clone())
+                            .unwrap_or_default();
+                        ConfigRow {
+                            app: app_type,
+                            label,
+                            exists: summary.config_dir.is_some() && summary.config_error.is_none(),
+                            path,
+                        }
+                    })
+                    .collect();
+                ToolsBasicLoad {
+                    config_rows,
+                    auto_launch: if remote {
+                        None
+                    } else {
+                        ochub_core::autostart::is_enabled().ok()
+                    },
+                    db_backups: backups
                         .into_iter()
-                        .map(|(app_type, label)| {
-                            let (exists, path) = match config_status(&app, app_type) {
-                                Ok((exists, path)) => (exists, path),
-                                Err(error) => (false, error.to_string()),
-                            };
-                            ConfigRow {
-                                app: app_type,
-                                label,
-                                exists,
-                                path,
-                            }
+                        .map(|entry| BackupRow {
+                            filename: entry.filename,
+                            size_bytes: entry.size_bytes,
+                            created_at: entry.created_at,
                         })
-                        .collect();
-                    ToolsBasicLoad {
-                        config_rows,
-                        auto_launch: ochub_core::autostart::is_enabled().ok(),
-                        db_backups: load_db_backup_rows().unwrap_or_default(),
-                    }
-                })
-                .await;
+                        .collect(),
+                }
+            })
+            .await;
             this.update(cx, |this, cx| {
                 if generation != this.reload_generation {
                     return;
@@ -260,12 +293,107 @@ impl ToolsView {
         self.refresh_advanced_configs(cx);
     }
 
+    pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        self.workspace_remote = backend.is_remote();
+        self.backend = backend;
+        self.workspace_available = true;
+        self.io_busy = false;
+        self.tool_busy = false;
+        self.confirm = None;
+        self.clear_workspace_data(cx);
+        self.reload(cx);
+    }
+
+    pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        self.advanced_reload_generation = self.advanced_reload_generation.wrapping_add(1);
+        self.workspace_remote = true;
+        self.workspace_available = false;
+        self.io_busy = false;
+        self.tool_busy = false;
+        self.confirm = None;
+        self.reload(cx);
+    }
+
+    fn clear_workspace_data(&mut self, cx: &mut Context<Self>) {
+        self.config_rows.clear();
+        self.auto_launch = None;
+        self.db_backups.clear();
+        self.tool_versions.clear();
+        self.tool_installations.clear();
+        self.env_conflicts.clear();
+        self.env_conflict_ids.clear();
+        self.clear_advanced_configs(cx);
+    }
+
+    fn clear_advanced_configs(&mut self, cx: &mut Context<Self>) {
+        for input in [
+            &self.openclaw_default_model_json,
+            &self.openclaw_env_json,
+            &self.openclaw_tools_json,
+            &self.hermes_model_json,
+            &self.hermes_memory_content,
+            &self.hermes_user_memory_content,
+        ] {
+            input.update(cx, |input, cx| input.set_content("", cx));
+        }
+        self.hermes_limits = None;
+    }
+
     fn refresh_advanced_configs(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            self.clear_advanced_configs(cx);
+            return;
+        }
         self.advanced_reload_generation = self.advanced_reload_generation.wrapping_add(1);
         let generation = self.advanced_reload_generation;
+        let backend = self.backend.clone();
+        let remote = self.workspace_remote;
         cx.spawn(async move |this, cx| {
-            let data = cx
-                .background_spawn(async move {
+            let data = if remote {
+                crate::core_async::run(async move {
+                    let default_model = backend
+                        .advanced_tool_read("openclaw.defaultModel", Value::Null)
+                        .await
+                        .unwrap_or(Value::Null);
+                    let env = backend
+                        .advanced_tool_read("openclaw.env", Value::Null)
+                        .await
+                        .unwrap_or_else(|_| Value::Object(Default::default()));
+                    let tools = backend
+                        .advanced_tool_read("openclaw.tools", Value::Null)
+                        .await
+                        .unwrap_or_else(|_| Value::Object(Default::default()));
+                    let model = backend
+                        .advanced_tool_read("hermes.models", Value::Null)
+                        .await
+                        .unwrap_or(Value::Null);
+                    let memory = backend
+                        .advanced_tool_read("hermes.memory.read", Value::Null)
+                        .await
+                        .unwrap_or(Value::Null);
+                    let user = backend
+                        .advanced_tool_read("hermes.user.read", Value::Null)
+                        .await
+                        .unwrap_or(Value::Null);
+                    let limits = backend
+                        .advanced_tool_read("hermes.memory.limits", Value::Null)
+                        .await
+                        .ok()
+                        .and_then(|value| serde_json::from_value(value).ok());
+                    ToolsAdvancedLoad {
+                        openclaw_default_model: pretty_or_empty(default_model),
+                        openclaw_env: pretty_or_empty(env.get("vars").cloned().unwrap_or(env)),
+                        openclaw_tools: pretty_or_empty(tools),
+                        hermes_model: pretty_or_empty(model),
+                        hermes_memory: memory["content"].as_str().unwrap_or_default().to_string(),
+                        hermes_user: user["content"].as_str().unwrap_or_default().to_string(),
+                        hermes_limits: limits,
+                    }
+                })
+                .await
+            } else {
+                cx.background_spawn(async move {
                     ToolsAdvancedLoad {
                         openclaw_default_model: openclaw::get_default_model()
                             .ok()
@@ -292,7 +420,8 @@ impl ToolsView {
                         hermes_limits: hermes::read_memory_limits().ok(),
                     }
                 })
-                .await;
+                .await
+            };
             this.update(cx, |this, cx| {
                 if generation != this.advanced_reload_generation {
                     return;
@@ -318,13 +447,6 @@ impl ToolsView {
         .detach();
     }
 
-    fn all_apps() -> Vec<(AppType, gpui::SharedString)> {
-        crate::app_meta::enabled_app_types()
-            .into_iter()
-            .map(|app| (app, crate::app_meta::label(app)))
-            .collect()
-    }
-
     /// Run filesystem/database work without blocking GPUI's event loop. Tools
     /// operations are serialized because restore/import actions can replace the
     /// same database or config files.
@@ -341,6 +463,42 @@ impl ToolsView {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { work() }).await;
+            this.update(cx, move |this, cx| {
+                this.io_busy = false;
+                apply(this, result, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn run_advanced<Apply>(
+        &mut self,
+        action: &'static str,
+        params: Value,
+        write: bool,
+        cx: &mut Context<Self>,
+        apply: Apply,
+    ) where
+        Apply: FnOnce(&mut Self, Result<Value, String>, &mut Context<Self>) + 'static,
+    {
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                if write {
+                    backend.advanced_tool_write(action, params).await
+                } else {
+                    backend.advanced_tool_read(action, params).await
+                }
+            })
+            .await
+            .map_err(|error| error.to_string());
             this.update(cx, move |this, cx| {
                 this.io_busy = false;
                 apply(this, result, cx);
@@ -418,7 +576,7 @@ impl ToolsView {
     }
 
     fn refresh_tool_versions(&mut self, cx: &mut Context<Self>) {
-        if self.tool_busy {
+        if self.tool_busy || !self.workspace_available {
             return;
         }
         self.tool_busy = true;
@@ -428,11 +586,11 @@ impl ToolsView {
             cx,
         );
 
-        let task = cx.background_spawn(crate::core_async::run(
-            ochub_core::session_manager::get_tool_versions(None, None),
-        ));
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let result = task.await;
+            let result = crate::core_async::run(async move { backend.tool_versions(None).await })
+                .await
+                .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
                 this.tool_busy = false;
                 match result {
@@ -458,35 +616,55 @@ impl ToolsView {
     }
 
     fn probe_cli_installations(&mut self, cx: &mut Context<Self>) {
-        match ochub_core::session_manager::probe_tool_installations(cli_tool_ids()) {
-            Ok(reports) => {
-                let conflicts = reports.iter().filter(|report| report.is_conflict).count();
-                let count = reports.len();
-                self.tool_installations = reports;
-                self.set_status(
-                    if conflicts == 0 {
-                        NotificationLevel::Success
-                    } else {
-                        NotificationLevel::Warning
-                    },
-                    tf!(
-                        k::TOOLS_CLI_INSTALLS_SCANNED,
-                        count = count,
-                        conflicts = conflicts
-                    ),
-                    cx,
-                );
-            }
-            Err(err) => self.set_status(
-                NotificationLevel::Error,
-                tf!(k::TOOLS_CLI_INSTALLS_SCAN_FAILED, error = err),
-                cx,
-            ),
+        if self.tool_busy || !self.workspace_available {
+            return;
         }
+        self.tool_busy = true;
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                let mut reports = Vec::new();
+                for tool in cli_tool_ids() {
+                    reports.extend(backend.probe_tool(&tool).await?);
+                }
+                Ok::<_, crate::remote::WorkspaceBackendError>(reports)
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.tool_busy = false;
+                match result {
+                    Ok(reports) => {
+                        let conflicts = reports.iter().filter(|report| report.is_conflict).count();
+                        let count = reports.len();
+                        this.tool_installations = reports;
+                        this.set_status(
+                            if conflicts == 0 {
+                                NotificationLevel::Success
+                            } else {
+                                NotificationLevel::Warning
+                            },
+                            tf!(
+                                k::TOOLS_CLI_INSTALLS_SCANNED,
+                                count = count,
+                                conflicts = conflicts
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(err) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_CLI_INSTALLS_SCAN_FAILED, error = err),
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn run_cli_lifecycle(&mut self, action: &'static str, cx: &mut Context<Self>) {
-        if self.tool_busy {
+        if self.tool_busy || !self.workspace_available {
             return;
         }
         self.tool_busy = true;
@@ -500,12 +678,15 @@ impl ToolsView {
             cx,
         );
 
-        let tools = cli_tool_ids();
-        let task = cx.background_spawn(async move {
-            ochub_core::session_manager::run_tool_lifecycle_action(tools, action.to_string(), None)
-        });
+        let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let result = task.await;
+            let result = crate::core_async::run(async move {
+                for tool in cli_tool_ids() {
+                    backend.run_tool_lifecycle(&tool, action).await?;
+                }
+                Ok::<_, crate::remote::WorkspaceBackendError>(())
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.tool_busy = false;
                 match result {
@@ -537,6 +718,59 @@ impl ToolsView {
 
     fn scan_env_conflicts(&mut self, cx: &mut Context<Self>) {
         let app_type = self.env_app;
+        if self.workspace_remote {
+            self.run_advanced(
+                "env.scan",
+                Value::Null,
+                false,
+                cx,
+                move |this, result, cx| match result {
+                    Ok(value) => {
+                        let mut ids = Vec::new();
+                        let conflicts = value
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|item| item["app"].as_str() == Some(app_type.as_str()))
+                            .filter_map(|item| {
+                                ids.push(item["id"].as_str()?.to_string());
+                                Some(ochub_core::EnvConflict {
+                                    var_name: item["variable"].as_str()?.to_string(),
+                                    var_value: item["value"]
+                                        .as_str()
+                                        .unwrap_or("******")
+                                        .to_string(),
+                                    source_type: item["sourceType"].as_str()?.to_string(),
+                                    source_path: item["sourcePath"].as_str()?.to_string(),
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let count = conflicts.len();
+                        this.env_conflict_ids = ids;
+                        this.env_conflicts = conflicts;
+                        this.set_status(
+                            if count == 0 {
+                                NotificationLevel::Success
+                            } else {
+                                NotificationLevel::Warning
+                            },
+                            tf!(
+                                k::TOOLS_ENV_SCANNED,
+                                app = env_app_label(app_type),
+                                count = count
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_ENV_SCAN_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || {
@@ -547,6 +781,7 @@ impl ToolsView {
                 Ok(conflicts) => {
                     let count = conflicts.len();
                     this.env_conflicts = conflicts;
+                    this.env_conflict_ids.clear();
                     this.set_status(
                         if count == 0 {
                             NotificationLevel::Success
@@ -577,6 +812,65 @@ impl ToolsView {
                 t(k::TOOLS_ENV_NONE_TO_DELETE),
                 cx,
             );
+            return;
+        }
+        if self.workspace_remote {
+            if !self.workspace_available {
+                return;
+            }
+            let ids = self.env_conflict_ids.clone();
+            let backend = self.backend.clone();
+            if self.io_busy {
+                return;
+            }
+            self.io_busy = true;
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = crate::core_async::run(async move {
+                    let mut backup = None;
+                    for id in &ids {
+                        backup = Some(
+                            backend
+                                .advanced_tool_write("env.clean", serde_json::json!({ "id": id }))
+                                .await?,
+                        );
+                    }
+                    Ok::<_, crate::remote::WorkspaceBackendError>((ids.len(), backup))
+                })
+                .await;
+                this.update(cx, |this, cx| {
+                    this.io_busy = false;
+                    match result {
+                        Ok((count, backup)) => {
+                            let backup_path = backup
+                                .as_ref()
+                                .and_then(|value| value["backupPath"].as_str())
+                                .unwrap_or_default();
+                            let backup_id = Path::new(backup_path)
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or(backup_path);
+                            this.env_restore_path.update(cx, |input, cx| {
+                                input.set_content(backup_id.to_string(), cx)
+                            });
+                            this.env_conflicts.clear();
+                            this.env_conflict_ids.clear();
+                            this.set_status(
+                                NotificationLevel::Success,
+                                tf!(k::TOOLS_ENV_DELETED, path = backup_path, count = count),
+                                cx,
+                            );
+                        }
+                        Err(error) => this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::TOOLS_ENV_DELETE_FAILED, error = error),
+                            cx,
+                        ),
+                    }
+                })
+                .ok();
+            })
+            .detach();
             return;
         }
         let conflicts = self.env_conflicts.clone();
@@ -610,6 +904,33 @@ impl ToolsView {
 
     fn restore_env_backup(&mut self, cx: &mut Context<Self>) {
         let raw = self.env_restore_path.read(cx).content().trim().to_string();
+        if self.workspace_remote {
+            if raw.is_empty() {
+                self.set_status(
+                    NotificationLevel::Warning,
+                    t(k::TOOLS_ENV_RESTORE_PATH_REQUIRED),
+                    cx,
+                );
+                return;
+            }
+            self.run_advanced(
+                "env.restore",
+                serde_json::json!({ "id": raw }),
+                true,
+                cx,
+                |this, result, cx| match result {
+                    Ok(_) => {
+                        this.set_status(NotificationLevel::Success, t(k::TOOLS_ENV_RESTORED), cx)
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_ENV_RESTORE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         let Some(path) = expand_user_path(&raw) else {
             self.set_status(
                 NotificationLevel::Warning,
@@ -634,87 +955,118 @@ impl ToolsView {
     }
 
     fn refresh_db_backups(&mut self, cx: &mut Context<Self>) {
-        self.run_io(
-            cx,
-            || load_db_backup_rows().map_err(|error| error.to_string()),
-            |this, result, cx| match result {
-                Ok(backups) => {
-                    let count = backups.len();
-                    this.db_backups = backups;
-                    this.set_status(
-                        NotificationLevel::Success,
-                        tf!(k::TOOLS_DB_BACKUPS_REFRESHED, count = count),
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move { backend.list_backups().await })
+                .await
+                .map(backup_rows)
+                .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(backups) => {
+                        let count = backups.len();
+                        this.db_backups = backups;
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::TOOLS_DB_BACKUPS_REFRESHED, count = count),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_DB_BACKUPS_REFRESH_FAILED, error = error),
                         cx,
-                    );
+                    ),
                 }
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::TOOLS_DB_BACKUPS_REFRESH_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn create_db_backup(&mut self, cx: &mut Context<Self>) {
-        let app = self.app.clone();
-        self.run_io(
-            cx,
-            move || {
-                app.db
-                    .create_backup_file()
-                    .map(|filename| (filename, load_db_backup_rows().unwrap_or_default()))
-                    .map_err(|error| error.to_string())
-            },
-            |this, result, cx| match result {
-                Ok((filename, backups)) => {
-                    this.db_backups = backups;
-                    this.set_status(
-                        NotificationLevel::Success,
-                        tf!(k::TOOLS_DB_BACKUP_CREATED, filename = filename),
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                let filename = backend.create_backup(None).await?;
+                let backups = backup_rows(backend.list_backups().await?);
+                Ok::<_, crate::remote::WorkspaceBackendError>((filename, backups))
+            })
+            .await
+            .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok((filename, backups)) => {
+                        this.db_backups = backups;
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::TOOLS_DB_BACKUP_CREATED, filename = filename),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_DB_BACKUP_CREATE_FAILED, error = error),
                         cx,
-                    );
+                    ),
                 }
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::TOOLS_DB_BACKUP_CREATE_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn restore_db_backup(&mut self, filename: String, cx: &mut Context<Self>) {
-        let app = self.app.clone();
-        let filename_for_work = filename.clone();
-        self.run_io(
-            cx,
-            move || {
-                app.db
-                    .restore_from_backup(&filename_for_work)
-                    .map(|backup_id| (backup_id, load_db_backup_rows().unwrap_or_default()))
-                    .map_err(|error| error.to_string())
-            },
-            move |this, result, cx| match result {
-                Ok((backup_id, backups)) => {
-                    this.db_backups = backups;
-                    this.set_status(
-                        NotificationLevel::Success,
-                        tf!(
-                            k::TOOLS_DB_BACKUP_RESTORED,
-                            filename = filename,
-                            backup = backup_id
-                        ),
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        let filename_for_request = filename.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                let restored = backend.restore_backup(&filename_for_request).await?;
+                let backups = backup_rows(backend.list_backups().await?);
+                Ok::<_, crate::remote::WorkspaceBackendError>((restored, backups))
+            })
+            .await
+            .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok((restored, backups)) => {
+                        this.db_backups = backups;
+                        let backup_id = restored["safetyBackup"].as_str().unwrap_or_default();
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(
+                                k::TOOLS_DB_BACKUP_RESTORED,
+                                filename = filename,
+                                backup = backup_id
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_DB_BACKUP_RESTORE_FAILED, error = error),
                         cx,
-                    );
+                    ),
                 }
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::TOOLS_DB_BACKUP_RESTORE_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn rename_db_backup(&mut self, filename: String, cx: &mut Context<Self>) {
@@ -727,146 +1079,198 @@ impl ToolsView {
             );
             return;
         }
-        self.run_io(
-            cx,
-            move || {
-                ochub_core::Database::rename_backup(&filename, &new_name)
-                    .map(|renamed| (renamed, load_db_backup_rows().unwrap_or_default()))
-                    .map_err(|error| error.to_string())
-            },
-            |this, result, cx| match result {
-                Ok((renamed, backups)) => {
-                    this.db_backups = backups;
-                    this.set_status(
-                        NotificationLevel::Success,
-                        tf!(k::TOOLS_DB_BACKUP_RENAMED, name = renamed),
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                let renamed = backend.rename_backup(&filename, &new_name).await?;
+                let backups = backup_rows(backend.list_backups().await?);
+                Ok::<_, crate::remote::WorkspaceBackendError>((renamed, backups))
+            })
+            .await
+            .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok((renamed, backups)) => {
+                        this.db_backups = backups;
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::TOOLS_DB_BACKUP_RENAMED, name = renamed),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_DB_BACKUP_RENAME_FAILED, error = error),
                         cx,
-                    );
+                    ),
                 }
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::TOOLS_DB_BACKUP_RENAME_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn delete_db_backup(&mut self, filename: String, cx: &mut Context<Self>) {
-        let filename_for_work = filename.clone();
-        self.run_io(
-            cx,
-            move || {
-                ochub_core::Database::delete_backup(&filename_for_work)
-                    .map(|()| load_db_backup_rows().unwrap_or_default())
-                    .map_err(|error| error.to_string())
-            },
-            move |this, result, cx| match result {
-                Ok(backups) => {
-                    this.db_backups = backups;
-                    this.set_status(
-                        NotificationLevel::Success,
-                        tf!(k::TOOLS_DB_BACKUP_DELETED, filename = filename),
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        let filename_for_request = filename.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                backend.delete_backup(&filename_for_request).await?;
+                Ok::<_, crate::remote::WorkspaceBackendError>(backup_rows(
+                    backend.list_backups().await?,
+                ))
+            })
+            .await
+            .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(backups) => {
+                        this.db_backups = backups;
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::TOOLS_DB_BACKUP_DELETED, filename = filename),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_DB_BACKUP_DELETE_FAILED, error = error),
                         cx,
-                    );
+                    ),
                 }
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::TOOLS_DB_BACKUP_DELETE_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn export_sql(&mut self, cx: &mut Context<Self>) {
         let raw = self.export_sql_path.read(cx).content().trim().to_string();
-        let Some(path) = expand_user_path(&raw) else {
+        if raw.is_empty() {
             self.set_status(
                 NotificationLevel::Warning,
                 t(k::TOOLS_SQL_EXPORT_PATH_REQUIRED),
                 cx,
             );
             return;
+        }
+        let path = if self.workspace_remote {
+            raw
+        } else {
+            let Some(path) = expand_user_path(&raw) else {
+                return;
+            };
+            path.to_string_lossy().into_owned()
         };
-        let app = self.app.clone();
-        let display_path = path.display().to_string();
-        self.run_io(
-            cx,
-            move || app.db.export_sql(&path).map_err(|error| error.to_string()),
-            move |this, result, cx| match result {
-                Ok(()) => this.set_status(
-                    NotificationLevel::Success,
-                    tf!(k::TOOLS_SQL_EXPORTED, path = display_path),
-                    cx,
-                ),
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::TOOLS_SQL_EXPORT_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        let display_path = path.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result =
+                crate::core_async::run(async move { backend.export_sql(&path).await }).await;
+            this.update(cx, move |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(_) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::TOOLS_SQL_EXPORTED, path = display_path),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_SQL_EXPORT_FAILED, error = error),
+                        cx,
+                    ),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn import_sql(&mut self, cx: &mut Context<Self>) {
         let raw = self.import_sql_path.read(cx).content().trim().to_string();
-        let Some(path) = expand_user_path(&raw) else {
+        if raw.is_empty() {
             self.set_status(
                 NotificationLevel::Warning,
                 t(k::TOOLS_SQL_IMPORT_PATH_REQUIRED),
                 cx,
             );
             return;
+        }
+        let path = if self.workspace_remote {
+            raw
+        } else {
+            let Some(path) = expand_user_path(&raw) else {
+                return;
+            };
+            path.to_string_lossy().into_owned()
         };
-        let app = self.app.clone();
-        self.run_io(
-            cx,
-            move || {
-                app.db
-                    .import_sql(&path)
-                    .map(|backup_id| {
-                        let sync_warning =
-                            ochub_core::services::ProviderService::sync_current_to_live(&app)
-                                .err()
-                                .map(|error| error.to_string());
-                        (
-                            backup_id,
-                            sync_warning,
-                            load_db_backup_rows().unwrap_or_default(),
-                        )
-                    })
-                    .map_err(|error| error.to_string())
-            },
-            |this, result, cx| match result {
-                Ok((backup_id, sync_warning, backups)) => {
-                    this.db_backups = backups;
-                    // The import itself succeeded either way; the re-apply
-                    // warning is the caveat that downgrades the toast.
-                    match sync_warning {
-                        None => this.set_status(
-                            NotificationLevel::Success,
-                            tf!(k::TOOLS_SQL_IMPORTED, backup = backup_id),
-                            cx,
-                        ),
-                        Some(error) => this.set_status(
-                            NotificationLevel::Warning,
-                            tf!(
-                                k::TOOLS_SQL_IMPORTED_WITH_WARNING,
-                                backup = backup_id,
-                                error = error
+        if self.io_busy || !self.workspace_available {
+            return;
+        }
+        self.io_busy = true;
+        let backend = self.backend.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                let imported = backend.import_sql(&path).await?;
+                let backups = backup_rows(backend.list_backups().await?);
+                Ok::<_, crate::remote::WorkspaceBackendError>((imported, backups))
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok((imported, backups)) => {
+                        this.db_backups = backups;
+                        let backup_id = imported["safetyBackup"].as_str().unwrap_or_default();
+                        let sync_warning = imported["syncWarning"].as_str();
+                        // The import itself succeeded either way; the re-apply
+                        // warning is the caveat that downgrades the toast.
+                        match sync_warning {
+                            None => this.set_status(
+                                NotificationLevel::Success,
+                                tf!(k::TOOLS_SQL_IMPORTED, backup = backup_id),
+                                cx,
                             ),
-                            cx,
-                        ),
+                            Some(error) => this.set_status(
+                                NotificationLevel::Warning,
+                                tf!(
+                                    k::TOOLS_SQL_IMPORTED_WITH_WARNING,
+                                    backup = backup_id,
+                                    error = error
+                                ),
+                                cx,
+                            ),
+                        }
                     }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_SQL_IMPORT_FAILED, error = error),
+                        cx,
+                    ),
                 }
-                Err(error) => this.set_status(
-                    NotificationLevel::Error,
-                    tf!(k::TOOLS_SQL_IMPORT_FAILED, error = error),
-                    cx,
-                ),
-            },
-        );
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn toggle_auto_launch(&mut self, cx: &mut Context<Self>) {
@@ -901,6 +1305,34 @@ impl ToolsView {
     }
 
     fn read_omo(&mut self, slim: bool, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                if slim {
+                    "omoSlim.localFile"
+                } else {
+                    "omo.localFile"
+                },
+                Value::Null,
+                false,
+                cx,
+                move |this, result, cx| match result {
+                    Ok(value) => {
+                        let path = value["filePath"].as_str().unwrap_or_default();
+                        this.set_status(
+                            NotificationLevel::Info,
+                            format!("{}: {path}", if slim { "OMO Slim" } else { "OMO" }),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_OMO_READ_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || {
@@ -929,6 +1361,29 @@ impl ToolsView {
     }
 
     fn disable_omo(&mut self, slim: bool, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                if slim {
+                    "omoSlim.disable"
+                } else {
+                    "omo.disable"
+                },
+                Value::Null,
+                true,
+                cx,
+                |this, result, cx| match result {
+                    Ok(_) => {
+                        this.set_status(NotificationLevel::Success, t(k::TOOLS_OMO_DISABLED), cx)
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_OMO_DISABLE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         let category = if slim { "omo-slim" } else { "omo" };
         let app = self.app.clone();
         self.run_io(
@@ -967,6 +1422,33 @@ impl ToolsView {
 
     fn validate_mcp_command(&mut self, cx: &mut Context<Self>) {
         let cmd = self.mcp_command.read(cx).content().trim().to_string();
+        if self.workspace_remote {
+            let shown = cmd.clone();
+            self.run_advanced(
+                "claude.mcp.validateCommand",
+                serde_json::json!({ "command": cmd }),
+                false,
+                cx,
+                move |this, result, cx| match result {
+                    Ok(value) if value["valid"].as_bool() == Some(true) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(k::TOOLS_MCP_COMMAND_AVAILABLE, command = shown),
+                        cx,
+                    ),
+                    Ok(_) => this.set_status(
+                        NotificationLevel::Warning,
+                        tf!(k::TOOLS_MCP_COMMAND_MISSING, command = shown),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_MCP_VALIDATE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         let command = cmd.clone();
         self.run_io(
             cx,
@@ -995,6 +1477,32 @@ impl ToolsView {
     }
 
     fn read_claude_mcp(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                "claude.mcp.config",
+                Value::Null,
+                false,
+                cx,
+                |this, result, cx| match result {
+                    Ok(Value::Null) => this.set_status(
+                        NotificationLevel::Warning,
+                        t(k::TOOLS_MCP_CONFIG_MISSING),
+                        cx,
+                    ),
+                    Ok(value) => this.set_status(
+                        NotificationLevel::Info,
+                        tf!(k::TOOLS_MCP_CONFIG_CHARS, count = value.to_string().len()),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_MCP_READ_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             || {
@@ -1023,6 +1531,34 @@ impl ToolsView {
     }
 
     fn apply_claude_plugin(&mut self, official: bool, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                if official {
+                    "claude.plugin.restore"
+                } else {
+                    "claude.plugin.apply"
+                },
+                Value::Null,
+                true,
+                cx,
+                |this, result, cx| match result {
+                    Ok(value) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::TOOLS_CLAUDE_PLUGIN_APPLIED,
+                            changed = value["changed"].as_bool().unwrap_or(false)
+                        ),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_CLAUDE_PLUGIN_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || {
@@ -1049,6 +1585,34 @@ impl ToolsView {
     }
 
     fn mark_claude_onboarding(&mut self, completed: bool, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                if completed {
+                    "claude.onboarding.skip"
+                } else {
+                    "claude.onboarding.clear"
+                },
+                Value::Null,
+                true,
+                cx,
+                |this, result, cx| match result {
+                    Ok(value) => this.set_status(
+                        NotificationLevel::Success,
+                        tf!(
+                            k::TOOLS_CLAUDE_ONBOARDING_APPLIED,
+                            changed = value["changed"].as_bool().unwrap_or(false)
+                        ),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_CLAUDE_ONBOARDING_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || {
@@ -1075,6 +1639,38 @@ impl ToolsView {
     }
 
     fn check_codex_unify_backup(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                "codex.history.status",
+                Value::Null,
+                false,
+                cx,
+                |this, result, cx| match result {
+                    Ok(value) => {
+                        let exists = value["backupExists"].as_bool().unwrap_or(false);
+                        this.set_status(
+                            if exists {
+                                NotificationLevel::Info
+                            } else {
+                                NotificationLevel::Warning
+                            },
+                            if exists {
+                                t(k::TOOLS_CODEX_UNIFY_BACKUP_PRESENT)
+                            } else {
+                                t(k::TOOLS_CODEX_UNIFY_BACKUP_ABSENT)
+                            },
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_HERMES_READ_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             || {
@@ -1100,6 +1696,42 @@ impl ToolsView {
     }
 
     fn restore_codex_unified_history(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                "codex.history.restore",
+                Value::Null,
+                true,
+                cx,
+                |this, result, cx| match result {
+                    Ok(value) => {
+                        if let Some(reason) = value["skippedReason"].as_str() {
+                            this.set_status(
+                                NotificationLevel::Warning,
+                                tf!(k::TOOLS_CODEX_RESTORE_SKIPPED, reason = reason),
+                                cx,
+                            );
+                        } else {
+                            this.set_status(
+                                NotificationLevel::Success,
+                                tf!(
+                                    k::TOOLS_CODEX_RESTORED,
+                                    files =
+                                        value["restoredJsonlFiles"].as_u64().unwrap_or_default(),
+                                    rows = value["restoredStateRows"].as_u64().unwrap_or_default()
+                                ),
+                                cx,
+                            );
+                        }
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_CODEX_RESTORE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             || {
@@ -1137,6 +1769,54 @@ impl ToolsView {
     }
 
     fn refresh_sync_status(&mut self, s3: bool, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            if self.io_busy || !self.workspace_available {
+                return;
+            }
+            self.io_busy = true;
+            let backend = self.backend.clone();
+            let provider = if s3 { "s3" } else { "webdav" };
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result =
+                    crate::core_async::run(async move { backend.sync_status(provider).await })
+                        .await;
+                this.update(cx, |this, cx| {
+                    this.io_busy = false;
+                    match result {
+                        Ok(value) if value["configured"].as_bool() == Some(true) => {
+                            let settings = &value["settings"];
+                            let status = serde_json::from_value(settings["status"].clone())
+                                .unwrap_or_default();
+                            this.set_status(
+                                NotificationLevel::Info,
+                                format_sync_status(
+                                    if s3 { "S3" } else { "WebDAV" },
+                                    settings["enabled"].as_bool().unwrap_or(false),
+                                    settings["autoSync"].as_bool().unwrap_or(false),
+                                    &status,
+                                ),
+                                cx,
+                            );
+                        }
+                        Ok(_) => this.set_status(
+                            NotificationLevel::Warning,
+                            tf!(
+                                k::TOOLS_SYNC_NOT_CONFIGURED,
+                                provider = if s3 { "S3" } else { "WebDAV" }
+                            ),
+                            cx,
+                        ),
+                        Err(error) => {
+                            this.set_status(NotificationLevel::Error, error.to_string(), cx)
+                        }
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         if s3 {
             match ochub_core::settings::get_s3_sync_settings() {
                 Some(settings) => self.set_status(
@@ -1177,6 +1857,37 @@ impl ToolsView {
     }
 
     fn openclaw_health(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                "openclaw.health",
+                Value::Null,
+                false,
+                cx,
+                |this, result, cx| match result {
+                    Ok(value) => {
+                        let count = value["warnings"]
+                            .as_array()
+                            .map(Vec::len)
+                            .unwrap_or_default();
+                        this.set_status(
+                            if count == 0 {
+                                NotificationLevel::Success
+                            } else {
+                                NotificationLevel::Warning
+                            },
+                            tf!(k::TOOLS_OPENCLAW_HEALTH, count = count),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_OPENCLAW_HEALTH_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             || {
@@ -1204,6 +1915,40 @@ impl ToolsView {
     }
 
     fn hermes_summary(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_remote {
+            self.run_advanced(
+                "hermes.models",
+                Value::Null,
+                false,
+                cx,
+                |this, result, cx| match result {
+                    Ok(Value::Null) => this.set_status(
+                        NotificationLevel::Warning,
+                        t(k::TOOLS_HERMES_MODEL_UNINITIALIZED),
+                        cx,
+                    ),
+                    Ok(value) => this.set_status(
+                        NotificationLevel::Info,
+                        tf!(
+                            k::TOOLS_HERMES_SUMMARY,
+                            provider = value["provider"]
+                                .as_str()
+                                .unwrap_or(raw(k::TOOLS_HERMES_UNSET)),
+                            model = value["default"]
+                                .as_str()
+                                .unwrap_or(raw(k::TOOLS_HERMES_UNSET))
+                        ),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_HERMES_READ_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             || hermes::get_model_config().map_err(|error| error.to_string()),
@@ -1252,6 +1997,39 @@ impl ToolsView {
                 return;
             }
         };
+        if self.workspace_remote {
+            let value = serde_json::to_value(&model).unwrap_or(Value::Null);
+            self.run_advanced(
+                "openclaw.defaultModel.set",
+                serde_json::json!({ "value": value }),
+                true,
+                cx,
+                |this, result, cx| match result
+                    .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()))
+                {
+                    Ok(outcome) => {
+                        let level = openclaw_outcome_level(&outcome);
+                        let message = openclaw_outcome_message(
+                            OutcomeKeys {
+                                plain: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED,
+                                backup: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_BACKUP,
+                                warnings: k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_WARNINGS,
+                                backup_warnings:
+                                    k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVED_BACKUP_WARNINGS,
+                            },
+                            outcome,
+                        );
+                        this.set_status(level, message, cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_OPENCLAW_DEFAULT_MODEL_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || openclaw::set_default_model(&model).map_err(|error| error.to_string()),
@@ -1292,6 +2070,38 @@ impl ToolsView {
             }
         };
         let env = openclaw::OpenClawEnvConfig { vars };
+        if self.workspace_remote {
+            let value = serde_json::to_value(&env).unwrap_or(Value::Null);
+            self.run_advanced(
+                "openclaw.env.set",
+                serde_json::json!({ "value": value }),
+                true,
+                cx,
+                |this, result, cx| match result
+                    .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()))
+                {
+                    Ok(outcome) => {
+                        let level = openclaw_outcome_level(&outcome);
+                        let message = openclaw_outcome_message(
+                            OutcomeKeys {
+                                plain: k::TOOLS_OPENCLAW_ENV_SAVED,
+                                backup: k::TOOLS_OPENCLAW_ENV_SAVED_BACKUP,
+                                warnings: k::TOOLS_OPENCLAW_ENV_SAVED_WARNINGS,
+                                backup_warnings: k::TOOLS_OPENCLAW_ENV_SAVED_BACKUP_WARNINGS,
+                            },
+                            outcome,
+                        );
+                        this.set_status(level, message, cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_OPENCLAW_ENV_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || openclaw::set_env_config(&env).map_err(|error| error.to_string()),
@@ -1331,6 +2141,38 @@ impl ToolsView {
                 return;
             }
         };
+        if self.workspace_remote {
+            let value = serde_json::to_value(&tools).unwrap_or(Value::Null);
+            self.run_advanced(
+                "openclaw.tools.set",
+                serde_json::json!({ "value": value }),
+                true,
+                cx,
+                |this, result, cx| match result
+                    .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()))
+                {
+                    Ok(outcome) => {
+                        let level = openclaw_outcome_level(&outcome);
+                        let message = openclaw_outcome_message(
+                            OutcomeKeys {
+                                plain: k::TOOLS_OPENCLAW_TOOLS_SAVED,
+                                backup: k::TOOLS_OPENCLAW_TOOLS_SAVED_BACKUP,
+                                warnings: k::TOOLS_OPENCLAW_TOOLS_SAVED_WARNINGS,
+                                backup_warnings: k::TOOLS_OPENCLAW_TOOLS_SAVED_BACKUP_WARNINGS,
+                            },
+                            outcome,
+                        );
+                        this.set_status(level, message, cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_OPENCLAW_TOOLS_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || openclaw::set_tools_config(&tools).map_err(|error| error.to_string()),
@@ -1370,6 +2212,34 @@ impl ToolsView {
                 return;
             }
         };
+        if self.workspace_remote {
+            let value = serde_json::to_value(&model).unwrap_or(Value::Null);
+            self.run_advanced(
+                "hermes.models.set",
+                serde_json::json!({ "value": value }),
+                true,
+                cx,
+                |this, result, cx| match result
+                    .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()))
+                {
+                    Ok(outcome) => this.set_status(
+                        NotificationLevel::Success,
+                        hermes_outcome_message(
+                            k::TOOLS_HERMES_MODEL_SAVED,
+                            k::TOOLS_HERMES_MODEL_SAVED_BACKUP,
+                            outcome,
+                        ),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_HERMES_MODEL_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || hermes::set_model_config(&model).map_err(|error| error.to_string()),
@@ -1401,6 +2271,31 @@ impl ToolsView {
                 .content()
                 .to_string(),
         };
+        if self.workspace_remote {
+            let action = match kind {
+                hermes::MemoryKind::Memory => "hermes.memory.write",
+                hermes::MemoryKind::User => "hermes.user.write",
+            };
+            self.run_advanced(
+                action,
+                serde_json::json!({ "content": content }),
+                true,
+                cx,
+                |this, result, cx| match result {
+                    Ok(_) => this.set_status(
+                        NotificationLevel::Success,
+                        t(k::TOOLS_HERMES_MEMORY_SAVED),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_HERMES_MEMORY_SAVE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || hermes::write_memory(kind, &content).map_err(|error| error.to_string()),
@@ -1425,6 +2320,48 @@ impl ToolsView {
             hermes::MemoryKind::Memory => !limits.memory_enabled,
             hermes::MemoryKind::User => !limits.user_enabled,
         };
+        if self.workspace_remote {
+            let action = match (kind, target) {
+                (hermes::MemoryKind::Memory, true) => "hermes.memory.enable",
+                (hermes::MemoryKind::Memory, false) => "hermes.memory.disable",
+                (hermes::MemoryKind::User, true) => "hermes.user.enable",
+                (hermes::MemoryKind::User, false) => "hermes.user.disable",
+            };
+            self.run_advanced(
+                action,
+                Value::Null,
+                true,
+                cx,
+                move |this, result, cx| match result {
+                    Ok(value) => {
+                        let outcome = serde_json::from_value(value["outcome"].clone());
+                        match outcome {
+                            Ok(outcome) => this.set_status(
+                                NotificationLevel::Success,
+                                hermes_outcome_message(
+                                    k::TOOLS_HERMES_MEMORY_TOGGLE_SAVED,
+                                    k::TOOLS_HERMES_MEMORY_TOGGLE_SAVED_BACKUP,
+                                    outcome,
+                                ),
+                                cx,
+                            ),
+                            Err(error) => this.set_status(
+                                NotificationLevel::Error,
+                                tf!(k::TOOLS_HERMES_MEMORY_TOGGLE_FAILED, error = error),
+                                cx,
+                            ),
+                        }
+                        this.refresh_advanced_configs(cx);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::TOOLS_HERMES_MEMORY_TOGGLE_FAILED, error = error),
+                        cx,
+                    ),
+                },
+            );
+            return;
+        }
         self.run_io(
             cx,
             move || {
@@ -1492,6 +2429,27 @@ impl ToolsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let app = row.app;
+        let open_button = if self.workspace_remote {
+            components::disabled_button(
+                format!("open-config-{}", row.app.as_str()),
+                t(k::TOOLS_ACTION_OPEN),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+                false,
+            )
+            .into_any_element()
+        } else {
+            components::button(
+                format!("open-config-{}", row.app.as_str()),
+                t(k::TOOLS_ACTION_OPEN),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.open_config_dir(app, cx);
+            }))
+            .into_any_element()
+        };
         components::card()
             .flex_row()
             .items_center()
@@ -1537,19 +2495,7 @@ impl ToolsView {
                             t(k::TOOLS_CONFIG_MISSING)
                         },
                     ))
-                    .child(
-                        components::button(
-                            format!("open-config-{}", row.app.as_str()),
-                            t(k::TOOLS_ACTION_OPEN),
-                            ButtonTone::Neutral,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.open_config_dir(app, cx);
-                            },
-                        )),
-                    ),
+                    .child(open_button),
             )
     }
 
@@ -1814,6 +2760,9 @@ impl ToolsView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if self.workspace_remote && ix == 2 {
+            return gpui::Empty.into_any_element();
+        }
         let block = div().w_full().pb_4();
         match ix {
             0 => {
@@ -2862,6 +3811,9 @@ impl Render for ToolsView {
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
+                        if !this.workspace_available {
+                            return;
+                        }
                         this.reload(cx);
                         this.set_status(
                             NotificationLevel::Success,
@@ -2982,61 +3934,6 @@ fn config_dir(app: AppType) -> Result<PathBuf, AppError> {
         .config_dir()
 }
 
-fn config_status(app: &Arc<AppState>, app_type: AppType) -> Result<(bool, String), AppError> {
-    let (exists, path) = match app_type {
-        AppType::Claude => {
-            let status = ochub_core::paths::get_claude_config_status();
-            (status.exists, status.path)
-        }
-        AppType::ClaudeDesktop => {
-            let status = claude_desktop::get_status(&app.db)?;
-            (
-                status.configured,
-                status.config_library_path.unwrap_or_default(),
-            )
-        }
-        AppType::Codex => {
-            let auth_path = codex::get_codex_auth_path();
-            let config_text = codex::read_codex_config_text().unwrap_or_default();
-            (
-                auth_path.exists() || !config_text.trim().is_empty(),
-                codex::get_codex_config_dir().to_string_lossy().to_string(),
-            )
-        }
-        AppType::GrokBuild => {
-            let config_path = ochub_core::apps::grokbuild::get_grok_config_path();
-            (
-                config_path.exists(),
-                ochub_core::apps::grokbuild::get_grok_config_dir()
-                    .to_string_lossy()
-                    .to_string(),
-            )
-        }
-        AppType::OpenCode => {
-            let config_path = opencode::get_opencode_config_path();
-            (
-                config_path.exists(),
-                opencode::get_opencode_dir().to_string_lossy().to_string(),
-            )
-        }
-        AppType::OpenClaw => {
-            let config_path = openclaw::get_openclaw_config_path();
-            (
-                config_path.exists(),
-                openclaw::get_openclaw_dir().to_string_lossy().to_string(),
-            )
-        }
-        AppType::Hermes => {
-            let config_path = hermes::get_hermes_config_path();
-            (
-                config_path.exists(),
-                hermes::get_hermes_dir().to_string_lossy().to_string(),
-            )
-        }
-    };
-    Ok((exists, path))
-}
-
 /// One catalog entry per reading, rather than a template with "enabled" and
 /// "auto-sync on" dropped into it: those are clauses, and a translation has to
 /// be free to reorder or reword the whole sentence.
@@ -3152,26 +4049,23 @@ fn expand_user_path(raw: &str) -> Option<PathBuf> {
     Some(PathBuf::from(trimmed))
 }
 
-fn load_db_backup_rows() -> Result<Vec<BackupRow>, AppError> {
-    let value = serde_json::to_value(ochub_core::Database::list_backups()?)
-        .map_err(|e| AppError::Message(tf!(k::TOOLS_DB_SERIALIZE_FAILED, error = e)))?;
-    let Some(array) = value.as_array() else {
-        return Ok(Vec::new());
-    };
-    Ok(array
-        .iter()
-        .filter_map(|item| {
-            Some(BackupRow {
-                filename: item.get("filename")?.as_str()?.to_string(),
-                size_bytes: item.get("sizeBytes")?.as_u64().unwrap_or_default(),
-                created_at: item
-                    .get("createdAt")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            })
+fn backup_rows(entries: Vec<ochub_core::db::BackupEntry>) -> Vec<BackupRow> {
+    entries
+        .into_iter()
+        .map(|entry| BackupRow {
+            filename: entry.filename,
+            size_bytes: entry.size_bytes,
+            created_at: entry.created_at,
         })
-        .collect())
+        .collect()
+}
+
+fn pretty_or_empty(value: Value) -> String {
+    if value.is_null() {
+        "{}".to_string()
+    } else {
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+    }
 }
 
 fn open_path(path: &Path) -> Result<(), AppError> {

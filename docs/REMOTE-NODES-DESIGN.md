@@ -1,22 +1,23 @@
 # OcHub Remote Nodes / Fleet 设计方案
 
-> 状态：**架构已落地；Phase 0 / Phase 1 已实现并验收，Phase 2 / Fleet 按本文边界演进**
+> 状态：**Phase 0 / Phase 1 / 现有桌面业务页面的 Phase 2 已实现；可靠性增强与 Fleet 按本文边界演进**
 >
 > 目标：让 OcHub 桌面版通过 SSH 安全控制只安装了 `ochcli` 的无桌面环境
 >
-> 最后更新：**2026-07-30**
+> 最后更新：**2026-07-31**
 
 本文是架构、协议与安全边界设计。面向用户的安装、WSL 配置、SSH Host Key 核对、
 添加节点、切换 Provider 和故障排查步骤，请阅读
 [远程节点使用指南](https://docs.ochub.org/zh/guides/remote-nodes)。
 
 当前实现已覆盖版本化 SSH stdio 协议、稳定节点身份、远端策略、系统 OpenSSH
-连接与 Host Key 固定、daemon owner 转发、Remote Nodes 桌面工作区、Provider
-plan/apply、Gateway 生命周期、operation journal、跨 SSH 会话幂等恢复和
-`remote-desktop` 审计。Phase 2 中更低频或高风险的 Provider Secret 编辑、
-MCP/Skills、Usage/Sessions、rollback，以及 Phase 3 Fleet 批量编排仍按本文定义的
-typed method、WorkspaceBackend 和逐节点 journal 边界继续扩展，不通过通用 Shell
-或危险降级提前开放。
+连接与 Host Key 固定、daemon owner 转发、Remote Nodes 桌面工作区、operation
+journal、跨 SSH 会话幂等恢复和 `remote-desktop` 审计。现有适用于无桌面节点的
+Provider、MCP、Skills、Usage/Pricing、Sessions/全文索引、Network、Settings、
+Sync/Backup、Tools/高级维护、Update、Gateway/Station 页面均由同一
+`WorkspaceBackend` 在本机和远端执行。后续的 rollback、长任务事件、显式文件传输、
+Gateway Tunnel 和 Fleet 批量编排仍按本文的 typed method 与逐节点 journal 边界演进，
+不通过通用 Shell 或危险降级提前开放。
 
 ## 1. 摘要
 
@@ -246,9 +247,9 @@ crates/protocol/
 协议使用 UTF-8 JSON Lines，一行一个 Frame：
 
 ```json
-{"type":"hello","protocolMin":1,"protocolMax":1,"clientVersion":"0.5.0","locale":"zh-CN"}
-{"type":"helloAck","protocolVersion":1,"serverVersion":"0.5.0","node":{"id":"...","hostname":"prod-gpu-01","os":"linux","arch":"x86_64"},"capabilities":["status.read","provider.read","provider.write"]}
-{"type":"request","requestId":"...","method":"provider.switch.plan","params":{"app":"codex","providerId":"team"}}
+{"type":"hello","protocolMin":2,"protocolMax":2,"clientVersion":"0.5.0","locale":"zh-CN"}
+{"type":"helloAck","protocolVersion":2,"serverVersion":"0.5.0","node":{"id":"...","hostname":"prod-gpu-01","os":"linux","arch":"x86_64"},"capabilities":["status.read","provider.read","provider.write","provider.network"]}
+{"type":"request","protocolVersion":2,"requestId":"...","method":"provider.switch.plan","params":{"app":"codex","providerId":"team"}}
 {"type":"response","requestId":"...","ok":true,"data":{},"warnings":[]}
 {"type":"event","requestId":"...","event":"progress","stage":"write-live-config","current":2,"total":3}
 {"type":"cancel","requestId":"..."}
@@ -683,17 +684,63 @@ crates/app/src/app_ui.rs
 完成条件：用户可以在桌面版连接无头主机，安全预览并切换远端 Codex/Claude
 Provider，且远端 Gateway 能由 daemon 持续运行。
 
-### Phase 2：完整远程工作区（架构边界已落地，功能渐进迁移）
+### Phase 2：完整远程工作区（现有无桌面业务页面已完成）
 
-- 全局 Local/Remote 目标选择器。
-- Provider 编辑和安全 Secret 输入。
-- MCP、Skills。
-- Usage、Sessions。
-- operation inspect/recover/rollback。
-- 可选 Gateway SSH Tunnel。
-- 更完整的 progress 和 invalidation。
+目标不是在 Remote Nodes 管理页继续堆叠快捷操作，而是让工作区选择器决定正常 GUI
+页面背后的 Backend。除纯桌面外观、窗口、托盘等控制端能力外，远端只安装
+`ochcli`/`ochubd` 时应具备与本机相同的管理面。
 
-完成条件：高频桌面功能在本机与远端拥有一致体验。
+迁移范围与完成状态：
+
+1. Provider 全功能：CRUD、排序、复制、原生配置导入/同步、公共配置、端点、测速、
+   模型、余额/额度、Auth 和受 Policy 保护的 Secret 写入。
+2. App Settings 和桌面现有 Gateway/Station 全功能，包括应用连接信息。
+3. MCP、Skills。
+4. Usage、Pricing、Sessions 和 Session Index。
+5. Tools、环境冲突、应用专项高级配置。
+6. Settings、Network、Sync、Backup、Migration 和远端 Update。
+7. operation list/inspect 与 mutation journal。
+
+当前开发状态：
+
+- Provider 已覆盖 CRUD、排序、复制、原生配置同步、公共配置、端点、测速、模型、
+  余额/额度和受策略保护的 Secret 写入。
+- Provider 编辑使用 JSON Merge Patch，未修改的 Secret 不需要从远端读回。
+- 直接 mutation 要求 idempotency key；Secret 写入由 `allowSecretsWrite` 单独授权。
+- 工作区下拉驱动正常 GUI，而不是远程节点页里的另一套快捷操作。
+- MCP 列表、添加/编辑、删除、应用开关、导入与同步已通过同一 Backend，并使用
+  Merge Patch 保留未回传的 Secret。
+- Skills 列表、市场搜索、仓库发现、安装/卸载/更新、应用开关和仓库管理已通过
+  `WorkspaceBackend`；远端技能目录不会错误地在控制端 Finder 中打开。
+- Usage 摘要、趋势、Provider/模型统计、请求日志/详情、来源同步、定价覆盖与默认倍率
+  已通过 `WorkspaceBackend`；`ochcli` 新增此前 GUI 独有的定价默认值读写。
+- Sessions 列表、完整消息、元数据/全文搜索、索引构建/维护/删除与会话删除已通过
+  `WorkspaceBackend`；远程作用域不会读取控制端会话目录或索引。
+- Gateway Station 列表、新建、Merge Patch 编辑、启停、删除、端点探测、模型发现和
+  应用绑定、Provider 导入、连接信息已通过 `WorkspaceBackend`；删除操作在 core 层
+  拒绝仍被应用引用的 Station。
+- Network proxy、通用 Settings/App Settings、数据目录、cc-switch migration、
+  WebDAV/S3 Sync、备份/恢复、SQL 导入导出全部在所选节点执行；远端路径不会在控制端
+  展开。
+- Tools 的 CLI 生命周期、环境冲突、Claude/Codex/OpenClaw/Hermes 高级维护以及 About
+  页的更新检查/安装已使用受限 typed action；桌面登录项、托盘、主题和打开本地文件夹
+  保持控制端语义。
+- 高风险恢复、数据导入和更新安装分别要求 `backup.restore` / `data.import` /
+  `update.install` capability；新 Secret 写入仍要求 `allowSecretsWrite`。
+- 协议协商范围为 v1–v2，新增方法依赖 capability；旧 `ochcli` 可以继续建立连接，
+  但完整工作区需要桌面端、`ochcli` 和 `ochubd` 同步升级。
+
+完成条件：所有适用于无桌面环境的 GUI 管理能力在本机与远端拥有一致体验；页面通过
+capability 表达平台或版本差异，而不是退回独立的远程快捷面板。
+
+### Phase 2.1：可靠性与数据面增强（后续演进）
+
+- operation recover/rollback。
+- 长任务 progress/cancel 与主动 cache invalidation event。
+- 明确的远端文件上传/下载，不把控制端路径误当作远端路径。
+- 可选、显式、可停止的 Gateway SSH Tunnel。
+- 若未来新增低层 Channel/Route/Rule/Key 桌面页面，同步实现其远端 Backend；现有
+  `ochcli gateway channel/route/key` 命令本身不通过通用 Shell 暴露。
 
 ### Phase 3：Fleet（后续演进）
 
@@ -793,5 +840,6 @@ OcHub 已经具备实现 Remote Nodes 所需的主要业务基础：共享 core�
 3. 将桌面 View 从直接依赖本地 `AppState` 渐进迁移到 Local/Remote Backend。
 4. 以 plan、revision、idempotency 和审计约束远程 mutation。
 
-单节点 MVP 应优先打通“连接节点 → 查看状态 → 预览并切换 Provider → 管理 Gateway”
-这一完整闭环；随后再扩展到完整远程工作区和多节点 Fleet。
+单节点 MVP 已打通“连接节点 → 查看状态 → 预览并切换 Provider → 管理 Gateway”的
+基础闭环。当前优先级是完成正常 GUI 页面的 Local/Remote Backend 迁移；只有单节点
+达到适用于无桌面环境的功能对等后，才进入多节点 Fleet。

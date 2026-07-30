@@ -12,14 +12,80 @@ pub enum Capability {
     DoctorRun,
     #[serde(rename = "app.read")]
     AppRead,
+    #[serde(rename = "app.write")]
+    AppWrite,
     #[serde(rename = "provider.read")]
     ProviderRead,
     #[serde(rename = "provider.write")]
     ProviderWrite,
+    #[serde(rename = "provider.network")]
+    ProviderNetwork,
+    #[serde(rename = "mcp.read")]
+    McpRead,
+    #[serde(rename = "mcp.write")]
+    McpWrite,
+    #[serde(rename = "skill.read")]
+    SkillRead,
+    #[serde(rename = "skill.write")]
+    SkillWrite,
+    #[serde(rename = "skill.network")]
+    SkillNetwork,
+    #[serde(rename = "usage.read")]
+    UsageRead,
+    #[serde(rename = "usage.write")]
+    UsageWrite,
+    #[serde(rename = "usage.network")]
+    UsageNetwork,
+    #[serde(rename = "session.read")]
+    SessionRead,
+    #[serde(rename = "session.write")]
+    SessionWrite,
+    #[serde(rename = "proxy.read")]
+    ProxyRead,
+    #[serde(rename = "proxy.write")]
+    ProxyWrite,
+    #[serde(rename = "proxy.network")]
+    ProxyNetwork,
+    #[serde(rename = "settings.read")]
+    SettingsRead,
+    #[serde(rename = "settings.write")]
+    SettingsWrite,
+    #[serde(rename = "sync.read")]
+    SyncRead,
+    #[serde(rename = "sync.write")]
+    SyncWrite,
+    #[serde(rename = "sync.network")]
+    SyncNetwork,
+    #[serde(rename = "backup.read")]
+    BackupRead,
+    #[serde(rename = "backup.write")]
+    BackupWrite,
+    #[serde(rename = "backup.restore")]
+    BackupRestore,
+    #[serde(rename = "tool.read")]
+    ToolRead,
+    #[serde(rename = "tool.write")]
+    ToolWrite,
+    #[serde(rename = "update.read")]
+    UpdateRead,
+    #[serde(rename = "update.install")]
+    UpdateInstall,
+    #[serde(rename = "data.read")]
+    DataRead,
+    #[serde(rename = "data.write")]
+    DataWrite,
+    #[serde(rename = "data.import")]
+    DataImport,
     #[serde(rename = "gateway.read")]
     GatewayRead,
     #[serde(rename = "gateway.lifecycle")]
     GatewayLifecycle,
+    #[serde(rename = "station.read")]
+    StationRead,
+    #[serde(rename = "station.write")]
+    StationWrite,
+    #[serde(rename = "station.network")]
+    StationNetwork,
     #[serde(rename = "operation.read")]
     OperationRead,
     #[serde(rename = "daemon.lifecycle")]
@@ -32,10 +98,43 @@ impl Capability {
             Self::StatusRead => "status.read",
             Self::DoctorRun => "doctor.run",
             Self::AppRead => "app.read",
+            Self::AppWrite => "app.write",
             Self::ProviderRead => "provider.read",
             Self::ProviderWrite => "provider.write",
+            Self::ProviderNetwork => "provider.network",
+            Self::McpRead => "mcp.read",
+            Self::McpWrite => "mcp.write",
+            Self::SkillRead => "skill.read",
+            Self::SkillWrite => "skill.write",
+            Self::SkillNetwork => "skill.network",
+            Self::UsageRead => "usage.read",
+            Self::UsageWrite => "usage.write",
+            Self::UsageNetwork => "usage.network",
+            Self::SessionRead => "session.read",
+            Self::SessionWrite => "session.write",
+            Self::ProxyRead => "proxy.read",
+            Self::ProxyWrite => "proxy.write",
+            Self::ProxyNetwork => "proxy.network",
+            Self::SettingsRead => "settings.read",
+            Self::SettingsWrite => "settings.write",
+            Self::SyncRead => "sync.read",
+            Self::SyncWrite => "sync.write",
+            Self::SyncNetwork => "sync.network",
+            Self::BackupRead => "backup.read",
+            Self::BackupWrite => "backup.write",
+            Self::BackupRestore => "backup.restore",
+            Self::ToolRead => "tool.read",
+            Self::ToolWrite => "tool.write",
+            Self::UpdateRead => "update.read",
+            Self::UpdateInstall => "update.install",
+            Self::DataRead => "data.read",
+            Self::DataWrite => "data.write",
+            Self::DataImport => "data.import",
             Self::GatewayRead => "gateway.read",
             Self::GatewayLifecycle => "gateway.lifecycle",
+            Self::StationRead => "station.read",
+            Self::StationWrite => "station.write",
+            Self::StationNetwork => "station.network",
             Self::OperationRead => "operation.read",
             Self::DaemonLifecycle => "daemon.lifecycle",
         }
