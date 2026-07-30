@@ -2932,10 +2932,6 @@ impl AppRoot {
             .shadow_xs()
             .child(self.render_sidebar_drag_region(cx))
             .child(navigation)
-            .child(crate::scrollbar::VerticalScrollbar::new(
-                "sidebar-navigation-scrollbar",
-                self.sidebar_scroll_handle.clone(),
-            ))
     }
 
     fn render_provider_card(

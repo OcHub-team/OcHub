@@ -7,14 +7,16 @@
 //!
 //! One batched form, like [`crate::settings_view::sync`]: `enabled` and
 //! `protocol` live in the same draft as the credential fields rather than
-//! applying instantly, specifically so this page can end in one
-//! [`components::commit_bar`] with no exception to "never pair a commit bar
-//! with a row that applies immediately".
+//! applying instantly, specifically so Discard/Save (in the page header) act
+//! on the whole batch with no exception to "never pair a commit control with
+//! a row that applies immediately".
 
-use gpui::{AnyElement, App, Context, Entity, ScrollHandle, SharedString, Window, div, prelude::*};
+use gpui::{
+    AnyElement, App, Context, Entity, ScrollHandle, SharedString, Window, div, prelude::*, px,
+};
 use ochub_core::settings::{self, AppSettings, ProxyProtocol, ProxySettings};
 
-use crate::components::{self, ButtonTone};
+use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{Key, k, raw, t};
 use crate::layout;
 use crate::notifications::NotificationLevel;
@@ -340,7 +342,7 @@ impl NetworkView {
         });
 
         let card = components::card()
-            .gap_4()
+            .gap_3()
             .child(layout::switch_row(
                 "network-proxy-enabled",
                 t(k::NETWORK_FIELD_ENABLED_LABEL),
@@ -362,44 +364,67 @@ impl NetworkView {
                     move |index, window, cx| protocol_select(&index, window, cx),
                 ),
             ))
-            .child(components::field_with_error(
-                t(k::NETWORK_FIELD_HOST_LABEL),
-                true,
-                Some(t(k::NETWORK_FIELD_HOST_DESC)),
-                self.host_error.map(|error| {
-                    error_text(
-                        error,
-                        k::NETWORK_ERROR_HOST_REQUIRED,
-                        k::NETWORK_ERROR_HOST_REQUIRED,
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_3()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(200.))
+                            .child(components::field_with_error(
+                                t(k::NETWORK_FIELD_HOST_LABEL),
+                                true,
+                                Some(t(k::NETWORK_FIELD_HOST_DESC)),
+                                self.host_error.map(|error| {
+                                    error_text(
+                                        error,
+                                        k::NETWORK_ERROR_HOST_REQUIRED,
+                                        k::NETWORK_ERROR_HOST_REQUIRED,
+                                    )
+                                }),
+                                div().w_full().child(self.host_input.clone()),
+                            )),
                     )
-                }),
-                div().w_full().child(self.host_input.clone()),
-            ))
-            .child(components::field_with_error(
-                t(k::NETWORK_FIELD_PORT_LABEL),
-                true,
-                Some(t(k::NETWORK_FIELD_PORT_DESC)),
-                self.port_error.map(|error| {
-                    error_text(
-                        error,
-                        k::NETWORK_ERROR_PORT_REQUIRED,
-                        k::NETWORK_ERROR_PORT_INVALID,
-                    )
-                }),
-                div().w_full().child(self.port_input.clone()),
-            ))
-            .child(components::field(
-                t(k::NETWORK_FIELD_USERNAME_LABEL),
-                false,
-                Some(t(k::NETWORK_FIELD_USERNAME_DESC)),
-                div().w_full().child(self.username_input.clone()),
-            ))
-            .child(components::field(
-                t(k::NETWORK_FIELD_PASSWORD_LABEL),
-                false,
-                Some(t(k::NETWORK_FIELD_PASSWORD_DESC)),
-                div().w_full().child(self.password_input.clone()),
-            ));
+                    .child(div().w(px(120.)).child(components::field_with_error(
+                        t(k::NETWORK_FIELD_PORT_LABEL),
+                        true,
+                        Some(t(k::NETWORK_FIELD_PORT_DESC)),
+                        self.port_error.map(|error| {
+                            error_text(
+                                error,
+                                k::NETWORK_ERROR_PORT_REQUIRED,
+                                k::NETWORK_ERROR_PORT_INVALID,
+                            )
+                        }),
+                        div().w_full().child(self.port_input.clone()),
+                    ))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_3()
+                    .w_full()
+                    .child(div().flex_1().min_w(px(180.)).child(components::field(
+                        t(k::NETWORK_FIELD_USERNAME_LABEL),
+                        false,
+                        Some(t(k::NETWORK_FIELD_USERNAME_DESC)),
+                        div().w_full().child(self.username_input.clone()),
+                    )))
+                    .child(div().flex_1().min_w(px(180.)).child(components::field(
+                        t(k::NETWORK_FIELD_PASSWORD_LABEL),
+                        false,
+                        Some(t(k::NETWORK_FIELD_PASSWORD_DESC)),
+                        div().w_full().child(self.password_input.clone()),
+                    ))),
+            );
         section(
             t(k::NETWORK_SECTION_CONNECTION_TITLE),
             t(k::NETWORK_SECTION_CONNECTION_DESC),
@@ -432,30 +457,78 @@ impl Render for NetworkView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty = self.dirty(cx);
         let saving = self.saving;
+        let live = dirty && !saving;
         let discard = cx.listener(|this: &mut Self, _: &(), _window, cx| this.discard(cx));
         let save = cx.listener(|this: &mut Self, _: &(), _window, cx| this.save(cx));
 
+        let discard_button = if live {
+            components::button(
+                "network-proxy-discard",
+                t(k::COMMON_COMMIT_BAR_DISCARD),
+                ButtonTone::Neutral,
+                ButtonSize::Md,
+            )
+            .on_click(move |_event, window, cx| discard(&(), window, cx))
+            .into_any_element()
+        } else {
+            components::disabled_button(
+                "network-proxy-discard",
+                t(k::COMMON_COMMIT_BAR_DISCARD),
+                ButtonTone::Neutral,
+                ButtonSize::Md,
+                true,
+            )
+            .into_any_element()
+        };
+        let save_label = if saving {
+            t(k::COMMON_COMMIT_BAR_SAVING)
+        } else {
+            t(k::COMMON_COMMIT_BAR_SAVE)
+        };
+        let save_button = if live {
+            components::button(
+                "network-proxy-save",
+                save_label,
+                ButtonTone::Primary,
+                ButtonSize::Md,
+            )
+            .on_click(move |_event, window, cx| save(&(), window, cx))
+            .into_any_element()
+        } else {
+            components::disabled_button(
+                "network-proxy-save",
+                save_label,
+                ButtonTone::Primary,
+                ButtonSize::Md,
+                true,
+            )
+            .into_any_element()
+        };
+        let actions = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .justify_end()
+            .gap_2()
+            .child(discard_button)
+            .child(save_button);
+
         let column = layout::content_column()
+            .max_w(px(640.))
             .child(self.render_connection(cx))
             .child(self.render_test(cx));
 
         layout::page()
             .relative()
-            .child(layout::page_header(
-                t(k::NETWORK_PAGE_TITLE),
-                Some(t(k::NETWORK_PAGE_DESC)),
-            ))
+            .child(
+                layout::page_header(t(k::NETWORK_PAGE_TITLE), Some(t(k::NETWORK_PAGE_DESC)))
+                    .child(actions),
+            )
             .child(layout::scroll_body(
                 "network-proxy-body",
                 &self.scroll,
                 column,
-            ))
-            .child(components::commit_bar(
-                "network-proxy",
-                dirty,
-                saving,
-                move |window, cx| discard(&(), window, cx),
-                move |window, cx| save(&(), window, cx),
             ))
     }
 }
