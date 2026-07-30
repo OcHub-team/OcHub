@@ -100,6 +100,7 @@
 "shell.sidebar.nav.gallery" = "Component gallery"
 "shell.sidebar.nav.gateway" = "Model providers"
 "shell.sidebar.nav.mcp" = "MCP servers"
+"shell.sidebar.nav.proxy" = "Network proxy"
 "shell.sidebar.nav.sessions" = "Sessions"
 "shell.sidebar.nav.settings" = "Settings"
 "shell.sidebar.nav.skills" = "Skills"

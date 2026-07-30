@@ -15,6 +15,7 @@ pub mod config;
 pub mod env;
 pub mod mcp;
 pub mod model_fetch;
+pub mod network_proxy;
 pub mod omo;
 pub mod pricing_catalog;
 pub mod provider;

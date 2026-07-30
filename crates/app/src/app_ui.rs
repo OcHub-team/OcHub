@@ -31,6 +31,7 @@ use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::mcp_view::McpView;
+use crate::network_view::NetworkView;
 use crate::notifications::{NotificationHost, NotificationLevel, ToastSource};
 use crate::provider_editor::{EditorEvent, ProviderEditor};
 use crate::sessions_view::SessionsView;
@@ -132,6 +133,7 @@ enum Section {
     Themes,
     Settings,
     Gateway,
+    Network,
     /// Dev-only component gallery (visible with MS_GALLERY=1).
     Gallery,
 }
@@ -151,6 +153,7 @@ impl Section {
             "theme" | "themes" | "appearance" => Self::Themes,
             "settings" | "setting" => Self::Settings,
             "gateway" => Self::Gateway,
+            "network" | "proxy" => Self::Network,
             "gallery" => Self::Gallery,
             "about" => Self::About,
             _ => Self::Providers,
@@ -203,6 +206,7 @@ pub struct AppRoot {
     ccswitch_importing: bool,
     settings_view: Entity<SettingsView>,
     gateway_view: Entity<GatewayView>,
+    network_view: Entity<NetworkView>,
     mcp_view: Entity<McpView>,
     skills_view: Entity<SkillsView>,
     usage_view: Entity<UsageView>,
@@ -864,6 +868,7 @@ impl AppRoot {
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
         let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
+        let network_view = cx.new(NetworkView::new);
         let mcp_view = cx.new(|cx| McpView::new(app.clone(), cx));
         let notifications = cx.new(|_| NotificationHost::new());
         let skills_view = cx.new(|cx| SkillsView::new(app.clone(), cx));
@@ -909,6 +914,7 @@ impl AppRoot {
             ccswitch_importing: false,
             settings_view,
             gateway_view,
+            network_view,
             mcp_view,
             skills_view,
             usage_view,
@@ -996,6 +1002,7 @@ impl AppRoot {
             Section::Mcp => this.mcp_view.update(cx, |v, cx| v.reload(cx)),
             Section::Skills => this.skills_view.update(cx, |v, cx| v.reload(cx)),
             Section::Gateway => this.gateway_view.update(cx, |v, cx| v.reload(cx)),
+            Section::Network => this.network_view.update(cx, |v, cx| v.reload(cx)),
             Section::Usage => this.usage_view.update(cx, |v, cx| v.activate(cx)),
             Section::Sessions => this.sessions_view.update(cx, |v, cx| v.reload(cx)),
             Section::Tools => this.tools_view.update(cx, |v, cx| v.reload(cx)),
@@ -1042,6 +1049,7 @@ impl AppRoot {
     fn connect_toast_sources(&self, cx: &mut Context<Self>) {
         Self::observe_toasts(&self.settings_view, &self.notifications, cx);
         Self::observe_toasts(&self.gateway_view, &self.notifications, cx);
+        Self::observe_toasts(&self.network_view, &self.notifications, cx);
         Self::observe_toasts(&self.mcp_view, &self.notifications, cx);
         Self::observe_toasts(&self.skills_view, &self.notifications, cx);
         Self::observe_toasts(&self.usage_view, &self.notifications, cx);
@@ -1053,6 +1061,7 @@ impl AppRoot {
 
         Self::forward_toast(&self.settings_view, &self.notifications, cx);
         Self::forward_toast(&self.gateway_view, &self.notifications, cx);
+        Self::forward_toast(&self.network_view, &self.notifications, cx);
         Self::forward_toast(&self.mcp_view, &self.notifications, cx);
         Self::forward_toast(&self.skills_view, &self.notifications, cx);
         Self::forward_toast(&self.usage_view, &self.notifications, cx);
@@ -1066,6 +1075,7 @@ impl AppRoot {
         match section {
             Section::Settings => Self::forward_toast(&self.settings_view, &self.notifications, cx),
             Section::Gateway => Self::forward_toast(&self.gateway_view, &self.notifications, cx),
+            Section::Network => Self::forward_toast(&self.network_view, &self.notifications, cx),
             Section::Mcp => Self::forward_toast(&self.mcp_view, &self.notifications, cx),
             Section::Skills => Self::forward_toast(&self.skills_view, &self.notifications, cx),
             Section::Usage => Self::forward_toast(&self.usage_view, &self.notifications, cx),
@@ -1175,6 +1185,7 @@ impl AppRoot {
             Section::About => IconName::Diamond,
             Section::Settings => IconName::Settings,
             Section::Gateway => IconName::Cloud,
+            Section::Network => IconName::Globe,
             Section::Providers => IconName::Cloud,
             Section::Gallery => IconName::Layers,
         }
@@ -1306,6 +1317,7 @@ impl AppRoot {
                 Section::Mcp => self.mcp_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Skills => self.skills_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Gateway => self.gateway_view.update(cx, |v, cx| v.reload(cx)),
+                Section::Network => self.network_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Usage => self.usage_view.update(cx, |v, cx| v.activate(cx)),
                 Section::Sessions => self.sessions_view.update(cx, |v, cx| v.reload(cx)),
                 Section::Tools => self.tools_view.update(cx, |v, cx| v.reload(cx)),
@@ -2854,6 +2866,13 @@ impl AppRoot {
                         Section::Gateway,
                         appearance,
                         cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-network-proxy",
+                        raw(k::SHELL_SIDEBAR_NAV_PROXY),
+                        Section::Network,
+                        appearance,
+                        cx,
                     )),
             )
             .child(Self::render_sidebar_group(
@@ -3489,6 +3508,7 @@ impl AppRoot {
         match self.section {
             Section::Settings => self.settings_view.clone().into_any_element(),
             Section::Gateway => self.gateway_view.clone().into_any_element(),
+            Section::Network => self.network_view.clone().into_any_element(),
             Section::Mcp => self.mcp_view.clone().into_any_element(),
             Section::Skills => self.skills_view.clone().into_any_element(),
             Section::Usage => self.usage_view.clone().into_any_element(),

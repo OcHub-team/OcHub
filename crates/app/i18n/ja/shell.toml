@@ -100,6 +100,7 @@
 "shell.sidebar.nav.gallery" = "コンポーネントギャラリー"
 "shell.sidebar.nav.gateway" = "モデルプロバイダー"
 "shell.sidebar.nav.mcp" = "MCP サーバー"
+"shell.sidebar.nav.proxy" = "ネットワークプロキシ"
 "shell.sidebar.nav.sessions" = "セッション"
 "shell.sidebar.nav.settings" = "設定"
 "shell.sidebar.nav.skills" = "スキル"

@@ -288,6 +288,102 @@ impl S3SyncSettings {
     }
 }
 
+/// Which network protocol the app-wide outbound proxy speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyProtocol {
+    #[default]
+    Http,
+    Socks5,
+}
+
+impl ProxyProtocol {
+    fn scheme(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Socks5 => "socks5",
+        }
+    }
+}
+
+/// App-wide HTTP/SOCKS proxy for OcHub's own outbound traffic (update checks,
+/// model provider requests such as model listing/balance/subscription — not
+/// the Gateway's own reverse-proxy forwarding, which is unrelated traffic).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub protocol: ProxyProtocol,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+impl ProxySettings {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.host.trim().is_empty() {
+            return Err(AppError::localized(
+                "proxy.host.required",
+                "代理地址不能为空",
+                "Proxy host is required.",
+            ));
+        }
+        if self.port == 0 {
+            return Err(AppError::localized(
+                "proxy.port.required",
+                "代理端口不能为空",
+                "Proxy port is required.",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn normalize(&mut self) {
+        self.host = self.host.trim().to_string();
+        self.username = self.username.trim().to_string();
+    }
+
+    /// The proxy URL reqwest expects, or `None` when disabled/unset. Embeds
+    /// credentials in the URL so callers do not also need `basic_auth`.
+    pub fn url(&self) -> Option<String> {
+        if !self.enabled || self.host.trim().is_empty() || self.port == 0 {
+            return None;
+        }
+        let scheme = self.protocol.scheme();
+        if self.username.is_empty() {
+            Some(format!("{scheme}://{}:{}", self.host, self.port))
+        } else {
+            Some(format!(
+                "{scheme}://{}:{}@{}:{}",
+                percent_encode(&self.username),
+                percent_encode(&self.password),
+                self.host,
+                self.port
+            ))
+        }
+    }
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalMigrations {
@@ -481,6 +577,10 @@ pub struct AppSettings {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_migrations: Option<LocalMigrations>,
+
+    /// App-wide HTTP/SOCKS proxy for OcHub's own outbound requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxySettings>,
 }
 
 impl Default for AppSettings {
@@ -535,6 +635,7 @@ impl Default for AppSettings {
             session_index_auto_reclaim: true,
             session_index_disabled_at: None,
             local_migrations: None,
+            proxy: None,
         }
     }
 }
@@ -776,6 +877,9 @@ pub fn get_settings_for_frontend() -> AppSettings {
     if let Some(s3) = &mut settings.s3_sync {
         s3.secret_access_key.clear();
     }
+    if let Some(proxy) = &mut settings.proxy {
+        proxy.password.clear();
+    }
     settings.webdav_backup = None;
     settings
 }
@@ -787,7 +891,12 @@ pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
         log::warn!("设置锁已毒化，使用恢复值: {e}");
         e.into_inner()
     });
+    let proxy_changed = guard.proxy != new_settings.proxy;
     *guard = new_settings;
+    drop(guard);
+    if proxy_changed {
+        crate::http_client::reload();
+    }
     Ok(())
 }
 
@@ -803,7 +912,12 @@ where
     mutator(&mut next);
     next.normalize_paths();
     save_settings_file(&next)?;
+    let proxy_changed = guard.proxy != next.proxy;
     *guard = next;
+    drop(guard);
+    if proxy_changed {
+        crate::http_client::reload();
+    }
     Ok(())
 }
 

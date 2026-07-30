@@ -22,6 +22,7 @@ mod i18n;
 mod icons;
 mod layout;
 mod mcp_view;
+mod network_view;
 mod notifications;
 mod provider_editor;
 mod scrollbar;

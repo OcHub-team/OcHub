@@ -101,6 +101,7 @@
 "shell.sidebar.nav.gallery" = "组件画廊"
 "shell.sidebar.nav.gateway" = "模型供应商"
 "shell.sidebar.nav.mcp" = "MCP 服务器"
+"shell.sidebar.nav.proxy" = "网络代理"
 "shell.sidebar.nav.sessions" = "会话"
 "shell.sidebar.nav.settings" = "设置"
 "shell.sidebar.nav.skills" = "技能"
