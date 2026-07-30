@@ -43,6 +43,28 @@ sha256sum -c SHA256SUMS --ignore-missing
 gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
 ```
 
+## Headless CLI for remote nodes
+
+Every release also provides headless archives for macOS, Windows, and Linux.
+They contain:
+
+- `ochcli`, the command-line control surface and Remote Nodes protocol server.
+- `ochubd`, the persistent runtime owner used by `ochcli`.
+
+Keep both files from the same release in one directory. On Linux or WSL:
+
+```sh
+tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
+sudo install -m 0755 ochcli ochubd /usr/local/bin/
+ochcli version
+ochcli remote probe
+```
+
+The desktop starts `ochcli remote serve --stdio` through system OpenSSH when it
+connects; do not expose that protocol with a network listener. Continue with
+[Control remote nodes over SSH](/guides/remote-nodes) for SSH, WSL, host-key,
+provider-import, and switching instructions.
+
 ## macOS: approving the app on first launch
 
 OcHub is signed with a self-signed certificate and is not notarized by Apple.

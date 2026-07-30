@@ -1,0 +1,277 @@
+---
+title: SSH でリモートノードを操作する
+description: OcHub Desktop から WSL、開発マシン、ヘッドレスサーバーの接続切り替えと Gateway 操作を行います。
+audience: human
+sidebar:
+  order: 0
+---
+
+Remote Nodes を使うと、デスクトップ環境のないマシン上の OcHub 状態を 1 台の
+OcHub Desktop から操作できます。リモート側に必要なのは OpenSSH、`ochcli`、
+`ochubd` だけです。AI コーディングツール、設定、認証情報はリモート環境に残ります。
+
+特に **WSL、Linux 開発マシン、リモートワークステーション**で便利です。API
+エンドポイントを変えるたびに SSH ログインして設定ファイルを探す代わりに、OcHub で
+対象マシンを選び、リモート側にすでに存在する接続へ切り替えられます。
+
+## リモートノードを使う理由
+
+実行環境と認証情報の境界を保ちながら、1 つの画面から操作できます。
+
+- 開発マシン上の Claude Code、Codex、OpenCode などを手作業で編集せず切り替える。
+- 接続前にオンライン状態、`ochcli` バージョン、プラットフォームを確認する。
+- 適用前に、どのリモート設定が変更されるかをプレビューする。
+- リモート OcHub Gateway の起動・停止と診断を行う。
+- 既存の OpenSSH エイリアス、SSH Agent、ProxyJump、Keychain、ハードウェアキーを使う。
+
+OcHub を閉じてもツールがローカルへ移動することはありません。切り替えは**選択した
+リモートノード上**のネイティブ設定を書き換えるため、ツールはその後もリモートで動作します。
+
+## 現在リモート管理できるもの
+
+現在の Remote Nodes は次をサポートします。
+
+| 領域 | リモートで利用できる機能 |
+| --- | --- |
+| ノード | 状態、ホスト名、OS、アーキテクチャ、Node ID、`ochcli` バージョン、Owner、アプリ |
+| 接続 | 既存接続の一覧、現在値、切り替えプレビュー、適用 |
+| Gateway | 状態表示、起動、停止 |
+| 診断 | Doctor と SSH 診断 |
+| 監査 | 最近のリモート操作記録 |
+
+初期版は任意の Shell 実行を提供しません。リモート Provider の作成・編集、API Key
+転送、MCP/Skills、Session/Usage、バックアップ復元、更新インストール、Gateway
+トンネルもまだ対象外です。Provider は先にリモート側で追加またはインポートし、
+デスクトップからそれらを切り替えます。
+
+## 必要条件
+
+次を準備してください。
+
+- 操作側コンピューターに OcHub Desktop `0.4.20` 以降。
+- 操作側で system `ssh` と `ssh-keyscan` が利用可能。
+- リモート側で到達可能な OpenSSH Server が稼働。
+- リモート側に互換バージョンの `ochcli` と `ochubd`。両方を同じディレクトリに置く。
+- 対話的なパスワード入力なしで成功する SSH key または Agent 認証。OcHub は
+  `BatchMode=yes` を使用します。
+- 接続を切り替える場合、リモート OcHub DB に少なくとも 1 つ Provider が存在。
+
+操作側から、OcHub と同じ経路を先にテストします。
+
+```sh
+ssh -V
+ssh -o BatchMode=yes devbox ochcli remote probe
+```
+
+`devbox` は SSH エイリアスに置き換えます。2 番目のコマンドはパスワードや
+passphrase を要求せず、node、runtime、version、policy、capability を返す必要があります。
+
+## リモートへ ochcli をインストールする
+
+[最新リリース](https://github.com/OcHub-team/OcHub/releases/latest)からリモート環境用の
+headless CLI archive をダウンロードします。`ochcli` と `ochubd` が同梱されています。
+Linux または WSL では次のように配置できます。
+
+```sh
+tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
+sudo install -m 0755 ochcli ochubd /usr/local/bin/
+
+ochcli version
+ochcli remote probe
+```
+
+`/usr/local/bin` へ書き込めない場合は別の場所へ両方を置き、ノード追加時に
+`ochcli` の絶対パスを指定します。非対話 SSH の `PATH` は通常の terminal より短い
+ことがあるため、絶対パスは「ochcli not found」の確実な対処でもあります。
+
+ツールに既存の実設定がある場合は、接続前にリモート OcHub DB へインポートします。
+
+```sh
+ochcli app list
+ochcli provider import-live --app codex
+ochcli provider list --app codex
+```
+
+`codex` は対象 App ID に変更します。追加の接続を作成する場合は
+`ochcli provider add --help` を使います。Secret はデスクトップ経由ではなく
+リモートマシン上で入力してください。
+
+daemon を手動起動する必要はありません。通常の最初の Remote Nodes session が必要に
+応じて Owner を起動し、SSH control session が終了しても動作を続けます。ログイン時や
+boot 時に起動したい場合は次を実行します。
+
+```sh
+ochcli daemon install
+ochcli daemon start
+ochcli daemon status
+```
+
+## SSH 接続を準備する
+
+**操作側コンピューター**の SSH config に具体的な alias を追加します。
+
+```text
+Host devbox
+    HostName 192.0.2.40
+    User alice
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+```
+
+OcHub は `~/.ssh/config` とその `Include` を読みます。Windows では WSL 内の
+`/home/<user>/.ssh/config` ではなく、`%USERPROFILE%\.ssh\config` です。具体的な
+`Host` alias は追加ダイアログに表示されます。wildcard だけの block は既定値として
+使われますが、独立したマシンとしては表示されません。
+
+ProxyJump、SSH Agent、system keychain、ControlMaster、hardware key は system
+OpenSSH が処理します。OcHub を開く前に次が成功することを確認してください。
+
+```sh
+ssh -o BatchMode=yes devbox ochcli remote probe
+```
+
+## ノードを追加して接続する
+
+1. OcHub sidebar で **Remote nodes** を開きます。
+2. **Add** を選びます。操作側の SSH config から具体的な alias が一覧になります。
+3. alias を選んで **Add**、または左下の **Add manually** を選びます。
+4. 手動追加では表示名、SSH target、key scan 用の実 hostname/IP、port、リモート
+   `ochcli` path を入力します。
+5. OcHub が `ssh-keyscan` を実行し、key type と SHA256 fingerprint を表示します。
+   cloud console や管理者など信頼できる経路と照合します。
+6. 一致した場合だけ **Trust and connect** を選びます。
+
+承認した key は private permission の
+`~/.ochub/ssh/known_hosts` に保存されます。通常の
+`~/.ssh/known_hosts` も引き続き利用されます。OcHub が
+`StrictHostKeyChecking=no` を暗黙に使うことはありません。
+
+接続一覧には online 状態、`ochcli` version、platform、最終接続時刻が表示されます。
+sidebar 上部の workspace selector で **This Mac** と保存済み remote node を切り替えます。
+
+## リモートの Provider を切り替える
+
+1. workspace selector または Remote Nodes 一覧から対象 node を選びます。
+2. 接続後、変更するリモート App を選びます。
+3. 既存 Provider の **Preview switch** を選びます。
+4. target node、SSH alias、current provider、target provider、config path、revision を確認します。
+5. **Apply change** を選びます。
+6. refresh するか、リモートのツールから短い request を送り、新しい接続を確認します。
+
+適用直前に revision がもう一度確認されます。preview 後にツールや別 process が設定を
+変更した場合、最新状態を上書きせず apply が拒否されます。node を refresh し、
+現在値を確認してから新しい preview を作成してください。
+
+mutation には idempotency key と remote operation journal もあります。apply 中に
+SSH が切断された場合は、再接続後に **Recent operations** を確認してから再試行します。
+同じ write を盲目的に二重実行せず、保存済み結果を返せます。
+
+## Gateway と診断を操作する
+
+接続した node page には remote Gateway 状態が表示されます。起動するとリモート Owner
+上で動作し、停止はその node だけに影響します。WSL や開発マシン上の AI tool が同じ
+machine の loopback Gateway を使う構成に適しています。
+
+SSH control session は Gateway を操作側へ自動公開しません。操作側からアクセスする
+必要がある場合は、remote port を確認して別の明示的な tunnel を作成します。
+
+```sh
+ssh -N -L 8765:127.0.0.1:<remote-port> devbox
+```
+
+**Run diagnostics** は remote `ochcli doctor` と SSH session diagnostics をまとめます。
+Recent operations は actor、time、operation ID、outcome を表示しますが、Provider
+Secret をデスクトップへコピーしません。
+
+## WSL の設定例
+
+Windows 上の OcHub Desktop から WSL distribution を操作する場合：
+
+1. WSL 内で OpenSSH Server をインストールして起動します。
+
+   ```sh
+   sudo apt update
+   sudo apt install openssh-server
+   sudo service ssh start
+   ```
+
+   systemd が有効なら最後の代わりに
+   `sudo systemctl enable --now ssh` を使えます。
+
+2. 前述の手順で WSL 内へ `ochcli` と `ochubd` をインストールします。
+3. Windows から WSL Linux user への key 認証を設定します。
+4. alias を **Windows** の
+   `%USERPROFILE%\.ssh\config` に追加します。
+
+   ```text
+   Host wsl-dev
+       HostName 127.0.0.1
+       User <your-wsl-user>
+       Port 22
+       IdentityFile ~/.ssh/id_ed25519
+   ```
+
+5. PowerShell でテストします。
+
+   ```powershell
+   ssh -o BatchMode=yes wsl-dev ochcli remote probe
+   ```
+
+6. OcHub の Remote Nodes dialog から `wsl-dev` を追加します。
+
+Windows 側が port 22 を使用中なら WSL `sshd` を別 port にし、alias も合わせます。
+WSL distribution または `sshd` が停止中なら node は offline になります。OcHub は
+Windows OpenSSH を使い、`wsl.exe` を自動起動しません。
+
+Claude Code や Codex は Linux path、credential、session、process を含めて WSL 内に
+置いたまま、Provider の切り替えだけを desktop の 2 click で行えるようになります。
+
+## セキュリティとリモートポリシー
+
+Remote Nodes は HTTP/TCP の管理 listener を追加しません。SSH が transport encryption、
+host authentication、user authentication を提供し、OcHub は SSH process の stdin/stdout
+上で allowlist 済みの `ochcli remote serve --stdio` protocol を動かします。request は
+typed operation であり、shell command string ではありません。
+
+既定 policy は status、diagnostics、Provider switching、Gateway lifecycle を許可します。
+remote secret write、backup restore、update install は無効です。remote node で確認します。
+
+```sh
+ochcli remote policy show
+ochcli remote policy validate
+```
+
+任意の policy file は `~/.ochub/remote.toml` です。read-only node の例：
+
+```toml
+schemaVersion = 1
+enabled = true
+allowWrite = false
+allowGatewayLifecycle = false
+allowSecretsWrite = false
+allowBackupRestore = false
+allowUpdateInstall = false
+```
+
+`enabled = false` で Remote Nodes session を拒否できます。通常の SSH account は Unix
+user と同じ権限を持ちます。policy が強い認可境界になるのは SSH key を OcHub forced
+command に制限した場合だけです。構成例と protocol の詳細は
+[Remote Nodes design and security model](https://github.com/OcHub-team/OcHub/blob/main/docs/REMOTE-NODES-DESIGN.md)
+を参照してください。
+
+## トラブルシューティングと現在の制限
+
+| 症状 | 確認すること |
+| --- | --- |
+| Add に alias がない | 操作側 SSH config に具体的な `Host name` を置き、`Include` を確認するか Add manually を使う |
+| Permission denied または prompt | key を SSH Agent へ追加し、`ssh -o BatchMode=yes <alias> ochcli remote probe` を成功させる |
+| `ochcli: command not found` | 非対話 SSH の `PATH` に両 binary を置くか、remote `ochcli` の絶対 path を指定する |
+| Host Key が変わった | 停止し、信頼できる経路で新 fingerprint を確認してから `known_hosts` の旧記録を置き換える |
+| WSL node が offline | distribution と `sshd` を起動し、Windows alias、localhost forwarding、port を確認する |
+| 接続できるが Provider がない | remote で `ochcli provider import-live --app <app>` または Provider add を実行する |
+| protocol/version error | Desktop と remote の `ochcli`/`ochubd` を更新し、別 archive の binary を混在させない |
+| Gateway が desktop から見えない | Gateway は remote 上にあるため remote tool を使うか、別の SSH tunnel を作成する |
+
+OcHub から node を削除しても、消えるのは操作側の接続記録だけです。リモートの
+Provider、tool config、`~/.ochub`、daemon、Gateway data は削除されません。

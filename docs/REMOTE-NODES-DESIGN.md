@@ -6,6 +6,10 @@
 >
 > 最后更新：**2026-07-30**
 
+本文是架构、协议与安全边界设计。面向用户的安装、WSL 配置、SSH Host Key 核对、
+添加节点、切换 Provider 和故障排查步骤，请阅读
+[远程节点使用指南](https://docs.ochub.org/zh/guides/remote-nodes)。
+
 当前实现已覆盖版本化 SSH stdio 协议、稳定节点身份、远端策略、系统 OpenSSH
 连接与 Host Key 固定、daemon owner 转发、Remote Nodes 桌面工作区、Provider
 plan/apply、Gateway 生命周期、operation journal、跨 SSH 会话幂等恢复和

@@ -42,6 +42,26 @@ sha256sum -c SHA256SUMS --ignore-missing
 gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
 ```
 
+## 用于远程节点的无桌面 CLI
+
+每个版本还提供 macOS、Windows 和 Linux 的无桌面压缩包，其中包含：
+
+- `ochcli`：命令行控制入口和远程节点协议服务端。
+- `ochubd`：`ochcli` 使用的持久 Runtime Owner。
+
+请把同一版本的两个文件放在同一目录。Linux 或 WSL 可以这样安装：
+
+```sh
+tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
+sudo install -m 0755 ochcli ochubd /usr/local/bin/
+ochcli version
+ochcli remote probe
+```
+
+桌面端连接时会通过系统 OpenSSH 启动
+`ochcli remote serve --stdio`，不要把该协议暴露成网络监听端口。SSH、WSL、主机密钥、
+Provider 导入和连接切换的完整步骤见[通过 SSH 控制远程节点](/zh/guides/remote-nodes)。
+
 ## macOS：首次启动时授权
 
 OcHub 使用自签名证书签名，没有经过 Apple 公证。Gatekeeper 只信任能一路追溯到

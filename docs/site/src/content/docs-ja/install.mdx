@@ -44,6 +44,28 @@ sha256sum -c SHA256SUMS --ignore-missing
 gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
 ```
 
+## リモートノード用 headless CLI
+
+各リリースには macOS、Windows、Linux 用の headless archive もあります。
+次の 2 つが含まれます。
+
+- `ochcli`：command-line control surface と Remote Nodes protocol server。
+- `ochubd`：`ochcli` が利用する persistent Runtime Owner。
+
+同じリリースの両方を同じディレクトリへ置きます。Linux または WSL の例：
+
+```sh
+tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
+sudo install -m 0755 ochcli ochubd /usr/local/bin/
+ochcli version
+ochcli remote probe
+```
+
+Desktop は接続時に system OpenSSH 経由で
+`ochcli remote serve --stdio` を起動します。この protocol を network listener
+として公開しないでください。SSH、WSL、host key、Provider import、切り替え手順は
+[SSH でリモートノードを操作する](/ja/guides/remote-nodes)を参照してください。
+
 ## macOS：初回起動時の承認
 
 OcHub は自己署名証明書で署名されており、Apple の公証は受けていません。

@@ -60,6 +60,7 @@ OpenCode、OpenClaw 和 Hermes**。
 | 🧩 | **MCP 与 Skills** | 集中管理可复用的 MCP 服务器和 Skills，再分发给需要的工具 |
 | 📊 | **会话与用量** | 浏览本地 CLI 会话，查看 Token、缓存、延迟、请求量和预估成本 |
 | 🔄 | **同步与备份** | 通过快照保护配置，并使用受支持的远程存储同步 OcHub 数据 |
+| 🖥️ | **远程节点** | 通过 SSH 安全切换 WSL、开发机和无桌面服务器上已有的 Provider |
 
 ## 两种连接方式
 
@@ -116,12 +117,15 @@ brew install --cask --no-quarantine ochub-team/tap/ochub
 
 | 平台 | 可用安装包 |
 | --- | --- |
-| macOS | Apple Silicon 和 Intel `.dmg` |
-| Windows 10/11 x64 | NSIS 安装程序和便携版 `.zip` |
-| Linux x64 | AppImage 和 Debian `.deb` |
+| macOS | Apple Silicon 和 Intel `.dmg`；无桌面 CLI `.tar.gz` |
+| Windows 10/11 x64 | NSIS 安装程序、便携 GUI `.zip` 和无桌面 CLI `.zip` |
+| Linux x64 | AppImage、Debian `.deb` 和无桌面 CLI `.tar.gz` |
 
 发布内容包含 `SHA256SUMS` 和 GitHub 构件证明。打包、签名验证和发布详情请参阅
 [发布指南](packaging/README.md)。
+
+无桌面压缩包内包含 `ochcli` 和 `ochubd`。如需从 OcHub Desktop 控制 WSL 或开发机，
+请阅读[远程节点使用指南](https://docs.ochub.org/zh/guides/remote-nodes)。
 
 ## 从源码构建
 

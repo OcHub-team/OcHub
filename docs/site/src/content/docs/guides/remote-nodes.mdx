@@ -1,0 +1,308 @@
+---
+title: Control remote nodes over SSH
+description: Use OcHub Desktop to switch providers and operate Gateway on WSL, development machines, and headless servers.
+audience: human
+sidebar:
+  order: 0
+---
+
+Remote Nodes lets one OcHub desktop control OcHub state on a machine that has
+no desktop environment. The remote machine only needs OpenSSH, `ochcli`, and
+`ochubd`; configuration and AI coding tools continue to run on that machine.
+
+This is especially useful when your editor or terminal runs in **WSL**, on a
+Linux development machine, or on a remote workstation. Instead of opening an
+SSH shell and remembering several config paths every time an API endpoint
+changes, select the machine in OcHub and switch its existing connection from
+the desktop.
+
+## Why use a remote node
+
+Remote Nodes keeps the execution environment and its credentials where they
+belong while giving you one visual control surface:
+
+- Switch Claude Code, Codex, OpenCode, and other supported tools on a
+  development machine without editing their files by hand.
+- See whether each node is online, which `ochcli` version it runs, and its
+  platform before connecting.
+- Preview the exact remote config change before it is applied.
+- Start or stop the remote OcHub Gateway and run remote diagnostics.
+- Reuse your existing OpenSSH aliases, SSH agent, ProxyJump, system keychain,
+  and hardware-backed keys.
+
+Closing OcHub does not move a running tool back to the local computer. A switch
+writes the tool's native configuration **on the selected remote node**, so that
+tool keeps working there afterward.
+
+## What the current version can manage
+
+Remote Nodes currently supports:
+
+| Area | Available remotely |
+| --- | --- |
+| Node | Live status, hostname, OS, architecture, node ID, `ochcli` version, owner process, and enabled apps |
+| Connections | List existing remote connections, show the current one, preview a switch, and apply it |
+| Gateway | Read status and start or stop the remote Gateway |
+| Diagnostics | Run Doctor plus SSH diagnostics |
+| Audit | Read recent remote operation records |
+
+The first release intentionally does **not** expose arbitrary shell execution.
+It also does not yet create or edit remote providers, transmit API keys, manage
+remote MCP/skills, browse remote sessions/usage, restore backups, install
+updates, or create a Gateway tunnel. Add or import providers on the remote
+machine first; the desktop can then switch among them.
+
+## Requirements
+
+Prepare all of the following:
+
+- OcHub Desktop `0.4.20` or later on the controlling computer.
+- System `ssh` and `ssh-keyscan` on the controlling computer.
+- A reachable OpenSSH server on the remote machine.
+- Matching or compatible `ochcli` and `ochubd` binaries on the remote machine.
+  Keep both binaries in the same directory.
+- SSH key or agent authentication that succeeds without an interactive
+  password prompt. OcHub connects with `BatchMode=yes`.
+- At least one provider already stored on the remote node if you want to
+  switch connections.
+
+Test the same path OcHub will use from the controlling computer:
+
+```sh
+ssh -V
+ssh -o BatchMode=yes devbox ochcli remote probe
+```
+
+Replace `devbox` with your SSH alias. The second command should return node,
+runtime, version, policy, and capability information without asking for a
+password or passphrase.
+
+## Install ochcli on the remote machine
+
+Download the headless CLI archive for the remote platform from the
+[latest release](https://github.com/OcHub-team/OcHub/releases/latest). It
+contains both `ochcli` and `ochubd`. On Linux or WSL, unpack it and install both
+in a stable location:
+
+```sh
+tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
+sudo install -m 0755 ochcli ochubd /usr/local/bin/
+
+ochcli version
+ochcli remote probe
+```
+
+If you cannot write `/usr/local/bin`, place both files in another directory and
+enter the absolute `ochcli` path when adding the node. Non-interactive SSH
+sessions often have a smaller `PATH` than your terminal, so an absolute path is
+also the most reliable fix for “ochcli not found.”
+
+If the tool already has a working live configuration, import it into the
+remote OcHub database before connecting:
+
+```sh
+ochcli app list
+ochcli provider import-live --app codex
+ochcli provider list --app codex
+```
+
+Change `codex` to the relevant app ID. Use `ochcli provider add --help` when
+you need to create additional remote connections. Secrets should be supplied
+on the remote machine, not copied through the desktop connection.
+
+You do not have to start a daemon by hand. The first normal Remote Nodes
+session starts the remote owner when needed, and it survives the SSH control
+session. To start it at login or boot instead, use:
+
+```sh
+ochcli daemon install
+ochcli daemon start
+ochcli daemon status
+```
+
+## Prepare the SSH connection
+
+Put a concrete alias in the SSH config on the **controlling computer**:
+
+```text
+Host devbox
+    HostName 192.0.2.40
+    User alice
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+```
+
+OcHub reads `~/.ssh/config` and its `Include` files. On Windows this means
+`%USERPROFILE%\.ssh\config`, not `/home/<user>/.ssh/config` inside WSL.
+Concrete `Host` aliases are listed in the Add dialog; wildcard-only blocks
+provide defaults but are not shown as selectable machines.
+
+ProxyJump, SSH agent, system keychain, ControlMaster, and hardware keys continue
+to be handled by system OpenSSH. Confirm that this succeeds before opening
+OcHub:
+
+```sh
+ssh -o BatchMode=yes devbox ochcli remote probe
+```
+
+## Add and connect a node
+
+1. Open **Remote nodes** in the OcHub sidebar.
+2. Select **Add**. OcHub reads the controlling computer's SSH config and lists
+   the concrete aliases it found.
+3. Select an alias and choose **Add**, or use **Add manually**.
+4. For a manual entry, provide a display name, SSH target, real hostname or IP
+   for key scanning, SSH port, and remote `ochcli` path.
+5. OcHub runs `ssh-keyscan` and shows each key type and SHA256 fingerprint.
+   Compare the fingerprint with a trusted source such as a cloud console or
+   administrator.
+6. Choose **Trust and connect** only after the fingerprint matches.
+
+Approved keys are stored in OcHub's dedicated
+`~/.ochub/ssh/known_hosts` file with private permissions. Existing entries in
+your normal `~/.ssh/known_hosts` remain valid too. OcHub never silently sets
+`StrictHostKeyChecking=no`.
+
+The connection list then shows live online state, `ochcli` version, platform,
+and last successful connection. The workspace selector at the top of the
+sidebar lets you move between **This Mac** and saved remote nodes.
+
+## Switch a provider on the remote node
+
+1. Choose the remote node from the workspace selector or the Remote Nodes
+   connection list.
+2. Connect, then select the remote application you want to change.
+3. Find an existing provider and choose **Preview switch**.
+4. Review the target node, SSH alias, current provider, target provider,
+   configuration path, and revision.
+5. Choose **Apply change**.
+6. Refresh or make a short request from the tool on the remote machine to
+   verify the new connection.
+
+OcHub checks the revision again immediately before applying the change. If the
+tool or another process edited the config after the preview, the apply is
+rejected instead of overwriting the newer state. Refresh the node, inspect the
+new current state, and create another preview.
+
+Mutations use an idempotency key and a remote operation journal. If SSH drops
+during an apply, reconnect and inspect **Recent operations** before retrying;
+the protocol can return the stored result instead of blindly performing the
+same write twice.
+
+## Operate Gateway and run diagnostics
+
+The connected node page shows remote Gateway state. Starting it launches
+Gateway on the remote owner; stopping it affects only that node. This is useful
+for WSL or a development machine whose local AI tools already point to that
+machine's loopback Gateway.
+
+The SSH control session does not expose the remote Gateway to the controlling
+computer. If you deliberately need local access, create a separate tunnel
+after reviewing the remote port:
+
+```sh
+ssh -N -L 8765:127.0.0.1:<remote-port> devbox
+```
+
+Use **Run diagnostics** to combine the remote `ochcli doctor` result with SSH
+session diagnostics. Recent operations show remote actor, time, operation ID,
+and outcome without copying provider secrets to the desktop.
+
+## WSL setup
+
+For OcHub Desktop on Windows controlling a WSL distribution:
+
+1. Install the OpenSSH server and OcHub CLI inside WSL:
+
+   ```sh
+   sudo apt update
+   sudo apt install openssh-server
+   sudo service ssh start
+   ```
+
+   On a systemd-enabled distribution, `sudo systemctl enable --now ssh` can
+   replace the last command.
+
+2. Install `ochcli` and `ochubd` inside WSL as described above.
+3. Configure key-based access from Windows to the WSL Linux user.
+4. Add the alias to **Windows**
+   `%USERPROFILE%\.ssh\config`:
+
+   ```text
+   Host wsl-dev
+       HostName 127.0.0.1
+       User <your-wsl-user>
+       Port 22
+       IdentityFile ~/.ssh/id_ed25519
+   ```
+
+5. Test from PowerShell:
+
+   ```powershell
+   ssh -o BatchMode=yes wsl-dev ochcli remote probe
+   ```
+
+6. Add `wsl-dev` from OcHub's Remote Nodes dialog.
+
+If Windows already uses port 22, configure WSL `sshd` on another port and use
+that port in the alias. A stopped WSL distribution or stopped `sshd` appears
+offline; start the distribution and SSH service before connecting. OcHub uses
+Windows OpenSSH and does not launch `wsl.exe` automatically.
+
+The practical benefit is that Claude Code or Codex can remain fully inside
+WSL—Linux paths, credentials, sessions, and processes included—while provider
+switching becomes a two-click desktop action.
+
+## Security and remote policy
+
+Remote Nodes adds no HTTP or TCP management listener. SSH supplies transport
+encryption, host authentication, and user authentication; OcHub runs the
+allowlisted `ochcli remote serve --stdio` protocol over that SSH process.
+Requests are typed operations, not shell command strings.
+
+By default the remote policy permits status reads, diagnostics, provider
+switching, and Gateway lifecycle. Remote secret writes, backup restore, and
+update installation remain disabled. Inspect the effective policy on the
+remote node with:
+
+```sh
+ochcli remote policy show
+ochcli remote policy validate
+```
+
+The optional policy file is `~/.ochub/remote.toml`. For a read-only node:
+
+```toml
+schemaVersion = 1
+enabled = true
+allowWrite = false
+allowGatewayLifecycle = false
+allowSecretsWrite = false
+allowBackupRestore = false
+allowUpdateInstall = false
+```
+
+Set `enabled = false` to reject Remote Nodes sessions entirely. An ordinary SSH
+account still has all permissions of that Unix user; the policy becomes a
+strong authorization boundary only when the SSH key is restricted to OcHub's
+forced command. See the
+[Remote Nodes design and security model](https://github.com/OcHub-team/OcHub/blob/main/docs/REMOTE-NODES-DESIGN.md)
+for that deployment pattern and protocol details.
+
+## Troubleshooting and current limits
+
+| Symptom | What to check |
+| --- | --- |
+| Alias is missing from Add | Put a concrete `Host name` in the controlling computer's SSH config; check `Include` paths, or use Add manually |
+| Permission denied or a prompt is required | Unlock/add the key to your SSH agent and make `ssh -o BatchMode=yes <alias> ochcli remote probe` succeed |
+| `ochcli: command not found` | Install both binaries in a non-interactive SSH `PATH`, or enter an absolute remote `ochcli` path |
+| Host key changed | Stop. Verify the new fingerprint through a trusted channel before replacing the old OcHub or user `known_hosts` entry |
+| WSL node is offline | Start the distribution and `sshd`; confirm the Windows alias, localhost forwarding, and port |
+| Node connects but no providers appear | Run `ochcli provider import-live --app <app>` or add providers on the remote machine |
+| Protocol/version error | Upgrade Desktop and the remote `ochcli`/`ochubd` pair; do not mix binaries from different archives |
+| Gateway runs but is unavailable on the desktop | It listens on the remote machine; use the remote tool or create a separate, explicit SSH tunnel |
+
+Removing a node from OcHub deletes only the local connection record. It does
+not remove remote providers, tool configuration, `~/.ochub`, the daemon, or
+Gateway data.

@@ -62,6 +62,7 @@ OpenCode, OpenClaw, and Hermes**.
 | 🧩 | **MCP & skills** | Keep reusable MCP servers and skills together, then distribute them to the tools that need them |
 | 📊 | **Sessions & usage** | Browse local CLI sessions and understand tokens, cache, latency, requests, and estimated cost |
 | 🔄 | **Sync & backup** | Protect your setup with snapshots and keep OcHub data in sync through supported remote storage |
+| 🖥️ | **Remote nodes** | Switch existing providers on WSL, development machines, and headless servers securely over SSH |
 
 ## Two ways to connect
 
@@ -133,6 +134,8 @@ signature verification, and release details live in the
 
 The headless archives contain `ochcli` and `ochubd`. See the included README
 or run `ochcli --help` to configure and operate OcHub without the desktop GUI.
+To control WSL or a development machine from OcHub Desktop, follow the
+[Remote Nodes guide](https://docs.ochub.org/guides/remote-nodes).
 
 ## Build from source
 
