@@ -70,6 +70,8 @@ pub struct PricingCatalogEntry {
     pub cache_read_cost_per_million: Option<String>,
     pub cache_creation_cost_per_million: Option<String>,
     #[serde(default)]
+    pub cache_creation_1h_cost_per_million: Option<String>,
+    #[serde(default)]
     pub special_pricing_fields: Vec<String>,
     pub source_url: Option<String>,
 }
@@ -186,6 +188,7 @@ impl Database {
                 "SELECT model_key, provider, mode,
                         input_cost_per_million, output_cost_per_million,
                         cache_read_cost_per_million, cache_creation_cost_per_million,
+                        cache_creation_1h_cost_per_million,
                         special_pricing_fields, source_url
                  FROM litellm_pricing_catalog
                  WHERE model_key LIKE ?1 COLLATE NOCASE
@@ -196,7 +199,7 @@ impl Database {
             .map_err(|error| AppError::Database(format!("读取 LiteLLM 价格目录失败: {error}")))?;
         let rows = statement
             .query_map(params![pattern, limit, offset], |row| {
-                let special: String = row.get(7)?;
+                let special: String = row.get(8)?;
                 Ok(PricingCatalogEntry {
                     model_key: row.get(0)?,
                     provider: row.get(1)?,
@@ -205,8 +208,9 @@ impl Database {
                     output_cost_per_million: row.get(4)?,
                     cache_read_cost_per_million: row.get(5)?,
                     cache_creation_cost_per_million: row.get(6)?,
+                    cache_creation_1h_cost_per_million: row.get(7)?,
                     special_pricing_fields: serde_json::from_str(&special).unwrap_or_default(),
-                    source_url: row.get(8)?,
+                    source_url: row.get(9)?,
                 })
             })
             .map_err(|error| AppError::Database(format!("读取 LiteLLM 价格目录失败: {error}")))?;
@@ -260,8 +264,9 @@ impl Database {
                         model_key, provider, mode,
                         input_cost_per_million, output_cost_per_million,
                         cache_read_cost_per_million, cache_creation_cost_per_million,
+                        cache_creation_1h_cost_per_million,
                         special_pricing_fields, source_url
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 )
                 .map_err(|error| AppError::Database(format!("准备价格目录写入失败: {error}")))?;
             let mut alias_statement = transaction
@@ -287,6 +292,7 @@ impl Database {
                         entry.output_cost_per_million,
                         entry.cache_read_cost_per_million,
                         entry.cache_creation_cost_per_million,
+                        entry.cache_creation_1h_cost_per_million,
                         special_pricing_fields,
                         entry.source_url,
                     ])
@@ -553,6 +559,9 @@ fn validate_snapshot(snapshot: &PricingCatalogSnapshot) -> Result<(), AppError> 
         if let Some(value) = entry.cache_creation_cost_per_million.as_deref() {
             validate_price(&entry.model_key, value)?;
         }
+        if let Some(value) = entry.cache_creation_1h_cost_per_million.as_deref() {
+            validate_price(&entry.model_key, value)?;
+        }
     }
     Ok(())
 }
@@ -706,6 +715,9 @@ fn snapshot_from_upstream(
             cache_creation_cost_per_million: json_price_per_million(
                 model.get("cache_creation_input_token_cost"),
             ),
+            cache_creation_1h_cost_per_million: json_price_per_million(
+                model.get("cache_creation_input_token_cost_above_1hr"),
+            ),
             special_pricing_fields,
             source_url: model
                 .get("source")
@@ -857,7 +869,10 @@ mod tests {
         let manual = find_model_pricing_row_for_requirements(&conn, "test/model-v1", true, true)
             .unwrap()
             .unwrap();
-        assert_eq!(manual, ("9".into(), "10".into(), "1".into(), "2".into()));
+        assert_eq!(
+            manual,
+            ("9".into(), "10".into(), "1".into(), "2".into(), "0".into())
+        );
     }
 
     #[test]
@@ -932,7 +947,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             manual_exact,
-            ("9".into(), "10".into(), "0.9".into(), "11.25".into())
+            (
+                "9".into(),
+                "10".into(),
+                "0.9".into(),
+                "11.25".into(),
+                "0".into()
+            )
         );
 
         assert!(

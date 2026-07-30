@@ -77,11 +77,18 @@ pub struct DailyStats {
 pub struct ProviderStats {
     pub provider_id: String,
     pub provider_name: String,
+    /// `station` = 本地网关转发；`session` = 从客户端会话文件导入。
+    pub source_kind: String,
     pub request_count: u64,
     pub total_tokens: u64,
     pub total_cost: String,
     pub success_rate: f32,
-    pub avg_latency_ms: u64,
+    /// Station 请求的平均完整耗时；Session 文件没有可靠时序，保持 None。
+    pub avg_latency_ms: Option<u64>,
+    /// Station 流式请求从发出到首个 token 的平均耗时。
+    pub avg_first_token_ms: Option<u64>,
+    /// Station 请求的输出吞吐，按输出 token 总数 / 请求完整耗时计算。
+    pub avg_tps: Option<f64>,
 }
 
 /// 模型统计
@@ -105,6 +112,8 @@ pub struct ModelPricingInfo {
     pub output_cost_per_million: String,
     pub cache_read_cost_per_million: String,
     pub cache_creation_cost_per_million: String,
+    #[serde(default)]
+    pub cache_creation_1h_cost_per_million: String,
 }
 
 /// 请求日志过滤器
@@ -146,6 +155,8 @@ pub struct RequestLogDetail {
     pub output_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
+    pub cache_creation_5m_tokens: u32,
+    pub cache_creation_1h_tokens: u32,
     pub input_cost_usd: String,
     pub output_cost_usd: String,
     pub cache_read_cost_usd: String,
@@ -165,12 +176,13 @@ pub struct RequestLogDetail {
     pub pricing_model: Option<String>,
 }
 
-/// 把 25 列的查询结果映射为 `RequestLogDetail`。
+/// 把 27 列的查询结果映射为 `RequestLogDetail`。
 ///
-/// 调用方的 SELECT **必须**按以下顺序返回 25 列：
+/// 调用方的 SELECT **必须**按以下顺序返回 27 列：
 /// `request_id, provider_id, provider_name, app_type, model, request_model,
 ///  cost_multiplier, input_tokens, output_tokens, cache_read_tokens,
-///  cache_creation_tokens, input_cost_usd, output_cost_usd, cache_read_cost_usd,
+///  cache_creation_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens,
+///  input_cost_usd, output_cost_usd, cache_read_cost_usd,
 ///  cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
 ///  first_token_ms, duration_ms, status_code, error_message, created_at,
 ///  data_source, pricing_model`
@@ -191,20 +203,22 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         output_tokens: row.get::<_, i64>(8)? as u32,
         cache_read_tokens: row.get::<_, i64>(9)? as u32,
         cache_creation_tokens: row.get::<_, i64>(10)? as u32,
-        input_cost_usd: row.get(11)?,
-        output_cost_usd: row.get(12)?,
-        cache_read_cost_usd: row.get(13)?,
-        cache_creation_cost_usd: row.get(14)?,
-        total_cost_usd: row.get(15)?,
-        is_streaming: row.get::<_, i64>(16)? != 0,
-        latency_ms: row.get::<_, i64>(17)? as u64,
-        first_token_ms: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
-        duration_ms: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
-        status_code: row.get::<_, i64>(20)? as u16,
-        error_message: row.get(21)?,
-        created_at: row.get(22)?,
-        data_source: row.get(23)?,
-        pricing_model: row.get(24)?,
+        cache_creation_5m_tokens: row.get::<_, i64>(11)? as u32,
+        cache_creation_1h_tokens: row.get::<_, i64>(12)? as u32,
+        input_cost_usd: row.get(13)?,
+        output_cost_usd: row.get(14)?,
+        cache_read_cost_usd: row.get(15)?,
+        cache_creation_cost_usd: row.get(16)?,
+        total_cost_usd: row.get(17)?,
+        is_streaming: row.get::<_, i64>(18)? != 0,
+        latency_ms: row.get::<_, i64>(19)? as u64,
+        first_token_ms: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
+        duration_ms: row.get::<_, Option<i64>>(21)?.map(|v| v as u64),
+        status_code: row.get::<_, i64>(22)? as u16,
+        error_message: row.get(23)?,
+        created_at: row.get(24)?,
+        data_source: row.get(25)?,
+        pricing_model: row.get(26)?,
     })
 }
 
@@ -214,13 +228,33 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
 /// authoritative mapping from placeholder to readable name.
 fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
     format!(
-        "COALESCE({provider_alias}.name, CASE {log_alias}.provider_id \
+        "COALESCE(
+            {provider_alias}.name,
+            (SELECT gc.name FROM gateway_channels gc WHERE gc.id = {log_alias}.provider_id),
+            CASE {log_alias}.provider_id \
          WHEN '_session' THEN 'Claude (Session)' \
          WHEN '_codex_session' THEN 'Codex (Session)' \
          WHEN '_gemini_session' THEN 'Gemini (Session)' \
          WHEN '_opencode_session' THEN 'OpenCode (Session)' \
          ELSE {log_alias}.provider_id END)"
     )
+}
+
+/// 将底层 data_source 收敛为用户能理解的两种采集口径。
+fn usage_source_kind_sql(log_alias: &str, has_data_source: bool) -> String {
+    if has_data_source {
+        let source = data_source_expr(log_alias);
+        format!(
+            "CASE WHEN {source} IN ('gateway', 'proxy') \
+             THEN 'station' ELSE 'session' END"
+        )
+    } else {
+        format!(
+            "CASE WHEN {log_alias}.provider_id IN (
+                '_session', '_codex_session', '_gemini_session', '_opencode_session'
+             ) THEN 'session' ELSE 'station' END"
+        )
+    }
 }
 
 pub(crate) const SESSION_CAPTURE_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
@@ -520,7 +554,8 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
+                    cache_read_cost_per_million, cache_creation_cost_per_million,
+                    cache_creation_1h_cost_per_million
              FROM model_pricing
              ORDER BY display_name",
         )?;
@@ -533,6 +568,7 @@ impl Database {
                 output_cost_per_million: row.get(3)?,
                 cache_read_cost_per_million: row.get(4)?,
                 cache_creation_cost_per_million: row.get(5)?,
+                cache_creation_1h_cost_per_million: row.get(6)?,
             })
         })?;
 
@@ -540,17 +576,14 @@ impl Database {
             .map_err(|e| AppError::Database(format!("读取模型定价失败: {e}")))
     }
 
-    pub fn update_model_pricing(
-        &self,
-        model_id: &str,
-        display_name: &str,
-        input_cost: &str,
-        output_cost: &str,
-        cache_read_cost: &str,
-        cache_creation_cost: &str,
-    ) -> Result<(), AppError> {
-        let model_id = model_id.trim();
-        let display_name = display_name.trim();
+    pub fn update_model_pricing(&self, pricing: &ModelPricingInfo) -> Result<(), AppError> {
+        let model_id = pricing.model_id.trim();
+        let display_name = pricing.display_name.trim();
+        let input_cost = pricing.input_cost_per_million.as_str();
+        let output_cost = pricing.output_cost_per_million.as_str();
+        let cache_read_cost = pricing.cache_read_cost_per_million.as_str();
+        let cache_creation_cost = pricing.cache_creation_cost_per_million.as_str();
+        let cache_creation_1h_cost = pricing.cache_creation_1h_cost_per_million.as_str();
         if model_id.is_empty() {
             return Err(AppError::localized(
                 "usage.modelIdRequired",
@@ -565,12 +598,21 @@ impl Database {
                 "Display name is required",
             ));
         }
+        // Older CLI/API payloads predate the split field. Preserve their
+        // behavior by using the 5-minute price rather than silently making
+        // 1-hour writes free.
+        let cache_creation_1h_cost = if cache_creation_1h_cost.trim().is_empty() {
+            cache_creation_cost
+        } else {
+            cache_creation_1h_cost
+        };
 
         for (label, value) in [
             ("input_cost", input_cost),
             ("output_cost", output_cost),
             ("cache_read_cost", cache_read_cost),
             ("cache_creation_cost", cache_creation_cost),
+            ("cache_creation_1h_cost", cache_creation_1h_cost),
         ] {
             let parsed = rust_decimal::Decimal::from_str(value.trim()).map_err(|e| {
                 AppError::localized(
@@ -592,15 +634,17 @@ impl Database {
         conn.execute(
             "INSERT OR REPLACE INTO model_pricing (
                 model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                cache_creation_1h_cost_per_million
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 model_id,
                 display_name,
                 input_cost.trim(),
                 output_cost.trim(),
                 cache_read_cost.trim(),
-                cache_creation_cost.trim()
+                cache_creation_cost.trim(),
+                cache_creation_1h_cost.trim()
             ],
         )
         .map_err(|e| AppError::Database(format!("更新模型定价失败: {e}")))?;
@@ -1353,29 +1397,45 @@ impl Database {
             format!("WHERE {}", rollup_conditions.join(" AND "))
         };
 
-        // UNION detail logs + rollup data, then aggregate
+        // UNION detail logs + rollup data, then aggregate by the user-visible
+        // supplier and capture source. One Station may expose several
+        // dialect/channel IDs; those are one supplier in the dashboard.
         let detail_pname = provider_name_coalesce("l", "p");
         let rollup_pname = provider_name_coalesce("r", "p2");
+        let detail_source = usage_source_kind_sql("l", true);
+        let rollup_source = usage_source_kind_sql("r", false);
         let fresh_input_detail = fresh_input_sql("l");
         let fresh_input_rollup = fresh_input_sql("r");
         let sql = format!(
             "SELECT
-                provider_id, app_type, provider_name,
+                MIN(provider_id) as provider_id, provider_name, source_kind,
                 SUM(request_count) as request_count,
                 SUM(total_tokens) as total_tokens,
                 SUM(total_cost) as total_cost,
                 SUM(success_count) as success_count,
-                CASE WHEN SUM(request_count) > 0
-                    THEN SUM(latency_sum) / SUM(request_count)
-                    ELSE 0 END as avg_latency
+                CASE WHEN SUM(perf_count) > 0
+                    THEN SUM(latency_sum) / SUM(perf_count)
+                    ELSE NULL END as avg_latency,
+                CASE WHEN SUM(first_token_count) > 0
+                    THEN SUM(first_token_sum) / SUM(first_token_count)
+                    ELSE NULL END as avg_first_token,
+                CASE WHEN SUM(tps_duration_ms) > 0
+                    THEN SUM(tps_output_tokens) * 1000.0 / SUM(tps_duration_ms)
+                    ELSE NULL END as avg_tps
             FROM (
                 SELECT l.provider_id, l.app_type,
                     {detail_pname} as provider_name,
+                    {detail_source} as source_kind,
                     COUNT(*) as request_count,
                     COALESCE(SUM({fresh_input_detail} + l.output_tokens), 0) as total_tokens,
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
                     COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
-                    COALESCE(SUM(l.latency_ms), 0) as latency_sum
+                    COALESCE(SUM(CASE WHEN {detail_source} = 'station' THEN l.latency_ms ELSE 0 END), 0) as latency_sum,
+                    COALESCE(SUM(CASE WHEN {detail_source} = 'station' THEN 1 ELSE 0 END), 0) as perf_count,
+                    COALESCE(SUM(CASE WHEN {detail_source} = 'station' THEN l.first_token_ms ELSE 0 END), 0) as first_token_sum,
+                    COALESCE(SUM(CASE WHEN {detail_source} = 'station' AND l.first_token_ms IS NOT NULL THEN 1 ELSE 0 END), 0) as first_token_count,
+                    COALESCE(SUM(CASE WHEN {detail_source} = 'station' AND l.latency_ms > 0 THEN l.output_tokens ELSE 0 END), 0) as tps_output_tokens,
+                    COALESCE(SUM(CASE WHEN {detail_source} = 'station' AND l.latency_ms > 0 THEN l.latency_ms ELSE 0 END), 0) as tps_duration_ms
                 FROM usage_logs l
                 LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
                 {detail_where}
@@ -1383,17 +1443,23 @@ impl Database {
                 UNION ALL
                 SELECT r.provider_id, r.app_type,
                     {rollup_pname} as provider_name,
+                    {rollup_source} as source_kind,
                     COALESCE(SUM(r.request_count), 0),
                     COALESCE(SUM({fresh_input_rollup} + r.output_tokens), 0),
                     COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0),
                     COALESCE(SUM(r.success_count), 0),
-                    COALESCE(SUM(r.avg_latency_ms * r.request_count), 0)
+                    COALESCE(SUM(CASE WHEN {rollup_source} = 'station' THEN r.avg_latency_ms * r.request_count ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN {rollup_source} = 'station' THEN r.request_count ELSE 0 END), 0),
+                    0,
+                    0,
+                    0,
+                    0
                 FROM usage_daily_rollups r
                 LEFT JOIN providers p2 ON r.provider_id = p2.id AND r.app_type = p2.app_type
                 {rollup_where}
                 GROUP BY r.provider_id, r.app_type
             )
-            GROUP BY provider_id, app_type
+            GROUP BY provider_name, source_kind
             ORDER BY total_cost DESC"
         );
 
@@ -1412,12 +1478,15 @@ impl Database {
 
             Ok(ProviderStats {
                 provider_id: row.get(0)?,
-                provider_name: row.get(2)?,
+                provider_name: row.get(1)?,
+                source_kind: row.get(2)?,
                 request_count: request_count as u64,
                 total_tokens: row.get::<_, i64>(4)? as u64,
                 total_cost: format!("{:.6}", row.get::<_, f64>(5)?),
                 success_rate,
-                avg_latency_ms: row.get::<_, f64>(7)? as u64,
+                avg_latency_ms: row.get::<_, Option<f64>>(7)?.map(|value| value as u64),
+                avg_first_token_ms: row.get::<_, Option<f64>>(8)?.map(|value| value as u64),
+                avg_tps: row.get(9)?,
             })
         };
 
@@ -1646,6 +1715,7 @@ impl Database {
             "SELECT l.request_id, l.provider_id, {logs_pname} as provider_name, l.app_type, l.model,
                     l.request_model, l.cost_multiplier,
                     l.input_tokens, l.output_tokens, l.cache_read_tokens, l.cache_creation_tokens,
+                    l.cache_creation_5m_tokens, l.cache_creation_1h_tokens,
                     l.input_cost_usd, l.output_cost_usd, l.cache_read_cost_usd, l.cache_creation_cost_usd, l.total_cost_usd,
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model
@@ -1689,6 +1759,7 @@ impl Database {
             "SELECT l.request_id, l.provider_id, {detail_pname} as provider_name, l.app_type, l.model,
                     l.request_model, l.cost_multiplier,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                    cache_creation_5m_tokens, cache_creation_1h_tokens,
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                     is_streaming, latency_ms, first_token_ms, duration_ms,
                     status_code, error_message, l.created_at, l.data_source, l.pricing_model
@@ -1818,7 +1889,10 @@ struct PricingInfo {
     output: rust_decimal::Decimal,
     cache_read: rust_decimal::Decimal,
     cache_creation: rust_decimal::Decimal,
+    cache_creation_1h: rust_decimal::Decimal,
 }
+
+type CompletePricingTuple = (String, String, String, String, String);
 
 impl Database {
     /// Recalculate stored zero-cost usage rows once pricing becomes available.
@@ -1844,6 +1918,7 @@ impl Database {
             "SELECT request_id, provider_id, NULL AS provider_name, app_type, model, request_model,
                         cost_multiplier,
                         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                        cache_creation_5m_tokens, cache_creation_1h_tokens,
                         input_cost_usd, output_cost_usd, cache_read_cost_usd,
                         cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
                         first_token_ms, duration_ms, status_code, error_message, created_at,
@@ -1944,8 +2019,17 @@ impl Database {
         let cache_read_cost = rust_decimal::Decimal::from(log.cache_read_tokens as u64)
             * pricing.cache_read
             / million;
-        let cache_creation_cost = rust_decimal::Decimal::from(log.cache_creation_tokens as u64)
+        let explicit_cache_creation = log
+            .cache_creation_5m_tokens
+            .saturating_add(log.cache_creation_1h_tokens);
+        let cache_creation_5m_tokens = log.cache_creation_5m_tokens.saturating_add(
+            log.cache_creation_tokens
+                .saturating_sub(explicit_cache_creation),
+        );
+        let cache_creation_cost = (rust_decimal::Decimal::from(cache_creation_5m_tokens as u64)
             * pricing.cache_creation
+            + rust_decimal::Decimal::from(log.cache_creation_1h_tokens as u64)
+                * pricing.cache_creation_1h)
             / million;
         // 总成本 = 基础成本之和 × 倍率
         let base_total = input_cost + output_cost + cache_read_cost + cache_creation_cost;
@@ -2001,7 +2085,7 @@ impl Database {
             needs_cache_read,
             needs_cache_creation,
         )?;
-        let Some((input, output, cache_read, cache_creation)) = row else {
+        let Some((input, output, cache_read, cache_creation, cache_creation_1h)) = row else {
             return Ok(None);
         };
 
@@ -2014,6 +2098,8 @@ impl Database {
                 .map_err(|e| AppError::Database(format!("解析缓存读取价格失败: {e}")))?,
             cache_creation: rust_decimal::Decimal::from_str(&cache_creation)
                 .map_err(|e| AppError::Database(format!("解析缓存写入价格失败: {e}")))?,
+            cache_creation_1h: rust_decimal::Decimal::from_str(&cache_creation_1h)
+                .map_err(|e| AppError::Database(format!("解析 1 小时缓存写入价格失败: {e}")))?,
         };
 
         cache.insert(cache_key, pricing.clone());
@@ -2091,19 +2177,24 @@ pub(crate) fn find_model_pricing(
         conn,
         model_id,
         usage.cache_read_tokens > 0,
-        usage.cache_creation_tokens > 0,
+        usage.cache_creation_tokens > 0
+            || usage.cache_creation_5m_tokens > 0
+            || usage.cache_creation_1h_tokens > 0,
     )
     .ok()
     .flatten()
-    .and_then(|(input, output, cache_read, cache_creation)| {
-        crate::usage_tracking::calculator::ModelPricing::from_strings(
-            &input,
-            &output,
-            &cache_read,
-            &cache_creation,
-        )
-        .ok()
-    })
+    .and_then(
+        |(input, output, cache_read, cache_creation, cache_creation_1h)| {
+            crate::usage_tracking::calculator::ModelPricing::from_strings_with_cache_tiers(
+                &input,
+                &output,
+                &cache_read,
+                &cache_creation,
+                &cache_creation_1h,
+            )
+            .ok()
+        },
+    )
 }
 
 #[cfg(test)]
@@ -2111,7 +2202,11 @@ pub(crate) fn find_model_pricing_row(
     conn: &Connection,
     model_id: &str,
 ) -> Result<Option<(String, String, String, String)>, AppError> {
-    find_model_pricing_row_for_requirements(conn, model_id, false, false)
+    find_model_pricing_row_for_requirements(conn, model_id, false, false).map(|row| {
+        row.map(|(input, output, cache_read, cache_creation, _)| {
+            (input, output, cache_read, cache_creation)
+        })
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2120,6 +2215,7 @@ struct ResolvedPricingRow {
     output: String,
     cache_read: Option<String>,
     cache_creation: Option<String>,
+    cache_creation_1h: Option<String>,
 }
 
 impl ResolvedPricingRow {
@@ -2127,17 +2223,22 @@ impl ResolvedPricingRow {
         self,
         needs_cache_read: bool,
         needs_cache_creation: bool,
-    ) -> Option<(String, String, String, String)> {
+    ) -> Option<CompletePricingTuple> {
         if (needs_cache_read && self.cache_read.is_none())
             || (needs_cache_creation && self.cache_creation.is_none())
         {
             return None;
         }
+        let cache_creation = self.cache_creation.unwrap_or_else(|| "0".to_string());
+        let cache_creation_1h = self
+            .cache_creation_1h
+            .unwrap_or_else(|| cache_creation.clone());
         Some((
             self.input,
             self.output,
             self.cache_read.unwrap_or_else(|| "0".to_string()),
-            self.cache_creation.unwrap_or_else(|| "0".to_string()),
+            cache_creation,
+            cache_creation_1h,
         ))
     }
 }
@@ -2147,7 +2248,7 @@ pub(crate) fn find_model_pricing_row_for_requirements(
     model_id: &str,
     needs_cache_read: bool,
     needs_cache_creation: bool,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<CompletePricingTuple>, AppError> {
     // Preserve a user-authored provider/region-qualified key before the
     // compatibility normalizer strips slash namespaces and Bedrock suffixes.
     // This lets a precise manual override beat both a generic manual alias and
@@ -2290,10 +2391,11 @@ pub(crate) fn is_placeholder_pricing_model(model_id: &str) -> bool {
 fn query_model_pricing_exact(
     conn: &Connection,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<CompletePricingTuple>, AppError> {
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                cache_creation_1h_cost_per_million
          FROM model_pricing
          WHERE model_id = ?1 COLLATE NOCASE",
         [model_id],
@@ -2303,6 +2405,7 @@ fn query_model_pricing_exact(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
             ))
         },
     )
@@ -2313,11 +2416,12 @@ fn query_model_pricing_exact(
 fn query_model_pricing_prefix(
     conn: &Connection,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<CompletePricingTuple>, AppError> {
     let pattern = format!("{model_id}-%");
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                cache_creation_1h_cost_per_million
          FROM model_pricing
          WHERE model_id LIKE ?1
          ORDER BY LENGTH(model_id) ASC
@@ -2329,6 +2433,7 @@ fn query_model_pricing_prefix(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
             ))
         },
     )
@@ -2342,7 +2447,8 @@ fn query_catalog_pricing_exact(
 ) -> Result<Option<ResolvedPricingRow>, AppError> {
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                cache_creation_1h_cost_per_million
          FROM litellm_pricing_catalog
          WHERE model_key = ?1 COLLATE NOCASE",
         [model_key],
@@ -2352,6 +2458,7 @@ fn query_catalog_pricing_exact(
                 output: row.get(1)?,
                 cache_read: row.get(2)?,
                 cache_creation: row.get(3)?,
+                cache_creation_1h: row.get(4)?,
             })
         },
     )
@@ -2366,7 +2473,8 @@ fn query_catalog_pricing_alias_unique(
     let mut statement = conn
         .prepare(
             "SELECT c.input_cost_per_million, c.output_cost_per_million,
-                    c.cache_read_cost_per_million, c.cache_creation_cost_per_million
+                    c.cache_read_cost_per_million, c.cache_creation_cost_per_million,
+                    c.cache_creation_1h_cost_per_million
              FROM litellm_pricing_aliases a
              JOIN litellm_pricing_catalog c ON c.model_key = a.model_key
              WHERE a.alias = ?1 COLLATE NOCASE",
@@ -2379,6 +2487,7 @@ fn query_catalog_pricing_alias_unique(
                 output: row.get(1)?,
                 cache_read: row.get(2)?,
                 cache_creation: row.get(3)?,
+                cache_creation_1h: row.get(4)?,
             })
         })
         .map_err(|e| AppError::Database(format!("查询 LiteLLM 别名定价失败: {e}")))?;
@@ -4390,6 +4499,104 @@ mod tests {
         let result = find_model_pricing_row(&conn, "unknown-model-123")?;
         assert!(result.is_none(), "不应该匹配不存在的模型");
 
+        Ok(())
+    }
+
+    #[test]
+    fn provider_stats_resolve_station_name_and_keep_session_performance_empty()
+    -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let now = Local::now().timestamp();
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO gateway_channels (
+                    id, endpoint_id, name, dialect, base_url, created_at
+                 ) VALUES (?1, 'endpoint-a', 'Acme Relay', 'responses', 'https://example.com', ?2)",
+                params!["station-channel:station-a:endpoint-a:responses", now],
+            )?;
+            conn.execute(
+                "INSERT INTO gateway_channels (
+                    id, endpoint_id, name, dialect, base_url, created_at
+                 ) VALUES (?1, 'endpoint-b', 'Acme Relay', 'messages', 'https://example.com', ?2)",
+                params!["station-channel:station-a:endpoint-b:messages", now],
+            )?;
+            insert_usage_log(
+                &conn,
+                "station-1",
+                "gateway",
+                "station-channel:station-a:endpoint-a:responses",
+                "claude-sonnet",
+                "gateway",
+                now,
+                100,
+                10,
+                0,
+                0,
+                200,
+                "0.1",
+            )?;
+            insert_usage_log(
+                &conn,
+                "station-2",
+                "gateway",
+                "station-channel:station-a:endpoint-b:messages",
+                "claude-sonnet",
+                "gateway",
+                now,
+                100,
+                20,
+                0,
+                0,
+                200,
+                "0.2",
+            )?;
+            conn.execute(
+                "UPDATE usage_logs SET latency_ms = 200, first_token_ms = 40
+                 WHERE request_id = 'station-2'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE usage_logs SET first_token_ms = 20
+                 WHERE request_id = 'station-1'",
+                [],
+            )?;
+            insert_usage_log(
+                &conn,
+                "session-1",
+                "codex",
+                "_codex_session",
+                "gpt-5",
+                "codex_session",
+                now,
+                80,
+                5,
+                0,
+                0,
+                200,
+                "0.01",
+            )?;
+        }
+
+        let stats = db.get_provider_stats(None, None, None, None, None)?;
+        let station = stats
+            .iter()
+            .find(|item| item.provider_name == "Acme Relay")
+            .expect("station provider");
+        assert_eq!(station.source_kind, "station");
+        assert_eq!(station.request_count, 2);
+        assert_eq!(station.avg_latency_ms, Some(150));
+        assert_eq!(station.avg_first_token_ms, Some(30));
+        assert_eq!(station.avg_tps, Some(100.0));
+
+        let session = stats
+            .iter()
+            .find(|item| item.provider_name == "Codex (Session)")
+            .expect("session provider");
+        assert_eq!(session.source_kind, "session");
+        assert_eq!(session.avg_latency_ms, None);
+        assert_eq!(session.avg_first_token_ms, None);
+        assert_eq!(session.avg_tps, None);
         Ok(())
     }
 }

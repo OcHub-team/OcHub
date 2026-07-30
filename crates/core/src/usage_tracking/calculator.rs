@@ -23,6 +23,7 @@ pub struct ModelPricing {
     pub output_cost_per_million: Decimal,
     pub cache_read_cost_per_million: Decimal,
     pub cache_creation_cost_per_million: Decimal,
+    pub cache_creation_1h_cost_per_million: Decimal,
 }
 
 /// 成本计算器
@@ -91,8 +92,10 @@ impl CostCalculator {
             Decimal::from(usage.output_tokens) * pricing.output_cost_per_million / million;
         let cache_read_cost =
             Decimal::from(usage.cache_read_tokens) * pricing.cache_read_cost_per_million / million;
-        let cache_creation_cost = Decimal::from(usage.cache_creation_tokens)
+        let (cache_creation_5m_tokens, cache_creation_1h_tokens) = usage.cache_creation_tiers();
+        let cache_creation_cost = (Decimal::from(cache_creation_5m_tokens)
             * pricing.cache_creation_cost_per_million
+            + Decimal::from(cache_creation_1h_tokens) * pricing.cache_creation_1h_cost_per_million)
             / million;
 
         // 总成本 = 各项基础成本之和 × 倍率
@@ -136,11 +139,28 @@ impl ModelPricing {
         cache_read: &str,
         cache_creation: &str,
     ) -> Result<Self, rust_decimal::Error> {
+        Self::from_strings_with_cache_tiers(
+            input,
+            output,
+            cache_read,
+            cache_creation,
+            cache_creation,
+        )
+    }
+
+    pub fn from_strings_with_cache_tiers(
+        input: &str,
+        output: &str,
+        cache_read: &str,
+        cache_creation_5m: &str,
+        cache_creation_1h: &str,
+    ) -> Result<Self, rust_decimal::Error> {
         Ok(Self {
             input_cost_per_million: Decimal::from_str(input)?,
             output_cost_per_million: Decimal::from_str(output)?,
             cache_read_cost_per_million: Decimal::from_str(cache_read)?,
-            cache_creation_cost_per_million: Decimal::from_str(cache_creation)?,
+            cache_creation_cost_per_million: Decimal::from_str(cache_creation_5m)?,
+            cache_creation_1h_cost_per_million: Decimal::from_str(cache_creation_1h)?,
         })
     }
 }
@@ -156,6 +176,8 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 200,
             cache_creation_tokens: 100,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         };
@@ -188,6 +210,8 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 200,
             cache_creation_tokens: 100,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         };
@@ -215,6 +239,8 @@ mod tests {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         };
@@ -237,6 +263,8 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         };
@@ -254,6 +282,8 @@ mod tests {
             output_tokens: 1,
             cache_read_tokens: 1,
             cache_creation_tokens: 1,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         };
@@ -266,5 +296,25 @@ mod tests {
         // 验证高精度计算
         assert!(cost.total_cost > Decimal::ZERO);
         assert!(cost.total_cost.to_string().len() > 2); // 确保保留了小数位
+    }
+
+    #[test]
+    fn test_cache_creation_uses_separate_5m_and_1h_prices() {
+        let usage = TokenUsage {
+            cache_creation_tokens: 300,
+            cache_creation_5m_tokens: 100,
+            cache_creation_1h_tokens: 200,
+            ..Default::default()
+        };
+        let pricing =
+            ModelPricing::from_strings_with_cache_tiers("0", "0", "0", "3.75", "6").unwrap();
+
+        let cost = CostCalculator::calculate(&usage, &pricing, Decimal::ONE);
+
+        assert_eq!(
+            cost.cache_creation_cost,
+            Decimal::from_str("0.001575").unwrap()
+        );
+        assert_eq!(cost.total_cost, cost.cache_creation_cost);
     }
 }

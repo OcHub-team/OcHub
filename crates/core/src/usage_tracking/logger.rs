@@ -75,10 +75,11 @@ impl<'a> UsageLogger<'a> {
             "INSERT OR REPLACE INTO usage_logs (
                 request_id, provider_id, app_type, model, request_model, pricing_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                cache_creation_5m_tokens, cache_creation_1h_tokens,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
                 provider_type, is_streaming, cost_multiplier, created_at, data_source
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, 'gateway')",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, 'gateway')",
             rusqlite::params![
                 log.request_id,
                 log.provider_id,
@@ -90,6 +91,8 @@ impl<'a> UsageLogger<'a> {
                 log.usage.output_tokens,
                 log.usage.cache_read_tokens,
                 log.usage.cache_creation_tokens,
+                log.usage.cache_creation_tiers().0,
+                log.usage.cache_creation_tiers().1,
                 input_cost,
                 output_cost,
                 cache_read_cost,
@@ -205,13 +208,21 @@ impl<'a> UsageLogger<'a> {
             &conn,
             model_id,
             usage.cache_read_tokens > 0,
-            usage.cache_creation_tokens > 0,
+            usage.cache_creation_tokens > 0
+                || usage.cache_creation_5m_tokens > 0
+                || usage.cache_creation_1h_tokens > 0,
         )?;
         match row {
-            Some((input, output, cache_read, cache_creation)) => {
-                ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
-                    .map(Some)
-                    .map_err(|e| AppError::Database(format!("解析定价数据失败: {e}")))
+            Some((input, output, cache_read, cache_creation, cache_creation_1h)) => {
+                ModelPricing::from_strings_with_cache_tiers(
+                    &input,
+                    &output,
+                    &cache_read,
+                    &cache_creation,
+                    &cache_creation_1h,
+                )
+                .map(Some)
+                .map_err(|e| AppError::Database(format!("解析定价数据失败: {e}")))
             }
             None => Ok(None),
         }
@@ -332,10 +343,7 @@ impl<'a> UsageLogger<'a> {
     ) -> Result<(), AppError> {
         let pricing = self.get_model_pricing(&pricing_model, &usage)?;
 
-        let has_usage = usage.input_tokens > 0
-            || usage.output_tokens > 0
-            || usage.cache_read_tokens > 0
-            || usage.cache_creation_tokens > 0;
+        let has_usage = usage.has_billable_tokens();
 
         if pricing.is_none() && has_usage && !is_placeholder_pricing_model(&pricing_model) {
             log::warn!("[USG-002] 模型定价未找到，成本将记录为 0: {pricing_model}");
@@ -398,6 +406,8 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         };

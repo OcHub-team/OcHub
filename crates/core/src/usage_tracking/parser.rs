@@ -19,6 +19,13 @@ pub struct TokenUsage {
     pub output_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
+    /// Claude prompt cache write split. Older/upstream-compatible responses
+    /// may only expose the aggregate field above; in that case it is treated
+    /// as a 5-minute write for backward-compatible billing.
+    #[serde(default)]
+    pub cache_creation_5m_tokens: u32,
+    #[serde(default)]
+    pub cache_creation_1h_tokens: u32,
     /// 从响应中提取的实际模型名称（如果可用）
     pub model: Option<String>,
     /// 从响应中提取的消息 ID（用于跨源去重）
@@ -48,7 +55,48 @@ impl TokenUsage {
             || self.output_tokens > 0
             || self.cache_read_tokens > 0
             || self.cache_creation_tokens > 0
+            || self.cache_creation_5m_tokens > 0
+            || self.cache_creation_1h_tokens > 0
     }
+
+    /// Return cache-write tokens split into Claude's billable TTL tiers.
+    /// Any aggregate tokens not represented by the explicit breakdown use
+    /// the 5-minute tier, matching Anthropic's default ephemeral TTL.
+    pub fn cache_creation_tiers(&self) -> (u32, u32) {
+        let explicit = self
+            .cache_creation_5m_tokens
+            .saturating_add(self.cache_creation_1h_tokens);
+        (
+            self.cache_creation_5m_tokens
+                .saturating_add(self.cache_creation_tokens.saturating_sub(explicit)),
+            self.cache_creation_1h_tokens,
+        )
+    }
+}
+
+fn cache_creation_tiers_from_value(usage: &Value) -> (u32, u32) {
+    let nested = usage.get("cache_creation");
+    let get = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| usage.get(*key).and_then(Value::as_u64))
+            .unwrap_or(0) as u32
+    };
+    let nested_get = |key: &str| {
+        nested
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32
+    };
+    (
+        nested_get("ephemeral_5m_input_tokens").max(get(&[
+            "claude_cache_creation_5_m_tokens",
+            "cache_creation_5m_input_tokens",
+        ])),
+        nested_get("ephemeral_1h_input_tokens").max(get(&[
+            "claude_cache_creation_1_h_tokens",
+            "cache_creation_1h_input_tokens",
+        ])),
+    )
 }
 
 /// API 类型
@@ -65,6 +113,13 @@ impl TokenUsage {
     /// 从 Claude API 非流式响应解析
     pub fn from_claude_response(body: &Value) -> Option<Self> {
         let usage = body.get("usage")?;
+        let (cache_creation_5m_tokens, cache_creation_1h_tokens) =
+            cache_creation_tiers_from_value(usage);
+        let cache_creation_tokens = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|value| value as u32)
+            .unwrap_or_else(|| cache_creation_5m_tokens.saturating_add(cache_creation_1h_tokens));
         // 提取响应中的模型名称
         let model = body
             .get("model")
@@ -82,10 +137,9 @@ impl TokenUsage {
                 .get("cache_read_input_tokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32,
-            cache_creation_tokens: usage
-                .get("cache_creation_input_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
+            cache_creation_tokens,
+            cache_creation_5m_tokens,
+            cache_creation_1h_tokens,
             model,
             message_id,
         })
@@ -116,6 +170,7 @@ impl TokenUsage {
                             }
                         }
                         if let Some(msg_usage) = event.get("message").and_then(|m| m.get("usage")) {
+                            let (cache_5m, cache_1h) = cache_creation_tiers_from_value(msg_usage);
                             // 从 message_start 获取 input_tokens（原生 Claude API）
                             if let Some(input) =
                                 msg_usage.get("input_tokens").and_then(|v| v.as_u64())
@@ -132,10 +187,14 @@ impl TokenUsage {
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0)
                                 as u32;
+                            usage.cache_creation_5m_tokens = cache_5m;
+                            usage.cache_creation_1h_tokens = cache_1h;
                         }
                     }
                     "message_delta" => {
                         if let Some(delta_usage) = event.get("usage") {
+                            let (delta_cache_5m, delta_cache_1h) =
+                                cache_creation_tiers_from_value(delta_usage);
                             // 从 message_delta 获取 output_tokens
                             if let Some(output) =
                                 delta_usage.get("output_tokens").and_then(|v| v.as_u64())
@@ -174,6 +233,8 @@ impl TokenUsage {
                                     }
                                     if let Some(cache_creation) = delta_cache_creation {
                                         usage.cache_creation_tokens = cache_creation;
+                                        usage.cache_creation_5m_tokens = delta_cache_5m;
+                                        usage.cache_creation_1h_tokens = delta_cache_1h;
                                     }
                                 }
                             }
@@ -189,6 +250,8 @@ impl TokenUsage {
                                 && let Some(cache_creation) = delta_cache_creation
                             {
                                 usage.cache_creation_tokens = cache_creation;
+                                usage.cache_creation_5m_tokens = delta_cache_5m;
+                                usage.cache_creation_1h_tokens = delta_cache_1h;
                             }
                         }
                     }
@@ -197,6 +260,11 @@ impl TokenUsage {
             }
         }
 
+        usage.cache_creation_tokens = usage.cache_creation_tokens.max(
+            usage
+                .cache_creation_5m_tokens
+                .saturating_add(usage.cache_creation_1h_tokens),
+        );
         // 用 has_billable_tokens 而非仅看 input/output：完全缓存命中、无输出的流式请求
         // （input==0 && output==0 但 cache_read>0）是真实的 cache-read 计费，必须保留。
         // Gemini→Anthropic 路径在 input 改为 fresh(promptTokenCount - cachedContentTokenCount)
@@ -219,6 +287,8 @@ impl TokenUsage {
             output_tokens: usage.get("completion_tokens")?.as_u64()? as u32,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         })
@@ -269,6 +339,8 @@ impl TokenUsage {
                 .get("cache_creation_input_tokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model,
             message_id: None,
         })
@@ -313,6 +385,8 @@ impl TokenUsage {
                 .get("cache_creation_input_tokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model,
             message_id: None,
         })
@@ -407,6 +481,8 @@ impl TokenUsage {
             output_tokens: completion_tokens as u32,
             cache_read_tokens: cached_tokens,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model,
             message_id: None,
         })
@@ -452,6 +528,8 @@ impl TokenUsage {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32,
             cache_creation_tokens: 0,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model,
             message_id: None,
         })
@@ -503,6 +581,8 @@ impl TokenUsage {
                 output_tokens: total_output,
                 cache_read_tokens: total_cache_read,
                 cache_creation_tokens: 0,
+                cache_creation_5m_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 model,
                 message_id: None,
             })
@@ -525,7 +605,11 @@ mod tests {
                 "input_tokens": 100,
                 "output_tokens": 50,
                 "cache_read_input_tokens": 20,
-                "cache_creation_input_tokens": 10
+                "cache_creation_input_tokens": 10,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 4,
+                    "ephemeral_1h_input_tokens": 6
+                }
             }
         });
 
@@ -534,6 +618,7 @@ mod tests {
         assert_eq!(usage.output_tokens, 50);
         assert_eq!(usage.cache_read_tokens, 20);
         assert_eq!(usage.cache_creation_tokens, 10);
+        assert_eq!(usage.cache_creation_tiers(), (4, 6));
         assert_eq!(usage.model, Some("claude-sonnet-4-20250514".to_string()));
     }
 

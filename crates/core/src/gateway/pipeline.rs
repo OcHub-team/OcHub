@@ -96,11 +96,26 @@ fn error_body(inlet: Dialect, message: &str) -> Value {
 /// messages-shape usage value → `TokenUsage` row fields.
 fn token_usage_from_messages(usage: &Value, model: Option<String>) -> TokenUsage {
     let g = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0) as u32;
+    let cache_creation = usage.get("cache_creation");
+    let nested = |key: &str| {
+        cache_creation
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32
+    };
+    let cache_creation_5m_tokens =
+        nested("ephemeral_5m_input_tokens").max(g("claude_cache_creation_5_m_tokens"));
+    let cache_creation_1h_tokens =
+        nested("ephemeral_1h_input_tokens").max(g("claude_cache_creation_1_h_tokens"));
+    let cache_creation_tokens = g("cache_creation_input_tokens")
+        .max(cache_creation_5m_tokens.saturating_add(cache_creation_1h_tokens));
     TokenUsage {
         input_tokens: g("input_tokens"),
         output_tokens: g("output_tokens"),
         cache_read_tokens: g("cache_read_input_tokens"),
-        cache_creation_tokens: g("cache_creation_input_tokens"),
+        cache_creation_tokens,
+        cache_creation_5m_tokens,
+        cache_creation_1h_tokens,
         model,
         message_id: None,
     }

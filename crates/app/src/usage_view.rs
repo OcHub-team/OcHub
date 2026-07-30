@@ -31,12 +31,14 @@ use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
-use crate::text_input::TextInput;
+use crate::text_input::{TextInput, TextInputEvent};
 use crate::tf;
 use crate::theme;
 
 const DEFAULT_LOG_PAGE_SIZE: u32 = 20;
 const LOG_PAGE_SIZE_OPTIONS: &[u32] = &[20, 50, 100];
+const DEFAULT_PRICING_PAGE_SIZE: u32 = 10;
+const PRICING_PAGE_SIZE_OPTIONS: &[u32] = &[10, 20, 50];
 const PRICING_APPS: [&str; 2] = ["claude", "codex"];
 const DATETIME_PICKER_GAP: f32 = 4.;
 const AUTO_SESSION_SYNC_INTERVAL: StdDuration = StdDuration::from_secs(60);
@@ -335,6 +337,12 @@ pub struct UsageView {
     pricing_output_cost: Entity<TextInput>,
     pricing_cache_read_cost: Entity<TextInput>,
     pricing_cache_creation_cost: Entity<TextInput>,
+    pricing_cache_creation_1h_cost: Entity<TextInput>,
+    pricing_query: Entity<TextInput>,
+    pricing_page: u32,
+    pricing_page_size: u32,
+    pricing_page_size_open: bool,
+    pricing_page_input: Entity<TextInput>,
     multiplier_claude: Entity<TextInput>,
     multiplier_codex: Entity<TextInput>,
     log_page_input: Entity<TextInput>,
@@ -370,6 +378,12 @@ impl UsageView {
         // view is built once at startup, so it needs pushing in by hand. The
         // other inputs hold examples and numbers, which do not translate.
         self.log_page_input.update(cx, |input, cx| {
+            input.set_placeholder(t(k::USAGE_PAGINATION_PAGE_PLACEHOLDER), cx)
+        });
+        self.pricing_query.update(cx, |input, cx| {
+            input.set_placeholder(t(k::USAGE_PRICING_SEARCH_PLACEHOLDER), cx)
+        });
+        self.pricing_page_input.update(cx, |input, cx| {
             input.set_placeholder(t(k::USAGE_PAGINATION_PAGE_PLACEHOLDER), cx)
         });
         self.rebuild_trend_cache();
@@ -427,6 +441,14 @@ impl UsageView {
             pricing_output_cost: cx.new(|cx| text_input(cx, "15", "0")),
             pricing_cache_read_cost: cx.new(|cx| text_input(cx, "0.3", "0")),
             pricing_cache_creation_cost: cx.new(|cx| text_input(cx, "3.75", "0")),
+            pricing_cache_creation_1h_cost: cx.new(|cx| text_input(cx, "6", "0")),
+            pricing_query: cx
+                .new(|cx| text_input(cx, raw(k::USAGE_PRICING_SEARCH_PLACEHOLDER), "").compact()),
+            pricing_page: 0,
+            pricing_page_size: DEFAULT_PRICING_PAGE_SIZE,
+            pricing_page_size_open: false,
+            pricing_page_input: cx
+                .new(|cx| text_input(cx, raw(k::USAGE_PAGINATION_PAGE_PLACEHOLDER), "").compact()),
             multiplier_claude: cx.new(|cx| text_input(cx, "1", "1")),
             multiplier_codex: cx.new(|cx| text_input(cx, "1", "1")),
             log_page_input: cx
@@ -458,6 +480,27 @@ impl UsageView {
         this.log_page_input.update(cx, |input, _| {
             input.set_on_enter(move |window, cx| jump(&(), window, cx));
         });
+        let pricing_jump = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
+            let text = input_value(&this.pricing_page_input, cx);
+            if let Ok(target) = text.parse::<u32>()
+                && target >= 1
+            {
+                let total = this.filtered_pricing(cx).len() as u32;
+                let total_pages = total.div_ceil(this.pricing_page_size).max(1);
+                this.set_pricing_page((target - 1).min(total_pages - 1), cx);
+            }
+        });
+        this.pricing_page_input.update(cx, |input, _| {
+            input.set_on_enter(move |window, cx| pricing_jump(&(), window, cx));
+        });
+        let pricing_query = this.pricing_query.clone();
+        cx.subscribe(&pricing_query, |this, _input, _: &TextInputEvent, cx| {
+            this.pricing_page = 0;
+            this.pricing_page_size_open = false;
+            this.list_state.remeasure();
+            cx.notify();
+        })
+        .detach();
         let apply_start = cx.listener(|this: &mut Self, _event: &(), _window, cx| {
             this.apply_custom_range(cx);
         });
@@ -588,6 +631,10 @@ impl UsageView {
         self.log_total = data.log_total;
         self.data_sources = data.data_sources;
         self.pricing = data.pricing;
+        let total_pages = (self.filtered_pricing(cx).len() as u32)
+            .div_ceil(self.pricing_page_size)
+            .max(1);
+        self.pricing_page = self.pricing_page.min(total_pages - 1);
         self.pricing_catalog = data.pricing_catalog;
         self.list_state.remeasure();
         cx.notify();
@@ -938,6 +985,16 @@ impl UsageView {
     }
 
     fn select_log(&mut self, request_id: String, cx: &mut Context<Self>) {
+        if self
+            .selected_log
+            .as_ref()
+            .is_some_and(|log| log.request_id == request_id)
+        {
+            self.selected_log = None;
+            self.list_state.remeasure();
+            cx.notify();
+            return;
+        }
         let app = self.app.clone();
         cx.spawn(async move |this, cx| {
             let detail = cx
@@ -1072,6 +1129,11 @@ impl UsageView {
             pricing.cache_creation_cost_per_million,
             cx,
         );
+        set_input(
+            &self.pricing_cache_creation_1h_cost,
+            pricing.cache_creation_1h_cost_per_million,
+            cx,
+        );
         self.show_pricing = true;
         cx.notify();
     }
@@ -1083,20 +1145,23 @@ impl UsageView {
         let output_cost = input_value(&self.pricing_output_cost, cx);
         let cache_read = input_value(&self.pricing_cache_read_cost, cx);
         let cache_creation = input_value(&self.pricing_cache_creation_cost, cx);
+        let cache_creation_1h = input_value(&self.pricing_cache_creation_1h_cost, cx);
 
         let app = self.app.clone();
         self.run_mutation(
             cx,
             move || {
+                let pricing = ModelPricingInfo {
+                    model_id: model_id.clone(),
+                    display_name,
+                    input_cost_per_million: input_cost,
+                    output_cost_per_million: output_cost,
+                    cache_read_cost_per_million: cache_read,
+                    cache_creation_cost_per_million: cache_creation,
+                    cache_creation_1h_cost_per_million: cache_creation_1h,
+                };
                 app.db
-                    .update_model_pricing(
-                        &model_id,
-                        &display_name,
-                        &input_cost,
-                        &output_cost,
-                        &cache_read,
-                        &cache_creation,
-                    )
+                    .update_model_pricing(&pricing)
                     .map(|_| model_id)
                     .map_err(|error| error.to_string())
             },
@@ -1116,6 +1181,40 @@ impl UsageView {
                 ),
             },
         );
+    }
+
+    fn filtered_pricing(&self, cx: &mut Context<Self>) -> Vec<&ModelPricingInfo> {
+        let query = input_value(&self.pricing_query, cx).to_lowercase();
+        self.pricing
+            .iter()
+            .filter(|item| {
+                query.is_empty()
+                    || item.model_id.to_lowercase().contains(&query)
+                    || item.display_name.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    fn set_pricing_page(&mut self, page: u32, cx: &mut Context<Self>) {
+        self.pricing_page = page;
+        self.pricing_page_size_open = false;
+        set_input(&self.pricing_page_input, "", cx);
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
+    fn toggle_pricing_page_size(&mut self, cx: &mut Context<Self>) {
+        self.pricing_page_size_open = !self.pricing_page_size_open;
+        cx.notify();
+    }
+
+    fn set_pricing_page_size(&mut self, page_size: u32, cx: &mut Context<Self>) {
+        self.pricing_page_size = page_size;
+        self.pricing_page = 0;
+        self.pricing_page_size_open = false;
+        set_input(&self.pricing_page_input, "", cx);
+        self.list_state.remeasure();
+        cx.notify();
     }
 
     fn delete_pricing(&mut self, model_id: String, cx: &mut Context<Self>) {
@@ -2477,41 +2576,92 @@ impl UsageView {
 
     fn render_providers(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let row_count = self.providers.len();
-        let rows = self
-            .providers
-            .iter()
-            .enumerate()
-            .map(|(ix, stats)| {
-                let provider = stats.provider_name.clone();
-                components::table_row(
-                    vec![
-                        text_cell(provider.clone()).into_any_element(),
-                        text_cell(stats.request_count.to_string()).into_any_element(),
-                        text_cell(stats.total_tokens.to_string()).into_any_element(),
-                        text_cell(format!("${}", format_money(&stats.total_cost, 4)))
-                            .into_any_element(),
-                        text_cell(format!("{:.1}%", stats.success_rate)).into_any_element(),
-                        text_cell(format!("{}ms", stats.avg_latency_ms)).into_any_element(),
-                    ],
-                    6,
-                    ix + 1 == row_count,
-                )
-                .id(ElementId::Name(
-                    format!("usage-provider-row-{provider}").into(),
-                ))
-                .role(gpui::Role::Button)
-                .aria_label(SharedString::from(tf!(
-                    k::USAGE_PROVIDERS_ROW_ARIA,
-                    name = provider
-                )))
-                .aria_selected(self.provider_filter.as_deref() == Some(provider.as_str()))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::surface_hover()))
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.set_provider_filter(Some(provider.clone()), cx);
-                }))
-            })
-            .collect::<Vec<_>>();
+        let rows =
+            self.providers
+                .iter()
+                .enumerate()
+                .map(|(ix, stats)| {
+                    let provider = stats.provider_name.clone();
+                    let provider_cell = div()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_color(theme::text())
+                                .text_xs()
+                                .truncate()
+                                .child(SharedString::from(provider.clone())),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme::muted())
+                                .text_xs()
+                                .child(source_kind_label(&stats.source_kind)),
+                        );
+                    let performance_cell =
+                        if stats.source_kind == "station" {
+                            let latency = stats
+                                .avg_latency_ms
+                                .map(|value| format!("{value}ms"))
+                                .unwrap_or_else(|| "—".to_string());
+                            let first_token = stats
+                                .avg_first_token_ms
+                                .map(|value| format!("TTFT {value}ms"))
+                                .unwrap_or_else(|| "TTFT —".to_string());
+                            let tps = stats
+                                .avg_tps
+                                .map(|value| format!("{value:.1} t/s"))
+                                .unwrap_or_else(|| "— t/s".to_string());
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_xs()
+                                        .child(SharedString::from(latency)),
+                                )
+                                .child(
+                                    div().text_color(theme::muted()).text_xs().truncate().child(
+                                        SharedString::from(format!("{first_token} · {tps}")),
+                                    ),
+                                )
+                        } else {
+                            text_cell("—")
+                        };
+                    components::table_row(
+                        vec![
+                            provider_cell.into_any_element(),
+                            text_cell(stats.request_count.to_string()).into_any_element(),
+                            text_cell(stats.total_tokens.to_string()).into_any_element(),
+                            text_cell(format!("${}", format_money(&stats.total_cost, 4)))
+                                .into_any_element(),
+                            text_cell(format!("{:.1}%", stats.success_rate)).into_any_element(),
+                            performance_cell.into_any_element(),
+                        ],
+                        6,
+                        ix + 1 == row_count,
+                    )
+                    .id(ElementId::Name(
+                        format!("usage-provider-row-{provider}").into(),
+                    ))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(tf!(
+                        k::USAGE_PROVIDERS_ROW_ARIA,
+                        name = provider
+                    )))
+                    .aria_selected(self.provider_filter.as_deref() == Some(provider.as_str()))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::surface_hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.set_provider_filter(Some(provider.clone()), cx);
+                    }))
+                })
+                .collect::<Vec<_>>();
 
         components::card()
             .p_0()
@@ -2602,80 +2752,124 @@ impl UsageView {
         let total_pages = self.log_total.div_ceil(self.log_page_size).max(1);
         let page = self.log_page.min(total_pages - 1);
         let row_count = self.logs.len();
-        let rows = self
-            .logs
-            .iter()
-            .enumerate()
-            .map(|(ix, log)| {
-                let provider = log
-                    .provider_name
-                    .clone()
-                    .unwrap_or_else(|| log.provider_id.clone());
-                let ok = (200..300).contains(&log.status_code);
-                let request_id = log.request_id.clone();
-                let time_cell = div()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_xs()
-                            .child(SharedString::from(short_time(log.created_at))),
-                    )
-                    .child(div().text_color(theme::muted()).text_xs().truncate().child(
-                        SharedString::from(format!(
-                            "{} · {}",
-                            provider,
-                            log.data_source.clone().unwrap_or_else(|| "proxy".into())
-                        )),
-                    ));
-                components::table_row(
-                    vec![
-                        time_cell.into_any_element(),
-                        text_cell(effective_model_label(log)).into_any_element(),
-                        text_cell(tf!(
-                            k::USAGE_LOGS_TOKENS,
-                            input = fresh_input_tokens(log),
-                            output = log.output_tokens
-                        ))
-                        .into_any_element(),
-                        text_cell(format!(
-                            "${} · {}ms",
-                            format_money(&log.total_cost_usd, 4),
-                            log.latency_ms
-                        ))
-                        .into_any_element(),
-                        components::badge(
-                            if ok {
-                                BadgeTone::Success
-                            } else {
-                                BadgeTone::Danger
-                            },
-                            log.status_code.to_string(),
+        let selected_log = self.selected_log.clone();
+        let rows =
+            self.logs
+                .iter()
+                .enumerate()
+                .map(|(ix, log)| {
+                    let provider = log
+                        .provider_name
+                        .clone()
+                        .unwrap_or_else(|| log.provider_id.clone());
+                    let ok = (200..300).contains(&log.status_code);
+                    let request_id = log.request_id.clone();
+                    let station = is_station_log(log);
+                    let source_label = if station {
+                        source_kind_label("station")
+                    } else {
+                        source_kind_label("session")
+                    };
+                    let selected_detail = selected_log
+                        .as_ref()
+                        .filter(|detail| detail.request_id == request_id)
+                        .cloned();
+                    let time_cell = div()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_color(theme::text())
+                                .text_xs()
+                                .child(SharedString::from(short_time(log.created_at))),
                         )
-                        .into_any_element(),
-                    ],
-                    5,
-                    ix + 1 == row_count,
-                )
-                .id(ElementId::Name(
-                    format!("usage-log-row-{request_id}").into(),
-                ))
-                .role(gpui::Role::Button)
-                .aria_label(SharedString::from(tf!(
-                    k::USAGE_LOGS_ROW_ARIA,
-                    model = log.model,
-                    status = log.status_code
-                )))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::surface_hover()))
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.select_log(request_id.clone(), cx);
-                }))
-            })
-            .collect::<Vec<_>>();
+                        .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                            SharedString::from(format!("{} · {}", provider, source_label)),
+                        ));
+                    let cost_cell =
+                        div()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_color(theme::text()).text_xs().child(
+                                SharedString::from(format!(
+                                    "${}",
+                                    format_money(&log.total_cost_usd, 4)
+                                )),
+                            ))
+                            .when(station, |s| {
+                                let duration = station_duration_ms(log);
+                                let tps = request_tps(log)
+                                    .map(|value| format!("{value:.1} t/s"))
+                                    .unwrap_or_else(|| "— t/s".to_string());
+                                let timing = log
+                                    .first_token_ms
+                                    .map(|ttft| format!("{duration}ms · TTFT {ttft}ms · {tps}"))
+                                    .unwrap_or_else(|| format!("{duration}ms · {tps}"));
+                                s.child(
+                                    div()
+                                        .text_color(theme::muted())
+                                        .text_xs()
+                                        .truncate()
+                                        .child(SharedString::from(timing)),
+                                )
+                            });
+                    let row = components::table_row(
+                        vec![
+                            time_cell.into_any_element(),
+                            text_cell(effective_model_label(log)).into_any_element(),
+                            text_cell(tf!(
+                                k::USAGE_LOGS_TOKENS,
+                                input = fresh_input_tokens(log),
+                                output = log.output_tokens
+                            ))
+                            .into_any_element(),
+                            cost_cell.into_any_element(),
+                            components::badge(
+                                if ok {
+                                    BadgeTone::Success
+                                } else {
+                                    BadgeTone::Danger
+                                },
+                                log.status_code.to_string(),
+                            )
+                            .into_any_element(),
+                        ],
+                        5,
+                        ix + 1 == row_count,
+                    )
+                    .id(ElementId::Name(
+                        format!("usage-log-row-{request_id}").into(),
+                    ))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(tf!(
+                        k::USAGE_LOGS_ROW_ARIA,
+                        model = log.model,
+                        status = log.status_code
+                    )))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::surface_hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.select_log(request_id.clone(), cx);
+                    }));
+                    div().w_full().flex().flex_col().child(row).when_some(
+                        selected_detail,
+                        |s, detail| {
+                            s.child(
+                                div()
+                                    .p_3()
+                                    .bg(theme::inset())
+                                    .border_b_1()
+                                    .border_color(theme::border())
+                                    .child(Self::render_request_detail(detail)),
+                            )
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
 
         let go = cx.listener(|this, page: &u32, _window, cx| {
             this.set_log_page(*page, cx);
@@ -2734,9 +2928,6 @@ impl UsageView {
                     .children(rows),
             )
             .child(pagination)
-            .when_some(self.selected_log.clone(), |s, log| {
-                s.child(Self::render_request_detail(log))
-            })
     }
 
     fn render_request_detail(log: RequestLogDetail) -> impl IntoElement {
@@ -2744,6 +2935,7 @@ impl UsageView {
             .provider_name
             .clone()
             .unwrap_or_else(|| log.provider_id.clone());
+        let station = is_station_log(&log);
         components::card()
             .gap_3()
             .child(
@@ -2799,7 +2991,11 @@ impl UsageView {
                     ))
                     .child(detail_cell(
                         raw(k::USAGE_DETAIL_CACHE_WRITE),
-                        log.cache_creation_tokens.to_string(),
+                        cache_creation_tiers(&log).0.to_string(),
+                    ))
+                    .child(detail_cell(
+                        raw(k::USAGE_DETAIL_CACHE_WRITE_1H),
+                        cache_creation_tiers(&log).1.to_string(),
                     ))
                     .child(detail_cell(
                         raw(k::USAGE_DETAIL_INPUT_COST),
@@ -2825,20 +3021,24 @@ impl UsageView {
                         raw(k::USAGE_DETAIL_MULTIPLIER),
                         format!("×{}", log.cost_multiplier),
                     ))
-                    .child(detail_cell(
-                        raw(k::USAGE_DETAIL_LATENCY),
-                        format!("{}ms", log.latency_ms),
-                    ))
-                    .when_some(log.first_token_ms, |s, value| {
+                    .when(station, |s| {
                         s.child(detail_cell(
-                            raw(k::USAGE_DETAIL_FIRST_TOKEN),
-                            format!("{value}ms"),
+                            raw(k::USAGE_DETAIL_LATENCY),
+                            format!("{}ms", station_duration_ms(&log)),
                         ))
                     })
-                    .when_some(log.duration_ms, |s, value| {
+                    .when(station, |s| {
+                        s.when_some(log.first_token_ms, |s, value| {
+                            s.child(detail_cell(
+                                raw(k::USAGE_DETAIL_FIRST_TOKEN),
+                                format!("{value}ms"),
+                            ))
+                        })
+                    })
+                    .when_some(request_tps(&log), |s, value| {
                         s.child(detail_cell(
-                            raw(k::USAGE_DETAIL_DURATION),
-                            format!("{value}ms"),
+                            raw(k::USAGE_DETAIL_TPS),
+                            format!("{value:.1} t/s"),
                         ))
                     })
                     .child(detail_cell(
@@ -2932,25 +3132,70 @@ impl UsageView {
     }
 
     fn render_pricing_config(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let row_count = self.pricing.len().min(12);
-        let pricing_rows = self
-            .pricing
-            .iter()
-            .take(12)
+        let filtered = self.filtered_pricing(cx);
+        let pricing_total = filtered.len() as u32;
+        let total_pages = pricing_total.div_ceil(self.pricing_page_size).max(1);
+        let page = self.pricing_page.min(total_pages - 1);
+        let page_start = (page * self.pricing_page_size) as usize;
+        let visible = filtered
+            .into_iter()
+            .skip(page_start)
+            .take(self.pricing_page_size as usize)
+            .cloned()
+            .collect::<Vec<_>>();
+        let row_count = visible.len();
+        let pricing_rows = visible
+            .into_iter()
             .enumerate()
             .map(|(ix, item)| {
                 let edit_item = item.clone();
                 let delete_id = item.model_id.clone();
-                components::table_row(
-                    vec![
-                        text_cell(item.model_id.clone()).into_any_element(),
-                        text_cell(item.display_name.clone()).into_any_element(),
-                        text_cell(format!("${}", item.input_cost_per_million)).into_any_element(),
-                        text_cell(format!("${}", item.output_cost_per_million)).into_any_element(),
-                        text_cell(format!("${}", item.cache_read_cost_per_million))
-                            .into_any_element(),
-                        text_cell(format!("${}", item.cache_creation_cost_per_million))
-                            .into_any_element(),
+                let model_cell = div()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_color(theme::text())
+                            .text_xs()
+                            .truncate()
+                            .child(SharedString::from(item.model_id.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .text_xs()
+                            .truncate()
+                            .child(SharedString::from(item.display_name.clone())),
+                    );
+                let cache_write_cell =
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_color(theme::text())
+                                .text_xs()
+                                .child(SharedString::from(format!(
+                                    "5m  ${}",
+                                    item.cache_creation_cost_per_million
+                                ))),
+                        )
+                        .child(div().text_color(theme::muted()).text_xs().child(
+                            SharedString::from(format!(
+                                "1h  ${}",
+                                item.cache_creation_1h_cost_per_million
+                            )),
+                        ));
+                let actions = div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(
                         components::icon_button_tone(
                             ElementId::Name(format!("pricing-edit-{}", item.model_id).into()),
                             t(k::USAGE_PRICING_EDIT),
@@ -2958,23 +3203,38 @@ impl UsageView {
                             ButtonTone::Neutral,
                             ButtonSize::Sm,
                         )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.edit_pricing(edit_item.clone(), cx);
-                        }))
-                        .into_any_element(),
-                        components::button(
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.edit_pricing(edit_item.clone(), cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        components::icon_button_tone(
                             ElementId::Name(format!("pricing-delete-{}", item.model_id).into()),
                             t(k::USAGE_PRICING_DELETE),
+                            IconName::Trash,
                             ButtonTone::Danger,
                             ButtonSize::Sm,
                         )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.confirm_delete_pricing = Some(delete_id.clone());
-                            cx.notify();
-                        }))
-                        .into_any_element(),
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.confirm_delete_pricing = Some(delete_id.clone());
+                                cx.notify();
+                            },
+                        )),
+                    );
+                components::table_row(
+                    vec![
+                        model_cell.into_any_element(),
+                        text_cell(format!("${}", item.input_cost_per_million)).into_any_element(),
+                        text_cell(format!("${}", item.output_cost_per_million)).into_any_element(),
+                        text_cell(format!("${}", item.cache_read_cost_per_million))
+                            .into_any_element(),
+                        cache_write_cell.into_any_element(),
+                        actions.into_any_element(),
                     ],
-                    8,
+                    6,
                     ix + 1 == row_count,
                 )
                 .id(ElementId::Name(
@@ -2982,6 +3242,28 @@ impl UsageView {
                 ))
             })
             .collect::<Vec<_>>();
+        let go = cx.listener(|this, page: &u32, _window, cx| {
+            this.set_pricing_page(*page, cx);
+        });
+        let toggle_page_size = cx.listener(|this, _event: &(), _window, cx| {
+            this.toggle_pricing_page_size(cx);
+        });
+        let set_page_size = cx.listener(|this, page_size: &u32, _window, cx| {
+            this.set_pricing_page_size(*page_size, cx);
+        });
+        let pricing_pagination = components::pagination_bar(
+            "usage-pricing-pages",
+            page,
+            total_pages,
+            Some(pricing_total as u64),
+            self.pricing_page_size,
+            PRICING_PAGE_SIZE_OPTIONS,
+            self.pricing_page_size_open,
+            &self.pricing_page_input,
+            move |page, window, cx| go(&page, window, cx),
+            move |window, cx| toggle_page_size(&(), window, cx),
+            move |page_size, window, cx| set_page_size(&page_size, window, cx),
+        );
 
         components::card()
             .gap_4()
@@ -3045,10 +3327,16 @@ impl UsageView {
                         self.pricing_cache_read_cost.clone(),
                     ))
                     .child(components::field(
-                        t(k::USAGE_PRICING_FIELD_CACHE_WRITE),
+                        t(k::USAGE_PRICING_FIELD_CACHE_WRITE_5M),
                         false,
                         None,
                         self.pricing_cache_creation_cost.clone(),
+                    ))
+                    .child(components::field(
+                        t(k::USAGE_PRICING_FIELD_CACHE_WRITE_1H),
+                        false,
+                        None,
+                        self.pricing_cache_creation_1h_cost.clone(),
                     )),
             )
             .child(
@@ -3066,33 +3354,47 @@ impl UsageView {
                 ),
             )
             .child(
-                components::card()
-                    .p_0()
-                    .child(table_title(
-                        raw(k::USAGE_PRICING_LIST_TITLE),
-                        t(k::USAGE_PRICING_LIST_SUBTITLE),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(components::field(
+                        t(k::USAGE_PRICING_SEARCH_LABEL),
+                        false,
+                        None,
+                        self.pricing_query.clone(),
                     ))
-                    // The last two columns hold the edit and delete buttons,
-                    // which label themselves.
-                    .child(components::table_header(&[
-                        raw(k::USAGE_PRICING_COL_MODEL_ID),
-                        raw(k::USAGE_PRICING_COL_DISPLAY_NAME),
-                        raw(k::USAGE_PRICING_COL_INPUT),
-                        raw(k::USAGE_PRICING_COL_OUTPUT),
-                        raw(k::USAGE_PRICING_COL_CACHE_READ),
-                        raw(k::USAGE_PRICING_COL_CACHE_WRITE),
-                        "",
-                        "",
-                    ]))
-                    .when(pricing_rows.is_empty(), |s| {
-                        s.child(components::empty_state(
-                            IconName::Diamond,
-                            t(k::USAGE_EMPTY_NO_DATA),
-                            t(k::USAGE_PRICING_EMPTY_HINT),
-                            None,
-                        ))
-                    })
-                    .children(pricing_rows),
+                    .child(
+                        components::card()
+                            .p_0()
+                            .child(table_title(
+                                raw(k::USAGE_PRICING_LIST_TITLE),
+                                tf!(
+                                    k::USAGE_PRICING_LIST_SUBTITLE,
+                                    page = page + 1,
+                                    pages = total_pages,
+                                    total = pricing_total
+                                ),
+                            ))
+                            .child(components::table_header(&[
+                                raw(k::USAGE_PRICING_COL_MODEL_ID),
+                                raw(k::USAGE_PRICING_COL_INPUT),
+                                raw(k::USAGE_PRICING_COL_OUTPUT),
+                                raw(k::USAGE_PRICING_COL_CACHE_READ),
+                                raw(k::USAGE_PRICING_COL_CACHE_WRITE),
+                                raw(k::USAGE_PRICING_COL_ACTIONS),
+                            ]))
+                            .when(pricing_rows.is_empty(), |s| {
+                                s.child(components::empty_state(
+                                    IconName::Diamond,
+                                    t(k::USAGE_EMPTY_NO_DATA),
+                                    t(k::USAGE_PRICING_EMPTY_HINT),
+                                    None,
+                                ))
+                            })
+                            .children(pricing_rows),
+                    )
+                    .child(pricing_pagination),
             )
     }
 
@@ -4026,6 +4328,45 @@ fn data_source_icon(source: &str) -> IconName {
         "session_log" | "codex_session" | "gemini_session" | "opencode_session" => IconName::Folder,
         _ => IconName::Blocks,
     }
+}
+
+fn source_kind_label(source: &str) -> String {
+    raw(match source {
+        "station" => k::USAGE_SOURCE_STATION,
+        _ => k::USAGE_SOURCE_SESSION,
+    })
+    .to_string()
+}
+
+fn is_station_log(log: &RequestLogDetail) -> bool {
+    log.data_source
+        .as_deref()
+        .is_some_and(|source| matches!(source, "gateway" | "proxy"))
+        || log.provider_id.starts_with("station-channel:")
+}
+
+fn station_duration_ms(log: &RequestLogDetail) -> u64 {
+    log.duration_ms.unwrap_or(log.latency_ms)
+}
+
+fn request_tps(log: &RequestLogDetail) -> Option<f64> {
+    if !is_station_log(log) {
+        return None;
+    }
+    let duration = station_duration_ms(log);
+    (duration > 0 && log.output_tokens > 0)
+        .then(|| log.output_tokens as f64 * 1000.0 / duration as f64)
+}
+
+fn cache_creation_tiers(log: &RequestLogDetail) -> (u32, u32) {
+    let explicit = log
+        .cache_creation_5m_tokens
+        .saturating_add(log.cache_creation_1h_tokens);
+    (
+        log.cache_creation_5m_tokens
+            .saturating_add(log.cache_creation_tokens.saturating_sub(explicit)),
+        log.cache_creation_1h_tokens,
+    )
 }
 
 fn fresh_input_tokens(log: &RequestLogDetail) -> u32 {

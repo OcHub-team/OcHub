@@ -119,6 +119,8 @@ impl Database {
             pricing_model TEXT,
             input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
             cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_creation_5m_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
             input_cost_usd TEXT NOT NULL DEFAULT '0', output_cost_usd TEXT NOT NULL DEFAULT '0',
             cache_read_cost_usd TEXT NOT NULL DEFAULT '0', cache_creation_cost_usd TEXT NOT NULL DEFAULT '0',
             total_cost_usd TEXT NOT NULL DEFAULT '0', latency_ms INTEGER NOT NULL, first_token_ms INTEGER,
@@ -160,7 +162,8 @@ impl Database {
             model_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
             input_cost_per_million TEXT NOT NULL, output_cost_per_million TEXT NOT NULL,
             cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
-            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
+            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0',
+            cache_creation_1h_cost_per_million TEXT NOT NULL DEFAULT '0'
         )",
             [],
         )
@@ -175,6 +178,7 @@ impl Database {
                 output_cost_per_million TEXT NOT NULL,
                 cache_read_cost_per_million TEXT,
                 cache_creation_cost_per_million TEXT,
+                cache_creation_1h_cost_per_million TEXT,
                 special_pricing_fields TEXT NOT NULL DEFAULT '[]',
                 source_url TEXT
              );
@@ -610,6 +614,90 @@ impl Database {
                             })?;
                         }
                         Self::set_user_version(conn, 10)?;
+                    }
+                    10 => {
+                        if Self::table_exists(conn, "usage_logs")?
+                            && !Self::has_column(conn, "usage_logs", "cache_creation_5m_tokens")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE usage_logs
+                                 ADD COLUMN cache_creation_5m_tokens INTEGER NOT NULL DEFAULT 0",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!(
+                                    "为用量日志添加 5 分钟缓存写入字段失败: {e}"
+                                ))
+                            })?;
+                            conn.execute(
+                                "UPDATE usage_logs
+                                 SET cache_creation_5m_tokens = cache_creation_tokens",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!("迁移历史缓存写入 token 失败: {e}"))
+                            })?;
+                        }
+                        if Self::table_exists(conn, "usage_logs")?
+                            && !Self::has_column(conn, "usage_logs", "cache_creation_1h_tokens")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE usage_logs
+                                 ADD COLUMN cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!(
+                                    "为用量日志添加 1 小时缓存写入字段失败: {e}"
+                                ))
+                            })?;
+                        }
+                        if Self::table_exists(conn, "model_pricing")?
+                            && !Self::has_column(
+                                conn,
+                                "model_pricing",
+                                "cache_creation_1h_cost_per_million",
+                            )?
+                        {
+                            conn.execute(
+                                "ALTER TABLE model_pricing
+                                 ADD COLUMN cache_creation_1h_cost_per_million TEXT NOT NULL DEFAULT '0'",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!(
+                                    "为手动定价添加 1 小时缓存写入价格失败: {e}"
+                                ))
+                            })?;
+                            conn.execute(
+                                "UPDATE model_pricing
+                                 SET cache_creation_1h_cost_per_million =
+                                     cache_creation_cost_per_million",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!("迁移历史缓存写入价格失败: {e}"))
+                            })?;
+                        }
+                        if Self::table_exists(conn, "litellm_pricing_catalog")?
+                            && !Self::has_column(
+                                conn,
+                                "litellm_pricing_catalog",
+                                "cache_creation_1h_cost_per_million",
+                            )?
+                        {
+                            conn.execute(
+                                "ALTER TABLE litellm_pricing_catalog
+                                 ADD COLUMN cache_creation_1h_cost_per_million TEXT",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!(
+                                    "为 LiteLLM 目录添加 1 小时缓存写入价格失败: {e}"
+                                ))
+                            })?;
+                        }
+                        Self::set_user_version(conn, 11)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -2311,5 +2399,60 @@ mod schema_migration_tests {
             )
             .unwrap();
         assert!(!websocket_enabled);
+    }
+
+    #[test]
+    fn migrates_v10_claude_cache_tiers_without_losing_existing_prices() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE usage_logs (
+                request_id TEXT PRIMARY KEY,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO usage_logs (request_id, cache_creation_tokens)
+             VALUES ('req-1', 123);
+             CREATE TABLE model_pricing (
+                model_id TEXT PRIMARY KEY,
+                cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
+             );
+             INSERT INTO model_pricing (model_id, cache_creation_cost_per_million)
+             VALUES ('claude-test', '3.75');
+             CREATE TABLE litellm_pricing_catalog (
+                model_key TEXT PRIMARY KEY,
+                cache_creation_cost_per_million TEXT
+             );
+             PRAGMA user_version = 10;",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        let split: (i64, i64) = conn
+            .query_row(
+                "SELECT cache_creation_5m_tokens, cache_creation_1h_tokens
+                 FROM usage_logs WHERE request_id = 'req-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(split, (123, 0));
+        let one_hour_price: String = conn
+            .query_row(
+                "SELECT cache_creation_1h_cost_per_million
+                 FROM model_pricing WHERE model_id = 'claude-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(one_hour_price, "3.75");
+        assert!(
+            Database::has_column(
+                &conn,
+                "litellm_pricing_catalog",
+                "cache_creation_1h_cost_per_million"
+            )
+            .unwrap()
+        );
     }
 }

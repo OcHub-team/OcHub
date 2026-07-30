@@ -122,6 +122,11 @@ def build_snapshot(
             ),
             "special_pricing_fields": special_pricing_fields(model),
         }
+        cache_creation_1h = decimal_string(
+            model.get("cache_creation_input_token_cost_above_1hr")
+        )
+        if cache_creation_1h is not None:
+            entry["cache_creation_1h_cost_per_million"] = cache_creation_1h
         source = model.get("source")
         if isinstance(source, str) and source.strip():
             entry["source_url"] = source

@@ -245,14 +245,7 @@ impl Application {
                 pricing.model_id
             )));
         }
-        self.state.db.update_model_pricing(
-            model_id,
-            &pricing.display_name,
-            &pricing.input_cost_per_million,
-            &pricing.output_cost_per_million,
-            &pricing.cache_read_cost_per_million,
-            &pricing.cache_creation_cost_per_million,
-        )?;
+        self.state.db.update_model_pricing(pricing)?;
         self.list_pricing_overrides()?
             .into_iter()
             .find(|item| item.model_id == model_id)
