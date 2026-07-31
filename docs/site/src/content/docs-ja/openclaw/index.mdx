@@ -1,0 +1,55 @@
+---
+title: OpenClaw を設定する
+description: 上流プロトコルを選び、モデルを追加し、デフォルトモデル、環境、ツール権限を管理します。
+audience: human
+sidebar:
+  order: 8
+  group:
+    label: OpenClaw
+    icon: ph:paw-print
+---
+
+OpenClaw のプロバイダーは `openclaw.json` の `models.providers.<id>` にあります。複数の
+プロバイダーを同時に保持するため、Provider ID はすべて一意にします。OcHub は OpenClaw の
+MCP とスキルを管理しません。既定ディレクトリは `~/.openclaw` です。
+
+## 接続とモデルを設定する
+
+1. 実際の上流プロトコルを選びます。
+
+   - `openai-completions`
+   - `openai-responses`
+   - `anthropic-messages`
+   - `google-generative-ai`
+   - `bedrock-converse-stream`
+
+2. Base URL と API キーを入力します。
+3. モデル ID、表示名、コンテキスト長、推論モデルかどうかを追加します。
+4. 必要なテナント／ルーティングヘッダーだけを追加します。
+5. 正しい ID の下に生成されることを確認して保存します。
+
+プロトコルは必須です。キーが正しくても選択が違うと 404、リクエストボディエラー、
+ストリーミング解析エラーになります。
+
+## デフォルトモデル、環境、ツール権限
+
+**高度なツール → OpenClaw の高度な設定**：
+
+| 領域 | 内容 | 用途 |
+| --- | --- | --- |
+| デフォルトモデル JSON | `agents.defaults.model` | `primary`、`fallbacks` など |
+| 環境 JSON | `env` | 実行時のキーと値 |
+| ツール設定 JSON | `tools` | `profile`、`allow`、`deny` |
+
+先に設定チェックを実行します。オブジェクト、配列、文字列の型を正しくし、保存後に表示される
+バックアップパスを記録します。
+
+<Aside type="caution" title="ツール権限は Agent の操作範囲を変えます">
+
+`tools.allow` と `tools.deny` の変更はローカル権限を拡大または縮小します。必要最小限だけを
+追加し、管理されたテストを行ってください。
+
+</Aside>
+
+保存後は[確認チェックリスト](/ja/guides/providers#新しい接続を確認する)に従って新しい接続を
+確認します。

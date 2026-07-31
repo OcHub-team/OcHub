@@ -1,11 +1,11 @@
 ---
-title: 日常機能
-description: 接続、アプリ固有設定、MCP、スキル、セッション、使用量、外観の基本操作。
+title: 機能ガイド
+description: 接続、MCP、スキル、セッション、使用量、リモートノード、外観の共通ワークフロー。
 audience: human
 sidebar:
   order: 20
   group:
-    label: 日常機能
+    label: 機能ガイド
     icon: ph:compass
 ---
 
@@ -65,18 +65,23 @@ WSL、開発マシン、ヘッドレスサーバー上の `ochcli` を SSH 経�
 
 </CardGrid>
 
-## アプリ別ガイド
+## 特定のツールを設定する
 
-基本的な接続の操作は共通ですが、認証、ファイル形式、高度な機能が異なります。
+接続の操作は共通ですが、書き込み方式、認証、高度な機能は異なります。各ツールに専用の
+ガイドグループがあります。
 
-| ツール | ガイド | 主な内容 |
-| --- | --- | --- |
-| Claude Code / Claude Desktop | [Claude を設定](/ja/guides/claude) | 認証変数、役割モデル、プラグイン、MCP |
-| Codex | [Codex を設定](/ja/guides/codex) | OAuth、Responses、推論、履歴 |
-| Grok Build | [その他のツール](/ja/guides/open-tools#grok-build) | プロファイル、API バックエンド、環境変数 |
-| OpenCode | [その他のツール](/ja/guides/open-tools#opencode) | AI SDK、複数接続、OMO |
-| OpenClaw | [その他のツール](/ja/guides/open-tools#openclaw) | API プロトコル、デフォルトモデル、ツール権限 |
-| Hermes | [その他のツール](/ja/guides/open-tools#hermes) | API モード、モデル、メモリ |
+| ツール | ガイド | 書き込み方式 | MCP | スキル |
+| --- | --- | --- | --- | --- |
+| Claude Code | [Claude を設定する](/ja/claude) | 現在の接続を切り替え | 対応 | 対応 |
+| Claude Desktop | [Claude を設定する](/ja/claude) | 現在の接続を切り替え | 非対応 | 非対応 |
+| Codex | [Codex を設定する](/ja/codex) | 現在の接続を切り替え | 対応 | 対応 |
+| Grok Build | [Grok Build を設定する](/ja/grok-build) | 現在の接続を切り替え | 対応 | 非対応 |
+| OpenCode | [OpenCode を設定する](/ja/opencode) | 複数接続の共存 | 対応 | 対応 |
+| OpenClaw | [OpenClaw を設定する](/ja/openclaw) | 複数接続の共存 | 非対応 | 非対応 |
+| Hermes | [Hermes を設定する](/ja/hermes) | 複数接続の共存 | 対応 | 対応 |
+
+「現在の接続を切り替え」方式では、ツールの実設定が 1 つの有効な接続を指します。共存方式では、
+OcHub が複数の接続を 1 つのツール設定へ書き込み、「ツールから削除」はその項目だけを削除します。
 
 cc-switch から既存データを移す場合は、ID 競合、バックアップ、段階的な確認を説明する
 [移行ガイド](/ja/guides/migration)から始めます。

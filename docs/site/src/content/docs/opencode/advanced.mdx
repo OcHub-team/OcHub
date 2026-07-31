@@ -1,0 +1,161 @@
+---
+title: Advanced OpenCode pitfalls
+description: Understand merged configuration, provider credentials, AI SDK protocol adapters, rules, sharing, and local state.
+audience: human
+sidebar:
+  order: 1
+---
+
+OpenCode keeps providers, credentials, project overrides, rules, plugins, and
+sessions in different places. A provider can be present in OcHub and still be
+unusable when one of those identities or layers does not match.
+
+## Global configuration is only the first layer
+
+OcHub manages the global `~/.config/opencode/opencode.json`. OpenCode merges it
+with remote organizational defaults, `OPENCODE_CONFIG`, the project
+`opencode.json`, runtime inline config, and managed policy. Later and managed
+sources can override matching keys while unrelated keys remain merged.
+
+The `.opencode/` directories are another source of agents, commands, plugins,
+skills, and tools. They do not need to replace the Provider entry to change the
+model or behavior selected by an agent.
+
+If OcHub's preview is correct but OpenCode shows another provider or model:
+
+1. Run OpenCode from the same directory where the problem occurs.
+2. Look upward for project `opencode.json` and `.opencode/` extensions.
+3. Check `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`, and managed settings.
+4. Remember that `OPENCODE_CONFIG_DIR` adds another extension directory.
+5. Add `"$schema": "https://opencode.ai/config.json"` for editor validation.
+
+Replacing one nested value does not necessarily remove unrelated values
+inherited from another layer.
+
+## Provider ID joins credentials to configuration
+
+`/connect` stores credentials separately in
+`~/.local/share/opencode/auth.json`. The Provider ID entered in `/connect` must
+exactly match the key under `provider.<id>` in `opencode.json`.
+
+This produces a common half-configured state:
+
+- The Provider appears in `/models`, but no matching credential exists.
+- A credential exists, but its ID differs by case, punctuation, or spelling.
+- OcHub writes `options.apiKey`, while an older `/connect` credential remains
+  and makes debugging ambiguous.
+
+Run `opencode auth list` first. Then verify the Provider ID, config entry, and
+credential source. Do not commit `auth.json` or literal authorization headers.
+OcHub's inline API key field is convenient for local switching; use
+`{env:NAME}` or `{file:path}` manually when a repository-safe secret reference
+is required.
+
+An unset `{env:NAME}` substitution becomes an empty string, so a syntactically
+valid configuration can still authenticate with no value.
+
+## The AI SDK package selects the wire protocol
+
+“OpenAI-compatible” is not one protocol:
+
+| Upstream endpoint | OpenCode package |
+| --- | --- |
+| `/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| `/v1/responses` | `@ai-sdk/openai` |
+| Anthropic Messages | `@ai-sdk/anthropic` |
+| Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
+| Google Gemini | `@ai-sdk/google` |
+
+Using `@ai-sdk/openai-compatible` for a Responses-only model can make the
+Provider and model appear normally but fail only when sending a message.
+Likewise, changing only `baseURL` does not translate Chat into Responses.
+
+For a mixed provider, current OpenCode can override the package per model.
+OcHub exposes one package at the Provider level and preserves native per-model
+fields when editing; review the JSON preview carefully before relying on a
+manual mixed setup.
+
+## Model metadata affects context behavior
+
+The key under `models` is the model ID OpenCode selects. `name` is display text.
+`limit.context` and `limit.output` tell OpenCode how much input and output the
+model supports; they do not increase the upstream limit.
+
+Wrong limits can cause premature compaction or requests that the upstream
+rejects. Use the provider's actual token limits. For providers already covered
+by Models.dev, avoid overriding values without a reason.
+
+OcHub's **Options extensions** parse `true`, `false`, and numbers as native JSON
+values. Quote-like text remains a string. Check the preview when an SDK option
+is type-sensitive.
+
+## `AGENTS.md` and `CLAUDE.md` are fallback choices
+
+OpenCode prefers a project `AGENTS.md`. It uses `CLAUDE.md` only when no
+`AGENTS.md` exists in that category. The same fallback applies to global
+OpenCode and Claude instruction files.
+
+Unlike Claude Code, OpenCode does not automatically expand `@file` references
+inside `AGENTS.md`. Put reusable files in the `instructions` array, which
+supports paths, globs, and remote URLs. Remote instructions introduce a network
+dependency and have a short fetch timeout, so critical build rules should stay
+local.
+
+OpenCode also loads Claude-compatible skills by default. Set the documented
+`OPENCODE_DISABLE_CLAUDE_CODE*` variables when this compatibility causes
+duplicate or unwanted instructions.
+
+## Session sharing publishes the conversation
+
+`/share` creates a link and synchronizes the conversation to OpenCode's
+servers. Anyone with the link can access the shared conversation. The shared
+data includes history and session metadata until `/unshare` removes it.
+
+For proprietary repositories:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled"
+}
+```
+
+Do not enable `"auto"` without an explicit team policy: it shares every new
+conversation automatically.
+
+## Plugins and OMO can change more than the model
+
+OpenCode plugins can add agents, commands, hooks, and provider behavior.
+Standard OMO and OMO Slim variants should not be active together. Before
+disabling either through OcHub:
+
+1. Read the detected OMO state.
+2. Back up the OpenCode configuration directory.
+3. Inspect the `plugin` array and project-level configuration.
+4. Restart OpenCode and confirm the active agent and Provider.
+
+A provider request problem may therefore come from a plugin or agent override,
+not the `provider` object itself.
+
+## Know where local state lives
+
+Common current locations are:
+
+- `~/.config/opencode/opencode.json`: global configuration managed by OcHub.
+- `~/.local/share/opencode/auth.json`: `/connect` credentials.
+- `~/.local/share/opencode/opencode.db`: current session database used by
+  OpenCode and OcHub usage synchronization.
+
+`XDG_DATA_HOME` and `OPENCODE_DB` can move the data/database location. A custom
+OcHub config directory changes the configuration path, not necessarily the
+data directory. Back up both before manual migration.
+
+## Official references
+
+- OpenCode [configuration](https://opencode.ai/docs/config)
+- OpenCode [providers and credentials](https://opencode.ai/docs/providers)
+- OpenCode [rules and AGENTS.md](https://opencode.ai/docs/rules/)
+- OpenCode [session sharing](https://opencode.ai/docs/share/)
+
+OcHub-specific merge behavior, OMO controls, session synchronization, and
+custom directories describe the current OcHub implementation.

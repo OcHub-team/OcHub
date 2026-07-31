@@ -1,0 +1,49 @@
+---
+title: Grok Build を設定する
+description: モデルプロファイルを定義し、資格情報と API バックエンドを選んで、Grok Build を新しい接続へ切り替えます。
+audience: human
+sidebar:
+  order: 6
+  group:
+    label: Grok Build
+    icon: ph:hammer
+---
+
+Grok Build は 1 つの現在モデルプロファイルで動作します。実設定は 1 つの有効な接続を
+指します。既定ディレクトリは `~/.grok` で、OcHub は MCP サーバーも管理できます。
+プリセットから始めるか、フォームへ手入力します。
+
+<Steps>
+
+1. **プロファイルを定義します。** `[models].default` が参照するクライアント設定名です。
+
+2. **上流モデルを入力します。** プロバイダーへ送る実 ID です。表示名は読みやすさだけに作用します。
+
+3. **Base URL を入力します。** 選択したプロトコルの基点を使います。
+
+4. **認証方式を選びます。** API キーは設定へ秘密値を書き込みます。環境変数は
+   `XAI_API_KEY` などの名前だけを保存し、Grok Build の実行環境にその値が必要です。
+
+5. **API バックエンドを選びます。** OpenAI Responses、OpenAI Chat Completions、
+   Anthropic Messages から上流に合うものを選びます。
+
+6. **コンテキスト長を設定します。** 上流モデルが実際に対応するトークン数を使います。
+
+7. **`config.toml` を確認して切り替えます。** Grok Build を再起動し、実リクエストを送ります。
+
+</Steps>
+
+<OcHubStepsVisual
+  locale="ja"
+  app="Grok Build"
+  labels="プロファイルを定義する|上流モデルを入力する|Base URL を入力する|API キーまたは環境変数認証を選ぶ|対応する API バックエンドを選ぶ|コンテキスト長を設定する|config.toml を確認して切り替える"
+  visuals="identity|model|fields|fields|source|model|preview"
+/>
+
+環境変数方式が OcHub のチェックでは成功し Grok Build で失敗する場合、2 つのプロセスが
+異なる環境を継承しています。同じターミナルから起動するか、Grok Build が実際に読み取る
+環境へ変数を定義します。
+
+保存後は[確認チェックリスト](/ja/guides/providers#新しい接続を確認する)に従って切り替えを
+確認します。実効設定、カスタム Backend、権限、サンドボックス、互換インポートは
+[Grok Build の高度な設定と落とし穴](/ja/grok-build/advanced)を参照してください。

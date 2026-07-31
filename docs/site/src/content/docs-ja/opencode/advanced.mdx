@@ -1,0 +1,140 @@
+---
+title: OpenCode の高度な設定と落とし穴
+description: 設定マージ、Provider 資格情報、AI SDK プロトコル、ルール、共有、ローカル状態を理解します。
+audience: human
+sidebar:
+  order: 1
+---
+
+OpenCode は Provider、資格情報、プロジェクト上書き、ルール、プラグイン、セッションを別々の
+場所へ保存します。OcHub に Provider があっても、識別子やレイヤーが一致しなければ使えません。
+
+## グローバル設定は最初のレイヤーにすぎない
+
+OcHub はグローバル `~/.config/opencode/opencode.json` を管理します。OpenCode はこれを
+Remote 組織既定値、`OPENCODE_CONFIG`、Project `opencode.json`、Runtime inline 設定、
+Managed policy とマージします。後のソースと Managed 設定は競合キーを上書きし、競合しない
+キーは残ります。
+
+`.opencode/` ディレクトリは Agent、command、plugin、skill、tool の別ソースです。Provider
+項目を置換しなくても、Agent が選ぶモデルや動作を変えられます。
+
+OcHub プレビューと OpenCode の表示が違う場合：
+
+1. 問題が起きる同じディレクトリから OpenCode を起動。
+2. 上方向の Project `opencode.json` と `.opencode/` 拡張を確認。
+3. `OPENCODE_CONFIG`、`OPENCODE_CONFIG_CONTENT`、Managed 設定を確認。
+4. `OPENCODE_CONFIG_DIR` が別の拡張ディレクトリを追加することを確認。
+5. `"$schema": "https://opencode.ai/config.json"` を追加して検証。
+
+ネスト値の上書きだけでは、別レイヤーから継承した無関係な値は必ずしも削除されません。
+
+## Provider ID が資格情報と設定を結び付ける
+
+`/connect` の資格情報は `~/.local/share/opencode/auth.json` に別保存されます。そこで入力した
+Provider ID は `opencode.json` の `provider.<id>` キーと完全一致する必要があります。
+
+よくある半端な状態：
+
+- `/models` に Provider があるが、対応資格情報がない。
+- 資格情報はあるが、ID の大文字小文字、記号、綴りが違う。
+- OcHub の `options.apiKey` と古い `/connect` 資格情報が同時に残り、出所が不明。
+
+まず `opencode auth list` を実行し、Provider ID、設定項目、資格情報ソースを確認します。
+`auth.json` や Authorization header の直書きをコミットしないでください。OcHub の inline
+API Key はローカル切り替え向けです。リポジトリで安全に参照する場合は `{env:NAME}` または
+`{file:path}` を手動で使います。
+
+未設定の `{env:NAME}` は空文字列になるため、構文が正しくても空の認証値になり得ます。
+
+## AI SDK パッケージが通信プロトコルを選ぶ
+
+「OpenAI-compatible」は単一プロトコルではありません：
+
+| 上流エンドポイント | OpenCode パッケージ |
+| --- | --- |
+| `/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| `/v1/responses` | `@ai-sdk/openai` |
+| Anthropic Messages | `@ai-sdk/anthropic` |
+| Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
+| Google Gemini | `@ai-sdk/google` |
+
+Responses 専用モデルへ `@ai-sdk/openai-compatible` を選ぶと、Provider とモデルは表示されても
+送信時に失敗します。`baseURL` だけを変えても Chat は Responses に変換されません。
+
+現在の OpenCode は混在 Provider でモデル単位のパッケージ上書きが可能です。OcHub は
+Provider 単位の選択を提供し、編集時にネイティブなモデル拡張を保持します。手動の混在設定を
+使う前に JSON プレビューを確認してください。
+
+## モデルメタデータはコンテキスト動作へ影響する
+
+`models` のキーは OpenCode が選択するモデル ID、`name` は表示文字列です。`limit.context`
+と `limit.output` は実際の上流制限を増やさず、OpenCode に上限を伝えます。
+
+誤った limit は早すぎる圧縮や、上流に拒否される巨大リクエストを起こします。Provider が
+公開する正確な Token 制限を使い、Models.dev 対応 Provider は理由なく上書きしないでください。
+
+OcHub の「オプション拡張」は `true`、`false`、数値を JSON ネイティブ型として解釈します。
+SDK オプションが型に敏感な場合はプレビューを確認します。
+
+## `AGENTS.md` と `CLAUDE.md` はフォールバック選択
+
+OpenCode は Project `AGENTS.md` を優先し、そのカテゴリにない場合だけ `CLAUDE.md` を使います。
+グローバル OpenCode と Claude 指示も同様です。
+
+Claude Code と異なり、OpenCode は `AGENTS.md` 内の `@file` を自動展開しません。再利用する
+ファイルはパス、glob、リモート URL 対応の `instructions` 配列へ入れます。リモート指示は
+ネットワークと短いタイムアウトに依存するため、重要なビルドルールはローカルに置きます。
+
+OpenCode は既定で Claude 互換スキルも読みます。重複・不要な指示が出る場合は、公式の
+`OPENCODE_DISABLE_CLAUDE_CODE*` 環境変数で対応ソースを無効化します。
+
+## セッション共有は会話を公開する
+
+`/share` はリンクを作り、会話を OpenCode サーバーへ同期します。リンクを知る誰もがアクセス
+できます。`/unshare` まで履歴とセッションメタデータが共有されます。
+
+機密リポジトリでは：
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled"
+}
+```
+
+明確なチームポリシーなしに `"auto"` を使わないでください。すべての新規会話を自動共有します。
+
+## プラグインと OMO はモデル以外も変える
+
+OpenCode プラグインは Agent、コマンド、Hook、Provider 動作を追加できます。標準 OMO と
+OMO Slim を同時に有効にすべきではありません。OcHub で無効化する前に：
+
+1. 検出済み OMO 状態を読む。
+2. OpenCode 設定ディレクトリをバックアップ。
+3. `plugin` 配列と Project 設定を確認。
+4. OpenCode を再起動し、現在の Agent と Provider を確認。
+
+Provider の問題が `provider` オブジェクトではなく、プラグインや Agent 上書きに由来する
+場合もあります。
+
+## ローカル状態の場所を区別する
+
+現在の一般的な場所：
+
+- `~/.config/opencode/opencode.json`：OcHub 管理のグローバル設定。
+- `~/.local/share/opencode/auth.json`：`/connect` 資格情報。
+- `~/.local/share/opencode/opencode.db`：OpenCode と OcHub 使用量同期のセッション DB。
+
+`XDG_DATA_HOME` と `OPENCODE_DB` はデータ・DB の場所を変更できます。OcHub のカスタム設定
+ディレクトリは設定パスだけを変え、データ場所は変えないことがあります。手動移行前に両方を
+バックアップしてください。
+
+## 公式リファレンス
+
+- OpenCode [設定](https://opencode.ai/docs/config)
+- OpenCode [Provider と資格情報](https://opencode.ai/docs/providers)
+- OpenCode [ルールと AGENTS.md](https://opencode.ai/docs/rules/)
+- OpenCode [セッション共有](https://opencode.ai/docs/share/)
+
+OcHub のマージ動作、OMO 管理、セッション同期、カスタムディレクトリは現在の OcHub 実装です。

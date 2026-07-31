@@ -87,13 +87,36 @@ OcHub 会在写入前检查实时配置是否发生漂移。出现冲突时：
 
 不要让 OcHub、cc-switch 和手工编辑器同时修改同一份配置。
 
+## 验证新连接
+
+在任何应用中保存或切换连接后：
+
+1. 查看生成的文件与路径。
+2. 保存后确认卡片状态是“已添加”或“当前”。
+3. 完全重启目标工具。
+4. 选择新的 Provider 与模型。
+5. 发起一条短请求。
+6. 检查工具错误、OcHub 用量或上游日志。
+
+| 问题 | 常见原因 |
+| --- | --- |
+| 连接没出现在工具里 | 保存后未“添加到工具”，或配置目录不对 |
+| 一个连接覆盖了另一个 | 多连接共存应用使用了重复 Provider ID |
+| 401 | API Key、环境变量或进程启动环境不一致 |
+| 404 / 请求体错误 | API Backend、协议或 API 模式选错 |
+| 模型可见但调用失败 | 模型 ID、上下文限制或权限不匹配 |
+| 高级字段保存失败 | JSON/YAML 节点类型不正确 |
+
 ## 按应用查看字段说明
 
 | 应用 | 继续阅读 |
 | --- | --- |
-| Claude Code / Claude Desktop | [鉴权变量、角色模型、MCP 与插件](/zh/guides/claude) |
-| Codex | [OAuth、Responses、推理与会话历史](/zh/guides/codex) |
-| Grok Build / OpenCode / OpenClaw / Hermes | [协议、模型列表与专属配置](/zh/guides/open-tools) |
+| Claude Code / Claude Desktop | [鉴权变量、角色模型、MCP 与插件](/zh/claude) |
+| Codex | [OAuth、Responses、推理与会话历史](/zh/codex) |
+| Grok Build | [Profile、API Backend 与环境变量](/zh/grok-build) |
+| OpenCode | [AI SDK 包、Provider ID 与 OMO](/zh/opencode) |
+| OpenClaw | [协议、默认模型与工具权限](/zh/openclaw) |
+| Hermes | [API 模式、模型与记忆](/zh/hermes) |
 
 需要从旧管理器带入连接时，不要手工逐条复制，先查看
 [从 cc-switch 迁移](/zh/guides/migration)。

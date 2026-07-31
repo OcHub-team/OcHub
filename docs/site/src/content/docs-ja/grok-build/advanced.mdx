@@ -1,0 +1,153 @@
+---
+title: Grok Build の高度な設定と落とし穴
+description: 設定スコープ、カスタムモデル、資格情報、inspect、権限、サンドボックス、互換インポートを診断します。
+audience: human
+sidebar:
+  order: 1
+---
+
+Grok Build はユーザーモデル Profile、Project 拡張、互換インポート、権限モード、独立した
+サンドボックスを組み合わせます。1 つの TOML だけでなく、実効設定を調べるのが最短です。
+
+## `grok inspect` から始める
+
+問題が起きる同じリポジトリとサブディレクトリで実行します：
+
+```bash
+grok inspect
+```
+
+設定ソース、指示、スキル、プラグイン、Hook、MCP を表示します。マシンや CI を比較する場合は
+`grok inspect --json` を使います。
+
+主なスコープ：
+
+| スコープ | 場所 | 用途 |
+| --- | --- | --- |
+| Environment | `GROK_*` など | セッション・CI 上書き |
+| User | `~/.grok/config.toml` または `$GROK_HOME/config.toml` | 個人モデル・UI 既定値 |
+| Project | `.grok/config.toml` | リポジトリ MCP、プラグイン、権限 |
+| Managed/requirements | 管理 TOML | Enterprise 既定値・ポリシー |
+
+OcHub は選択した User 設定ディレクトリを書き込みます。Project 設定は 2 つ目の完全なモデル
+Profile ではなく、安全に共有できる拡張に限定されます。`GROK_HOME` が別の場所なら、OcHub
+にも同じディレクトリを設定してください。
+
+## Profile、モデル ID、表示名は別物
+
+```toml
+[models]
+default = "company-grok"
+
+[model."company-grok"]
+model = "upstream-model-id"
+name = "Company Grok"
+```
+
+- `company-grok` は `[models].default` が選ぶローカル Profile。
+- `upstream-model-id` は API へ送る値。
+- `Company Grok` は表示文字列。
+
+表示名だけでは無効な上流モデルを修正できません。Profile 名変更では `[models].default` と
+`[model."<profile>"]` を同時に更新します。OcHub の構造化エディターは両方を処理します。
+
+## `api_backend` はエンドポイントと一致させる
+
+カスタムモデルの Backend：
+
+| `api_backend` | 想定上流 |
+| --- | --- |
+| `responses` | OpenAI Responses |
+| `chat_completions` | OpenAI Chat Completions |
+| `messages` | Anthropic Messages |
+
+Base URL はプロトコルを選択・変換しません。不一致は 404、不明フィールド、stream 解析失敗に
+なります。上流の実エンドポイントを確認してから OcHub で Backend を選びます。
+
+## `env_key` は変数名であり、値を設定しない
+
+```toml
+env_key = "COMPANY_AI_KEY"
+```
+
+この場合、`grok` プロセスが空でない `COMPANY_AI_KEY` を継承する必要があります。OcHub から
+見えるキーが terminal、IDE、launch agent、SSH、CI runner にも見えるとは限りません。
+
+ヘッドレスな公式 xAI は通常 `XAI_API_KEY` を使います。カスタム Provider は専用変数名を使い、
+xAI キーを別エンドポイントへ誤送信しないようにします。ローカルファイル保存を許容するとき
+だけ inline `api_key` を使ってください。
+
+## コンテキスト制限はクライアント動作へ影響する
+
+`context_window` は選択モデルの上限を Grok Build へ伝えますが、上流を拡張しません。大きすぎる
+値は圧縮を遅らせてサーバー拒否を起こし、小さすぎる値は早すぎる圧縮を起こします。
+
+`/context` で使用量を確認し、長いセッションは `/compact` で手動圧縮できます。モデル系列の
+宣伝上限ではなく、正確な上流モデルの制限を使います。
+
+## 権限とサンドボックスは別の問題
+
+- 権限はツール呼び出しを実行できるか決定。
+- サンドボックスは承認済み呼び出しがアクセスできるディスク・ネットワークを制限。
+
+Ask が安全な既定値です。Auto は安全な呼び出しを分類承認し、Always-approve は確認を省略
+しますが、明示 deny と `PreToolUse` Hook は守ります。Allow はサンドボックス外アクセスを
+許可しません。
+
+Plan mode も独立しています。承認前に通常の編集ツールを拒否しますが、shell は権限モードに
+従いファイルを書けます。Subagent は権限モードを継承しますが、親の Plan mode の編集制限を
+受けません。Plan mode をセキュリティ境界として扱わないでください。
+
+自動化では blanket always-approve ではなく、限定 allow、明示 deny、sandbox Profile を使います。
+
+## 互換インポートは重複を作る
+
+Grok Build は Claude Code と Cursor の指示、スキル、プラグイン、Hook、MCP、および
+`AGENTS.md` ファミリーを自動で読めます。移行には便利ですが、同じ機能を複数ソースから
+読み込むことがあります。
+
+症状：
+
+- 設定が違う似た名前の MCP が 2 つある。
+- `.grok/` にない Hook が実行される。
+- Claude と Grok の指示が矛盾する。
+- Grok 側を削除してもプラグイン・スキルが残る。
+
+`grok inspect` で出所を確認します。MCP では同名 Project サーバーが User サーバーを完全に
+置換し、Grok 設定は互換 vendor ファイルより優先されます。不要な互換ソースを無効化します。
+
+## MCP 起動を個別診断する
+
+```bash
+grok mcp list
+grok mcp doctor <name>
+```
+
+Remote MCP は可能なら HTTP を使います。OAuth token は `~/.grok/mcp_credentials.json` に
+別保存されます。stdio は `~/.grok/logs/mcp/<server>.stderr.log` を確認し、初回 `npx`
+ダウンロードには長い `startup_timeout_sec` が必要な場合があります。
+
+Project MCP はコミットできますが、秘密値は直書きせず `${VAR}` または `${VAR:-default}` を
+使います。
+
+## Headless 実行を明示する
+
+Script・CI では：
+
+- `-p` と機械可読出力を使用。
+- 更新確認が再現性を下げる場合は `--no-auto-update`。
+- 非対話権限モードと明示 allow/deny を選択。
+- マシン間で既定 Profile が違う場合は `-m <profile>`。
+
+Workstation の browser login は remote runner を設定しません。Headless では
+`grok login --device-auth` または適切に scoped された API Key を使います。
+
+## 公式リファレンス
+
+- xAI [Grok Build 概要](https://docs.x.ai/build/overview)
+- xAI [設定とスコープ](https://docs.x.ai/build/settings)
+- xAI [権限](https://docs.x.ai/build/features/permissions)
+- xAI [MCP サーバー](https://docs.x.ai/build/features/mcp-servers)
+- xAI [CLI リファレンス](https://docs.x.ai/build/cli/reference)
+
+OcHub のプリセット、検証、プレビュー、カスタム設定ディレクトリは現在の OcHub 実装です。

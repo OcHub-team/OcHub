@@ -90,13 +90,36 @@ OcHub は書き込み前に設定ドリフトを確認します。競合があ�
 
 OcHub、cc-switch、手動エディターで同じファイルを同時に編集しないでください。
 
+## 新しい接続を確認する
+
+任意のアプリで接続を保存または切り替えた後：
+
+1. 生成ファイルとパスを確認。
+2. 保存後に「追加済み」または「現在」を確認。
+3. 対象ツールを完全に再起動。
+4. 新しいプロバイダーとモデルを選択。
+5. 短いリクエストを送信。
+6. ツールエラー、OcHub 使用量、上流ログを確認。
+
+| 問題 | よくある原因 |
+| --- | --- |
+| 接続がない | 保存だけで追加していない、またはディレクトリ違い |
+| 別項目を上書き | 共存アプリで Provider ID が重複 |
+| 401 | キー、環境変数、起動環境の不一致 |
+| 404 / ボディエラー | バックエンド、プロトコル、API モードの誤り |
+| モデルは見えるが失敗 | ID、コンテキスト、権限の不一致 |
+| 高度な保存に失敗 | JSON/YAML ノード型の誤り |
+
 ## アプリ別フィールドガイド
 
 | アプリ | 続きを読む |
 | --- | --- |
-| Claude Code / Claude Desktop | [認証変数、役割モデル、MCP、プラグイン](/ja/guides/claude) |
-| Codex | [OAuth、Responses、推論、セッション履歴](/ja/guides/codex) |
-| Grok Build / OpenCode / OpenClaw / Hermes | [プロトコル、モデル一覧、固有設定](/ja/guides/open-tools) |
+| Claude Code / Claude Desktop | [認証、役割モデル、MCP、プラグイン](/ja/claude) |
+| Codex | [OAuth、Responses、推論、セッション履歴](/ja/codex) |
+| Grok Build | [プロファイル、API バックエンド、環境変数](/ja/grok-build) |
+| OpenCode | [AI SDK パッケージ、Provider ID、OMO](/ja/opencode) |
+| OpenClaw | [プロトコル、デフォルトモデル、ツール権限](/ja/openclaw) |
+| Hermes | [API モード、モデル、メモリ](/ja/hermes) |
 
 旧管理ツールから接続を移す場合は、手作業でコピーせず
 [cc-switch から移行](/ja/guides/migration)を利用してください。

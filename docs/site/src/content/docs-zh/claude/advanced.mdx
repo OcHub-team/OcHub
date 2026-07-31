@@ -1,0 +1,133 @@
+---
+title: Claude Code 进阶与易踩坑
+description: 排查配置优先级、网关兼容、指令加载、MCP 作用域与权限行为。
+audience: human
+sidebar:
+  order: 1
+---
+
+Claude Code 会同时从多个位置读取设置、凭据、指令与工具。通过 OcHub 切换后看似“没有生效”，
+通常不是配置丢失，而是实时值被另一个来源覆盖。
+
+## 先确认哪一层获胜
+
+Claude Code 的设置优先级从高到低为：
+
+1. 受管策略
+2. 命令行参数
+3. `.claude/settings.local.json`
+4. `.claude/settings.json`
+5. `~/.claude/settings.json`
+
+OcHub 通常编辑用户级 `~/.claude/settings.json`。仓库或本地设置可以覆盖同名标量。数组会跨层
+合并，因此重复的 hooks、permissions 或插件项可能来自多个文件。
+
+环境变量还是另一条覆盖路径。尤其是 `ANTHROPIC_API_KEY` 可以优先于 Claude 订阅登录，旧的
+`ANTHROPIC_BASE_URL` 也可能让请求继续发往之前的网关。
+
+切换不生效时：
+
+1. 从新终端重新启动 Claude Code。
+2. 检查当前目录附近的 `.claude/settings.local.json` 与 `.claude/settings.json`。
+3. 检查已导出的 `ANTHROPIC_*` 变量。
+4. 使用 Claude Code 的配置诊断查看生效值来自哪个文件。
+5. 再与 OcHub 的写入预览比较。
+
+## 先选鉴权头，再检查密钥
+
+以下三者不能互换：
+
+| 变量 | 请求行为 | 常见用途 |
+| --- | --- | --- |
+| `ANTHROPIC_AUTH_TOKEN` | `Authorization: Bearer ...` | 第三方网关 |
+| `ANTHROPIC_API_KEY` | `x-api-key: ...` | Anthropic API Key |
+| Claude 登录缓存 | 账号或订阅认证 | 官方登录 |
+
+OcHub 只把密钥写入所选变量，并从受管 `env` 中移除另一个变量。但配置文件之外的 shell 变量
+仍可能获胜。从第三方切回官方登录后出现 401，常见原因就是终端仍导出了 API Key。
+
+## 自定义 Base URL 仍然需要 Messages 协议
+
+`ANTHROPIC_BASE_URL` 只重定向 Claude Code，不负责协议转换。直接连接的第三方地址必须接受
+Anthropic Messages 语义。若上游只有 Chat Completions 或 Responses，应选择 OcHub
+模型供应商，让网关执行受支持的转换。
+
+设置 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` 后，Claude Code 可以从网关
+`/v1/models` 发现模型。该能力默认关闭，因为共享网关密钥可能把它能访问的全部模型暴露给
+每个用户。只有确认模型目录可以公开给当前用户时才开启。
+
+部分网关实现了 Messages，却不接受 Anthropic 的 beta header 或 `thinking` 字段：
+
+- `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` 移除实验 beta 字段。
+- `CLAUDE_CODE_DISABLE_THINKING=1` 不发送 thinking 参数。
+
+只在确认上游的具体错误后把它们当兼容兜底。这些变量会关闭能力，不能用来掩盖协议选择错误。
+
+## 模型别名与上下文标记都是能力声明
+
+Claude Code 使用一个回退模型，以及 Sonnet、Opus、Haiku、Fable 的角色映射。显示名称不能让
+无效的上游模型 ID 变得可用。应先逐个验证真实 ID，再增加角色映射。
+
+OcHub 的“1M 上下文”会追加 Claude Code 的 `[1M]` 标记。只有模型和账号确实支持扩展上下文
+时才开启；Haiku 不接受该标记。转发站声称拥有很大的 `context_window`，不等于 Claude Code
+的 1M 变体一定可用。
+
+## `CLAUDE.md` 是上下文，不是强制策略
+
+Claude Code 默认读取 `CLAUDE.md`，不会直接读取 `AGENTS.md`。希望多个 Agent 共用一份来源，
+可创建一个很短的 `CLAUDE.md`：
+
+```md
+@AGENTS.md
+```
+
+需要注意：
+
+- 每个 `CLAUDE.md` 应保持精简；Anthropic 建议目标少于 200 行。
+- import 只改善组织方式，内容仍会进入上下文。
+- 父目录、子目录、本地文件与 rules 会拼接；含糊或冲突的规则无法保证可靠执行。
+- `--add-dir` 只授予目录访问，除非设置
+  `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`，否则不会加载该目录的指令。
+- `/compact` 后会重新注入根目录指令；子目录指令要等 Claude 再次读取该目录文件时加载。
+
+大型 monorepo 应使用带路径 frontmatter 的 `.claude/rules/`，不要把所有约定塞进一个每次
+必加载的文件。
+
+## MCP 作用域不等于设置作用域
+
+Claude MCP 常见的三个作用域：
+
+| 作用域 | 保存位置 | 是否共享 |
+| --- | --- | --- |
+| Local | `~/.claude.json` 中的项目条目 | 否 |
+| Project | `.mcp.json` | 是，通过 Git |
+| User | `~/.claude.json` | 否，本机所有项目 |
+
+同名服务器的优先级是 Local 高于 Project，高于 User。项目 MCP 文件应通过环境变量展开引用
+密钥，而不是提交明文 token。Claude 会在首次使用项目 `.mcp.json` 前要求信任；旧的信任选择
+阻止新配置时，可使用 `claude mcp reset-project-choices` 重置。
+
+新的远程 MCP 应优先使用 HTTP；SSE transport 已弃用。MCP 的大输出会消耗活动上下文，也可能
+触发 Claude Code 的输出限制。
+
+## 权限、Hook 与沙箱要分开排查
+
+权限规则按 deny、ask、allow 的顺序判断。高优先级层的 deny 不能被低优先级层重新允许。
+Hook 也可能阻止或改写工具调用；沙箱则限制已经获准的 shell 命令能访问的文件与网络。
+
+工具意外被阻止时：
+
+1. 用 `/hooks` 查看 hook 及其来源文件。
+2. 检查受管、本地、项目和用户设置中的 deny。
+3. 检查沙箱的文件系统与网络限制。
+4. 修改最窄的责任层，不要直接增加宽泛 allow。
+
+## 官方参考
+
+- Anthropic [Claude Code 设置](https://code.claude.com/docs/en/settings)
+- Anthropic [LLM 网关配置](https://code.claude.com/docs/en/llm-gateway)
+- Anthropic [记忆与 CLAUDE.md](https://code.claude.com/docs/en/memory)
+- Anthropic [MCP 配置](https://code.claude.com/docs/en/mcp)
+- Anthropic [权限](https://code.claude.com/docs/en/permissions)
+
+OcHub 字段名称、预览、协议转换和自定义配置目录描述的是 OcHub 当前实现。

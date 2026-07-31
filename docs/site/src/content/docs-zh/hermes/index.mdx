@@ -1,0 +1,48 @@
+---
+title: 配置 Hermes
+description: 选择 API 模式、添加模型，并维护 Hermes 的模型与记忆配置。
+audience: human
+sidebar:
+  order: 9
+  group:
+    label: Hermes
+    icon: ph:paper-plane-tilt
+---
+
+Hermes 可以同时保存多个 Provider，并把它们写入默认配置目录 `~/.hermes` 下的 `config.yaml`。
+OcHub 也可以管理它的 MCP 服务器和技能。Hermes 默认可能未在应用列表中启用，先到
+**设置 → 应用与插件**开启 Hermes，再回到应用页。
+
+## 配置自定义连接
+
+1. 选择 API 模式：
+
+   | API 模式 | 上游 |
+   | --- | --- |
+   | `chat_completions` | OpenAI 兼容 Chat |
+   | `anthropic_messages` | Claude Messages |
+   | `codex_responses` | OpenAI Responses |
+   | `bedrock_converse` | AWS Bedrock Converse |
+
+2. 填写 Base URL 与 API Key。
+3. 添加模型列表。第一行模型 ID 会同时成为 Hermes 运行时和 `/model` 选择器的默认模型。
+4. 按需填写显示名和上下文长度。
+5. 上游要求控制调用间隔时，填写 `rate_limit_delay` 秒数；留空表示不额外限流。
+6. 检查生成的 `config.yaml`，保存并重开 Hermes。
+
+缺省 API 模式会按 Chat Completions 处理，因此 Anthropic、Responses 或 Bedrock 上游必须明确
+选择对应模式。
+
+## 模型与记忆维护
+
+在**高级工具 → Hermes 模型与记忆**中可以：
+
+- 读取和保存 `config.yaml` 的 `model` 节点。
+- 编辑 MEMORY 与 USER 记忆内容。
+- 分别启用或关闭两类记忆。
+- 查看当前字符数量和启用状态。
+
+保存模型或切换记忆时，OcHub 会在可用时给出备份路径。不要在 Hermes 正在写入记忆时同时
+修改，先退出运行中的 Agent。
+
+保存后，按[验收清单](/zh/guides/providers#验证新连接)确认新连接可用。

@@ -99,13 +99,36 @@ conflict:
 
 Do not let OcHub, cc-switch, and a manual editor write the same file at once.
 
+## Verify a new connection
+
+After saving or switching a connection in any app:
+
+1. Review the generated file and path.
+2. Confirm the card is Added or Current after saving.
+3. Fully restart the target tool.
+4. Select the new provider and model.
+5. Make one short request.
+6. Check tool errors, OcHub usage, or upstream logs.
+
+| Problem | Common cause |
+| --- | --- |
+| Connection missing | It was saved but not added, or the directory is wrong |
+| One connection replaced another | Duplicate Provider ID in a coexistence app |
+| 401 | Key, environment variable, or launch environment mismatch |
+| 404 / body error | Wrong backend, protocol, or API mode |
+| Model appears but fails | Model ID, context limit, or permission mismatch |
+| Advanced save fails | Incorrect JSON/YAML node type |
+
 ## App-specific field guides
 
 | App | Continue with |
 | --- | --- |
-| Claude Code / Claude Desktop | [Authentication, role models, MCP, and plugins](/guides/claude) |
-| Codex | [OAuth, Responses, reasoning, and session history](/guides/codex) |
-| Grok Build / OpenCode / OpenClaw / Hermes | [Protocols, model lists, and app-specific files](/guides/open-tools) |
+| Claude Code / Claude Desktop | [Authentication, role models, MCP, and plugins](/claude) |
+| Codex | [OAuth, Responses, reasoning, and session history](/codex) |
+| Grok Build | [Profiles, API backends, and environment variables](/grok-build) |
+| OpenCode | [AI SDK packages, provider IDs, and OMO](/opencode) |
+| OpenClaw | [Protocols, default model, and tool permissions](/openclaw) |
+| Hermes | [API modes, models, and memory](/hermes) |
 
 To bring in connections from an older manager, use
 [Migrate from cc-switch](/guides/migration) instead of copying every entry by

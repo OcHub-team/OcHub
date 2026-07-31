@@ -1,0 +1,55 @@
+---
+title: Configure Grok Build
+description: Define a model profile, choose credentials and an API backend, then switch Grok Build onto a new connection.
+audience: human
+sidebar:
+  order: 6
+  group:
+    label: Grok Build
+    icon: ph:hammer
+---
+
+Grok Build operates with one current model profile: its live configuration
+points to one active connection. Its default directory is `~/.grok`, and OcHub
+can also manage its MCP servers. Start from a preset or fill the form manually.
+
+<Steps>
+
+1. **Define the profile.** It is the client configuration name used by
+   `[models].default`.
+
+2. **Enter the upstream model.** This is the model ID sent to the provider; the
+   display name is only for readability.
+
+3. **Enter the Base URL.** Use the base address for the selected protocol.
+
+4. **Choose credentials.** API Key writes the secret to configuration.
+   Environment variable stores only a name such as `XAI_API_KEY`, which must
+   exist in Grok Build's runtime environment.
+
+5. **Choose an API backend.** Select OpenAI Responses, OpenAI Chat Completions,
+   or Anthropic Messages to match the upstream.
+
+6. **Set the context window.** Use the actual token limit supported by the
+   upstream model.
+
+7. **Review `config.toml` and switch.** Restart Grok Build and make a real
+   request.
+
+</Steps>
+
+<OcHubStepsVisual
+  locale="en"
+  app="Grok Build"
+  labels="Define the profile|Enter the upstream model|Enter the Base URL|Choose API-key or environment authentication|Select the matching API backend|Set the context window|Review config.toml and switch"
+  visuals="identity|model|fields|fields|source|model|preview"
+/>
+
+If environment-variable mode works in an OcHub check but not in Grok Build, the
+two processes probably inherited different environments. Launch from the same
+terminal or define the variable in the environment Grok Build actually reads.
+
+After saving, follow the [verification checklist](/guides/providers#verify-a-new-connection)
+to confirm the switch. For effective configuration, custom backends,
+permissions, sandboxing, and compatibility imports, see
+[Advanced Grok Build pitfalls](/grok-build/advanced).

@@ -1,0 +1,167 @@
+---
+title: 配置 Codex
+description: 选择账号与 API 鉴权模式，配置 Responses 上游，并管理会话历史。
+audience: human
+sidebar:
+  order: 5
+  group:
+    label: Codex
+    icon: ph:terminal-window
+---
+
+Codex 同时使用 `config.toml` 和 `auth.json`。前者保存模型与 Provider，后者保存官方账号
+登录材料。OcHub 把两者作为一套连接配置管理，但不会把 API Key 伪装成官方账号登录。
+
+## 先选择鉴权方式
+
+新增 Codex 连接时，先根据目标选择一种模式：
+
+| 模式 | 账号状态 | 模型请求凭据 | 适用场景 |
+| --- | --- | --- | --- |
+| 仅第三方 API | 不要求 ChatGPT 登录 | 第三方 API Key | 完全使用第三方 Responses 上游 |
+| 仅 ChatGPT 账号登录 | 使用 `auth.json` | 官方登录态 | 使用 Codex 官方账号与端点 |
+| ChatGPT 登录 + 第三方 API | 保留 `auth.json` | 第三方 API Key | 需要账号能力，同时把模型请求发往第三方 |
+
+组合模式中，账号仍由 `auth.json` 管理；模型请求使用当前 Provider 的
+`experimental_bearer_token`。因此看到 `auth.json` 仍然存在是预期行为。
+
+<Aside type="note" title="API Key 与 OAuth 各司其职">
+
+“第三方连接保留当前 OAuth”只避免切换时覆盖 `auth.json`，不会让 OAuth 自动替代第三方
+API Key。第三方上游要求密钥时，仍要在连接中填写。
+
+</Aside>
+
+## 配置第三方 Responses 上游
+
+<Steps>
+
+1. **打开 Codex 并新增连接。** 如果页面提供合适预设，可从预设开始，再核对每个字段。
+
+2. **设置 Provider ID。** 这是 `config.toml` 中 `[model_providers.<id>]` 的键，也是 `model_provider` 的值。使用简短、稳定且不含空格的标识，例如 `company_proxy`。
+
+3. **填写普通 Provider 名称。** 它是 Codex 配置内部的名称，不是 OcHub 列表中显示的连接名称。
+
+4. **填写 Base URL。** 第三方模式通常以 `/v1` 结尾，Codex 会继续拼接 `/responses`。以供应商给出的 Responses 地址为准。
+
+5. **选择鉴权方式并填写 Key。** “仅第三方 API”和组合模式都会使用第三方 API Key；仅账号登录不会使用该字段。
+
+6. **填写模型。** 使用上游真实支持的模型 ID。需要时再选择 `minimal`、`low`、`medium`、`high` 或 `xhigh` 推理强度。
+
+7. **保持 `wire_api = responses`。** 当前 Codex 不再支持 `chat`；只有 Chat Completions 的上游应通过 OcHub 模型供应商做接口转换。
+
+8. **检查预览并切换。** 确认 `config.toml` 中的 Provider ID、Base URL、模型和鉴权模式正确，再保存并切换。
+
+9. **重开 Codex 会话。** 发起一条短请求，在“用量 → 请求日志”中核对请求模型、计价模型和状态。
+
+</Steps>
+
+<OcHubStepsVisual
+  locale="zh"
+  app="Codex"
+  labels="打开 Codex 并添加连接|设置稳定的 Provider ID|填写内部 Provider 名称|填写 Responses Base URL|选择鉴权并填写 Key|选择上游支持的模型|保持 Responses 接口|检查 config.toml 并切换|在新 Codex 会话中验证"
+  visuals="toolbar-add|identity|identity|fields|fields|model|source|preview|usage-nav"
+/>
+
+## 什么时候使用模型供应商
+
+以下情况优先使用[模型供应商模式](/zh/getting-started/relay)，不要勉强写成 Codex 直接连接：
+
+- 上游只支持 OpenAI Chat Completions，不支持 Responses。
+- 需要把 Codex 模型别名改写成上游模型名。
+- 需要在 Anthropic、Chat 与 Responses 接口之间自动选择。
+- 希望集中记录网关级首 Token、总延迟和错误。
+- 希望后续切换上游时不反复重写 `config.toml`。
+
+Codex 的远程压缩请求要求上游支持 OpenAI Responses。普通请求可以由网关转换到 Chat，但
+远程压缩不能依赖 Chat-only 上游。
+
+## 配置模型与推理
+
+连接表单中的“模型”会成为 Codex 当前模型。推理强度是否生效取决于模型和上游对
+Responses 推理参数的支持。
+
+建议按以下顺序验证：
+
+1. 不设置推理强度，确认模型能回复。
+2. 先尝试 `medium`。
+3. 再根据延迟和结果调整到 `low`、`high` 或 `xhigh`。
+4. 上游拒绝参数时，清空推理强度，而不是频繁更换模型与密钥。
+
+“远程压缩”只有在 Provider 名称精确为 `OpenAI` 时才由 Codex 开启。第三方上游必须完整支持
+Responses 的远程压缩语义，否则保持关闭。
+
+## 高级请求选项
+
+高级区域适合上游明确要求额外参数时使用：
+
+| 字段 | 用途 | 示例场景 |
+| --- | --- | --- |
+| 禁用响应存储 | 写入 `disable_response_storage = true` | ZDR 或不支持响应存储的上游 |
+| Query 参数 | 追加到每次请求 URL | Azure 的 `api-version` |
+| HTTP 头 | 附加自定义请求头 | 租户、项目或路由标识 |
+
+先在普通连接上完成请求，再逐项添加。密钥应放在专用 API Key 字段；不要为了方便把长期密钥
+复制到普通自定义头中。
+
+## 管理官方登录
+
+如果 Codex 已经通过 ChatGPT 账号登录：
+
+1. 新增或选择“官方登录”连接。
+2. 切换后确认 Base URL 回到官方行为。
+3. 重开 Codex。
+4. 执行一条请求，确认没有第三方 Provider 错误。
+
+从官方登录切到第三方时，可在**Codex 应用设置**开启“第三方连接保留当前 OAuth”。这样
+切换不会覆盖 `auth.json`，以后仍可快速切回官方登录。
+
+## 统一与迁移会话历史
+
+Codex 应用设置包含两个容易混淆的选项：
+
+- **迁入既有 Codex 会话**：在下一次迁移流程中导入已有官方会话历史。
+- **统一 Codex 会话历史**：让官方与第三方 Codex 会话使用统一历史位置。
+
+调整历史设置前：
+
+1. 退出所有 Codex 进程。
+2. 备份 `~/.codex`，或你配置的自定义 Codex 目录。
+3. 一次只改一个选项。
+4. 重启 OcHub 后检查“会话”中的数量与时间范围。
+
+需要撤回统一历史时，打开**高级工具 → Codex 历史**：
+
+- “检查统一历史备份”会判断当前目录是否存在可恢复备份。
+- “恢复官方历史备份”可能覆盖当前官方历史；确认前先再做一份目录备份。
+
+## MCP 与技能
+
+Codex 支持 OcHub 的 MCP 和技能分发。
+
+- 在**MCP 服务器**中打开 Codex 开关并同步，内容会写入 Codex 的 `config.toml`。
+- 在**技能**中选择 Codex 作为安装目标，或在已安装卡片上启用。
+- 修改自定义配置目录后，两者都会改用新目录；同步后重启 Codex。
+- 如果 MCP 表里出现 `[mcp.servers.*]` 之类旧格式，OcHub 会在导入时兼容读取，并按当前格式写回。
+
+## 常见问题
+
+| 现象 | 原因方向 | 处理 |
+| --- | --- | --- |
+| 提示 `chat` 已移除 | `wire_api` 或上游只支持 Chat | 改用 Responses，或通过模型供应商转换 |
+| Base URL 请求 404 | `/v1` 层级不对 | 核对最终应为 `/v1/responses` |
+| 官方账号仍在但第三方请求 401 | OAuth 不等于第三方 Key | 检查鉴权模式与第三方 API Key |
+| 远程压缩失败 | 上游不完整支持 Responses | 关闭远程压缩或改用 Responses 上游 |
+| 切换后模型没变 | 旧 Codex 进程仍在运行 | 退出后重开会话并查看 `config.toml` 预览 |
+| 会话数量异常 | 历史目录或统一历史设置改变 | 核对自定义目录并检查历史备份 |
+
+完成配置后，至少确认：
+
+- `config.toml` 中当前 `model_provider` 与预期 Provider ID 一致。
+- 账号模式与 API Key 模式没有混用。
+- 一条真实请求能返回，且日志显示正确请求模型。
+- MCP、技能和会话历史位于预期的 Codex 配置目录。
+
+如需把 Chat-only 上游接给 Codex，继续阅读
+[路由实战](/zh/advanced/routing-recipes)。同时登录与转发、远程压缩、Responses WebSocket 和
+Provider 历史分桶见 [Codex 进阶与易踩坑](/zh/codex/advanced)。

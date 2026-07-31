@@ -1,0 +1,55 @@
+---
+title: Configure OpenClaw
+description: Choose the upstream protocol, add models, and manage default model, environment, and tool permissions.
+audience: human
+sidebar:
+  order: 8
+  group:
+    label: OpenClaw
+    icon: ph:paw-print
+---
+
+OpenClaw providers live under `models.providers.<id>` in `openclaw.json`. It
+keeps several providers at once, so every Provider ID must be unique. OcHub
+does not manage OpenClaw MCP or skills. Its default directory is `~/.openclaw`.
+
+## Configure the connection and models
+
+1. Choose the actual upstream protocol:
+
+   - `openai-completions`
+   - `openai-responses`
+   - `anthropic-messages`
+   - `google-generative-ai`
+   - `bedrock-converse-stream`
+
+2. Enter Base URL and API key.
+3. Add model ID, display name, context window, and reasoning marker.
+4. Add custom headers only for required tenant or routing information.
+5. Confirm the provider appears under the right ID and save.
+
+The protocol is required. A correct key with the wrong protocol commonly
+produces a 404, invalid request body, or broken streaming.
+
+## Default model, environment, and tool permissions
+
+Under **Advanced tools → OpenClaw advanced configuration**:
+
+| Area | Content | Typical use |
+| --- | --- | --- |
+| Default model JSON | `agents.defaults.model` | `primary`, `fallbacks`, and related fields |
+| Environment JSON | `env` | Runtime key-value pairs |
+| Tool configuration JSON | `tools` | `profile`, `allow`, and `deny` |
+
+Run Check OpenClaw configuration first. JSON values must have the right object,
+array, and string types. Record the backup path OcHub reports when saving.
+
+<Aside type="caution" title="Tool permissions change what the agent can do">
+
+Changing `tools.allow` or `tools.deny` can expand or reduce local access. Add
+only what a task needs and run a controlled test afterward.
+
+</Aside>
+
+After saving, follow the [verification checklist](/guides/providers#verify-a-new-connection)
+to confirm the new connection works.

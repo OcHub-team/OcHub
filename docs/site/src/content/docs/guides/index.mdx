@@ -1,11 +1,11 @@
 ---
-title: Everyday features
-description: Common workflows for connections, app-specific settings, MCP, skills, sessions, usage, and appearance.
+title: Features
+description: Common workflows for connections, MCP, skills, sessions, usage, remote nodes, and appearance.
 audience: human
 sidebar:
   order: 20
   group:
-    label: Everyday features
+    label: Features
     icon: ph:compass
 ---
 
@@ -21,7 +21,6 @@ tool configuration.
 | Find a conversation, token count, or request cost | [Sessions and usage](/guides/sessions-usage) |
 | Change language, startup behavior, or visible apps | [Settings and themes](/guides/settings-themes) |
 | Configure authentication or fields unique to one CLI | Choose an app-specific guide below |
-
 <CardGrid>
 
 <Card title="Remote nodes" icon="ph:desktop-tower">
@@ -67,19 +66,24 @@ Adjust language, startup behavior, app visibility, terminals, and themes.
 
 </CardGrid>
 
-## Continue by app
+## Configure a specific tool
 
-The connection workflow is shared, but authentication, file formats, and advanced
-capabilities differ:
+The connection workflow is shared, but write modes, authentication, and
+advanced capabilities differ. Each tool has its own guide group:
 
-| Tool | Guide | Focus |
-| --- | --- | --- |
-| Claude Code / Claude Desktop | [Configure Claude](/guides/claude) | Auth variables, role models, plugins, and MCP |
-| Codex | [Configure Codex](/guides/codex) | OAuth, Responses, reasoning, and history |
-| Grok Build | [Configure other tools](/guides/open-tools#grok-build) | Profiles, API backends, and environment variables |
-| OpenCode | [Configure other tools](/guides/open-tools#opencode) | AI SDK, multiple connections, and OMO |
-| OpenClaw | [Configure other tools](/guides/open-tools#openclaw) | API protocols, default model, and tool permissions |
-| Hermes | [Configure other tools](/guides/open-tools#hermes) | API modes, models, and memory |
+| Tool | Guide | Write mode | MCP | Skills |
+| --- | --- | --- | --- | --- |
+| Claude Code | [Configure Claude](/claude) | Current-connection switching | Yes | Yes |
+| Claude Desktop | [Configure Claude](/claude) | Current-connection switching | No | No |
+| Codex | [Configure Codex](/codex) | Current-connection switching | Yes | Yes |
+| Grok Build | [Configure Grok Build](/grok-build) | Current-connection switching | Yes | No |
+| OpenCode | [Configure OpenCode](/opencode) | Multiple connections coexist | Yes | Yes |
+| OpenClaw | [Configure OpenClaw](/openclaw) | Multiple connections coexist | No | No |
+| Hermes | [Configure Hermes](/hermes) | Multiple connections coexist | Yes | Yes |
+
+In current-connection switching, the tool's live configuration points to one
+active connection. In coexistence mode, OcHub writes several connections into
+one tool configuration, and Remove from tool deletes only that entry.
 
 When moving existing data from cc-switch, start with the
 [migration guide](/guides/migration) for ID-collision, backup, and staged

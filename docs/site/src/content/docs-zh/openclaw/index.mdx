@@ -1,0 +1,54 @@
+---
+title: 配置 OpenClaw
+description: 选择上游协议、添加模型，并管理默认模型、环境变量与工具权限。
+audience: human
+sidebar:
+  order: 8
+  group:
+    label: OpenClaw
+    icon: ph:paw-print
+---
+
+OpenClaw 的 Provider 位于 `openclaw.json` 的 `models.providers.<id>`。它可以同时保存多个
+Provider，因此每个 Provider ID 必须唯一。OcHub 不为 OpenClaw 管理 MCP 或技能。默认配置目录
+是 `~/.openclaw`。
+
+## 配置连接与模型
+
+1. 选择上游真实使用的 API 协议：
+
+   - `openai-completions`
+   - `openai-responses`
+   - `anthropic-messages`
+   - `google-generative-ai`
+   - `bedrock-converse-stream`
+
+2. 填写 Base URL 和 API Key。
+3. 为每个模型添加 ID、显示名、上下文窗口，并标记是否为推理模型。
+4. 需要租户或路由头时，在高级区域增加自定义请求头。
+5. 查看预览，确认 Provider 位于正确 ID 下，再保存。
+
+协议字段是必填项。API Key 正确但接口协议选错时，常见表现是 404、请求体字段错误或流式
+响应无法解析。
+
+## 默认模型、环境变量与工具权限
+
+打开**高级工具 → OpenClaw 高级配置**可以维护：
+
+| 区域 | 对应内容 | 适合操作 |
+| --- | --- | --- |
+| 默认模型 JSON | `agents.defaults.model` | 设置 `primary`、`fallbacks` 等 |
+| 环境变量 JSON | `env` | 添加 OpenClaw 运行时需要的键值 |
+| 工具配置 JSON | `tools` | 设置 `profile`、`allow`、`deny` |
+
+先点击“检查 OpenClaw 配置”。保存前 JSON 必须是正确类型：对象、数组和字符串不能互相替代。
+OcHub 会在可用时生成备份；状态提示出现备份路径后立即记录。
+
+<Aside type="caution" title="工具权限会改变 Agent 能做什么">
+
+修改 `tools.allow` 或 `tools.deny` 可能扩大或缩小 OpenClaw 的本机操作权限。只加入任务必需的
+工具，并在修改后执行一次受控测试。
+
+</Aside>
+
+保存后，按[验收清单](/zh/guides/providers#验证新连接)确认新连接可用。

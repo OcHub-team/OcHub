@@ -1,0 +1,202 @@
+---
+title: Codex の高度な設定と落とし穴
+description: ChatGPT ログインを保持したモデルプロバイダー転送、リモート圧縮、Responses WebSocket、ローカル履歴を理解します。
+audience: human
+sidebar:
+  order: 1
+---
+
+Codex のアカウント状態、モデル通信、チャット履歴は関連していますが、別の状態です。原因が
+分かりにくい 401、圧縮失敗、「消えた」履歴の多くは、これらを同じものとして扱うと発生します。
+
+## まず正しい構造を理解する
+
+| 名前 | 保存場所 | 実際の役割 |
+| --- | --- | --- |
+| OcHub 接続 ID | OcHub データベース | 接続カードを識別。内部では UUID のままでよい |
+| Codex Provider ID | `config.toml` の `model_provider` | `[model_providers.<id>]` と Codex 履歴バケットを選択 |
+| Codex プロバイダー名 | `[model_providers.<id>].name` | 表示・能力互換フィールド。履歴バケットではない |
+| ChatGPT ログイン | `auth.json` または OS 資格情報ストア | ChatGPT 資格情報を保存・更新 |
+| モデルプロバイダー資格情報 | 現在の Provider 認証フィールド | サードパーティーまたは OcHub ローカルゲートウェイへのモデル要求を認証 |
+
+OcHub カード名を変えても履歴は移行されません。`model_provider` を変えると、新しい履歴が
+別バケットへ入る可能性があります。OcHub は内部 UUID と Codex Provider ID を分離し、新しい
+モデルプロバイダー接続には安定した `custom` を使います。`company_proxy` などへ変更もできます。
+
+<Aside type="caution" title="Provider ID は表示名ではなく安定したデータです">
+
+空白のない短く安定した値を使います。アドレス、モデル、キー、カード名だけを変更するときは
+通常変更しません。旧接続が UUID を Provider ID に使っていた場合は、OcHub で編集して保存
+します。OcHub はバックアップ後、一致する JSONL メタデータと SQLite スレッド索引を移行します。
+
+</Aside>
+
+## ChatGPT ログインを保持してモデルプロバイダーを使う
+
+ChatGPT のアカウント状態を残しながら、モデル推論をサードパーティー Responses API または
+OcHub モデルプロバイダーへ送る方式です。
+
+<Steps>
+
+1. **先に ChatGPT へログインします。** 公式 Codex 接続だけで動作することを確認します。
+   資格情報は `~/.codex/auth.json` または OS キーチェーンに保存されます。
+
+2. **OcHub にログイン情報を保持させます。** Codex アプリ設定で「サードパーティーで現在の
+   OAuth を保持」を有効にします。
+
+3. **Codex 接続を追加し「モデルプロバイダー」を選びます。** 既存プロバイダーとクライアント
+   モデルを選択します。
+
+4. **安定した Provider ID を設定します。** 例は `company_proxy`。これは履歴バケットであり、
+   OcHub の内部接続 ID ではありません。
+
+5. **「ChatGPT ログイン + サードパーティー API」を選びます。** OcHub はログイン状態を保持し、
+   ローカルゲートウェイ用に別のクライアントキーを発行します。
+
+6. **プレビューを確認します。** `model_provider` は安定 ID、`base_url` は OcHub ローカル
+   ゲートウェイを指し、Provider には OpenAI ログイン要件とゲートウェイ bearer の両方が必要です。
+
+7. **保存、切り替え、Codex 再起動。** 短い要求を送り、「使用量 → リクエストログ」で
+   `gateway` 経由か確認します。
+
+</Steps>
+
+生成例です。キーは OcHub が生成するため、無関係なマシンへ手動コピーしないでください。
+
+```toml
+model_provider = "company_proxy"
+
+[model_providers.company_proxy]
+name = "Company Proxy"
+base_url = "http://127.0.0.1:4180/v1"
+wire_api = "responses"
+requires_openai_auth = true
+experimental_bearer_token = "rd-..."
+```
+
+認証経路は 2 本あります。
+
+- ChatGPT ログインキャッシュは Codex が管理します。
+- モデル要求は `rd-...` で OcHub ゲートウェイへ入り、ゲートウェイが上流資格情報を使います。
+
+`auth.json` を保持してもサードパーティー API が ChatGPT OAuth を受け入れるわけではありません。
+ゲートウェイキーだけを持っていても、ChatGPT へログイン済みとは限りません。
+
+## 圧縮は何を圧縮するのか
+
+長いチャットには別の 2 種類の状態があります。
+
+- **ローカル transcript**：`/resume`、セッション一覧、確認用にディスクへ保存。
+- **アクティブコンテキスト**：次のモデル要求へ送る履歴。コンテキストウィンドウ制限を受ける。
+
+`/compact` はアクティブコンテキストを圧縮します。古いターンを簡潔な要約へ置き換え、重要な
+決定を残しながら無制限な増加を防ぎます。ローカル transcript の削除とは異なります。Codex は
+モデル既定値で自動圧縮もでき、上級者は `model_auto_compact_token_limit` で閾値を上書きできます。
+
+## リモート圧縮とは
+
+通常圧縮はクライアント側で要約できます。リモート圧縮は Responses 固有の圧縮要求を、その
+意味を実装した上流へ委譲します。現在の OcHub では Responses の `compaction_trigger` を含み、
+Chat Completions や Anthropic Messages に忠実な変換先はありません。
+
+そのため OcHub は、選択したモデルプロバイダーに原生 Responses 上流がある場合だけ提供します。
+
+1. モデルプロバイダーで Responses インターフェースを有効化。
+2. Codex 接続を編集し、そのプロバイダーを選択。
+3. Provider セクションで「リモート圧縮」を有効化。
+4. プレビューでプロバイダー名が正確に `OpenAI` になったことを確認。
+5. Codex を再起動し、長いチャットで `/compact` を確認。
+
+プロバイダー名 `OpenAI` は現在の Codex/OcHub の能力互換ルールです。
+`model_provider = "openai"` と混同しないでください。前者はカスタム Provider の名前、後者は
+Codex 予約済みの内蔵 OpenAI Provider を選択し、独自転送には使えません。
+
+<Aside type="caution" title="OpenAI-compatible はリモート圧縮対応を意味しません">
+
+通常の `/v1/responses` 生成だけを実装し、圧縮入力を認識しないサービスは多くあります。
+HTTP 400、不明 input type、圧縮後の中断が出たら無効にします。OcHub は Chat-only 上流の
+通常要求を変換できますが、リモート圧縮は変換できません。
+
+</Aside>
+
+## Responses WebSocket とは
+
+`supports_websockets = true` は、このモデル Provider が Responses API WebSocket 通信へ
+対応すると Codex に伝えます。対応 Provider は、毎回 HTTP/SSE 要求を作る代わりに、持続する
+双方向接続で Responses イベントを運べます。
+
+混同しやすい 2 種類の WebSocket：
+
+| WebSocket | 接続 | OcHub/Codex 設定 |
+| --- | --- | --- |
+| Responses WebSocket | Codex モデルクライアント ↔ モデル Provider | `supports_websockets = true` |
+| app-server WebSocket | 外部クライアント ↔ `codex app-server` | `codex --remote` / `app-server --listen` |
+
+OcHub が設定するのは前者であり、Codex CLI をリモート app-server にする機能ではありません。
+
+## WebSocket を有効にする条件
+
+次のすべてを満たす場合だけ有効にします。
+
+- 上流が HTTP streaming だけでなく Responses WebSocket を明示的にサポート。
+- モデルプロバイダーの Responses インターフェースで WebSocket 能力が有効。
+- ネットワークプロキシ、TLS 終端、社内 CA が `wss://` ハンドシェイクと長時間接続を許可。
+- 通常の Responses 要求がすでに成功。
+
+モデルプロバイダーで有効にすると、OcHub は能力を Codex 接続へ反映します。
+
+```toml
+[model_providers.company_proxy]
+wire_api = "responses"
+supports_websockets = true
+```
+
+WebSocket は接続の繰り返しコストを減らし、継続イベントストリームに適する可能性がありますが、
+すべての上流で高速になる保証はありません。ハンドシェイク失敗、頻繁な切断、HTTPS のみの
+企業プロキシでは無効にします。モデル、認証、Base URL の誤りを直す機能ではありません。
+
+## チャット履歴の保存場所
+
+公式 Codex は再開可能なセッション transcript をローカルに保存します。現在のバージョンは
+通常 `$CODEX_HOME`（既定 `~/.codex`）の次の場所を使います。
+
+- `sessions/`：アクティブセッションの rollout JSONL。
+- `archived_sessions/`：アーカイブ済みだが復元可能なセッション。
+- `state_5.sqlite`：スレッド一覧、索引、Provider バケット状態。
+
+ファイル名は現在の実装詳細で、将来変更される可能性があります。Codex 実行中の一括編集より、
+`/resume`、`/archive`、`codex unarchive`、OcHub セッション管理を優先してください。
+
+`auth.json` は履歴ではありません。機密ログイン情報を含むためパスワードと同様に保護し、
+Git、チケット、公開チャットへ貼り付けないでください。
+
+## Provider ID が履歴へ影響する理由
+
+Codex はセッションメタデータとスレッド索引に `model_provider` を記録します。内蔵 `openai`、
+共有 `custom`、その他 Provider を区別できますが、ID の変更は履歴バケットも変えます。
+
+- URL、モデル、キーだけを変更：Provider ID を保持。
+- サードパーティー接続間で履歴共有：同じ安定 ID（例 `custom`）を使用。
+- チームと個人履歴を分離：`team_proxy`、`personal_proxy` のように別 ID を使用。
+- 旧 UUID を置換：Codex を終了し、OcHub から保存して JSONL と SQLite をバックアップ・移行。
+- `/archive` はローカル保持、`/delete` は現在のセッションと派生子セッションを永久削除。
+
+## 安全なトラブルシューティング順序
+
+1. **ログイン層**：Codex はログイン済みか。ファイル保存かキーチェーンか。
+2. **Provider 層**：`model_provider` が存在する `[model_providers.<id>]` を指すか。
+3. **ゲートウェイ層**：Base URL が OcHub ローカルか、`rd-...` がこの接続用か。
+4. **通常要求**：リモート圧縮と WebSocket を無効にし、Responses 要求を 1 件確認。
+5. **WebSocket 層**：上流とネットワーク対応を確認してから有効化。
+6. **圧縮層**：最後にリモート圧縮を有効にし、`/compact` を個別確認。
+7. **履歴層**：`/resume` が変わったら、削除前に `CODEX_HOME` と Provider ID を確認。
+
+## 公式参考と実装境界
+
+- OpenAI [Codex 設定リファレンス](https://learn.chatgpt.com/docs/config-file/config-reference)：
+  `model_provider`、`requires_openai_auth`、`supports_websockets`、自動圧縮閾値。
+- OpenAI [Codex 認証とセッション](https://learn.chatgpt.com/docs/auth)：ログインキャッシュと保存。
+- OpenAI [Codex CLI コマンド](https://learn.chatgpt.com/docs/developer-commands.md?surface=cli)：
+  `/compact`、`/resume`、`/archive`、`/delete`。
+- Provider 名によるリモート圧縮判定、Responses-only 保護、UUID 履歴移行、具体的な走査パスは
+  現在の Codex 向け OcHub 互換動作であり、OpenAI が保証する永久プロトコルではありません。

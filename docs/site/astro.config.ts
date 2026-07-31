@@ -38,6 +38,31 @@ const nimbusConfig = defineNimbusConfig({
 
 export default defineConfig({
   output: "static",
+  // Per-tool guides moved out of /guides/* into top-level groups. Keep the
+  // old URLs alive for every locale (static meta-refresh pages).
+  redirects: {
+    "/guides/claude": "/claude",
+    "/guides/claude-advanced": "/claude/advanced",
+    "/guides/codex": "/codex",
+    "/guides/codex-advanced": "/codex/advanced",
+    "/guides/grok-build-advanced": "/grok-build/advanced",
+    "/guides/opencode-advanced": "/opencode/advanced",
+    "/guides/open-tools": "/guides",
+    "/ja/guides/claude": "/ja/claude",
+    "/ja/guides/claude-advanced": "/ja/claude/advanced",
+    "/ja/guides/codex": "/ja/codex",
+    "/ja/guides/codex-advanced": "/ja/codex/advanced",
+    "/ja/guides/grok-build-advanced": "/ja/grok-build/advanced",
+    "/ja/guides/opencode-advanced": "/ja/opencode/advanced",
+    "/ja/guides/open-tools": "/ja/guides",
+    "/zh/guides/claude": "/zh/claude",
+    "/zh/guides/claude-advanced": "/zh/claude/advanced",
+    "/zh/guides/codex": "/zh/codex",
+    "/zh/guides/codex-advanced": "/zh/codex/advanced",
+    "/zh/guides/grok-build-advanced": "/zh/grok-build/advanced",
+    "/zh/guides/opencode-advanced": "/zh/opencode/advanced",
+    "/zh/guides/open-tools": "/zh/guides",
+  },
   // Tailwind v4 via its Vite plugin (the integration Astro recommends for
   // Tailwind v4 — replaces the PostCSS plugin, which doesn't build under
   // Astro 7's Vite 8 bundler).

@@ -1,0 +1,144 @@
+---
+title: Claude Code の高度な設定と落とし穴
+description: 設定の優先順位、ゲートウェイ互換性、指示の読み込み、MCP スコープ、権限動作を診断します。
+audience: human
+sidebar:
+  order: 1
+---
+
+Claude Code は設定、資格情報、指示、ツールを複数の場所から同時に読み込みます。OcHub で
+切り替えた内容が反映されない場合、消失ではなく別のソースによる上書きが一般的です。
+
+## どの設定レイヤーが優先されるか
+
+Claude Code の設定優先順位は高い順に次の通りです：
+
+1. 管理ポリシー
+2. コマンドライン引数
+3. `.claude/settings.local.json`
+4. `.claude/settings.json`
+5. `~/.claude/settings.json`
+
+OcHub は通常、ユーザーレベルの `~/.claude/settings.json` を編集します。リポジトリまたは
+ローカル設定は同じスカラー値を上書きできます。配列はレイヤー間でマージされるため、Hook、
+権限、プラグインの重複が複数ファイルから来ることがあります。
+
+環境変数も独立した上書き経路です。特に `ANTHROPIC_API_KEY` は Claude サブスクリプション
+ログインより優先される場合があり、古い `ANTHROPIC_BASE_URL` は以前のゲートウェイへ
+リクエストを送り続けます。
+
+切り替えが反映されないとき：
+
+1. 新しいシェルから Claude Code を再起動。
+2. 現在のディレクトリ周辺の `.claude/settings.local.json` と `.claude/settings.json` を確認。
+3. export 済みの `ANTHROPIC_*` 変数を確認。
+4. Claude Code の設定診断で実効値のソースを特定。
+5. OcHub の書き込みプレビューと比較。
+
+## キーより先に認証ヘッダーを選ぶ
+
+次の 3 つは互換ではありません：
+
+| 変数 | リクエスト動作 | 一般的な用途 |
+| --- | --- | --- |
+| `ANTHROPIC_AUTH_TOKEN` | `Authorization: Bearer ...` | サードパーティーゲートウェイ |
+| `ANTHROPIC_API_KEY` | `x-api-key: ...` | Anthropic API Key |
+| Claude ログインキャッシュ | アカウント・サブスクリプション認証 | 公式ログイン |
+
+OcHub は選択したキー変数のみを書き込み、管理対象 `env` からもう一方を削除します。ただし
+ファイル外の shell 変数は引き続き優先されます。公式ログインへ戻した後の 401 は、export
+済み API Key が残っていることがよくあります。
+
+## カスタム Base URL にも Messages プロトコルが必要
+
+`ANTHROPIC_BASE_URL` は Claude Code の接続先を変更するだけで、プロトコルを変換しません。
+直接接続するサードパーティーは Anthropic Messages の意味論を受け付ける必要があります。
+Chat Completions または Responses 専用上流は OcHub モデルプロバイダー経由で、対応する
+ゲートウェイ変換を使用してください。
+
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` を設定すると `/v1/models` から
+ゲートウェイモデルを検出できます。共有資格情報がアクセス可能な全モデルを各ユーザーへ
+見せる恐れがあるため、既定では無効です。カタログ公開が安全な場合だけ有効にします。
+
+Messages を実装していても、Anthropic 固有 beta header や `thinking` を拒否する
+ゲートウェイがあります：
+
+- `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` は実験的 beta フィールドを除外。
+- `CLAUDE_CODE_DISABLE_THINKING=1` は thinking パラメーターを省略。
+
+上流の正確なエラーを確認した後の互換フォールバックとして使います。機能を無効化する設定で
+あり、プロトコル選択ミスを隠すためのものではありません。
+
+## モデル別名とコンテキスト記号は能力宣言
+
+Claude Code はフォールバックモデルと Sonnet、Opus、Haiku、Fable のロール別マッピングを
+使います。表示名では無効な上流モデル ID を有効にできません。各 ID を検証してから
+マッピングを追加してください。
+
+OcHub の「1M コンテキスト」は Claude Code の `[1M]` 記号を追加します。モデルとアカウント
+が拡張コンテキストに対応する場合だけ有効にしてください。Haiku はこの記号に対応しません。
+リレーが大きな `context_window` を示しても、Claude Code の 1M 変種が使える証明には
+なりません。
+
+## `CLAUDE.md` はコンテキストでありポリシーではない
+
+Claude Code は既定で `CLAUDE.md` を読み、`AGENTS.md` は直接読みません。複数 Agent で
+同じソースを使うには、小さな `CLAUDE.md` を作成します：
+
+```md
+@AGENTS.md
+```
+
+注意点：
+
+- 各 `CLAUDE.md` は簡潔にし、Anthropic は 200 行未満を目安にしています。
+- import は整理には役立ちますが、内容は引き続きコンテキストへ入ります。
+- 親、子、local、rules は連結され、曖昧な矛盾は確実には解決されません。
+- `--add-dir` はアクセスを許可するだけです。
+  `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` がなければ指示は読み込みません。
+- `/compact` 後、ルート指示は再注入されます。子ディレクトリの指示は、その中のファイルを
+  再び読むときにロードされます。
+
+大規模 monorepo では、すべてを常時ロードする 1 ファイルではなく、パス指定 frontmatter
+付き `.claude/rules/` を使います。
+
+## MCP スコープは設定スコープと異なる
+
+Claude MCP の一般的なスコープ：
+
+| スコープ | 保存場所 | 共有 |
+| --- | --- | --- |
+| Local | `~/.claude.json` 内のプロジェクト項目 | しない |
+| Project | `.mcp.json` | Git 経由で共有 |
+| User | `~/.claude.json` | しない。本機の全プロジェクト |
+
+同名サーバーは Local、Project、User の順に優先されます。Project MCP は秘密値を直接書かず、
+環境変数展開を使ってください。Claude は Project `.mcp.json` の初回利用前に信頼確認を
+行います。古い判断が新設定を妨げる場合は `claude mcp reset-project-choices` でリセットします。
+
+新しいリモート MCP は可能なら HTTP を使用します。SSE transport は非推奨です。大きな MCP
+出力は活動コンテキストを消費し、Claude Code の出力制限にも達します。
+
+## 権限、Hook、サンドボックスを分けて診断する
+
+権限ルールは deny、ask、allow の順で評価されます。上位レイヤーの deny を下位レイヤーで
+再許可できません。Hook はツール呼び出しを拒否・変更でき、サンドボックスは承認済み shell
+コマンドがアクセスできるファイルとネットワークを制限します。
+
+予期せずツールが拒否された場合：
+
+1. `/hooks` で Hook と元ファイルを確認。
+2. managed、local、project、user の deny を確認。
+3. サンドボックスのファイルシステム・ネットワーク制限を確認。
+4. 広い allow ではなく、原因となる最小レイヤーを修正。
+
+## 公式リファレンス
+
+- Anthropic [Claude Code 設定](https://code.claude.com/docs/en/settings)
+- Anthropic [LLM ゲートウェイ設定](https://code.claude.com/docs/en/llm-gateway)
+- Anthropic [メモリと CLAUDE.md](https://code.claude.com/docs/en/memory)
+- Anthropic [MCP 設定](https://code.claude.com/docs/en/mcp)
+- Anthropic [権限](https://code.claude.com/docs/en/permissions)
+
+OcHub のフィールド名、プレビュー、プロトコル変換、カスタム設定ディレクトリは現在の
+OcHub 実装を説明しています。
