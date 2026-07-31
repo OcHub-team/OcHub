@@ -7,8 +7,8 @@ sidebar:
 ---
 
 Remote Nodes を使うと、デスクトップ環境のないマシン上の OcHub 状態を 1 台の
-OcHub Desktop から操作できます。リモート側に必要なのは OpenSSH、`ochcli`、
-`ochubd` だけです。AI コーディングツール、設定、認証情報はリモート環境に残ります。
+OcHub Desktop から操作できます。リモート側に必要なのは OpenSSH と 1 つの
+`ochcli` だけです。AI コーディングツール、設定、認証情報はリモート環境に残ります。
 
 特に **WSL、Linux 開発マシン、リモートワークステーション**で便利です。API
 エンドポイントを変えるたびに SSH ログインして設定ファイルを探す代わりに、OcHub で
@@ -42,7 +42,7 @@ OcHub を閉じてもツールがローカルへ移動することはありま�
 | Sessions | 一覧、全文表示、メタデータ/本文検索、全文 index の構築・保守・削除、session 削除 |
 | Network / Settings | remote proxy の表示・変更・test、app、backup policy、session index、data directory、cc-switch migration |
 | Sync / Backup | WebDAV/S3 の設定・test・upload/download、backup 管理、remote path での SQL import/export |
-| Tools / Update | remote CLI tool の確認・install・update、environment conflict、Claude/Codex/OpenClaw/Hermes の保守、OcHub update |
+| Tools / Update | remote CLI tool の確認・install・update、environment conflict、Claude/Codex/OpenClaw/Hermes の保守、node version の確認、direct download または desktop relay による署名済み OcHub update |
 | Gateway / Station | Gateway の状態・起動停止・接続情報。Provider import、Station の作成・編集・probe・model discovery・remote app への適用 |
 | 診断 | Doctor と SSH 診断 |
 | 監査 | 最近のリモート操作記録 |
@@ -53,7 +53,7 @@ tray/login、theme、「Finder で開く」などは意図的に操作側 comput
 
 OcHub は任意の Shell 実行や自動 Gateway tunnel を提供しません。古い node とは広告済み
 capability の範囲で接続できますが、完全な workspace には新しい remote `ochcli` が必要です。
-Desktop、`ochcli`、`ochubd` を同時に更新してください。
+managed updater より前の node には、Desktop が manual upgrade の案内を表示します。
 
 ## 必要条件
 
@@ -62,7 +62,8 @@ Desktop、`ochcli`、`ochubd` を同時に更新してください。
 - 操作側コンピューターに OcHub Desktop `0.4.21` 以降。
 - 操作側で system `ssh` と `ssh-keyscan` が利用可能。
 - リモート側で到達可能な OpenSSH Server が稼働。
-- リモート側に互換バージョンの `ochcli` と `ochubd`。両方を同じディレクトリに置く。
+- リモート側に互換バージョンの `ochcli`。managed update と rollback を使う場合は
+  `ochcli node install` でインストールする。
 - 対話的なパスワード入力なしで成功する SSH key または Agent 認証。OcHub は
   `BatchMode=yes` を使用します。
 - 接続を切り替える場合、リモート OcHub DB に少なくとも 1 つ Provider が存在。
@@ -80,20 +81,26 @@ passphrase を要求せず、node、runtime、version、policy、capability を�
 ## リモートへ ochcli をインストールする
 
 [最新リリース](https://github.com/OcHub-team/OcHub/releases/latest)からリモート環境用の
-headless CLI archive をダウンロードします。`ochcli` と `ochubd` が同梱されています。
-Linux または WSL では次のように配置できます。
+headless CLI archive をダウンロードします。実行ファイルは `ochcli` ひとつです。
+Linux または WSL では managed node としてインストールします。
 
 ```sh
 tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
-sudo install -m 0755 ochcli ochubd /usr/local/bin/
+chmod +x ochcli
+./ochcli node install
 
 ochcli version
+ochcli node status
 ochcli remote probe
 ```
 
-`/usr/local/bin` へ書き込めない場合は別の場所へ両方を置き、ノード追加時に
-`ochcli` の絶対パスを指定します。非対話 SSH の `PATH` は通常の terminal より短い
-ことがあるため、絶対パスは「ochcli not found」の確実な対処でもあります。
+installer は user-owned directory に version を保持し、stable な `current` entry を
+atomic に切り替え、`~/.local/bin/ochcli` を公開します。利用可能なら launchd または
+systemd user service を登録します。systemd のない WSL では background owner を使い、
+WSL restart 後は次の SSH session が再起動します。
+
+非対話 SSH の `PATH` に `~/.local/bin` を含めてください。node 追加時に managed
+`ochcli` の絶対 path を指定する方法も「ochcli not found」の確実な対処です。
 
 ツールに既存の実設定がある場合は、接続前にリモート OcHub DB へインポートします。
 
@@ -107,15 +114,8 @@ ochcli provider list --app codex
 `ochcli provider add --help` を使います。Secret はデスクトップ経由ではなく
 リモートマシン上で入力してください。
 
-daemon を手動起動する必要はありません。通常の最初の Remote Nodes session が必要に
-応じて Owner を起動し、SSH control session が終了しても動作を続けます。ログイン時や
-boot 時に起動したい場合は次を実行します。
-
-```sh
-ochcli daemon install
-ochcli daemon start
-ochcli daemon status
-```
+2 つ目の daemon binary は不要です。同じ managed `ochcli` が persistent Owner を
+実行し、通常の最初の Remote Nodes session が必要に応じて起動します。
 
 ## SSH 接続を準備する
 
@@ -171,6 +171,32 @@ workspace 切り替え後、page 内の path は**選択中 node の path**で�
 解決され、操作側の `HOME` は使いません。file picker、web/Finder を開く操作、
 desktop preference は local のままです。
 
+## リモートノードを 1 click で更新する
+
+node が managed update capability を広告すると、接続行に `ochcli` version と update
+action が表示されます。OcHub は node version と target platform を取得し、署名済み
+`headless.json` release manifest を確認します。dialog では次を選べます。
+
+- **Automatic**：node が対象 release asset へ到達できれば direct download、できなければ
+  desktop relay。
+- **Download on node**：remote node 自身が署名済み executable を download。
+- **Relay through this computer**：Desktop が対象 binary を download・verify し、SSH
+  経由で node へ stream。
+
+relay でも desktop だけを信用しません。node が expected Node ID、target、byte count、
+SHA-256、release signature を再検証します。どちらも stable `current` entry を atomic
+に切り替え、Owner を restart して version を health check します。失敗時は previous
+version を自動復元します。node 上で手動 rollback もできます。
+
+```sh
+ochcli --yes node rollback
+```
+
+update install は policy で既定無効です。後述の `allowUpdateInstall = true` を設定して
+再接続してください。managed updater より前の node は一度だけ手動で current
+`ochcli` に置き換え、`ochcli node install` を実行して再接続します。managed
+self-update は現在 macOS と Linux（WSL を含む）をサポートします。
+
 ## リモートの Provider を切り替える
 
 1. workspace selector または Remote Nodes 一覧から対象 node を選びます。
@@ -220,7 +246,7 @@ Windows 上の OcHub Desktop から WSL distribution を操作する場合：
    systemd が有効なら最後の代わりに
    `sudo systemctl enable --now ssh` を使えます。
 
-2. 前述の手順で WSL 内へ `ochcli` と `ochubd` をインストールします。
+2. 前述の手順で WSL 内へ単一の `ochcli` を `ochcli node install` でインストールします。
 3. Windows から WSL Linux user への key 認証を設定します。
 4. alias を **Windows** の
    `%USERPROFILE%\.ssh\config` に追加します。
@@ -255,8 +281,9 @@ host authentication、user authentication を提供し、OcHub は SSH process �
 上で allowlist 済みの `ochcli remote serve --stdio` protocol を動かします。request は
 typed operation であり、shell command string ではありません。
 
-既定 policy は status、diagnostics、Provider switching、Gateway lifecycle を許可します。
-remote secret write、backup restore、update install は無効です。remote node で確認します。
+既定 policy は status、diagnostics、Provider switching、Gateway lifecycle、node update
+status の読み取りを許可します。remote secret write、backup restore、update install は
+無効です。remote node で確認します。
 
 ```sh
 ochcli remote policy show
@@ -299,11 +326,13 @@ policy の変更は次の SSH control session から有効です。
 | --- | --- |
 | Add に alias がない | 操作側 SSH config に具体的な `Host name` を置き、`Include` を確認するか Add manually を使う |
 | Permission denied または prompt | key を SSH Agent へ追加し、`ssh -o BatchMode=yes <alias> ochcli remote probe` を成功させる |
-| `ochcli: command not found` | 非対話 SSH の `PATH` に両 binary を置くか、remote `ochcli` の絶対 path を指定する |
+| `ochcli: command not found` | 非対話 SSH の `PATH` に `~/.local/bin` を加えるか、managed `ochcli` の絶対 path を指定する |
 | Host Key が変わった | 停止し、信頼できる経路で新 fingerprint を確認してから `known_hosts` の旧記録を置き換える |
 | WSL node が offline | distribution と `sshd` を起動し、Windows alias、localhost forwarding、port を確認する |
 | 接続できるが Provider がない | remote で `ochcli provider import-live --app <app>` または Provider add を実行する |
-| protocol/version error | Desktop と remote の `ochcli`/`ochubd` を更新し、別 archive の binary を混在させない |
+| update action が manual upgrade を示す | current `ochcli` で一度 `ochcli node install` を実行し、`allowUpdateInstall` を有効にして再接続する |
+| desktop relay が選択された | node が対象 release asset へ到達できないため、Desktop が verify 後に SSH で安全に転送している |
+| protocol/version error | Desktop と remote `ochcli` を更新して再接続する |
 | Gateway が desktop から見えない | Gateway は remote 上にあるため remote tool を使うか、別の SSH tunnel を作成する |
 
 OcHub から node を削除しても、消えるのは操作側の接続記録だけです。リモートの

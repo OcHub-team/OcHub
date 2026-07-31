@@ -47,19 +47,23 @@ gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
 ## リモートノード用 headless CLI
 
 各リリースには macOS、Windows、Linux 用の headless archive もあります。
-次の 2 つが含まれます。
+含まれる実行ファイルは `ochcli` ひとつだけです。command-line control surface、
+Remote Nodes protocol server、persistent Runtime Owner のすべてを担います。
 
-- `ochcli`：command-line control surface と Remote Nodes protocol server。
-- `ochubd`：`ochcli` が利用する persistent Runtime Owner。
-
-同じリリースの両方を同じディレクトリへ置きます。Linux または WSL の例：
+Linux または WSL の例：
 
 ```sh
 tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
-sudo install -m 0755 ochcli ochubd /usr/local/bin/
+chmod +x ochcli
+./ochcli node install
 ochcli version
+ochcli node status
 ochcli remote probe
 ```
+
+managed installer は user profile 内に各 version を保持し、
+`~/.local/bin/ochcli` を公開して、利用可能なら user service も登録します。
+CLI と background owner は一体として atomic update と rollback ができます。
 
 Desktop は接続時に system OpenSSH 経由で
 `ochcli remote serve --stdio` を起動します。この protocol を network listener

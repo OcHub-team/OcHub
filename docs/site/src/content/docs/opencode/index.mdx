@@ -1,6 +1,6 @@
 ---
-title: Configure OpenCode
-description: Add providers under unique IDs, pick the right AI SDK package, and manage OMO configuration.
+title: OpenCode
+description: Configure OpenCode providers, AI SDK packages, multiple connections, and OMO.
 audience: human
 sidebar:
   order: 7
@@ -10,44 +10,26 @@ sidebar:
 ---
 
 OpenCode stores providers under `provider.<id>` in `opencode.json`, so several
-connections coexist in one configuration. Every Provider ID must be unique, and
-editing one provider preserves the others. Remove from tool deletes only that
-entry, not the others. Its default directory is `~/.config/opencode`, and OcHub
-can also manage its MCP servers and skills.
+connections coexist in one configuration. Choose a guide below.
 
-## Add an OpenCode connection
+<CardGrid>
 
-1. Enter a stable ID such as `openrouter` or `company_ai`.
-2. Choose an AI SDK package that matches the upstream:
+<Card title="Configure OpenCode" icon="ph:plugs-connected">
 
-   | Upstream | Common package |
-   | --- | --- |
-   | OpenAI-compatible third party | `@ai-sdk/openai-compatible` |
-   | Official OpenAI | `@ai-sdk/openai` |
-   | Anthropic / Claude | `@ai-sdk/anthropic` |
-   | Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
-   | Google Gemini | `@ai-sdk/google` |
+Add providers under unique IDs, pick the right AI SDK package, and manage OMO
+configuration.
 
-3. Enter Base URL and API key. An official SDK may use its default endpoint.
-4. Add model IDs, display names, and optional context and output limits.
-5. Add `options.*` extensions or request headers only when required.
-6. Confirm that the preview changes only the intended `provider.<id>`.
-7. Save, add or switch, then choose the provider and model in OpenCode.
+[Read the guide](/opencode/configure)
 
-Option extensions parse booleans and numbers as literals. They can express
-`setCacheKey` or Bedrock region and credentials. Verify the expected type.
+</Card>
 
-## OMO configuration
+<Card title="Advanced OpenCode pitfalls" icon="ph:warning-diamond">
 
-Advanced tools can read and disable OMO / OMO Slim. Disabling deletes the
-corresponding file and clears current markers on related connections:
+Understand merged configuration, provider credentials, AI SDK protocol
+adapters, rules, sharing, and local state.
 
-1. Read OMO or OMO Slim first.
-2. Back up the OpenCode directory.
-3. Disable only when it is no longer needed.
-4. Return to the OpenCode page and verify the current connection.
+[Read the guide](/opencode/advanced)
 
-After saving, follow the [verification checklist](/guides/providers#verify-a-new-connection)
-to confirm the new connection works. For configuration layers, credentials,
-AI SDK protocol selection, and sharing, see
-[Advanced OpenCode pitfalls](/opencode/advanced).
+</Card>
+
+</CardGrid>

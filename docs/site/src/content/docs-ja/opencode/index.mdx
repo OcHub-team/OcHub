@@ -1,6 +1,6 @@
 ---
-title: OpenCode を設定する
-description: 一意の ID でプロバイダーを追加し、適切な AI SDK パッケージを選び、OMO 設定を管理します。
+title: OpenCode
+description: OpenCode のプロバイダー、AI SDK パッケージ、複数接続、OMO を設定します。
 audience: human
 sidebar:
   order: 7
@@ -9,43 +9,27 @@ sidebar:
     icon: ph:brackets-angle
 ---
 
-OpenCode は `opencode.json` の `provider.<id>` にプロバイダーを保存するため、複数の接続が
-1 つの設定に共存します。Provider ID はすべて一意にします。1 項目を編集しても他の接続は
-保持されます。「ツールから削除」はその項目だけを削除し、他には影響しません。既定
-ディレクトリは `~/.config/opencode` で、OcHub は MCP サーバーとスキルも管理できます。
+OpenCode は `opencode.json` の `provider.<id>` にプロバイダーを保存するため、複数の
+接続が 1 つの設定に共存します。下のガイドから選んでください。
 
-## OpenCode の接続を追加する
+<CardGrid>
 
-1. `openrouter` や `company_ai` のような安定した ID を入力します。
-2. 上流に合う AI SDK パッケージを選びます。
+<Card title="OpenCode を設定する" icon="ph:plugs-connected">
 
-   | 上流 | 一般的なパッケージ |
-   | --- | --- |
-   | OpenAI 互換サードパーティー | `@ai-sdk/openai-compatible` |
-   | OpenAI 公式 | `@ai-sdk/openai` |
-   | Anthropic / Claude | `@ai-sdk/anthropic` |
-   | Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
-   | Google Gemini | `@ai-sdk/google` |
+一意の ID でプロバイダーを追加し、適切な AI SDK パッケージを選び、OMO 設定を
+管理します。
 
-3. Base URL と API キーを入力します。公式 SDK は既定アドレスを使える場合があります。
-4. モデル ID、表示名、任意のコンテキスト／出力上限を追加します。
-5. 必要な場合だけ `options.*` 拡張やリクエストヘッダーを追加します。
-6. プレビューが対象 `provider.<id>` だけを変更することを確認します。
-7. 保存してツールへ追加または切り替え、OpenCode 内でプロバイダーとモデルを選びます。
+[ガイドを読む](/ja/opencode/configure)
 
-オプション拡張では真偽値と数値をリテラルとして解析します。`setCacheKey` や Bedrock の
-リージョン・認証項目に使えますが、型を確認してください。
+</Card>
 
-## OMO 設定
+<Card title="OpenCode の高度な設定と落とし穴" icon="ph:warning-diamond">
 
-高度なツールから OMO / OMO Slim を読み取り、無効化できます。無効化は対応ファイルを削除し、
-関連する接続の現在マークを消します。
+設定のマージ、Provider 資格情報、AI SDK プロトコルアダプター、ルール、共有、
+ローカル状態を理解します。
 
-1. 先に OMO または OMO Slim を読み取ります。
-2. OpenCode ディレクトリをバックアップします。
-3. 不要と確認できた場合だけ無効化します。
-4. OpenCode ページで現在の接続を再確認します。
+[ガイドを読む](/ja/opencode/advanced)
 
-保存後は[確認チェックリスト](/ja/guides/providers#新しい接続を確認する)に従って新しい接続を
-確認します。設定レイヤー、資格情報、AI SDK プロトコルの選択、共有は
-[OpenCode の高度な設定と落とし穴](/ja/opencode/advanced)を参照してください。
+</Card>
+
+</CardGrid>

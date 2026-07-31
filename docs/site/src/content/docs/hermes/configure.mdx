@@ -1,0 +1,47 @@
+---
+title: Configure Hermes
+description: Pick an API mode, add models, and maintain Hermes model and memory configuration.
+audience: human
+sidebar:
+  order: 1
+---
+
+Hermes keeps several providers at once and stores them in `config.yaml` under
+its default directory `~/.hermes`. OcHub can also manage its MCP servers and
+skills. Hermes may be disabled by default; enable it under **Settings → Apps
+and plugins** before opening its page.
+
+## Configure a custom connection
+
+1. Choose an API mode:
+
+   | Mode | Upstream |
+   | --- | --- |
+   | `chat_completions` | OpenAI-compatible Chat |
+   | `anthropic_messages` | Claude Messages |
+   | `codex_responses` | OpenAI Responses |
+   | `bedrock_converse` | AWS Bedrock Converse |
+
+2. Enter Base URL and API key.
+3. Add models. The first model ID also becomes the runtime and `/model` default.
+4. Add optional display names and context lengths.
+5. Use `rate_limit_delay` for a required delay between calls.
+6. Review the generated `config.yaml`, save, and restart Hermes.
+
+Without an explicit mode, Hermes treats a provider as Chat Completions, so
+Anthropic, Responses, and Bedrock upstreams must select the matching mode.
+
+## Model and memory maintenance
+
+Under **Advanced tools → Hermes model and memory**, you can:
+
+- Read and save the `model` node in `config.yaml`.
+- Edit MEMORY and USER memory content.
+- Toggle each memory type.
+- Inspect character counts and enabled state.
+
+Do not edit while a running Hermes agent is writing memory. Record any backup
+path shown after a save or toggle.
+
+After saving, follow the [verification checklist](/guides/providers#verify-a-new-connection)
+to confirm the new connection works.

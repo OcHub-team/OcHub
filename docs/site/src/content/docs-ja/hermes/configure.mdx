@@ -1,0 +1,45 @@
+---
+title: Hermes を設定する
+description: API モードを選び、モデルを追加し、Hermes のモデルとメモリ設定を保守します。
+audience: human
+sidebar:
+  order: 1
+---
+
+Hermes は複数のプロバイダーを同時に保持し、既定ディレクトリ `~/.hermes` の `config.yaml`
+へ保存します。OcHub は MCP サーバーとスキルも管理できます。Hermes は既定で無効の場合が
+あります。ページを開く前に**設定 → アプリとプラグイン**で有効にします。
+
+## カスタム接続を設定する
+
+1. API モードを選びます。
+
+   | モード | 上流 |
+   | --- | --- |
+   | `chat_completions` | OpenAI 互換 Chat |
+   | `anthropic_messages` | Claude Messages |
+   | `codex_responses` | OpenAI Responses |
+   | `bedrock_converse` | AWS Bedrock Converse |
+
+2. Base URL と API キーを入力します。
+3. モデルを追加します。最初の ID が実行時と `/model` のデフォルトになります。
+4. 任意の表示名とコンテキスト長を追加します。
+5. 呼び出し間隔が必要なら `rate_limit_delay` を設定します。
+6. 生成された `config.yaml` を確認して保存し、Hermes を再起動します。
+
+明示しない場合は Chat Completions として扱われるため、Anthropic、Responses、Bedrock は
+対応モードを必ず選びます。
+
+## モデルとメモリの保守
+
+**高度なツール → Hermes のモデルとメモリ**では：
+
+- `config.yaml` の `model` ノードを読み取り・保存。
+- MEMORY と USER メモリを編集。
+- それぞれを有効／無効化。
+- 文字数と状態を確認。
+
+Hermes Agent がメモリを書いている間は編集せず、表示されたバックアップパスを記録します。
+
+保存後は[確認チェックリスト](/ja/guides/providers#新しい接続を確認する)に従って新しい接続を
+確認します。

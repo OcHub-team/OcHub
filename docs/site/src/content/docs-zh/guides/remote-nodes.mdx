@@ -6,8 +6,8 @@ sidebar:
   order: 0
 ---
 
-“远程节点”让一台 OcHub 桌面版控制没有桌面环境的机器。远端只需安装 OpenSSH、
-`ochcli` 和 `ochubd`；AI 编程工具、配置文件和凭据仍然留在远端执行环境中。
+“远程节点”让一台 OcHub 桌面版控制没有桌面环境的机器。远端只需安装 OpenSSH 和
+一个 `ochcli`；AI 编程工具、配置文件和凭据仍然留在远端执行环境中。
 
 它尤其适合 **WSL、Linux 开发机、远程工作站**：以后更换 API 端点时，不必每次都先
 SSH 登录、寻找配置文件再手动修改。直接在 OcHub 里选择那台机器，然后切换远端已经
@@ -41,7 +41,7 @@ SSH 登录、寻找配置文件再手动修改。直接在 OcHub 里选择那台
 | Sessions | 列出会话、查看完整对话、元数据与全文搜索、构建/维护/删除全文索引，并删除会话 |
 | 网络与设置 | 查看、修改和测试远端代理；管理远端应用开关、备份策略、会话索引、数据目录和 cc-switch 数据迁移 |
 | 同步与备份 | 配置/测试 WebDAV、S3，同步上传/下载；创建、改名、恢复、删除备份以及在远端路径导入/导出 SQL |
-| 工具与更新 | 查看/安装/更新远端 CLI 工具；处理环境变量冲突；维护 Claude、Codex、OpenClaw、Hermes；检查并安装远端 OcHub 更新 |
+| 工具与更新 | 查看/安装/更新远端 CLI 工具；处理环境变量冲突；维护 Claude、Codex、OpenClaw、Hermes；读取节点版本并通过远端直连或桌面中继安装签名更新 |
 | 网关与中继站 | 查看状态和启停网关；查看连接信息；列出、新建、编辑、启停、删除中继站；导入 Provider、探测端点、读取模型并应用到远端应用 |
 | 诊断 | 运行 Doctor 和 SSH 会话诊断 |
 | 审计 | 查看最近的远端操作记录 |
@@ -51,8 +51,8 @@ SSH 登录、寻找配置文件再手动修改。直接在 OcHub 里选择那台
 这类操作仍属于控制端，这是有意保留的设备边界。
 
 OcHub 不会提供任意 Shell 执行，也不会自动建立 Gateway 数据面隧道。桌面端可与旧节点
-协商它们已经广告的能力；完整工作区需要新版远端 `ochcli`，因此建议桌面端、
-`ochcli` 和 `ochubd` 一起升级。
+协商它们已经广告的能力；完整工作区需要新版远端 `ochcli`。对于还不支持受管更新的
+旧节点，桌面端会提示先手动升级一次。
 
 ## 使用前提
 
@@ -61,7 +61,8 @@ OcHub 不会提供任意 Shell 执行，也不会自动建立 Gateway 数据面�
 - 控制端安装 OcHub Desktop `0.4.21` 或更高版本。
 - 控制端能使用系统 `ssh` 和 `ssh-keyscan`。
 - 远端运行可访问的 OpenSSH Server。
-- 远端安装兼容版本的 `ochcli` 和 `ochubd`，且两个文件放在同一目录。
+- 远端安装兼容版本的 `ochcli`；如需受管更新和回滚，请用
+  `ochcli node install` 安装。
 - SSH 密钥或 Agent 鉴权可以在不交互输入密码的情况下完成。OcHub 使用
   `BatchMode=yes` 连接。
 - 如果要切换连接，远端 OcHub 数据库中至少已有一个 Provider。
@@ -79,19 +80,24 @@ ssh -o BatchMode=yes devbox ochcli remote probe
 ## 在远端安装 ochcli
 
 从[最新发布页](https://github.com/OcHub-team/OcHub/releases/latest)下载适合远端平台的
-无桌面 CLI 压缩包。包内同时包含 `ochcli` 和 `ochubd`。Linux 或 WSL 可以这样安装：
+无桌面 CLI 压缩包。包内只有一个 `ochcli`。Linux 或 WSL 可以这样安装：
 
 ```sh
 tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
-sudo install -m 0755 ochcli ochubd /usr/local/bin/
+chmod +x ochcli
+./ochcli node install
 
 ochcli version
+ochcli node status
 ochcli remote probe
 ```
 
-如果不能写入 `/usr/local/bin`，可以把两个文件放到其他目录，并在添加节点时填写
-`ochcli` 的绝对路径。非交互 SSH 的 `PATH` 往往比日常终端短，填写绝对路径也是解决
-“ochcli not found”最可靠的方法。
+安装器会在用户目录中保留各版本，通过稳定的 `current` 入口原子切换当前版本，并提供
+`~/.local/bin/ochcli`。平台可用时会安装 launchd 或 systemd 用户服务；没有 systemd
+的 WSL 会使用后台 Owner，WSL 重启后由下一次 SSH 会话重新启动。
+
+请确保非交互 SSH 的 `PATH` 包含 `~/.local/bin`。添加节点时也可以填写受管
+`ochcli` 的绝对路径，这是解决“ochcli not found”最可靠的方法。
 
 如果远端工具已经有可用的实时配置，连接前先把它导入远端 OcHub 数据库：
 
@@ -104,14 +110,8 @@ ochcli provider list --app codex
 把 `codex` 换成实际的应用 ID。需要新增更多远端连接时运行
 `ochcli provider add --help`。密钥应直接在远端输入，不要通过桌面控制连接复制。
 
-无需手工启动 daemon。正常的第一次远程会话会在需要时启动远端 Owner，而且 SSH
-控制会话断开后它仍可继续运行。如果希望它随登录或开机启动，可以执行：
-
-```sh
-ochcli daemon install
-ochcli daemon start
-ochcli daemon status
-```
+不需要再下载第二个 daemon 二进制，也无需手工启动。受管的同一个 `ochcli` 会运行
+持久 Owner；正常的第一次远程会话会在需要时启动它。
 
 ## 准备 SSH 连接
 
@@ -163,6 +163,27 @@ Provider、网关、设置、同步、工具或更新操作。
 导入 `/srv/backup/OcHub.sql`、Settings 中的数据目录，以及同步/备份文件都在远端解析，
 不会使用控制端的 `HOME`。只有文件选择器、打开网页、打开 Finder 和桌面偏好仍在控制端。
 
+## 一键更新远程节点
+
+节点支持受管更新时，连接行会显示已安装的 `ochcli` 版本和更新入口。OcHub 会先读取
+节点版本与目标平台，再获取经过签名的 `headless.json` 发布清单。弹窗提供三种策略：
+
+- **自动选择**：节点能访问对应发布文件时直接下载，否则使用桌面中继。
+- **在节点下载**：让远端节点自行下载签名后的可执行文件。
+- **通过本机中继**：桌面端下载并校验正确平台的文件，再通过 SSH 传给节点。
+
+中继不会只信任桌面端：节点会再次核对目标节点 ID、平台、字节数、SHA-256 和发布签名。
+两条路径都会原子切换稳定的 `current` 入口、重启 Owner，并检查它报告的新版本；健康
+检查失败会自动恢复上一个版本。也可以在节点手动回滚：
+
+```sh
+ochcli --yes node rollback
+```
+
+安装更新默认被策略关闭。按后文把 `allowUpdateInstall = true` 打开并重新连接后，一键
+更新才会出现。早于受管更新功能的旧节点需要手动升级一次：换成新版 `ochcli`，执行
+`ochcli node install`，再重新连接。受管自更新目前支持 macOS 和 Linux（包括 WSL）。
+
 ## 切换远端节点上的连接
 
 1. 在工作区下拉或远程节点连接列表中选择目标节点。
@@ -209,7 +230,7 @@ Actor、时间、Operation ID 和结果，但不会把 Provider Secret 复制到
    如果该发行版启用了 systemd，也可用
    `sudo systemctl enable --now ssh` 代替最后一条命令。
 
-2. 按前文说明，在 WSL 内安装 `ochcli` 和 `ochubd`。
+2. 按前文说明，在 WSL 内用 `ochcli node install` 安装单个 `ochcli`。
 3. 配置从 Windows 到 WSL Linux 用户的密钥鉴权。
 4. 把别名写入 **Windows**
    `%USERPROFILE%\.ssh\config`：
@@ -243,8 +264,8 @@ Actor、时间、Operation ID 和结果，但不会把 Provider Secret 复制到
 OcHub 只在 SSH 进程的 stdin/stdout 上运行白名单化的
 `ochcli remote serve --stdio` 协议。请求是类型化操作，不是 Shell 命令字符串。
 
-默认策略允许读取状态、运行诊断、切换 Provider 和管理网关生命周期；远端 Secret 写入、
-备份恢复和更新安装默认关闭。在远端查看有效策略：
+默认策略允许读取状态、运行诊断、切换 Provider、管理网关生命周期，以及读取节点更新
+状态；远端 Secret 写入、备份恢复和更新安装默认关闭。在远端查看有效策略：
 
 ```sh
 ochcli remote policy show
@@ -286,11 +307,13 @@ allowUpdateInstall = true
 | --- | --- |
 | 添加弹窗里没有别名 | 在控制端 SSH config 中添加明确的 `Host name`，检查 `Include` 路径，或使用手动添加 |
 | Permission denied 或仍要求输入 | 解锁密钥并加入 SSH Agent，直到 `ssh -o BatchMode=yes <alias> ochcli remote probe` 可以直接成功 |
-| `ochcli: command not found` | 把两个二进制放进非交互 SSH 的 `PATH`，或填写远端 `ochcli` 绝对路径 |
+| `ochcli: command not found` | 把 `~/.local/bin` 加入非交互 SSH 的 `PATH`，或填写受管 `ochcli` 的绝对路径 |
 | Host Key 发生变化 | 立即停止；通过可信渠道核对新指纹后，才替换 OcHub 或用户 `known_hosts` 中的旧记录 |
 | WSL 节点离线 | 启动发行版和 `sshd`，检查 Windows 侧别名、本机转发和端口 |
 | 节点能连接但没有 Provider | 在远端执行 `ochcli provider import-live --app <app>` 或添加 Provider |
-| 协议/版本不兼容 | 同时升级桌面端和远端 `ochcli`/`ochubd`，不要混用不同压缩包里的二进制 |
+| 更新入口提示手动升级 | 先用新版 `ochcli` 执行一次 `ochcli node install`，启用 `allowUpdateInstall` 后重新连接 |
+| 更新使用桌面中继 | 节点无法访问对应发布文件；桌面端会校验后通过 SSH 安全传输 |
+| 协议/版本不兼容 | 升级桌面端和远端 `ochcli` 后重新连接 |
 | 网关已运行但控制端访问不到 | 网关运行在远端；让远端工具使用它，或单独建立显式 SSH 隧道 |
 
 从 OcHub 移除节点只会删除控制端的连接记录，不会删除远端 Provider、工具配置、

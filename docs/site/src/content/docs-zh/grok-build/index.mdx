@@ -1,6 +1,6 @@
 ---
-title: 配置 Grok Build
-description: 定义模型 Profile、选择凭据与 API Backend，然后把 Grok Build 切换到新连接。
+title: Grok Build
+description: 配置 Grok Build 模型 Profile、凭据、API Backend 与环境变量。
 audience: human
 sidebar:
   order: 6
@@ -9,37 +9,25 @@ sidebar:
     icon: ph:hammer
 ---
 
-Grok Build 以一个当前模型 Profile 工作：它的实时配置只指向一个当前连接。默认配置目录是
-`~/.grok`，OcHub 也可以管理它的 MCP 服务器。新增连接时可以从预设开始，也可以手工填写。
+Grok Build 以一个当前模型 Profile 工作：它的实时配置指向一个当前连接。请选择下方的
+指南。
 
-<Steps>
+<CardGrid>
 
-1. **定义配置名称。** “配置名称”是客户端使用的 profile 名，也是 `[models].default` 指向的名称。
+<Card title="配置 Grok Build" icon="ph:plugs-connected">
 
-2. **填写上游模型。** 它是实际发送给供应商的模型 ID；显示名只用于界面识别。
+定义模型 Profile、选择凭据与 API Backend、设置上下文窗口，然后切换。
 
-3. **填写 Base URL。** 使用上游对应协议的基础地址。
+[阅读指南](/zh/grok-build/configure)
 
-4. **选择鉴权方式。** “API Key”会把密钥写进配置；“环境变量”只保存变量名，例如 `XAI_API_KEY`，运行 Grok Build 的环境中必须真的存在该变量。
+</Card>
 
-5. **选择 API Backend。** 根据上游选择 OpenAI Responses、OpenAI Chat Completions 或 Anthropic Messages。
+<Card title="Grok Build 进阶与易踩坑" icon="ph:warning-diamond">
 
-6. **填写上下文窗口。** 使用上游模型真实支持的 Token 数，不要用营销页面上的总长度猜测。
+排查配置作用域、自定义模型 Backend、凭据、inspect、权限、沙箱与兼容导入。
 
-7. **查看 `config.toml` 预览并切换。** 重开 Grok Build 后发起真实请求。
+[阅读指南](/zh/grok-build/advanced)
 
-</Steps>
+</Card>
 
-<OcHubStepsVisual
-  locale="zh"
-  app="Grok Build"
-  labels="定义配置名称|填写上游模型|填写 Base URL|选择 API Key 或环境变量鉴权|选择匹配的 API Backend|设置上下文窗口|检查 config.toml 并切换"
-  visuals="identity|model|fields|fields|source|model|preview"
-/>
-
-如果环境变量模式在 OcHub 测试成功、Grok Build 却鉴权失败，通常是两个进程继承的环境不同。
-从同一个终端启动 Grok Build，或把变量写入它实际读取的启动环境。
-
-保存后，按[验收清单](/zh/guides/providers#验证新连接)确认切换成功。生效配置、
-自定义 Backend、权限、沙箱与兼容导入见
-[Grok Build 进阶与易踩坑](/zh/grok-build/advanced)。
+</CardGrid>

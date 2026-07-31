@@ -1,6 +1,6 @@
 ---
-title: Codex を設定する
-description: アカウントと API の認証方式を選び、Responses 上流とセッション履歴を管理します。
+title: Codex
+description: Codex の認証方式、Responses 上流、推論、セッション履歴を設定します。
 audience: human
 sidebar:
   order: 5
@@ -9,140 +9,27 @@ sidebar:
     icon: ph:terminal-window
 ---
 
-Codex は `config.toml` と `auth.json` を使います。前者はモデルとプロバイダー、後者は公式
-アカウントのログイン情報です。OcHub は 1 組の設定として扱いますが、API キーを公式ログイン
-として偽装することはありません。
+Codex は `config.toml` と `auth.json` の両方を使います。OcHub は API キーを公式
+ログインのように偽装せず、両方を 1 つの接続として管理します。下のガイドから選んでください。
 
-## 認証方式を選ぶ
+<CardGrid>
 
-| 方式 | アカウント状態 | モデルリクエストの認証 | 用途 |
-| --- | --- | --- | --- |
-| サードパーティー API のみ | ChatGPT ログイン不要 | サードパーティー API キー | 完全なサードパーティー Responses |
-| ChatGPT ログインのみ | `auth.json` を使用 | 公式ログイン状態 | Codex 公式アカウントとエンドポイント |
-| ChatGPT ログイン + サードパーティー API | `auth.json` を保持 | サードパーティー API キー | アカウント機能とサードパーティーのモデル要求 |
+<Card title="Codex を設定する" icon="ph:plugs-connected">
 
-併用方式ではアカウントは `auth.json`、モデルリクエストは現在のプロバイダーの
-`experimental_bearer_token` が担当します。
+認証方式を選び、Responses 上流を構成し、モデルと推論、公式ログイン、履歴、MCP、
+スキルを管理します。
 
-<Aside type="note" title="OAuth と API キーの役割は別です">
+[ガイドを読む](/ja/codex/configure)
 
-「サードパーティーで現在の OAuth を保持」は `auth.json` の上書きを防ぎますが、上流が
-必要とする API キーの代わりにはなりません。
+</Card>
 
-</Aside>
+<Card title="Codex の高度な設定と落とし穴" icon="ph:warning-diamond">
 
-## サードパーティー Responses を設定する
+モデルプロバイダーを使いながら ChatGPT ログインを保持し、リモート圧縮、
+Responses WebSocket、ローカルセッション履歴を理解します。
 
-<Steps>
+[ガイドを読む](/ja/codex/advanced)
 
-1. **Codex を開き、接続を追加します。** 適切なプリセットがあれば開始点にし、
-   全フィールドを確認します。
+</Card>
 
-2. **Provider ID を設定します。** `[model_providers.<id>]` のキーであり、
-   `model_provider` の値です。`company_proxy` のような短く安定した ID を使います。
-
-3. **プロバイダー名を設定します。** OcHub カード名ではなく、Codex 内部の名前です。
-
-4. **Base URL を入力します。** サードパーティー方式は通常 `/v1` で終わり、Codex が
-   `/responses` を追加します。
-
-5. **認証方式とキーを設定します。** サードパーティー API と併用方式はサードパーティーキーを使い、ログインのみ
-   では使いません。
-
-6. **モデルを選びます。** 上流が実際に対応する ID を使い、必要なら `minimal`、`low`、
-   `medium`、`high`、`xhigh` の推論強度を設定します。
-
-7. **`wire_api = responses` を維持します。** Codex は `chat` を廃止しています。
-   Chat 専用上流は OcHub ゲートウェイ変換が必要です。
-
-8. **プレビューを確認して切り替えます。** Provider ID、アドレス、モデル、認証方式を
-   `config.toml` で確認します。
-
-9. **新しい Codex セッションで確認します。** 短いリクエストを送り、使用量のモデルと状態を
-   確認します。
-
-</Steps>
-
-<OcHubStepsVisual
-  locale="ja"
-  app="Codex"
-  labels="Codex で接続を追加する|安定した Provider ID を設定する|内部プロバイダー名を設定する|Responses の Base URL を入力する|認証を選びキーを入力する|対応モデルを選ぶ|Responses インターフェースを維持する|config.toml を確認して切り替える|新しい Codex セッションで確認する"
-  visuals="toolbar-add|identity|identity|fields|fields|model|source|preview|usage-nav"
-/>
-
-## モデルプロバイダーを使う場面
-
-- 上流が Chat Completions のみで Responses 非対応。
-- Codex のモデルエイリアスを実 ID へ変換。
-- Anthropic、Chat、Responses から自動選択。
-- 最初のトークン、総レイテンシー、エラーを記録。
-- 上流変更のたびに `config.toml` を書き直したくない。
-
-Codex のリモート圧縮には Responses 上流が必要です。通常リクエストは Chat へ変換できますが、
-リモート圧縮は Chat 専用上流を使えません。
-
-## モデルと推論
-
-推論強度はモデルと上流が Responses の推論パラメーターへ対応する場合だけ有効です。
-
-1. 強度なしでモデルを確認。
-2. `medium` を試す。
-3. レイテンシーと結果を比較して `low`、`high`、`xhigh` へ調整。
-4. 上流が拒否したら、キーやモデルを同時変更せず強度を空に戻す。
-
-リモート圧縮はプロバイダー名が正確に `OpenAI` の場合だけ Codex が有効にします。
-サードパーティーが完全対応しない限り無効のままにします。
-
-## 高度なリクエスト項目
-
-| 項目 | 用途 | 例 |
-| --- | --- | --- |
-| レスポンス保存を無効化 | `disable_response_storage = true` | ZDR、保存非対応上流 |
-| Query パラメーター | すべての URL へ追加 | Azure `api-version` |
-| HTTP ヘッダー | カスタムヘッダー | テナント、プロジェクト、ルート ID |
-
-通常リクエストを成功させてから 1 項目ずつ追加します。長期キーは通常ヘッダーではなく専用
-API キーフィールドに保存します。
-
-## 公式ログイン
-
-1. 公式ログインの接続を追加または選択。
-2. 切り替えて公式エンドポイントへ戻ったことを確認。
-3. Codex を再起動。
-4. リクエストを送り、サードパーティーエラーが消えたことを確認。
-
-アプリ設定の「サードパーティーで現在の OAuth を保持」を有効にすると、`auth.json` を
-保持したままサードパーティーのモデルを使い、公式へ戻しやすくなります。
-
-## 履歴の統合と移行
-
-- **既存 Codex セッションを移行**：次回の移行で公式履歴を取り込みます。
-- **Codex セッション履歴を統合**：公式とサードパーティーを 1 つの履歴場所へ保存します。
-
-変更前に Codex を終了し、`~/.codex` またはカスタムディレクトリをバックアップします。
-1 項目ずつ変更して再起動し、セッション数と期間を確認します。
-
-**高度なツール → Codex 履歴**では、統合履歴バックアップの有無を確認し、公式履歴へ
-復元できます。復元は現在の公式履歴を上書きする可能性があるため、先に再度バックアップします。
-
-## MCP とスキル
-
-- MCP カードで Codex を有効にし、`config.toml` へ同期。
-- スキルのインストール先またはカードで Codex を有効化。
-- カスタムディレクトリは両方の保存先を変更。同期後に再起動。
-- 旧 `[mcp.servers.*]` はインポート時に寛容に読み、現在形式で書き込み。
-
-## よくある問題
-
-| 症状 | 原因の方向 | 対処 |
-| --- | --- | --- |
-| `chat` は廃止済み | `wire_api` または Chat 専用上流 | Responses またはゲートウェイ変換 |
-| Base URL が 404 | `/v1` の階層 | 最終パスが `/v1/responses` か確認 |
-| アカウントはあるが 401 | OAuth はサードパーティーキーではない | 方式とサードパーティーキーを確認 |
-| リモート圧縮失敗 | Responses 対応不足 | 無効化または対応上流 |
-| モデルが変わらない | 古い Codex プロセス | 再起動してプレビュー確認 |
-| セッション数が違う | 履歴場所または統合設定 | ディレクトリとバックアップを確認 |
-
-Chat 専用上流は[ルーティング実践](/ja/advanced/routing-recipes)へ進んでください。同時ログインと
-転送、リモート圧縮、Responses WebSocket、Provider 履歴バケットについては
-[Codex の高度な設定と落とし穴](/ja/codex/advanced)を参照してください。
+</CardGrid>

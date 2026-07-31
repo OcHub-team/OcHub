@@ -7,8 +7,8 @@ sidebar:
 ---
 
 Remote Nodes lets one OcHub desktop control OcHub state on a machine that has
-no desktop environment. The remote machine only needs OpenSSH, `ochcli`, and
-`ochubd`; configuration and AI coding tools continue to run on that machine.
+no desktop environment. The remote machine only needs OpenSSH and one `ochcli`
+executable; configuration and AI coding tools continue to run on that machine.
 
 This is especially useful when your editor or terminal runs in **WSL**, on a
 Linux development machine, or on a remote workstation. Instead of opening an
@@ -49,7 +49,7 @@ Remote Nodes currently supports:
 | Sessions | List sessions, open full transcripts, search metadata and content, build/maintain/delete the full-text index, and delete sessions |
 | Network and settings | Read, change, and test the remote proxy; manage remote apps, backup policy, session indexing, data directory, and cc-switch migration |
 | Sync and backup | Configure/test WebDAV and S3, upload/download snapshots, manage backups, and import/export SQL at remote paths |
-| Tools and updates | Inspect/install/update remote CLI tools; repair environment conflicts; maintain Claude, Codex, OpenClaw, and Hermes; check and install remote OcHub updates |
+| Tools and updates | Inspect/install/update remote CLI tools; repair environment conflicts; maintain Claude, Codex, OpenClaw, and Hermes; check the node version and install signed OcHub updates directly or through a desktop relay |
 | Gateway and stations | Read and control the Gateway, show client connection information, import providers, and fully create/edit/probe/apply remote stations |
 | Diagnostics | Run Doctor plus SSH diagnostics |
 | Audit | Read recent remote operation records |
@@ -63,7 +63,8 @@ computer.
 OcHub does **not** expose arbitrary shell execution or automatically create a
 Gateway data-plane tunnel. The desktop can negotiate the capabilities an older
 node advertises, but the complete workspace requires a current remote
-`ochcli`. Upgrade Desktop, `ochcli`, and `ochubd` together.
+`ochcli`. Desktop shows a manual-upgrade hint for a legacy node that predates
+the managed updater.
 
 ## Requirements
 
@@ -72,8 +73,8 @@ Prepare all of the following:
 - OcHub Desktop `0.4.21` or later on the controlling computer.
 - System `ssh` and `ssh-keyscan` on the controlling computer.
 - A reachable OpenSSH server on the remote machine.
-- Matching or compatible `ochcli` and `ochubd` binaries on the remote machine.
-  Keep both binaries in the same directory.
+- A compatible `ochcli` on the remote machine, installed with `ochcli node
+  install` for managed update and rollback.
 - SSH key or agent authentication that succeeds without an interactive
   password prompt. OcHub connects with `BatchMode=yes`.
 - At least one provider already stored on the remote node if you want to
@@ -94,21 +95,28 @@ password or passphrase.
 
 Download the headless CLI archive for the remote platform from the
 [latest release](https://github.com/OcHub-team/OcHub/releases/latest). It
-contains both `ochcli` and `ochubd`. On Linux or WSL, unpack it and install both
-in a stable location:
+contains one `ochcli` executable. On Linux or WSL, unpack it and install a
+managed node:
 
 ```sh
 tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
-sudo install -m 0755 ochcli ochubd /usr/local/bin/
+chmod +x ochcli
+./ochcli node install
 
 ochcli version
+ochcli node status
 ochcli remote probe
 ```
 
-If you cannot write `/usr/local/bin`, place both files in another directory and
-enter the absolute `ochcli` path when adding the node. Non-interactive SSH
-sessions often have a smaller `PATH` than your terminal, so an absolute path is
-also the most reliable fix for “ochcli not found.”
+The installer retains releases in a user-owned version directory, atomically
+points a stable `current` entry at the active one, and exposes
+`~/.local/bin/ochcli`. It installs a launchd or systemd user service when one
+is available. WSL without systemd uses a background owner that the next SSH
+session starts again after WSL restarts.
+
+Make sure `~/.local/bin` is available to non-interactive SSH sessions. You can
+also enter its absolute `ochcli` path when adding the node; this is the most
+reliable fix for “ochcli not found.”
 
 If the tool already has a working live configuration, import it into the
 remote OcHub database before connecting:
@@ -123,15 +131,9 @@ Change `codex` to the relevant app ID. Use `ochcli provider add --help` when
 you need to create additional remote connections. Secrets should be supplied
 on the remote machine, not copied through the desktop connection.
 
-You do not have to start a daemon by hand. The first normal Remote Nodes
-session starts the remote owner when needed, and it survives the SSH control
-session. To start it at login or boot instead, use:
-
-```sh
-ochcli daemon install
-ochcli daemon start
-ochcli daemon status
-```
+You do not have to install a second daemon binary or start it by hand. The same
+managed `ochcli` runs the persistent owner, and the first normal Remote Nodes
+session starts it when needed.
 
 ## Prepare the SSH connection
 
@@ -193,6 +195,35 @@ directory in Settings, and sync/backup files are resolved remotely and do not
 use the controller's `HOME`. File pickers, opening a web page or Finder, and
 desktop preferences remain local.
 
+## Update a remote node with one click
+
+The connection row shows the installed `ochcli` version and an update action
+when the node advertises managed update support. OcHub first asks the node for
+its version and target platform, then reads the signed `headless.json` release
+manifest. Choose a strategy in the update dialog:
+
+- **Automatic** uses direct download when the node can reach its exact release
+  asset, otherwise it uses the desktop relay.
+- **Download on node** makes the node download the signed executable itself.
+- **Relay through this computer** downloads and verifies the executable on the
+  desktop, then streams it to the node over SSH.
+
+The relay does not trust the desktop alone: the node checks the expected node
+ID, target, byte count, SHA-256 digest, and release signature again. For either
+route, activation switches one stable `current` link, restarts the owner, and
+checks the version it reports. A failed health check restores the previous
+version automatically. You can also roll back on the node:
+
+```sh
+ochcli --yes node rollback
+```
+
+Update installation is disabled by policy until you set
+`allowUpdateInstall = true` as described below and reconnect. A node from a
+release before managed update support must be upgraded manually once: replace
+the old CLI with a current `ochcli`, run `ochcli node install`, and reconnect.
+Managed self-update currently supports macOS and Linux, including WSL.
+
 ## Switch a provider on the remote node
 
 1. Choose the remote node from the workspace selector or the Remote Nodes
@@ -249,7 +280,8 @@ For OcHub Desktop on Windows controlling a WSL distribution:
    On a systemd-enabled distribution, `sudo systemctl enable --now ssh` can
    replace the last command.
 
-2. Install `ochcli` and `ochubd` inside WSL as described above.
+2. Install the single `ochcli` inside WSL with `ochcli node install` as
+   described above.
 3. Configure key-based access from Windows to the WSL Linux user.
 4. Add the alias to **Windows**
    `%USERPROFILE%\.ssh\config`:
@@ -287,8 +319,9 @@ allowlisted `ochcli remote serve --stdio` protocol over that SSH process.
 Requests are typed operations, not shell command strings.
 
 By default the remote policy permits status reads, diagnostics, provider
-switching, and Gateway lifecycle. Remote secret writes, backup restore, and
-update installation remain disabled. Inspect the effective policy on the
+switching, and Gateway lifecycle. It also permits reading node update status,
+but remote secret writes, backup restore, and update installation remain
+disabled. Inspect the effective policy on the
 remote node with:
 
 ```sh
@@ -335,11 +368,13 @@ control session.
 | --- | --- |
 | Alias is missing from Add | Put a concrete `Host name` in the controlling computer's SSH config; check `Include` paths, or use Add manually |
 | Permission denied or a prompt is required | Unlock/add the key to your SSH agent and make `ssh -o BatchMode=yes <alias> ochcli remote probe` succeed |
-| `ochcli: command not found` | Install both binaries in a non-interactive SSH `PATH`, or enter an absolute remote `ochcli` path |
+| `ochcli: command not found` | Put `~/.local/bin` in the non-interactive SSH `PATH`, or enter the managed `ochcli` absolute path |
 | Host key changed | Stop. Verify the new fingerprint through a trusted channel before replacing the old OcHub or user `known_hosts` entry |
 | WSL node is offline | Start the distribution and `sshd`; confirm the Windows alias, localhost forwarding, and port |
 | Node connects but no providers appear | Run `ochcli provider import-live --app <app>` or add providers on the remote machine |
-| Protocol/version error | Upgrade Desktop and the remote `ochcli`/`ochubd` pair; do not mix binaries from different archives |
+| Update action says manual upgrade | Install a current `ochcli` once with `ochcli node install`, enable `allowUpdateInstall`, then reconnect |
+| Update uses desktop relay | The node cannot reach its exact release asset; the desktop securely downloads, verifies, and streams it over SSH |
+| Protocol/version error | Upgrade Desktop and the remote `ochcli`, then reconnect |
 | Gateway runs but is unavailable on the desktop | It listens on the remote machine; use the remote tool or create a separate, explicit SSH tunnel |
 
 Removing a node from OcHub deletes only the local connection record. It does

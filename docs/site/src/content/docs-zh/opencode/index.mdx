@@ -1,6 +1,6 @@
 ---
-title: 配置 OpenCode
-description: 在唯一 ID 下添加 Provider、选择正确的 AI SDK 包，并管理 OMO 配置。
+title: OpenCode
+description: 配置 OpenCode Provider、AI SDK 包、多连接共存与 OMO。
 audience: human
 sidebar:
   order: 7
@@ -9,43 +9,25 @@ sidebar:
     icon: ph:brackets-angle
 ---
 
-OpenCode 把每个连接写在 `opencode.json` 的 `provider.<id>` 下，因此多个连接可以共存于同一份
-配置。每个 Provider ID 必须唯一，编辑其中一个 Provider 时会保留其他 Provider。“从工具移除”
-只移除选中的条目，不会清空其他 Provider。默认配置目录是 `~/.config/opencode`，OcHub 也可以
-管理它的 MCP 服务器和技能。
+OpenCode 把 Provider 保存在 `opencode.json` 的 `provider.<id>` 下，因此多个连接可以
+共存于同一份配置。请选择下方的指南。
 
-## 新增 OpenCode 连接
+<CardGrid>
 
-1. 填写稳定的 Provider ID，例如 `openrouter` 或 `company_ai`。
-2. 选择与上游一致的 AI SDK 包：
+<Card title="配置 OpenCode" icon="ph:plugs-connected">
 
-   | 上游类型 | 常用选择 |
-   | --- | --- |
-   | OpenAI 兼容第三方 | `@ai-sdk/openai-compatible` |
-   | OpenAI 官方 | `@ai-sdk/openai` |
-   | Anthropic / Claude | `@ai-sdk/anthropic` |
-   | Amazon Bedrock | `@ai-sdk/amazon-bedrock` |
-   | Google Gemini | `@ai-sdk/google` |
+在唯一 ID 下添加 Provider、选择正确的 AI SDK 包，并管理 OMO 配置。
 
-3. 填写 Base URL 和 API Key。官方 SDK 使用默认地址时，Base URL 可以按表单提示留空。
-4. 添加模型 ID、显示名，以及可选的上下文窗口和最大输出。
-5. 只有上游要求时才增加 `options.*` 扩展或自定义请求头。
-6. 展开预览，确认只新增或更新目标 `provider.<id>`。
-7. 保存后使用“添加到工具”或“切换”，再从 OpenCode 中选择模型验证。
+[阅读指南](/zh/opencode/configure)
 
-“选项扩展”会把布尔值和数字按字面量解析，适合 `setCacheKey` 或 Bedrock 的区域与鉴权字段。
-不确定字段类型时先查上游或 OpenCode 配置要求，避免把 `true` 错写成字符串。
+</Card>
 
-## OMO 配置
+<Card title="OpenCode 进阶与易踩坑" icon="ph:warning-diamond">
 
-OcHub 的**高级工具**可以读取并禁用 OMO / OMO Slim。禁用会删除对应配置文件并清除相关
-连接的当前标记，因此：
+理解配置合并、Provider 凭据、AI SDK 协议适配、规则、会话分享与本地状态。
 
-1. 先点击“读取 OMO”或“读取 OMO Slim”确认状态。
-2. 备份 OpenCode 配置目录。
-3. 只有明确不再使用时才执行禁用。
-4. 回到 OpenCode 页面重新确认当前 Provider。
+[阅读指南](/zh/opencode/advanced)
 
-保存后，按[验收清单](/zh/guides/providers#验证新连接)确认新连接可用。配置层、
-凭据、AI SDK 协议选择和会话分享见
-[OpenCode 进阶与易踩坑](/zh/opencode/advanced)。
+</Card>
+
+</CardGrid>

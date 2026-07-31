@@ -46,24 +46,29 @@ gh attestation verify <downloaded-file> --repo OcHub-team/OcHub
 ## Headless CLI for remote nodes
 
 Every release also provides headless archives for macOS, Windows, and Linux.
-They contain:
+Each archive contains one executable, `ochcli`. It is the command-line control
+surface, Remote Nodes protocol server, and persistent runtime owner.
 
-- `ochcli`, the command-line control surface and Remote Nodes protocol server.
-- `ochubd`, the persistent runtime owner used by `ochcli`.
-
-Keep both files from the same release in one directory. On Linux or WSL:
+On Linux or WSL:
 
 ```sh
 tar -xzf OcHub_*_linux_x86_64_cli.tar.gz
-sudo install -m 0755 ochcli ochubd /usr/local/bin/
+chmod +x ochcli
+./ochcli node install
 ochcli version
+ochcli node status
 ochcli remote probe
 ```
+
+The managed installer retains versions under the user profile, exposes
+`~/.local/bin/ochcli`, and installs a user service when the platform provides
+one. It also enables atomic one-click update and rollback of the CLI and its
+background owner as one unit.
 
 The desktop starts `ochcli remote serve --stdio` through system OpenSSH when it
 connects; do not expose that protocol with a network listener. Continue with
 [Control remote nodes over SSH](/guides/remote-nodes) for SSH, WSL, host-key,
-provider-import, and switching instructions.
+provider-import, switching, and one-click update instructions.
 
 ## macOS: approving the app on first launch
 
