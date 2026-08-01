@@ -4203,7 +4203,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_capabilities_keep_high_risk_features_out_by_default() {
+    fn policy_capabilities_enable_updates_but_keep_other_restricted_features_out() {
         let capabilities = capabilities(&ochub_core::remote_policy::RemotePolicy::default());
         assert!(capabilities.contains(&Capability::AppWrite));
         assert!(capabilities.contains(&Capability::ProviderWrite));
@@ -4240,7 +4240,9 @@ mod tests {
                 .iter()
                 .any(|value| value.as_str() == "backup.restore")
         );
-        assert!(!capabilities.contains(&Capability::UpdateInstall));
+        assert!(capabilities.contains(&Capability::UpdateInstall));
+        assert!(capabilities.contains(&Capability::NodeUpdateInstall));
+        assert!(capabilities.contains(&Capability::NodeUpdateRelay));
         assert!(!capabilities.contains(&Capability::DataImport));
     }
 

@@ -1901,7 +1901,7 @@ impl RemoteView {
         components::modal_overlay(card)
     }
 
-    fn render_node_update_modal(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_node_update_modal(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let Some(dialog) = self.update_dialog.as_ref() else {
             return div();
         };
@@ -2269,9 +2269,11 @@ impl RemoteView {
             )
             .into_any_element()
         };
+        let max_height = (window.viewport_size().height - px(32.)).max(px(320.));
         let card = components::modal_card()
             .w(px(720.))
-            .max_h(px(760.))
+            .max_w_full()
+            .max_h(max_height)
             .child(
                 components::modal_header(t(k::REMOTE_UPDATE_TITLE)).child(if dialog.working() {
                     icon_only_button(
@@ -3050,7 +3052,7 @@ async fn load_snapshot(backend: WorkspaceBackend) -> Result<RemoteSnapshot, Stri
 }
 
 impl gpui::Render for RemoteView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let add = cx.listener(|this: &mut Self, _: &(), _window, cx| this.open_add(cx));
         let action = if self.add_open {
             components::disabled_button(
@@ -3095,7 +3097,7 @@ impl gpui::Render for RemoteView {
             page = page.child(self.render_add_modal(cx));
         }
         if self.update_dialog.is_some() {
-            page = page.child(self.render_node_update_modal(cx));
+            page = page.child(self.render_node_update_modal(window, cx));
         }
         if self.issue_dialog.is_some() {
             page = page.child(self.render_issue_details_modal(cx));

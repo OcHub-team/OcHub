@@ -195,8 +195,8 @@ Provider、网关、设置、同步、工具或更新操作。
 ochcli --yes node rollback
 ```
 
-安装更新默认被策略关闭。按后文把 `allowUpdateInstall = true` 打开并重新连接后，一键
-更新才会出现。早于受管更新功能的旧节点可以直接在连接行点击**升级**完成首次受管安装；
+安装更新默认已由策略允许。如果要禁用，请设置 `allowUpdateInstall = false` 并重新连接。
+早于受管更新功能的旧节点可以直接在连接行点击**升级**完成首次受管安装；
 后续版本再使用更新弹窗的直连/中继策略。受管安装和自更新目前支持 macOS 和 Linux
 （包括 WSL）。
 
@@ -280,8 +280,8 @@ Actor、时间、Operation ID 和结果，但不会把 Provider Secret 复制到
 OcHub 只在 SSH 进程的 stdin/stdout 上运行白名单化的
 `ochcli remote serve --stdio` 协议。请求是类型化操作，不是 Shell 命令字符串。
 
-默认策略允许读取状态、运行诊断、切换 Provider、管理网关生命周期，以及读取节点更新
-状态；远端 Secret 写入、备份恢复和更新安装默认关闭。在远端查看有效策略：
+默认策略允许读取状态、运行诊断、切换 Provider、管理网关生命周期和安装更新；
+远端 Secret 写入和备份恢复默认关闭。在远端查看有效策略：
 
 ```sh
 ochcli remote policy show
@@ -305,8 +305,8 @@ allowUpdateInstall = false
 授权边界。具体部署方式和协议细节见
 [远程节点设计与安全模型](https://github.com/OcHub-team/OcHub/blob/main/docs/REMOTE-NODES-DESIGN.md)。
 
-如果需要从桌面执行恢复数据库、导入 SQL/cc-switch 数据或安装远端更新，请在远端
-策略中按需开启高风险能力：
+如果需要从桌面执行恢复数据库或导入 SQL/cc-switch 数据，请在远端策略中
+显式开启恢复能力。安装更新默认已开启，也可以在配置中显式声明：
 
 ```toml
 allowBackupRestore = true
@@ -327,7 +327,7 @@ allowUpdateInstall = true
 | Host Key 发生变化 | 立即停止；通过可信渠道核对新指纹后，才替换 OcHub 或用户 `known_hosts` 中的旧记录 |
 | WSL 节点离线 | 启动发行版和 `sshd`，检查 Windows 侧别名、本机转发和端口 |
 | 节点能连接但没有 Provider | 在远端执行 `ochcli provider import-live --app <app>` 或添加 Provider |
-| 连接行提示节点版本过旧 | 点击**升级**完成首次受管安装；后续更新另需启用 `allowUpdateInstall` |
+| 连接行提示节点版本过旧 | 点击**升级**完成首次受管安装；后续更新默认允许，除非设置 `allowUpdateInstall = false` |
 | 更新使用桌面中继 | 节点无法访问对应发布文件；桌面端会校验后通过 SSH 安全传输 |
 | 协议/版本不兼容 | 升级桌面端和远端 `ochcli` 后重新连接 |
 | 网关已运行但控制端访问不到 | 网关运行在远端；让远端工具使用它，或单独建立显式 SSH 隧道 |

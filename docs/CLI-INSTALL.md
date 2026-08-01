@@ -69,9 +69,9 @@ policy—the SSH login itself is the authorization boundary. Once a current node
 is running, normal executable updates use the typed remote update capability
 described below.
 
-Subsequent remote update installation is intentionally disabled by the default
-policy. To allow one-click updates, create or edit `~/.ochub/remote.toml` on
-the node:
+Subsequent remote update installation is enabled by the default policy. To
+disable one-click updates, create or edit `~/.ochub/remote.toml` on the node
+and set `allowUpdateInstall = false`. The effective default policy is:
 
 ```toml
 schemaVersion = 1

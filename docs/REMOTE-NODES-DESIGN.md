@@ -740,8 +740,8 @@ capability 表达平台或版本差异，而不是退回独立的远程快捷面
   没有 systemd 的 WSL 使用按需后台 Owner。
 - 新增 `headless.json`，按目标平台记录下载地址、字节数、SHA-256 和 payload minisign
   签名；未签名发布仍可展示版本，但不能一键安装。
-- `node.update.read` 默认可用；`node.update.install` 和 `node.update.relay` 必须由
-  `allowUpdateInstall = true` 显式授权。
+- `node.update.read` 默认可用；`node.update.install` 和 `node.update.relay` 默认授权，
+  可通过 `allowUpdateInstall = false` 显式禁用。
 - 桌面端先读取节点版本和平台，再自动选择远端直连下载或控制端下载后经 SSH 中继。
 - 即使节点连更新清单也无法获取，桌面端仍可自行获取清单并进入中继路径。
 - 中继接收端重新校验 Node ID、平台、长度、哈希与签名，不把控制端当作信任根。

@@ -30,7 +30,7 @@ pub struct RemotePolicy {
     pub allow_secrets_write: bool,
     #[serde(default)]
     pub allow_backup_restore: bool,
-    #[serde(default)]
+    #[serde(default = "enabled")]
     pub allow_update_install: bool,
 }
 
@@ -52,7 +52,7 @@ impl Default for RemotePolicy {
             allow_daemon_lifecycle: true,
             allow_secrets_write: false,
             allow_backup_restore: false,
-            allow_update_install: false,
+            allow_update_install: true,
         }
     }
 }
@@ -146,7 +146,19 @@ mod tests {
         assert!(policy.allow_write);
         assert!(!policy.allow_secrets_write);
         assert!(!policy.allow_backup_restore);
-        assert!(!policy.allow_update_install);
+        assert!(policy.allow_update_install);
+    }
+
+    #[test]
+    fn update_install_defaults_on_but_can_be_disabled_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("remote.toml");
+
+        fs::write(&path, "schemaVersion = 1\n").unwrap();
+        assert!(load_at(&path).unwrap().allow_update_install);
+
+        fs::write(&path, "schemaVersion = 1\nallowUpdateInstall = false\n").unwrap();
+        assert!(!load_at(&path).unwrap().allow_update_install);
     }
 
     #[test]

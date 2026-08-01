@@ -151,7 +151,7 @@ fn probe_reports_protocol_identity_without_starting_a_listener() {
             .any(|capability| capability == "node.update.read")
     );
     assert!(
-        !value["data"]["capabilities"]
+        value["data"]["capabilities"]
             .as_array()
             .unwrap()
             .iter()
@@ -171,9 +171,14 @@ fn node_update_status_is_available_without_contacting_the_release_server() {
             .any(|capability| capability.as_str() == "node.update.read")
     );
     assert!(
-        !ack.capabilities
+        ack.capabilities
             .iter()
             .any(|capability| capability.as_str() == "node.update.install")
+    );
+    assert!(
+        ack.capabilities
+            .iter()
+            .any(|capability| capability.as_str() == "node.update.relay")
     );
 
     let status = request(
@@ -194,7 +199,7 @@ fn node_update_status_is_available_without_contacting_the_release_server() {
 }
 
 #[test]
-fn node_update_install_and_relay_require_explicit_remote_policy() {
+fn node_update_install_and_relay_can_be_disabled_by_remote_policy() {
     let home = tempfile::tempdir().unwrap();
     let config_dir = home.path().join(".ochub");
     std::fs::create_dir_all(&config_dir).unwrap();
@@ -208,19 +213,19 @@ fn node_update_install_and_relay_require_explicit_remote_policy() {
             "allowDaemonLifecycle = true\n",
             "allowSecretsWrite = false\n",
             "allowBackupRestore = false\n",
-            "allowUpdateInstall = true\n",
+            "allowUpdateInstall = false\n",
         ),
     )
     .unwrap();
 
     let (child, stdin, _stdout, ack) = start_remote(home.path(), "desktop-node-update-policy");
     assert!(
-        ack.capabilities
+        !ack.capabilities
             .iter()
             .any(|capability| capability.as_str() == "node.update.install")
     );
     assert!(
-        ack.capabilities
+        !ack.capabilities
             .iter()
             .any(|capability| capability.as_str() == "node.update.relay")
     );

@@ -240,12 +240,12 @@ version automatically. You can also roll back on the node:
 ochcli --yes node rollback
 ```
 
-Update installation is disabled by policy until you set
-`allowUpdateInstall = true` as described below and reconnect. For a node from
-before managed update support, choose **Upgrade** in the connection row to
-perform the first managed installation; later releases use the direct/relay
-update dialog. Managed installation and self-update currently support macOS
-and Linux, including WSL.
+Update installation is enabled by the default policy. Set
+`allowUpdateInstall = false` and reconnect if you want to disable it for a
+node. For a node from before managed update support, choose **Upgrade** in the
+connection row to perform the first managed installation; later releases use
+the direct/relay update dialog. Managed installation and self-update currently
+support macOS and Linux, including WSL.
 
 ## Switch a provider on the remote node
 
@@ -342,10 +342,9 @@ allowlisted `ochcli remote serve --stdio` protocol over that SSH process.
 Requests are typed operations, not shell command strings.
 
 By default the remote policy permits status reads, diagnostics, provider
-switching, and Gateway lifecycle. It also permits reading node update status,
-but remote secret writes, backup restore, and update installation remain
-disabled. Inspect the effective policy on the
-remote node with:
+switching, Gateway lifecycle, and update installation. Remote secret writes
+and backup restore remain disabled. Inspect the effective policy on the remote
+node with:
 
 ```sh
 ochcli remote policy show
@@ -371,9 +370,9 @@ forced command. See the
 [Remote Nodes design and security model](https://github.com/OcHub-team/OcHub/blob/main/docs/REMOTE-NODES-DESIGN.md)
 for that deployment pattern and protocol details.
 
-To restore a database, import SQL/cc-switch data, or install an update from the
-desktop, explicitly enable the corresponding high-risk capabilities on the
-remote node:
+To restore a database or import SQL/cc-switch data from the desktop, explicitly
+enable backup restore on the remote node. Update installation is already
+enabled by default, but can also be stated explicitly:
 
 ```toml
 allowBackupRestore = true
@@ -395,7 +394,7 @@ control session.
 | Host key changed | Stop. Verify the new fingerprint through a trusted channel before replacing the old OcHub or user `known_hosts` entry |
 | WSL node is offline | Start the distribution and `sshd`; confirm the Windows alias, localhost forwarding, and port |
 | Node connects but no providers appear | Run `ochcli provider import-live --app <app>` or add providers on the remote machine |
-| Node version is reported as too old | Choose **Upgrade** for the first managed installation; later updates also require `allowUpdateInstall` |
+| Node version is reported as too old | Choose **Upgrade** for the first managed installation; later updates are enabled unless `allowUpdateInstall = false` |
 | Update uses desktop relay | The node cannot reach its exact release asset; the desktop securely downloads, verifies, and streams it over SSH |
 | Protocol/version error | Upgrade Desktop and the remote `ochcli`, then reconnect |
 | Gateway runs but is unavailable on the desktop | It listens on the remote machine; use the remote tool or create a separate, explicit SSH tunnel |
