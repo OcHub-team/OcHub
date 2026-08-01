@@ -123,12 +123,6 @@ impl ProviderSwitchHandle {
             Self::Local { plan, .. } | Self::Remote { plan, .. } => plan,
         }
     }
-
-    pub(crate) fn revision(&self) -> &str {
-        match self {
-            Self::Local { revision, .. } | Self::Remote { revision, .. } => revision,
-        }
-    }
 }
 
 #[allow(dead_code)]

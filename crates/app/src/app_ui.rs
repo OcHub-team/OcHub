@@ -982,7 +982,13 @@ impl AppRoot {
         )
         .detach();
         cx.subscribe(&this.remote_view, |this, view, event, cx| {
-            let RemoteEvent::ConnectionChanged { id, connected } = event;
+            if let RemoteEvent::ManageRequested { id } = event {
+                this.select_remote_scope(id.clone(), cx);
+                return;
+            }
+            let RemoteEvent::ConnectionChanged { id, connected } = event else {
+                unreachable!();
+            };
             if this.active_remote_scope.as_deref() != Some(id.as_str()) {
                 return;
             }

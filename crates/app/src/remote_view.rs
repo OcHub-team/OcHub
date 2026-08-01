@@ -13,12 +13,7 @@ use gpui::{
     Context, Entity, FontWeight, MouseButton, ScrollHandle, SharedString, Window, div, prelude::*,
     px,
 };
-use ochub_core::AppId;
-use ochub_core::application::{
-    AppSummary, DoctorReport, ProviderListItem, ProviderSwitchPolicy, StatusSummary,
-};
-use ochub_core::gateway::GatewayStatus;
-use ochub_core::runtime::journal::{OperationRecord, OperationState};
+use ochub_core::application::AppSummary;
 use ochub_protocol::Capability;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
@@ -27,11 +22,10 @@ use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::remote::{
-    BootstrapProbe, NodeInstallStatus, NodeUpdateInstallResult, NodeUpdateReport,
-    ProviderSwitchHandle, RemoteClient, RemoteConnectionIssue, RemoteConnectionIssueKind,
-    RemoteHost, RemoteHostStore, ScannedHostKey, SshConfigEntry, WorkspaceBackend,
-    discover_ssh_connections, install_bootstrap, probe_bootstrap, relay_node_update,
-    scan_host_keys, trust_host_key,
+    BootstrapProbe, NodeInstallStatus, NodeUpdateInstallResult, NodeUpdateReport, RemoteClient,
+    RemoteConnectionIssue, RemoteConnectionIssueKind, RemoteHost, RemoteHostStore, ScannedHostKey,
+    SshConfigEntry, WorkspaceBackend, discover_ssh_connections, install_bootstrap, probe_bootstrap,
+    relay_node_update, scan_host_keys, trust_host_key,
 };
 use crate::text_input::TextInput;
 use crate::{tf, theme};
@@ -58,12 +52,7 @@ fn icon_only_button(
 }
 
 struct RemoteSnapshot {
-    status: StatusSummary,
     apps: Vec<AppSummary>,
-    selected_app: Option<AppId>,
-    providers: Vec<ProviderListItem>,
-    gateway: GatewayStatus,
-    operations: Vec<OperationRecord>,
 }
 
 struct RemoteConnectFailure {
@@ -246,6 +235,7 @@ pub(crate) struct RemoteScopeItem {
 #[derive(Clone)]
 pub(crate) enum RemoteEvent {
     ConnectionChanged { id: String, connected: bool },
+    ManageRequested { id: String },
 }
 
 pub struct RemoteView {
@@ -255,16 +245,7 @@ pub struct RemoteView {
     connection_generation: u64,
     client: Option<Arc<RemoteClient>>,
     backend: Option<WorkspaceBackend>,
-    remote_status: Option<StatusSummary>,
     apps: Vec<AppSummary>,
-    selected_app: Option<AppId>,
-    providers: Vec<ProviderListItem>,
-    gateway: Option<GatewayStatus>,
-    operations: Vec<OperationRecord>,
-    doctor_report: Option<DoctorReport>,
-    ssh_diagnostics: Vec<String>,
-    pending_plan: Option<ProviderSwitchHandle>,
-    pending_provider_name: Option<String>,
     add_open: bool,
     add_mode: AddMode,
     ssh_config_entries: Vec<SshConfigEntry>,
@@ -322,16 +303,7 @@ impl RemoteView {
             connection_generation: 0,
             client: None,
             backend: None,
-            remote_status: None,
             apps: Vec::new(),
-            selected_app: None,
-            providers: Vec::new(),
-            gateway: None,
-            operations: Vec::new(),
-            doctor_report: None,
-            ssh_diagnostics: Vec::new(),
-            pending_plan: None,
-            pending_provider_name: None,
             add_open: false,
             add_mode: AddMode::SshConfig,
             ssh_config_entries: Vec::new(),
@@ -675,12 +647,6 @@ impl RemoteView {
         cx.notify();
     }
 
-    fn connect_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected_id.clone() {
-            self.connect_host(id, cx);
-        }
-    }
-
     fn connect_host(&mut self, id: String, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -692,8 +658,6 @@ impl RemoteView {
         let generation = self.connection_generation;
         self.busy = true;
         self.connection_state = ConnectionState::Connecting;
-        self.pending_plan = None;
-        self.pending_provider_name = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
@@ -705,12 +669,12 @@ impl RemoteView {
                             message: error.to_string(),
                         })?;
                 let backend = WorkspaceBackend::remote(client.clone());
-                let snapshot = load_snapshot(backend.clone(), None)
-                    .await
-                    .map_err(|message| RemoteConnectFailure {
+                let snapshot = load_snapshot(backend.clone()).await.map_err(|message| {
+                    RemoteConnectFailure {
                         issue: None,
                         message,
-                    })?;
+                    }
+                })?;
                 Ok::<_, RemoteConnectFailure>((client, backend, snapshot))
             })
             .await;
@@ -795,16 +759,7 @@ impl RemoteView {
         self.busy = false;
         self.connection_state = ConnectionState::Disconnected;
         self.backend = None;
-        self.remote_status = None;
         self.apps.clear();
-        self.selected_app = None;
-        self.providers.clear();
-        self.gateway = None;
-        self.operations.clear();
-        self.doctor_report = None;
-        self.ssh_diagnostics.clear();
-        self.pending_plan = None;
-        self.pending_provider_name = None;
         if let Some(client) = self.client.take() {
             cx.spawn(async move |_this, _cx| {
                 let _ = crate::core_async::run(async move { client.close().await }).await;
@@ -847,7 +802,7 @@ impl RemoteView {
         {
             self.disconnect(cx);
         } else {
-            self.activate_scope(id, cx);
+            cx.emit(RemoteEvent::ManageRequested { id });
         }
     }
 
@@ -1316,7 +1271,6 @@ impl RemoteView {
         let host_id = host.id.clone();
         let active = self.selected_id.as_deref() == Some(host_id.as_str())
             && self.connection_state == ConnectionState::Connected;
-        let preferred_app = self.selected_app.clone();
         if active {
             self.connection_state = ConnectionState::Connecting;
             self.busy = true;
@@ -1417,8 +1371,7 @@ impl RemoteView {
                             let probe = NodeProbe::online(&new_client);
                             if active {
                                 let backend = WorkspaceBackend::remote(new_client.clone());
-                                let snapshot =
-                                    load_snapshot(backend.clone(), preferred_app.clone()).await?;
+                                let snapshot = load_snapshot(backend.clone()).await?;
                                 return Ok::<_, String>((
                                     new_client,
                                     Some(backend),
@@ -1520,12 +1473,7 @@ impl RemoteView {
     }
 
     fn install_snapshot(&mut self, snapshot: RemoteSnapshot) {
-        self.remote_status = Some(snapshot.status);
         self.apps = snapshot.apps;
-        self.selected_app = snapshot.selected_app;
-        self.providers = snapshot.providers;
-        self.gateway = Some(snapshot.gateway);
-        self.operations = snapshot.operations;
     }
 
     fn refresh_remote(&mut self, cx: &mut Context<Self>) {
@@ -1535,254 +1483,16 @@ impl RemoteView {
         let Some(backend) = self.backend.clone() else {
             return;
         };
-        let preferred = self.selected_app.clone();
         self.busy = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result =
-                crate::core_async::run(async move { load_snapshot(backend, preferred).await })
-                    .await;
+            let result = crate::core_async::run(async move { load_snapshot(backend).await }).await;
             this.update(cx, |this, cx| {
                 this.busy = false;
                 match result {
                     Ok(snapshot) => this.install_snapshot(snapshot),
                     Err(error) => this.set_status(
                         tf!(k::REMOTE_ERROR_LOAD, error = error),
-                        NotificationLevel::Error,
-                    ),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn run_doctor(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        let Some(backend) = self.backend.clone() else {
-            return;
-        };
-        let client = self.client.clone();
-        self.busy = true;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = crate::core_async::run(async move {
-                let report = backend.doctor().await.map_err(|error| error.to_string())?;
-                let diagnostics = match client {
-                    Some(client) => client.diagnostics().await,
-                    None => Vec::new(),
-                };
-                Ok::<_, String>((report, diagnostics))
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok((report, diagnostics)) => {
-                        this.doctor_report = Some(report);
-                        this.ssh_diagnostics = diagnostics;
-                    }
-                    Err(error) => this.set_status(
-                        tf!(k::REMOTE_ERROR_DOCTOR, error = error),
-                        NotificationLevel::Error,
-                    ),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn select_app(&mut self, app_id: String, cx: &mut Context<Self>) {
-        if self.busy
-            || self
-                .selected_app
-                .as_ref()
-                .is_some_and(|app| app.as_str() == app_id)
-        {
-            return;
-        }
-        let Ok(app) = AppId::parse(&app_id) else {
-            return;
-        };
-        let Some(backend) = self.backend.clone() else {
-            return;
-        };
-        self.busy = true;
-        self.pending_plan = None;
-        self.pending_provider_name = None;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let app_for_request = app.clone();
-            let result = crate::core_async::run(async move {
-                backend
-                    .list_providers(&app_for_request)
-                    .await
-                    .map_err(|error| error.to_string())
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok(providers) => {
-                        this.selected_app = Some(app);
-                        this.providers = providers;
-                    }
-                    Err(error) => this.set_status(
-                        tf!(k::REMOTE_ERROR_LOAD, error = error),
-                        NotificationLevel::Error,
-                    ),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn plan_switch(&mut self, provider_id: String, provider_name: String, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        let (Some(backend), Some(app)) = (self.backend.clone(), self.selected_app.clone()) else {
-            return;
-        };
-        self.busy = true;
-        self.pending_plan = None;
-        self.pending_provider_name = None;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = crate::core_async::run(async move {
-                backend
-                    .plan_provider_switch(&app, &provider_id, ProviderSwitchPolicy::Abort)
-                    .await
-                    .map_err(|error| error.to_string())
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok(plan) => {
-                        this.pending_plan = Some(plan);
-                        this.pending_provider_name = Some(provider_name);
-                    }
-                    Err(error) => this.set_status(
-                        tf!(k::REMOTE_ERROR_PLAN, error = error),
-                        NotificationLevel::Error,
-                    ),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn cancel_plan(&mut self, cx: &mut Context<Self>) {
-        self.pending_plan = None;
-        self.pending_provider_name = None;
-        cx.notify();
-    }
-
-    fn apply_plan(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        let (Some(backend), Some(handle)) = (self.backend.clone(), self.pending_plan.clone())
-        else {
-            return;
-        };
-        let provider_name = self
-            .pending_provider_name
-            .clone()
-            .unwrap_or_else(|| handle.plan().provider_id.clone());
-        let app = self.selected_app.clone();
-        self.busy = true;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = crate::core_async::run(async move {
-                backend
-                    .apply_provider_switch(handle)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let providers = if let Some(app) = app {
-                    backend
-                        .list_providers(&app)
-                        .await
-                        .map_err(|error| error.to_string())?
-                } else {
-                    Vec::new()
-                };
-                Ok::<_, String>(providers)
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok(providers) => {
-                        this.providers = providers;
-                        this.pending_plan = None;
-                        this.pending_provider_name = None;
-                        this.set_status(
-                            tf!(k::REMOTE_SUCCESS_APPLIED, provider = provider_name),
-                            NotificationLevel::Success,
-                        );
-                    }
-                    Err(error) => this.set_status(
-                        tf!(k::REMOTE_ERROR_APPLY, error = error),
-                        NotificationLevel::Error,
-                    ),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn toggle_gateway(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        let (Some(backend), Some(gateway)) = (self.backend.clone(), self.gateway.as_ref()) else {
-            return;
-        };
-        let running = !gateway.running;
-        self.busy = true;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let backend_for_request = backend.clone();
-            let result = crate::core_async::run(async move {
-                backend_for_request
-                    .set_gateway_running(running)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                backend_for_request
-                    .gateway_status()
-                    .await
-                    .map_err(|error| error.to_string())
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok(gateway) => {
-                        this.gateway = Some(gateway);
-                        this.set_status(
-                            if running {
-                                t(k::REMOTE_SUCCESS_GATEWAY_STARTED)
-                            } else {
-                                t(k::REMOTE_SUCCESS_GATEWAY_STOPPED)
-                            },
-                            NotificationLevel::Success,
-                        );
-                    }
-                    Err(error) => this.set_status(
-                        tf!(k::REMOTE_ERROR_GATEWAY, error = error),
                         NotificationLevel::Error,
                     ),
                 }
@@ -2100,18 +1810,6 @@ impl RemoteView {
                     .child(t(k::REMOTE_BOOTSTRAP_PHASE_DETECTING)),
             );
         }
-        body = body.child(
-            div()
-                .rounded_lg()
-                .border_1()
-                .border_color(theme::border())
-                .bg(theme::surface())
-                .px_4()
-                .py_3()
-                .text_xs()
-                .text_color(theme::muted())
-                .child(t(k::REMOTE_BOOTSTRAP_SECURITY)),
-        );
         if let Some(error) = &dialog.error {
             body = body.child(
                 div()
@@ -3064,9 +2762,9 @@ impl RemoteView {
                         )
                     };
                 let version = if connected {
-                    self.remote_status
+                    self.client
                         .as_ref()
-                        .map(|status| status.version.clone())
+                        .map(|client| client.handshake().server_version.clone())
                 } else {
                     probe.and_then(|probe| probe.version.clone())
                 };
@@ -3110,8 +2808,10 @@ impl RemoteView {
                 let toggle = cx.listener(move |this: &mut Self, _: &(), _window, cx| {
                     this.toggle_host(toggle_id.clone(), cx)
                 });
-                let manage = cx.listener(move |this: &mut Self, _: &(), _window, cx| {
-                    this.activate_scope(manage_id.clone(), cx)
+                let manage = cx.listener(move |_this: &mut Self, _: &(), _window, cx| {
+                    cx.emit(RemoteEvent::ManageRequested {
+                        id: manage_id.clone(),
+                    })
                 });
                 let update = cx.listener(move |this: &mut Self, _: &(), _window, cx| {
                     this.open_node_update(update_id.clone(), cx)
@@ -3339,716 +3039,14 @@ impl RemoteView {
             )
             .child(layout::group(rows))
     }
-
-    fn render_scope(&self, host: &RemoteHost) -> gpui::Div {
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .w_full()
-            .px_4()
-            .py_3()
-            .rounded_lg()
-            .border_1()
-            .border_color(theme::accent())
-            .bg(theme::accent_soft())
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .text_sm()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme::accent())
-                    .child(icon(IconName::Terminal, theme::accent(), 15.))
-                    .child(tf!(
-                        k::REMOTE_SCOPE,
-                        node = host.label,
-                        target = host.ssh_alias
-                    )),
-            )
-            .child(components::badge(
-                if self.busy {
-                    BadgeTone::Warning
-                } else {
-                    BadgeTone::Success
-                },
-                if self.busy {
-                    t(k::REMOTE_BUSY_LOADING)
-                } else {
-                    t(k::REMOTE_NODE_CONNECTED)
-                },
-            ))
-    }
-
-    fn render_node_status(&self, host: &RemoteHost) -> gpui::Div {
-        let Some(status) = &self.remote_status else {
-            return div();
-        };
-        let node_id = self
-            .client
-            .as_ref()
-            .map(|client| client.handshake().node.id.as_str())
-            .unwrap_or("-");
-        let handshake = self.client.as_ref().map(|client| client.handshake());
-        let platform = handshake
-            .map(|ack| {
-                format!(
-                    "{} {} · {} · {}",
-                    ack.node.os, ack.node.arch, ack.node.hostname, ack.node.user
-                )
-            })
-            .unwrap_or_else(|| "-".to_string());
-        let runtime = handshake
-            .and_then(|ack| {
-                Some(tf!(
-                    k::REMOTE_STATUS_RUNTIME,
-                    kind = ack.runtime.owner_kind.as_deref()?,
-                    pid = ack.runtime.owner_pid?
-                ))
-            })
-            .unwrap_or_else(|| "-".to_string());
-        let rows = vec![
-            layout::row()
-                .child(layout::row_label(
-                    t(k::REMOTE_STATUS_NODE_ID),
-                    SharedString::from(node_id.to_string()),
-                ))
-                .child(components::badge(
-                    BadgeTone::Accent,
-                    tf!(k::REMOTE_NODE_VERSION, version = status.version),
-                ))
-                .into_any_element(),
-            layout::row()
-                .child(layout::row_label(
-                    t(k::REMOTE_STATUS_DATA_DIR),
-                    SharedString::from(status.data_dir.clone()),
-                ))
-                .child(components::badge(
-                    BadgeTone::Neutral,
-                    tf!(
-                        k::REMOTE_STATUS_APPS,
-                        enabled = status.enabled_apps,
-                        total = status.registered_apps
-                    ),
-                ))
-                .into_any_element(),
-            layout::row()
-                .child(layout::row_label(
-                    t(k::REMOTE_STATUS_PLATFORM),
-                    SharedString::from(platform),
-                ))
-                .child(components::badge(BadgeTone::Neutral, runtime))
-                .into_any_element(),
-        ];
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(layout::section_header(
-                t(k::REMOTE_STATUS_TITLE),
-                host.remote_node_id
-                    .clone()
-                    .map(SharedString::from)
-                    .unwrap_or_else(|| SharedString::from(node_id.to_string())),
-            ))
-            .child(layout::group(rows))
-    }
-
-    fn render_doctor(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let run = cx.listener(|this: &mut Self, _: &(), _window, cx| this.run_doctor(cx));
-        let action = if self.busy {
-            components::disabled_button(
-                "remote-doctor-disabled",
-                t(k::REMOTE_ACTION_DOCTOR),
-                ButtonTone::Neutral,
-                ButtonSize::Sm,
-                true,
-            )
-            .into_any_element()
-        } else {
-            components::button(
-                "remote-doctor",
-                t(k::REMOTE_ACTION_DOCTOR),
-                ButtonTone::Neutral,
-                ButtonSize::Sm,
-            )
-            .on_click(move |_event, window, cx| run(&(), window, cx))
-            .into_any_element()
-        };
-        let mut block = div().flex().flex_col().gap_2().child(
-            layout::section_header(
-                t(k::REMOTE_DOCTOR_TITLE),
-                self.doctor_report
-                    .as_ref()
-                    .map(|report| {
-                        if report.healthy {
-                            t(k::REMOTE_DOCTOR_HEALTHY)
-                        } else {
-                            t(k::REMOTE_DOCTOR_FAILED)
-                        }
-                    })
-                    .unwrap_or_else(|| t(k::REMOTE_SECURITY_NOTE)),
-            )
-            .child(action),
-        );
-        if let Some(report) = &self.doctor_report {
-            let mut rows = report
-                .checks
-                .iter()
-                .map(|check| {
-                    let healthy = matches!(check.status.as_str(), "ok" | "healthy" | "pass");
-                    layout::row()
-                        .child(layout::row_label(
-                            SharedString::from(check.id.clone()),
-                            SharedString::from(check.message.clone()),
-                        ))
-                        .child(components::badge(
-                            if healthy {
-                                BadgeTone::Success
-                            } else {
-                                BadgeTone::Warning
-                            },
-                            SharedString::from(check.status.clone()),
-                        ))
-                        .into_any_element()
-                })
-                .collect::<Vec<_>>();
-            rows.extend(
-                self.ssh_diagnostics
-                    .iter()
-                    .take(5)
-                    .enumerate()
-                    .map(|(index, line)| {
-                        layout::row()
-                            .child(layout::row_label(
-                                SharedString::from(format!("ssh.stderr.{}", index + 1)),
-                                SharedString::from(line.clone()),
-                            ))
-                            .child(components::badge(BadgeTone::Neutral, "SSH"))
-                            .into_any_element()
-                    }),
-            );
-            block = block.child(layout::group(rows));
-        }
-        block
-    }
-
-    fn render_operations(&self) -> gpui::Div {
-        let rows = self
-            .operations
-            .iter()
-            .take(5)
-            .map(|operation| {
-                let tone = match operation.state {
-                    OperationState::Completed => BadgeTone::Success,
-                    OperationState::Failed | OperationState::RecoveryRequired => BadgeTone::Danger,
-                    OperationState::Planned | OperationState::Prepared => BadgeTone::Warning,
-                    OperationState::RolledBack => BadgeTone::Neutral,
-                };
-                let state = serde_json::to_value(operation.state)
-                    .ok()
-                    .and_then(|value| value.as_str().map(str::to_string))
-                    .unwrap_or_else(|| "unknown".to_string());
-                layout::row()
-                    .child(layout::row_label(
-                        SharedString::from(operation.operation.clone()),
-                        SharedString::from(format!(
-                            "{} · {} · {}",
-                            operation.actor, operation.started_at, operation.id
-                        )),
-                    ))
-                    .child(components::badge(tone, state))
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(layout::section_header(
-                t(k::REMOTE_OPERATION_TITLE),
-                if rows.is_empty() {
-                    t(k::REMOTE_OPERATION_EMPTY)
-                } else {
-                    t(k::REMOTE_PLAN_DESC)
-                },
-            ))
-            .when(!rows.is_empty(), |block| block.child(layout::group(rows)))
-    }
-
-    fn render_apps_and_providers(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let manageable = self
-            .apps
-            .iter()
-            .filter(|app| app.enabled && app.supports_provider)
-            .collect::<Vec<_>>();
-        let mut block = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(layout::section_header(
-                t(k::REMOTE_APP_TITLE),
-                if manageable.is_empty() {
-                    t(k::REMOTE_APP_EMPTY)
-                } else {
-                    tf!(
-                        k::REMOTE_STATUS_APPS,
-                        enabled = self.apps.iter().filter(|app| app.enabled).count(),
-                        total = self.apps.len()
-                    )
-                    .into()
-                },
-            ));
-        if !manageable.is_empty() {
-            let mut tabs = div().flex().flex_row().flex_wrap().gap_2();
-            for app in manageable {
-                let id = app.id.clone();
-                let selected = self
-                    .selected_app
-                    .as_ref()
-                    .is_some_and(|selected| selected.as_str() == app.id);
-                let select = cx.listener(move |this: &mut Self, _: &(), _window, cx| {
-                    this.select_app(id.clone(), cx)
-                });
-                tabs = tabs.child(
-                    components::button(
-                        SharedString::from(format!("remote-app-{}", app.id)),
-                        SharedString::from(app.display_name.clone()),
-                        if selected {
-                            ButtonTone::Primary
-                        } else {
-                            ButtonTone::Neutral
-                        },
-                        ButtonSize::Sm,
-                    )
-                    .on_click(move |_event, window, cx| select(&(), window, cx)),
-                );
-            }
-            block = block.child(tabs);
-        }
-        if self.providers.is_empty() {
-            return block.child(
-                div()
-                    .w_full()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::surface())
-                    .child(components::empty_state(
-                        IconName::Cloud,
-                        t(k::REMOTE_PROVIDER_EMPTY),
-                        t(k::REMOTE_SECURITY_NOTE),
-                        None,
-                    )),
-            );
-        }
-        let rows = self
-            .providers
-            .iter()
-            .map(|provider| {
-                let id = provider.id.clone();
-                let name = provider.name.clone();
-                let plan = cx.listener(move |this: &mut Self, _: &(), _window, cx| {
-                    this.plan_switch(id.clone(), name.clone(), cx)
-                });
-                let action = if provider.current {
-                    components::badge(BadgeTone::Success, t(k::REMOTE_PROVIDER_CURRENT))
-                        .into_any_element()
-                } else if self.busy {
-                    components::disabled_button(
-                        SharedString::from(format!("remote-plan-disabled-{}", provider.id)),
-                        t(k::REMOTE_ACTION_PLAN),
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                        true,
-                    )
-                    .into_any_element()
-                } else {
-                    components::button(
-                        SharedString::from(format!("remote-plan-{}", provider.id)),
-                        t(k::REMOTE_ACTION_PLAN),
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(move |_event, window, cx| plan(&(), window, cx))
-                    .into_any_element()
-                };
-                layout::row()
-                    .child(layout::row_label(
-                        SharedString::from(provider.name.clone()),
-                        SharedString::from(provider.base_url.clone()),
-                    ))
-                    .child(action)
-                    .into_any_element()
-            })
-            .collect();
-        block.child(layout::group(rows))
-    }
-
-    fn render_gateway(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(gateway) = &self.gateway else {
-            return div();
-        };
-        let toggle = cx.listener(|this: &mut Self, _: &(), _window, cx| this.toggle_gateway(cx));
-        let (description, action) = if gateway.running {
-            (
-                tf!(k::REMOTE_GATEWAY_RUNNING, url = gateway.base_url),
-                t(k::REMOTE_GATEWAY_STOP),
-            )
-        } else {
-            (
-                tf!(k::REMOTE_GATEWAY_STOPPED, port = gateway.port),
-                t(k::REMOTE_GATEWAY_START),
-            )
-        };
-        let button = if self.busy {
-            components::disabled_button(
-                "remote-gateway-toggle-disabled",
-                action,
-                ButtonTone::Neutral,
-                ButtonSize::Sm,
-                true,
-            )
-            .into_any_element()
-        } else {
-            components::button(
-                "remote-gateway-toggle",
-                action,
-                if gateway.running {
-                    ButtonTone::Danger
-                } else {
-                    ButtonTone::Primary
-                },
-                ButtonSize::Sm,
-            )
-            .on_click(move |_event, window, cx| toggle(&(), window, cx))
-            .into_any_element()
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(layout::section_header(
-                t(k::REMOTE_GATEWAY_TITLE),
-                description,
-            ))
-            .child(layout::group(vec![
-                layout::row()
-                    .child(layout::row_label(
-                        t(k::REMOTE_GATEWAY_TITLE),
-                        SharedString::from(format!("{}:{}", gateway.base_url, gateway.port)),
-                    ))
-                    .child(button)
-                    .into_any_element(),
-            ]))
-    }
-
-    fn render_plan(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let handle = self.pending_plan.as_ref()?;
-        let plan = handle.plan();
-        let provider = self
-            .pending_provider_name
-            .as_deref()
-            .unwrap_or(plan.provider_id.as_str());
-        let current = plan
-            .current_provider_id
-            .as_deref()
-            .unwrap_or_else(|| crate::i18n::raw(k::REMOTE_PLAN_NONE));
-        let target_node = self
-            .selected_id
-            .as_deref()
-            .and_then(|id| self.store.get(id));
-        let cancel = cx.listener(|this: &mut Self, _: &(), _window, cx| this.cancel_plan(cx));
-        let apply = cx.listener(|this: &mut Self, _: &(), _window, cx| this.apply_plan(cx));
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .w_full()
-                .rounded_lg()
-                .border_1()
-                .border_color(theme::yellow())
-                .bg(theme::yellow_soft())
-                .p_4()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme::text())
-                        .child(t(k::REMOTE_PLAN_TITLE)),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme::subtext())
-                        .child(t(k::REMOTE_PLAN_DESC)),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(theme::subtext())
-                        .when_some(target_node, |lines, host| {
-                            lines.child(tf!(
-                                k::REMOTE_PLAN_SCOPE,
-                                node = host.label,
-                                target = host.ssh_alias
-                            ))
-                        })
-                        .child(tf!(k::REMOTE_PLAN_CURRENT, provider = current))
-                        .child(tf!(k::REMOTE_PLAN_TARGET, provider = provider))
-                        .child(tf!(k::REMOTE_PLAN_PATH, path = plan.config_path))
-                        .child(tf!(k::REMOTE_PLAN_REVISION, revision = handle.revision()))
-                        .child(if plan.would_change {
-                            t(k::REMOTE_PLAN_WILL_CHANGE)
-                        } else {
-                            t(k::REMOTE_PLAN_WONT_CHANGE)
-                        }),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap_2()
-                        .child(
-                            components::button(
-                                "remote-plan-cancel",
-                                t(k::REMOTE_ACTION_CANCEL),
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(move |_event, window, cx| cancel(&(), window, cx)),
-                        )
-                        .child(if self.busy {
-                            components::disabled_button(
-                                "remote-plan-apply-disabled",
-                                t(k::REMOTE_ACTION_APPLY),
-                                ButtonTone::Primary,
-                                ButtonSize::Sm,
-                                true,
-                            )
-                            .into_any_element()
-                        } else {
-                            components::button(
-                                "remote-plan-apply",
-                                t(k::REMOTE_ACTION_APPLY),
-                                ButtonTone::Primary,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(move |_event, window, cx| apply(&(), window, cx))
-                            .into_any_element()
-                        }),
-                ),
-        )
-    }
-
-    fn render_selected_node(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(id) = self.selected_id.as_deref() else {
-            return div().flex().flex_1().child(components::empty_state(
-                IconName::Desktop,
-                t(k::REMOTE_EMPTY_TITLE),
-                t(k::REMOTE_EMPTY_DESC),
-                None,
-            ));
-        };
-        let Some(host) = self.store.get(id) else {
-            return div();
-        };
-        let remove_id = host.id.clone();
-        let connect = cx.listener(|this: &mut Self, _: &(), _window, cx| this.connect_selected(cx));
-        let disconnect = cx.listener(|this: &mut Self, _: &(), _window, cx| this.disconnect(cx));
-        let refresh = cx.listener(|this: &mut Self, _: &(), _window, cx| this.refresh_remote(cx));
-        let remove = cx.listener(move |this: &mut Self, _: &(), _window, cx| {
-            this.remove_host(remove_id.clone(), cx)
-        });
-        let status_label = match self.connection_state {
-            ConnectionState::Disconnected => t(k::REMOTE_NODE_DISCONNECTED),
-            ConnectionState::Connecting => t(k::REMOTE_NODE_CONNECTING),
-            ConnectionState::Connected => t(k::REMOTE_NODE_CONNECTED),
-        };
-        let primary = match self.connection_state {
-            ConnectionState::Disconnected => {
-                if self.busy {
-                    components::disabled_button(
-                        "remote-connect-disabled",
-                        status_label.clone(),
-                        ButtonTone::Primary,
-                        ButtonSize::Md,
-                        true,
-                    )
-                    .into_any_element()
-                } else {
-                    components::button(
-                        "remote-connect",
-                        t(k::REMOTE_ACTION_CONNECT),
-                        ButtonTone::Primary,
-                        ButtonSize::Md,
-                    )
-                    .on_click(move |_event, window, cx| connect(&(), window, cx))
-                    .into_any_element()
-                }
-            }
-            ConnectionState::Connecting => components::disabled_button(
-                "remote-connecting",
-                status_label.clone(),
-                ButtonTone::Primary,
-                ButtonSize::Md,
-                true,
-            )
-            .into_any_element(),
-            ConnectionState::Connected => components::button(
-                "remote-disconnect",
-                t(k::REMOTE_ACTION_DISCONNECT),
-                ButtonTone::Neutral,
-                ButtonSize::Md,
-            )
-            .on_click(move |_event, window, cx| disconnect(&(), window, cx))
-            .into_any_element(),
-        };
-        let last_seen = host
-            .last_seen_at
-            .as_deref()
-            .map(|time| tf!(k::REMOTE_HOST_LAST_SEEN, time = time))
-            .unwrap_or_else(|| t(k::REMOTE_HOST_NEVER_SEEN).to_string());
-        let mut detail = div().flex().flex_col().flex_1().min_w_0().gap_3().child(
-            div()
-                .flex()
-                .flex_row()
-                .items_start()
-                .justify_between()
-                .gap_3()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_lg()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme::text())
-                                .child(SharedString::from(host.label.clone())),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::muted())
-                                .child(format!("{} · {}", host.ssh_alias, last_seen)),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
-                        .when(self.connection_state == ConnectionState::Connected, |row| {
-                            row.child(
-                                components::button(
-                                    "remote-refresh",
-                                    t(k::REMOTE_ACTION_REFRESH),
-                                    ButtonTone::Ghost,
-                                    ButtonSize::Md,
-                                )
-                                .on_click(move |_event, window, cx| refresh(&(), window, cx)),
-                            )
-                        })
-                        .child(primary),
-                ),
-        );
-        if self.connection_state == ConnectionState::Connected {
-            detail = detail
-                .child(self.render_scope(host))
-                .child(self.render_node_status(host))
-                .child(self.render_apps_and_providers(cx))
-                .child(self.render_gateway(cx))
-                .child(self.render_doctor(cx))
-                .child(self.render_operations());
-            if let Some(plan) = self.render_plan(cx) {
-                detail = detail.child(plan);
-            }
-        } else {
-            detail = detail
-                .child(
-                    div()
-                        .w_full()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme::border())
-                        .bg(theme::surface())
-                        .child(components::empty_state(
-                            IconName::Terminal,
-                            status_label,
-                            if self.busy {
-                                t(k::REMOTE_BUSY_CONNECTING)
-                            } else {
-                                t(k::REMOTE_SECURITY_NOTE)
-                            },
-                            None,
-                        )),
-                )
-                .child(
-                    div().flex().flex_row().justify_end().child(
-                        components::button(
-                            "remote-remove",
-                            t(k::REMOTE_ACTION_REMOVE),
-                            ButtonTone::Danger,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(move |_event, window, cx| remove(&(), window, cx)),
-                    ),
-                );
-        }
-        detail
-    }
 }
 
-async fn load_snapshot(
-    backend: WorkspaceBackend,
-    preferred: Option<AppId>,
-) -> Result<RemoteSnapshot, String> {
-    let (status, apps, gateway, operations) = tokio::join!(
-        backend.status(),
-        backend.list_apps(),
-        backend.gateway_status(),
-        backend.list_operations()
-    );
-    let status = status.map_err(|error| error.to_string())?;
-    let apps = apps.map_err(|error| error.to_string())?;
-    let gateway = gateway.map_err(|error| error.to_string())?;
-    let operations = operations.map_err(|error| error.to_string())?;
-    let selected_app = preferred
-        .filter(|preferred| {
-            apps.iter()
-                .any(|app| app.id == preferred.as_str() && app.enabled && app.supports_provider)
-        })
-        .or_else(|| {
-            apps.iter()
-                .find(|app| app.enabled && app.supports_provider)
-                .and_then(|app| AppId::parse(&app.id).ok())
-        });
-    let providers = match &selected_app {
-        Some(app) => backend
-            .list_providers(app)
-            .await
-            .map_err(|error| error.to_string())?,
-        None => Vec::new(),
-    };
-    Ok(RemoteSnapshot {
-        status,
-        apps,
-        selected_app,
-        providers,
-        gateway,
-        operations,
-    })
+async fn load_snapshot(backend: WorkspaceBackend) -> Result<RemoteSnapshot, String> {
+    let apps = backend
+        .list_apps()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(RemoteSnapshot { apps })
 }
 
 impl gpui::Render for RemoteView {
@@ -4081,11 +3079,7 @@ impl gpui::Render for RemoteView {
                 None,
             ))
         } else {
-            let mut column = layout::wide_column().child(self.render_connection_list(cx));
-            if self.connection_state == ConnectionState::Connected {
-                column = column.child(self.render_selected_node(cx));
-            }
-            column
+            layout::wide_column().child(self.render_connection_list(cx))
         };
         let mut page = layout::page()
             .child(

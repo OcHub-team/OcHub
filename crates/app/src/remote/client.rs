@@ -157,7 +157,6 @@ pub(crate) struct RemoteClient {
     host: RemoteHost,
     handshake: HelloAckFrame,
     io: Mutex<ConnectionIo>,
-    diagnostics: Arc<Mutex<VecDeque<String>>>,
     unusable: AtomicBool,
 }
 
@@ -249,7 +248,6 @@ impl RemoteClient {
                 stdin,
                 stdout,
             }),
-            diagnostics,
             unusable: AtomicBool::new(false),
         }))
     }
@@ -347,10 +345,6 @@ impl RemoteClient {
                 }
             }
         }
-    }
-
-    pub(crate) async fn diagnostics(&self) -> Vec<String> {
-        self.diagnostics.lock().await.iter().cloned().collect()
     }
 
     pub(crate) async fn close(&self) -> Result<(), RemoteClientError> {
