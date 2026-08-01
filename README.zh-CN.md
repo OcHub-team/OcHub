@@ -47,8 +47,8 @@ OcHub 将这些工作集中到一个快速的原生桌面应用中。你可以�
 连接切换器，也可以把本地网关放在工具与上游 API 之间，集中完成路由、
 兼容转换、故障转移和用量统计。
 
-OcHub 目前支持管理 **Claude Code、Claude Desktop、Codex、Grok Build、
-OpenCode、OpenClaw 和 Hermes**。
+OcHub 目前支持管理 **Claude Code、Claude Desktop、Codex、Cherry Studio、
+Grok Build、Kimi Code、OpenCode、OpenClaw 和 Hermes**。
 
 ## 所有能力，一处管理
 
@@ -62,6 +62,8 @@ OpenCode、OpenClaw 和 Hermes**。
 | 🔄 | **同步与备份** | 通过快照保护配置，并使用受支持的远程存储同步 OcHub 数据 |
 | 🖥️ | **远程节点** | 通过 SSH 安全切换 WSL、开发机和无桌面服务器上已有的 Provider |
 | ⚡ | **Codex 原生模式** | 在 macOS 上从 OcHub 启动 Codex，通过原生模型选择器选择兼容模型和上游所支持的 Fast 或 Ultra |
+| 🌙 | **Kimi Code 配置档** | 管理 `~/.kimi-code/config.toml` 中的原生供应商、模型别名、限制、能力、请求头与凭据映射 |
+| 🍒 | **Cherry Studio 导入** | 在 OcHub 保存可复用连接，再打开 Cherry Studio 的公开 Deep Link 并在应用内确认导入 |
 
 ## 两种连接方式
 

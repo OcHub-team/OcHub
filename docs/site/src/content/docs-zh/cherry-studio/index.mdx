@@ -1,0 +1,40 @@
+---
+title: Cherry Studio
+description: 在 OcHub 保存供应商连接，并通过 Cherry Studio 的公开 Deep Link 协议导入。
+audience: human
+sidebar:
+  order: 10
+  group:
+    label: Cherry Studio
+    icon: ph:cherries
+---
+
+Cherry Studio 采用“仅导入”集成。OcHub 在自己的数据库中保存可复用连接，并通过
+Cherry Studio 公开的自定义 URL 协议把连接交给已安装的应用；不会修改 Cherry Studio
+的 SQLite 数据库，也不会调用其内部 Electron IPC。
+
+## 导入供应商
+
+1. 在 OcHub 侧边栏打开 **Cherry Studio**，点击**添加连接**。
+2. 选择与上游一致的协议：OpenAI Chat Completions、OpenAI Responses、Anthropic
+   Messages、Gemini、Vertex AI、Vertex Anthropic 或 Ollama。
+3. 填写 Base URL 和 API Key，然后保存连接。
+4. 点击连接卡片上的**导入**。
+5. Cherry Studio 会打开供应商确认弹窗。检查名称、端点、密钥和协议后，在 Cherry
+   Studio 中确认。
+
+OcHub 只在点击按钮时生成 `cherrystudio://providers/api-keys` Deep Link。完整 API Key
+会在这一刻从本地存储读取，不进入渲染状态、日志或剪贴板。密钥会作为本机 URL 载荷交给
+Cherry Studio，因此只应在可信电脑上执行导入。
+
+## 范围与限制
+
+- 必须已安装 Cherry Studio，并由它注册 `cherrystudio://` URL Scheme。
+- 公开载荷只导入供应商 ID、名称、Base URL、API Key 和协议类型；模型及 Cherry
+  专属设置需要在 Cherry Studio 内配置。
+- 使用相同供应商 ID 再次导入时，Cherry Studio 会在确认后更新现有供应商。
+- 在 OcHub 删除连接只删除 OcHub 保存的副本，不会删除或同步 Cherry Studio 中的供应商。
+- 仅支持本机连接；远程节点操作和后台快速切换菜单不会提供 Cherry Studio 导入。
+
+如果点击后 Cherry Studio 没有打开，请先手动启动一次，让系统完成 URL Scheme 注册，
+然后重新点击**导入**。

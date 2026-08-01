@@ -16,13 +16,16 @@ sidebar:
 | Claude Code | 現在の接続を切り替え | 対応 | 対応 | プラグイン、役割モデル、セッション |
 | Claude Desktop | 現在の接続を切り替え | 非対応 | 非対応 | 公式／サードパーティー接続 |
 | Codex | 現在の接続を切り替え | 対応 | 対応 | OAuth、モデルカタログ、履歴 |
+| Cherry Studio | Deep Link で確認してインポート | 非対応 | 非対応 | プロバイダーと API Key のインポート |
 | Grok Build | 現在の接続を切り替え | 対応 | 非対応 | プロファイル、API バックエンド |
+| Kimi Code | 現在の接続を切り替え | 非対応 | 非対応 | プロバイダー、モデル、上限、機能 |
 | OpenCode | 複数接続の共存 | 対応 | 対応 | 複数モデル、セッション、OMO |
 | OpenClaw | 複数接続の共存 | 非対応 | 非対応 | デフォルトモデル、ツール、環境 |
 | Hermes | 複数接続の共存 | 対応 | 対応 | モデル、レート制限、メモリ |
 
 切り替え方式は 1 つの実接続を重視します。共存方式は複数をツールへ書き込み、ツールまたは
 OcHub から選択します。
+Cherry Studio は独自の確認ダイアログを開き、アプリのデータベースへ直接書き込みません。
 
 ## 既定パス
 
@@ -35,6 +38,8 @@ OcHub から選択します。
 | Claude Code | `~/.claude/`、MCP は通常 `~/.claude.json` |
 | Codex | `~/.codex/` |
 | Grok Build | `~/.grok/` |
+| Kimi Code | `~/.kimi-code/` |
+| Cherry Studio | OcHub はデータディレクトリへ書き込まず、`cherrystudio://` でインポート |
 | OpenCode | `~/.config/opencode/` |
 | OpenClaw | `~/.openclaw/` |
 | Hermes | `~/.hermes/` |

@@ -332,6 +332,8 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
         AppType::OpenCode
         | AppType::OpenClaw
         | AppType::Hermes
+        | AppType::KimiCode
+        | AppType::CherryStudio
         | AppType::GrokBuild
         | AppType::ClaudeDesktop => false,
     }
@@ -397,6 +399,8 @@ pub(crate) fn remove_common_config_from_settings(
         AppType::OpenCode
         | AppType::OpenClaw
         | AppType::Hermes
+        | AppType::KimiCode
+        | AppType::CherryStudio
         | AppType::GrokBuild
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
@@ -445,6 +449,8 @@ fn apply_common_config_to_settings(
         AppType::OpenCode
         | AppType::OpenClaw
         | AppType::Hermes
+        | AppType::KimiCode
+        | AppType::CherryStudio
         | AppType::GrokBuild
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
@@ -754,6 +760,8 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
         )),
         AppType::Codex => write_codex_live_snapshot(provider),
         AppType::GrokBuild => write_grokbuild_live_snapshot(provider),
+        AppType::KimiCode => write_kimi_code_live_snapshot(provider),
+        AppType::CherryStudio => Ok(()),
         AppType::OpenCode => write_opencode_live_snapshot(provider),
         AppType::OpenClaw => write_openclaw_live_snapshot(provider),
         AppType::Hermes => write_hermes_live_snapshot(provider),
@@ -786,6 +794,10 @@ pub(crate) fn write_codex_live_snapshot(provider: &Provider) -> Result<(), AppEr
 
 pub(crate) fn write_grokbuild_live_snapshot(provider: &Provider) -> Result<(), AppError> {
     crate::apps::grokbuild::write_grok_provider_live(provider)
+}
+
+pub(crate) fn write_kimi_code_live_snapshot(provider: &Provider) -> Result<(), AppError> {
+    crate::apps::kimi_code::write_kimi_code_live(provider)
 }
 
 pub(crate) fn write_opencode_live_snapshot(provider: &Provider) -> Result<(), AppError> {
@@ -1051,6 +1063,8 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             Ok(result)
         }
         AppType::GrokBuild => crate::apps::grokbuild::read_grok_live_settings(),
+        AppType::KimiCode => crate::apps::kimi_code::read_kimi_code_live_snapshot(),
+        AppType::CherryStudio => Ok(Value::Null),
         AppType::Claude => {
             let path = get_claude_settings_path();
             if !path.exists() {
@@ -1133,6 +1147,8 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
     let settings_config = match app_type {
         AppType::Codex => crate::apps::codex::read_codex_live_settings()?,
         AppType::GrokBuild => crate::apps::grokbuild::read_grok_live_settings()?,
+        AppType::KimiCode => crate::apps::kimi_code::read_kimi_code_live_snapshot()?,
+        AppType::CherryStudio => return Ok(false),
         AppType::Claude => {
             let settings_path = get_claude_settings_path();
             if !settings_path.exists() {
@@ -1158,6 +1174,15 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
             unreachable!("additive mode apps are handled by early return")
         }
     };
+
+    if matches!(app_type, AppType::KimiCode)
+        && settings_config
+            .get("providers")
+            .and_then(Value::as_object)
+            .is_none_or(serde_json::Map::is_empty)
+    {
+        return Ok(false);
+    }
 
     let mut provider = Provider::with_id(
         "default".to_string(),
@@ -1231,7 +1256,7 @@ pub fn should_auto_import_default_config(
 /// - existing OcHub providers are never overwritten.
 pub fn auto_import_live_providers(state: &AppState, app_type: AppType) -> Result<usize, AppError> {
     match app_type {
-        AppType::Claude | AppType::Codex | AppType::GrokBuild => {
+        AppType::Claude | AppType::Codex | AppType::GrokBuild | AppType::KimiCode => {
             if should_auto_import_default_config(state, &app_type)?
                 && import_default_config(state, app_type)?
             {
@@ -1241,6 +1266,7 @@ pub fn auto_import_live_providers(state: &AppState, app_type: AppType) -> Result
             }
         }
         AppType::ClaudeDesktop => Ok(0),
+        AppType::CherryStudio => Ok(0),
         AppType::OpenCode => import_opencode_providers_from_live(state),
         AppType::OpenClaw => import_openclaw_providers_from_live(state),
         AppType::Hermes => import_hermes_providers_from_live(state),

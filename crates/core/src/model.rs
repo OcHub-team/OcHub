@@ -347,6 +347,15 @@ impl Provider {
                 .and_then(crate::apps::grokbuild::extract_credentials)
                 .map(|(base_url, _)| base_url)
                 .unwrap_or_default(),
+            AppType::KimiCode => settings
+                .get("providers")
+                .and_then(Value::as_object)
+                .and_then(|providers| providers.values().next())
+                .and_then(|provider| provider.get("base_url"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            AppType::CherryStudio => str_at(settings.get("base_url")),
             AppType::Hermes => str_at(settings.get("base_url")),
             AppType::OpenClaw => str_at(settings.get("baseUrl")),
             AppType::OpenCode => str_at(
@@ -408,6 +417,20 @@ impl Provider {
                 .and_then(Value::as_str)
                 .and_then(crate::apps::grokbuild::extract_credentials)
                 .unwrap_or_default(),
+            AppType::KimiCode => {
+                let provider = settings
+                    .get("providers")
+                    .and_then(Value::as_object)
+                    .and_then(|providers| providers.values().next());
+                (
+                    str_at(provider.and_then(|value| value.get("base_url"))),
+                    str_at(provider.and_then(|value| value.get("api_key"))),
+                )
+            }
+            AppType::CherryStudio => (
+                str_at(settings.get("base_url")),
+                str_at(settings.get("api_key")),
+            ),
             AppType::Hermes => (
                 str_at(settings.get("base_url")),
                 str_at(settings.get("api_key")),

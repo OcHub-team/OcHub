@@ -64,6 +64,7 @@ pub fn supported_apps() -> &'static [AppType] {
         AppType::ClaudeDesktop,
         AppType::Codex,
         AppType::GrokBuild,
+        AppType::KimiCode,
         AppType::OpenCode,
         AppType::OpenClaw,
         AppType::Hermes,
@@ -74,9 +75,12 @@ pub fn supported_apps() -> &'static [AppType] {
 pub fn client_dialect(app_type: AppType) -> Dialect {
     match app_type {
         AppType::Claude | AppType::ClaudeDesktop => Dialect::Messages,
+        AppType::CherryStudio => Dialect::Chat,
         AppType::Codex => Dialect::Responses,
         AppType::GrokBuild => Dialect::Responses,
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Dialect::Chat,
+        AppType::KimiCode | AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => {
+            Dialect::Chat
+        }
     }
 }
 
@@ -235,8 +239,10 @@ fn app_label(app_type: AppType) -> &'static str {
     match app_type {
         AppType::Claude => "Claude Code",
         AppType::ClaudeDesktop => "Claude Desktop",
+        AppType::CherryStudio => "Cherry Studio",
         AppType::Codex => "Codex",
         AppType::GrokBuild => "Grok Build",
+        AppType::KimiCode => "Kimi Code",
         AppType::OpenCode => "OpenCode",
         AppType::OpenClaw => "OpenClaw",
         AppType::Hermes => "Hermes",
@@ -368,6 +374,9 @@ fn gateway_settings_for_provider(
 ) -> Result<serde_json::Value, AppError> {
     let models = policy.client_models();
     match app_type {
+        AppType::CherryStudio => Err(AppError::InvalidInput(
+            "Cherry Studio 请通过 Deep Link 导入连接，不能直接写入网关配置".to_string(),
+        )),
         AppType::Claude | AppType::ClaudeDesktop => {
             let mut env = serde_json::Map::from_iter([
                 ("ANTHROPIC_BASE_URL".to_string(), json!(base_url)),
@@ -454,6 +463,39 @@ fn gateway_settings_for_provider(
                     toml_edit::value(crate::apps::grokbuild::DEFAULT_CONTEXT_WINDOW);
             }
             Ok(json!({ "config": document.to_string() }))
+        }
+        AppType::KimiCode => {
+            let model_ids = if models.is_empty() {
+                vec!["gateway".to_string()]
+            } else {
+                models.to_vec()
+            };
+            let default_model = model_ids[0].clone();
+            let model_map = model_ids
+                .iter()
+                .map(|model| {
+                    (
+                        model.clone(),
+                        json!({
+                            "provider": provider_id,
+                            "model": model,
+                            "max_context_size": 128000,
+                        }),
+                    )
+                })
+                .collect::<serde_json::Map<String, serde_json::Value>>();
+            Ok(json!({
+                "default_provider": provider_id,
+                "default_model": default_model,
+                "providers": {
+                    provider_id: {
+                        "type": "openai",
+                        "base_url": format!("{base_url}/v1"),
+                        "api_key": key,
+                    }
+                },
+                "models": model_map,
+            }))
         }
         AppType::OpenCode => {
             let mut config = json!({
@@ -1048,6 +1090,16 @@ pub fn import_provider_as_channel(
     }
     let dialect = match app_type {
         AppType::Claude | AppType::ClaudeDesktop => Dialect::Messages,
+        AppType::CherryStudio => provider
+            .settings_config
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .map(|provider_type| match provider_type {
+                "anthropic" | "vertex-anthropic" => Dialect::Messages,
+                "openai-response" => Dialect::Responses,
+                _ => Dialect::Chat,
+            })
+            .unwrap_or(Dialect::Chat),
         AppType::Codex => Dialect::Responses,
         AppType::GrokBuild => provider
             .settings_config
@@ -1060,6 +1112,19 @@ pub fn import_provider_as_channel(
                 _ => Dialect::Chat,
             })
             .unwrap_or(Dialect::Responses),
+        AppType::KimiCode => provider
+            .settings_config
+            .get("providers")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|providers| providers.values().next())
+            .and_then(|provider| provider.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .map(|provider_type| match provider_type {
+                "anthropic" => Dialect::Messages,
+                "openai_responses" => Dialect::Responses,
+                _ => Dialect::Chat,
+            })
+            .unwrap_or(Dialect::Chat),
         AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Dialect::Chat,
     };
     let channel = GatewayChannel {

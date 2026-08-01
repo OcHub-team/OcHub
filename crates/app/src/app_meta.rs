@@ -92,6 +92,8 @@ pub fn builtin_icon(icon_id: &str) -> Option<IconName> {
         "codex" => IconName::AgentCodex,
         "grok" => IconName::AgentGrokBuild,
         "hermes" => IconName::AgentHermes,
+        "cherry-studio" => IconName::AgentCherryStudio,
+        "kimi-code" => IconName::AgentKimiCode,
         "openclaw" => IconName::AgentOpenClaw,
         "opencode" => IconName::AgentOpenCode,
         _ => return None,

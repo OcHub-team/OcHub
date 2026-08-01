@@ -19,6 +19,7 @@
 "app_settings.config_dir.codex.desc" = "Defaults to ~/.codex. Affects auth.json, config.toml and the session history."
 "app_settings.config_dir.grokbuild.desc" = "Defaults to ~/.grok. Affects config.toml, MCP and the session history."
 "app_settings.config_dir.hermes.desc" = "Defaults to ~/.hermes. Affects config.yaml."
+"app_settings.config_dir.kimi_code.desc" = "Defaults to ~/.kimi-code. Affects config.toml."
 "app_settings.config_dir.openclaw.desc" = "Defaults to ~/.openclaw. Affects openclaw.json."
 "app_settings.config_dir.opencode.desc" = "Defaults to ~/.config/opencode. Affects opencode.json."
 "app_settings.config_dir.save" = "Save directory"

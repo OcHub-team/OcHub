@@ -848,8 +848,10 @@ impl ProviderService {
         match app_type {
             AppType::Claude => Self::extract_claude_common_config(&provider.settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
+            AppType::CherryStudio => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(&provider.settings_config),
             AppType::GrokBuild => Ok(String::new()),
+            AppType::KimiCode => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
             AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
@@ -864,8 +866,10 @@ impl ProviderService {
         match app_type {
             AppType::Claude => Self::extract_claude_common_config(settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
+            AppType::CherryStudio => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(settings_config),
             AppType::GrokBuild => Ok(String::new()),
+            AppType::KimiCode => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Hermes => Ok(String::new()),
@@ -1125,6 +1129,9 @@ impl ProviderService {
             AppType::ClaudeDesktop => {
                 crate::apps::claude_desktop::validate_provider(provider)?;
             }
+            AppType::CherryStudio => {
+                crate::apps::cherry_studio::build_provider_import_deeplink(provider)?;
+            }
             AppType::Codex => {
                 let settings = provider.settings_config.as_object().ok_or_else(|| {
                     AppError::localized(
@@ -1174,6 +1181,18 @@ impl ProviderService {
                         AppError::Config("Grok Build 配置缺少 config 字段".to_string())
                     })?;
                 crate::apps::grokbuild::validate_config_toml(config)?;
+            }
+            AppType::KimiCode => {
+                let settings = provider.settings_config.as_object().ok_or_else(|| {
+                    AppError::Config("Kimi Code 配置必须是 JSON 对象".to_string())
+                })?;
+                if !settings.get("providers").is_some_and(Value::is_object)
+                    || !settings.get("models").is_some_and(Value::is_object)
+                {
+                    return Err(AppError::Config(
+                        "Kimi Code 配置缺少 providers 或 models".to_string(),
+                    ));
+                }
             }
             AppType::OpenCode => {
                 if !provider.settings_config.is_object() {
@@ -1271,6 +1290,20 @@ impl ProviderService {
                     crate::apps::claude_desktop::direct_gateway_credentials(provider)?;
                 Ok((credentials.api_key, credentials.base_url))
             }
+            AppType::CherryStudio => Ok((
+                provider
+                    .settings_config
+                    .get("api_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                provider
+                    .settings_config
+                    .get("base_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )),
             AppType::Codex => {
                 let _auth = provider
                     .settings_config
@@ -1343,6 +1376,26 @@ impl ProviderService {
                         AppError::Config("Grok Build 配置缺少 Base URL 或 API Key".to_string())
                     })?;
                 Ok((api_key, base_url))
+            }
+            AppType::KimiCode => {
+                let provider = provider
+                    .settings_config
+                    .get("providers")
+                    .and_then(Value::as_object)
+                    .and_then(|providers| providers.values().next())
+                    .ok_or_else(|| AppError::Config("Kimi Code 配置缺少 provider".to_string()))?;
+                Ok((
+                    provider
+                        .get("api_key")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    provider
+                        .get("base_url")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                ))
             }
             AppType::OpenCode => {
                 let options = provider

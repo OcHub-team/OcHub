@@ -4,6 +4,7 @@
 
 use std::{
     collections::HashMap,
+    process::Command,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -118,6 +119,29 @@ pub(crate) fn open_deeplink_in_roots(cx: &mut App, uri: &str) {
             Err(error) => log::warn!("invalid model-provider deep link: {error}"),
         }
     }
+}
+
+fn open_cherry_studio_deeplink(deeplink: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(deeplink).status();
+
+    #[cfg(target_os = "windows")]
+    let status = Command::new("cmd")
+        .args(["/C", "start", "", deeplink])
+        .status();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = Command::new("xdg-open").arg(deeplink).status();
+
+    status
+        .map_err(|error| error.to_string())
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("system URL opener exited with {status}"))
+            }
+        })
 }
 
 /// Which top-level section the main panel renders.
@@ -1723,6 +1747,10 @@ impl AppRoot {
     }
 
     fn do_switch(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.selected_app == AppType::CherryStudio {
+            self.do_cherry_studio_import(id, cx);
+            return;
+        }
         if self.active_remote_scope.is_none()
             && self
                 .providers
@@ -1797,6 +1825,73 @@ impl AppRoot {
                     this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error.to_string(), cx);
                     cx.notify();
                 }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn do_cherry_studio_import(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.provider_action_in_flight {
+            return;
+        }
+        if self.active_remote_scope.is_some() {
+            self.notify_error(
+                t(k::SHELL_PROVIDER_IMPORT_FAILED),
+                t(k::SHELL_PROVIDER_IMPORT_REMOTE_UNSUPPORTED),
+                cx,
+            );
+            return;
+        }
+
+        // The list backend intentionally returns redacted provider data. Read
+        // the local SSOT only at click time so the API key never enters view
+        // state, rendering, logs, or the clipboard.
+        let provider = match self
+            .app
+            .db
+            .get_provider_by_id(&id, AppType::CherryStudio.as_str())
+        {
+            Ok(Some(provider)) => provider,
+            Ok(None) => {
+                self.notify_error(
+                    t(k::SHELL_PROVIDER_IMPORT_FAILED),
+                    "provider not found".to_string(),
+                    cx,
+                );
+                return;
+            }
+            Err(error) => {
+                self.notify_error(t(k::SHELL_PROVIDER_IMPORT_FAILED), error.to_string(), cx);
+                return;
+            }
+        };
+        let name = provider.name.clone();
+        let deeplink =
+            match ochub_core::apps::cherry_studio::build_provider_import_deeplink(&provider) {
+                Ok(deeplink) => deeplink,
+                Err(error) => {
+                    self.notify_error(t(k::SHELL_PROVIDER_IMPORT_FAILED), error.to_string(), cx);
+                    return;
+                }
+            };
+
+        self.provider_action_in_flight = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { open_cherry_studio_deeplink(&deeplink) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provider_action_in_flight = false;
+                match result {
+                    Ok(()) => this.notify_success(
+                        SharedString::from(tf!(k::SHELL_PROVIDER_IMPORT_OPENED, name = name)),
+                        cx,
+                    ),
+                    Err(error) => this.notify_error(t(k::SHELL_PROVIDER_IMPORT_FAILED), error, cx),
+                }
+                cx.notify();
             })
             .ok();
         })
@@ -2380,7 +2475,8 @@ impl AppRoot {
     /// Rebuild all provider-list structure in one pass. This is deliberately
     /// called only after data/current-order changes, never from `render`.
     fn rebuild_provider_structure_cache(&mut self) {
-        let is_switch = !self.selected_app.is_additive_mode();
+        let is_import = self.selected_app == AppType::CherryStudio;
+        let is_switch = !self.selected_app.is_additive_mode() && !is_import;
         let connection_ixs: Vec<usize> = self
             .providers
             .iter()
@@ -3530,7 +3626,9 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let is_current = !self.selected_app.is_additive_mode() && provider.id == self.current;
+        let is_import = self.selected_app == AppType::CherryStudio;
+        let is_current =
+            !self.selected_app.is_additive_mode() && !is_import && provider.id == self.current;
         let is_gateway = provider.is_local_gateway();
         let id = provider.id.clone();
         let edit_id = id.clone();
@@ -3567,7 +3665,9 @@ impl AppRoot {
             is_gateway && !is_additive && self.station_route_for_provider(provider).is_none();
         // One key per branch, label and aria sentence together: a screen reader
         // cannot be handed a verb and a name to glue into a sentence itself.
-        let (main_label_key, main_aria_key) = if gateway_needs_setup {
+        let (main_label_key, main_aria_key) = if is_import {
+            (k::SHELL_ACTION_IMPORT, k::SHELL_ACTION_IMPORT_ARIA)
+        } else if gateway_needs_setup {
             (
                 k::SHELL_ACTION_SETUP_RELAY,
                 k::SHELL_ACTION_SETUP_RELAY_ARIA,
@@ -3779,10 +3879,10 @@ impl AppRoot {
                         components::action_button(
                             SharedString::from(format!("switch-{}", provider.id)),
                             t(main_label_key),
-                            !(is_current || (is_additive && is_in_live)),
+                            is_import || !(is_current || (is_additive && is_in_live)),
                         )
                         .aria_label(SharedString::from(tf!(main_aria_key, name = provider_name)))
-                        .aria_selected(is_current || (is_additive && is_in_live))
+                        .aria_selected(!is_import && (is_current || (is_additive && is_in_live)))
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 if gateway_needs_setup {
@@ -3991,7 +4091,9 @@ impl AppRoot {
         let connection_count = self.providers.len();
         // A whole sentence per mode: the count sits inside the phrase, and no
         // locale has to build one out of a mode fragment and a tail.
-        let subtitle = SharedString::from(if app.is_additive_mode() {
+        let subtitle = SharedString::from(if app == AppType::CherryStudio {
+            tf!(k::SHELL_LIST_SUBTITLE_IMPORT, count = connection_count)
+        } else if app.is_additive_mode() {
             tf!(k::SHELL_LIST_SUBTITLE_ADDITIVE, count = connection_count)
         } else {
             tf!(k::SHELL_LIST_SUBTITLE_DIRECT, count = connection_count)

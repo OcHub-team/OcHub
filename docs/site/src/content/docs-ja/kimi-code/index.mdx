@@ -1,0 +1,46 @@
+---
+title: Kimi Code
+description: Kimi Code のプロバイダー、モデル、上限、機能、ネイティブ TOML 設定を管理します。
+audience: human
+sidebar:
+  order: 9
+  group:
+    label: Kimi Code
+    icon: ph:moon-stars
+---
+
+OcHub は Kimi Code を「現在の接続を切り替える」ツールとして管理します。各接続は
+プロバイダーとモデルをまとめた完全なプロファイルです。切り替えると、選択した内容を
+`~/.kimi-code/config.toml` に書き込み、`default_provider` と `default_model` を更新し、
+プロバイダーに関係しないトップレベル設定は保持します。
+
+## 接続を追加する
+
+1. OcHub のサイドバーで **Kimi Code** を開き、**接続を追加**を選びます。
+2. 安定した Provider ID を入力します。モデルは `provider` フィールドでこの値を参照します。
+3. 上流に合うプロトコルを選びます：OpenAI Chat Completions、OpenAI Responses、
+   Anthropic Messages、Kimi、Google GenAI、Vertex AI。
+4. Base URL と API Key を入力します。
+5. モデルを 1 件以上追加します。各行には一意の別名、上流モデル ID、正のコンテキスト長が
+   必要です。最大出力、表示名、機能は任意です。
+6. **既定モデルの別名**をモデル表に存在する値に設定します。
+7. `config.toml` のプレビューを確認し、保存して**切り替え**を選びます。
+
+機能は `thinking,tool_use,image_in` のようにカンマで区切ります。カスタムヘッダーは
+プロバイダー要求に追加されます。認証情報の環境マッピングはプロバイダーの `env` テーブルに
+書かれますが、シェル環境自体は変更しません。
+
+## 既存の設定
+
+Kimi Code に有効な現在のプロバイダーがある場合、OcHub は接続として検出できます。
+そのプロバイダーと、それを参照するモデルが取り込まれます。書き込み時にはコメントと無関係な
+セクションを保持し、以前 OcHub が管理していた古いプロバイダー／モデル項目を置き換えます。
+
+手書きのプロバイダー構成を残したい場合は、最初の切り替え前に `config.toml` をバックアップ
+してください。現在、Kimi Code の MCP／スキル同期には対応していません。
+
+## 確認
+
+切り替え後に Kimi Code を再起動し、期待するモデルを選んで短い要求を送信します。古い端点を
+使い続ける場合は、OcHub と Kimi Code が同じホームディレクトリを参照していることと、
+`default_provider`／`default_model` の参照先がファイル内に存在することを確認してください。

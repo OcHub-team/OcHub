@@ -1,0 +1,41 @@
+---
+title: Cherry Studio
+description: OcHub にプロバイダー接続を保存し、Cherry Studio の公開 Deep Link でインポートします。
+audience: human
+sidebar:
+  order: 10
+  group:
+    label: Cherry Studio
+    icon: ph:cherries
+---
+
+Cherry Studio との連携はインポート専用です。OcHub は再利用できる接続を自身のデータベースに
+保存し、Cherry Studio が公開するカスタム URL プロトコルでインストール済みアプリへ渡します。
+Cherry Studio の SQLite データベースを編集せず、内部 Electron IPC も呼び出しません。
+
+## プロバイダーをインポートする
+
+1. OcHub のサイドバーで **Cherry Studio** を開き、**接続を追加**を選びます。
+2. 上流に合う種類を選びます：OpenAI Chat Completions、OpenAI Responses、Anthropic
+   Messages、Gemini、Vertex AI、Vertex Anthropic、Ollama。
+3. Base URL と API Key を入力して保存します。
+4. 接続カードの**インポート**を選びます。
+5. Cherry Studio の確認ダイアログで名前、端点、キー、種類を確認し、そこで確定します。
+
+OcHub はボタンを押した時だけ `cherrystudio://providers/api-keys` Deep Link を生成します。
+完全な API Key はその時点でローカル保存領域から読み込まれ、描画状態、ログ、クリップボードには
+入りません。キーはローカル URL のペイロードとして Cherry Studio に渡るため、信頼できる端末で
+のみ実行してください。
+
+## 対応範囲と制限
+
+- Cherry Studio がインストールされ、`cherrystudio://` のハンドラーとして登録されている必要があります。
+- 公開ペイロードが渡すのはプロバイダー ID、名前、Base URL、API Key、プロトコル種類です。
+  モデルなど Cherry 固有の設定は Cherry Studio 内で行います。
+- 同じプロバイダー ID を再度インポートすると、Cherry Studio の確認後に既存項目を更新できます。
+- OcHub で接続を削除しても、削除されるのは OcHub の保存内容だけです。Cherry Studio 側の削除や
+  同期は行いません。
+- ローカル接続だけが対象です。リモートノードとバックグラウンドのクイック切り替えには表示しません。
+
+Cherry Studio が開かない場合は、一度手動で起動して URL Scheme を登録させてから、もう一度
+**インポート**を選んでください。

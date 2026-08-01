@@ -427,13 +427,17 @@ fn config_dir_meta(app: AppType) -> Option<(&'static str, &'static str)> {
         AppType::Claude => Some(("~/.claude", raw(k::APP_SETTINGS_CONFIG_DIR_CLAUDE_DESC))),
         AppType::Codex => Some(("~/.codex", raw(k::APP_SETTINGS_CONFIG_DIR_CODEX_DESC))),
         AppType::GrokBuild => Some(("~/.grok", raw(k::APP_SETTINGS_CONFIG_DIR_GROKBUILD_DESC))),
+        AppType::KimiCode => Some((
+            "~/.kimi-code",
+            raw(k::APP_SETTINGS_CONFIG_DIR_KIMI_CODE_DESC),
+        )),
         AppType::OpenCode => Some((
             "~/.config/opencode",
             raw(k::APP_SETTINGS_CONFIG_DIR_OPENCODE_DESC),
         )),
         AppType::OpenClaw => Some(("~/.openclaw", raw(k::APP_SETTINGS_CONFIG_DIR_OPENCLAW_DESC))),
         AppType::Hermes => Some(("~/.hermes", raw(k::APP_SETTINGS_CONFIG_DIR_HERMES_DESC))),
-        AppType::ClaudeDesktop => None,
+        AppType::ClaudeDesktop | AppType::CherryStudio => None,
     }
 }
 
@@ -442,10 +446,11 @@ fn read_config_dir(settings: &AppSettings, app: AppType) -> Option<String> {
         AppType::Claude => settings.claude_config_dir.clone(),
         AppType::Codex => settings.codex_config_dir.clone(),
         AppType::GrokBuild => settings.grokbuild_config_dir.clone(),
+        AppType::KimiCode => settings.kimi_code_config_dir.clone(),
         AppType::OpenCode => settings.opencode_config_dir.clone(),
         AppType::OpenClaw => settings.openclaw_config_dir.clone(),
         AppType::Hermes => settings.hermes_config_dir.clone(),
-        AppType::ClaudeDesktop => None,
+        AppType::ClaudeDesktop | AppType::CherryStudio => None,
     }
 }
 
@@ -454,10 +459,13 @@ fn config_dir_path(app: AppType) -> &'static str {
         AppType::Claude => "claudeConfigDir",
         AppType::Codex => "codexConfigDir",
         AppType::GrokBuild => "grokbuildConfigDir",
+        AppType::KimiCode => "kimiCodeConfigDir",
         AppType::OpenCode => "opencodeConfigDir",
         AppType::OpenClaw => "openclawConfigDir",
         AppType::Hermes => "hermesConfigDir",
-        AppType::ClaudeDesktop => unreachable!("Claude Desktop has no config directory override"),
+        AppType::ClaudeDesktop | AppType::CherryStudio => {
+            unreachable!("this app has no config directory override")
+        }
     }
 }
 

@@ -132,6 +132,9 @@ impl McpService {
             AppType::ClaudeDesktop => {
                 log::debug!("Claude Desktop 3P profiles do not use OcHub MCP sync, skipping");
             }
+            AppType::CherryStudio => {
+                log::debug!("Cherry Studio Deep Link integration does not manage MCP, skipping");
+            }
             AppType::Codex => {
                 // Codex uses TOML format, must use the correct function
                 mcp::sync_single_server_to_codex(&Default::default(), &server.id, &server.server)?;
@@ -142,6 +145,9 @@ impl McpService {
                     &server.id,
                     &server.server,
                 )?;
+            }
+            AppType::KimiCode => {
+                log::debug!("Kimi Code MCP sync is not enabled yet, skipping");
             }
             AppType::OpenCode => {
                 mcp::sync_single_server_to_opencode(
@@ -181,8 +187,14 @@ impl McpService {
             AppType::ClaudeDesktop => {
                 log::debug!("Claude Desktop 3P profiles do not use OcHub MCP sync, skipping");
             }
+            AppType::CherryStudio => {
+                log::debug!("Cherry Studio Deep Link integration does not manage MCP, skipping");
+            }
             AppType::Codex => mcp::remove_server_from_codex(id)?,
             AppType::GrokBuild => mcp::remove_server_from_grokbuild(id)?,
+            AppType::KimiCode => {
+                log::debug!("Kimi Code MCP sync is not enabled yet, skipping remove");
+            }
             AppType::OpenCode => {
                 mcp::remove_server_from_opencode(id)?;
             }

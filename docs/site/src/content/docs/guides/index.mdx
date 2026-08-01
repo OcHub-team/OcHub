@@ -3,7 +3,7 @@ title: Features
 description: Common workflows for connections, MCP, skills, sessions, usage, remote nodes, and appearance.
 audience: human
 sidebar:
-  order: 20
+  order: 30
   group:
     label: Features
     icon: ph:compass
@@ -76,7 +76,9 @@ advanced capabilities differ. Each tool has its own guide group:
 | Claude Code | [Configure Claude](/claude/configure) | Current-connection switching | Yes | Yes |
 | Claude Desktop | [Configure Claude](/claude/configure) | Current-connection switching | No | No |
 | Codex | [Configure Codex](/codex/configure) | Current-connection switching | Yes | Yes |
+| Cherry Studio | [Import into Cherry Studio](/cherry-studio) | Confirmed Deep Link import | No | No |
 | Grok Build | [Configure Grok Build](/grok-build/configure) | Current-connection switching | Yes | No |
+| Kimi Code | [Configure Kimi Code](/kimi-code) | Current-connection switching | No | No |
 | OpenCode | [Configure OpenCode](/opencode/configure) | Multiple connections coexist | Yes | Yes |
 | OpenClaw | [Configure OpenClaw](/openclaw/configure) | Multiple connections coexist | No | No |
 | Hermes | [Configure Hermes](/hermes/configure) | Multiple connections coexist | Yes | Yes |
@@ -84,6 +86,7 @@ advanced capabilities differ. Each tool has its own guide group:
 In current-connection switching, the tool's live configuration points to one
 active connection. In coexistence mode, OcHub writes several connections into
 one tool configuration, and Remove from tool deletes only that entry.
+Cherry Studio is import-only and confirms every handoff in its own window.
 
 When moving existing data from cc-switch, start with the
 [migration guide](/guides/migration) for ID-collision, backup, and staged

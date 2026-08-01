@@ -3,7 +3,7 @@ title: 機能ガイド
 description: 接続、MCP、スキル、セッション、使用量、リモートノード、外観の共通ワークフロー。
 audience: human
 sidebar:
-  order: 20
+  order: 30
   group:
     label: 機能ガイド
     icon: ph:compass
@@ -75,13 +75,16 @@ WSL、開発マシン、ヘッドレスサーバー上の `ochcli` を SSH 経�
 | Claude Code | [Claude を設定する](/ja/claude/configure) | 現在の接続を切り替え | 対応 | 対応 |
 | Claude Desktop | [Claude を設定する](/ja/claude/configure) | 現在の接続を切り替え | 非対応 | 非対応 |
 | Codex | [Codex を設定する](/ja/codex/configure) | 現在の接続を切り替え | 対応 | 対応 |
+| Cherry Studio | [Cherry Studio にインポート](/ja/cherry-studio) | Deep Link で確認してインポート | 非対応 | 非対応 |
 | Grok Build | [Grok Build を設定する](/ja/grok-build/configure) | 現在の接続を切り替え | 対応 | 非対応 |
+| Kimi Code | [Kimi Code を設定する](/ja/kimi-code) | 現在の接続を切り替え | 非対応 | 非対応 |
 | OpenCode | [OpenCode を設定する](/ja/opencode/configure) | 複数接続の共存 | 対応 | 対応 |
 | OpenClaw | [OpenClaw を設定する](/ja/openclaw/configure) | 複数接続の共存 | 非対応 | 非対応 |
 | Hermes | [Hermes を設定する](/ja/hermes/configure) | 複数接続の共存 | 対応 | 対応 |
 
 「現在の接続を切り替え」方式では、ツールの実設定が 1 つの有効な接続を指します。共存方式では、
 OcHub が複数の接続を 1 つのツール設定へ書き込み、「ツールから削除」はその項目だけを削除します。
+Cherry Studio はインポート専用で、受け渡しのたびに独自ウィンドウで確認します。
 
 cc-switch から既存データを移す場合は、ID 競合、バックアップ、段階的な確認を説明する
 [移行ガイド](/ja/guides/migration)から始めます。

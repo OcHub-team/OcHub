@@ -3,7 +3,7 @@ title: 功能指南
 description: 连接、MCP、技能、会话、用量、远程节点与外观的常用工作流。
 audience: human
 sidebar:
-  order: 20
+  order: 30
   group:
     label: 功能指南
     icon: ph:compass
@@ -74,13 +74,16 @@ sidebar:
 | Claude Code | [配置 Claude](/zh/claude/configure) | 当前连接切换 | 支持 | 支持 |
 | Claude Desktop | [配置 Claude](/zh/claude/configure) | 当前连接切换 | 不支持 | 不支持 |
 | Codex | [配置 Codex](/zh/codex/configure) | 当前连接切换 | 支持 | 支持 |
+| Cherry Studio | [导入 Cherry Studio](/zh/cherry-studio) | Deep Link 确认导入 | 不支持 | 不支持 |
 | Grok Build | [配置 Grok Build](/zh/grok-build/configure) | 当前连接切换 | 支持 | 不支持 |
+| Kimi Code | [配置 Kimi Code](/zh/kimi-code) | 当前连接切换 | 不支持 | 不支持 |
 | OpenCode | [配置 OpenCode](/zh/opencode/configure) | 多连接共存 | 支持 | 支持 |
 | OpenClaw | [配置 OpenClaw](/zh/openclaw/configure) | 多连接共存 | 不支持 | 不支持 |
 | Hermes | [配置 Hermes](/zh/hermes/configure) | 多连接共存 | 支持 | 支持 |
 
 “当前连接切换”表示工具的实时配置只指向一个当前连接；“多连接共存”表示 OcHub 会把多个连接
 写入同一份工具配置，“从工具移除”只移除对应条目。
+Cherry Studio 采用仅导入模式，每次交接都由它自己的窗口确认。
 
 从 cc-switch 迁入现有配置时，先阅读[迁移教程](/zh/guides/migration)，了解同 ID 覆盖、备份
 和分批验收。

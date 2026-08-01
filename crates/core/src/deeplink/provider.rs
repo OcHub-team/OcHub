@@ -154,8 +154,14 @@ pub(crate) fn build_provider_from_request(
 ) -> Result<Provider, AppError> {
     let settings_config = match app_type {
         AppType::Claude | AppType::ClaudeDesktop => build_claude_settings(request),
+        AppType::CherryStudio => serde_json::json!({
+            "type": "openai",
+            "base_url": get_primary_endpoint(request),
+            "api_key": request.api_key,
+        }),
         AppType::Codex => build_codex_settings(request),
         AppType::GrokBuild => build_grokbuild_settings(request),
+        AppType::KimiCode => build_kimi_code_settings(request),
         AppType::OpenCode => build_opencode_settings(request),
         AppType::OpenClaw => build_additive_app_settings(request),
         AppType::Hermes => build_hermes_settings(request),
@@ -179,6 +185,29 @@ pub(crate) fn build_provider_from_request(
     };
 
     Ok(provider)
+}
+
+fn build_kimi_code_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
+    let provider_id = "custom";
+    let model = request.model.clone().unwrap_or_else(|| "model".to_string());
+    json!({
+        "default_provider": provider_id,
+        "default_model": model,
+        "providers": {
+            provider_id: {
+                "type": "openai",
+                "base_url": get_primary_endpoint(request),
+                "api_key": request.api_key.clone().unwrap_or_default(),
+            }
+        },
+        "models": {
+            model.clone(): {
+                "provider": provider_id,
+                "model": model,
+                "max_context_size": 128000,
+            }
+        }
+    })
 }
 
 /// Get primary endpoint from request (first one if comma-separated)

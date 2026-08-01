@@ -15,8 +15,10 @@ use crate::error::AppError;
 pub mod builtin {
     pub const CLAUDE: &str = "claude";
     pub const CLAUDE_DESKTOP: &str = "claude-desktop";
+    pub const CHERRY_STUDIO: &str = "cherry-studio";
     pub const CODEX: &str = "codex";
     pub const GROKBUILD: &str = "grokbuild";
+    pub const KIMI_CODE: &str = "kimi-code";
     pub const OPENCODE: &str = "opencode";
     pub const OPENCLAW: &str = "openclaw";
     pub const HERMES: &str = "hermes";
@@ -38,8 +40,14 @@ impl AppId {
         if s == "claude_desktop" || s == "claudeDesktop" {
             return Ok(Self(Arc::from(builtin::CLAUDE_DESKTOP)));
         }
+        if matches!(s, "cherry_studio" | "cherryStudio" | "cherry") {
+            return Ok(Self(Arc::from(builtin::CHERRY_STUDIO)));
+        }
         if matches!(s, "grok-build" | "grok_build" | "grok") {
             return Ok(Self(Arc::from(builtin::GROKBUILD)));
+        }
+        if matches!(s, "kimi_code" | "kimi") {
+            return Ok(Self(Arc::from(builtin::KIMI_CODE)));
         }
         let valid_len = !s.is_empty() && s.len() <= 32;
         let valid_start = s
@@ -107,8 +115,10 @@ mod tests {
         for id in [
             builtin::CLAUDE,
             builtin::CLAUDE_DESKTOP,
+            builtin::CHERRY_STUDIO,
             builtin::CODEX,
             builtin::GROKBUILD,
+            builtin::KIMI_CODE,
             builtin::OPENCODE,
             builtin::OPENCLAW,
             builtin::HERMES,

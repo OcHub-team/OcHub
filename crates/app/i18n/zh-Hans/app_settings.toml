@@ -23,6 +23,7 @@
 "app_settings.config_dir.codex.desc" = "默认 ~/.codex；影响 auth.json、config.toml 和会话历史。"
 "app_settings.config_dir.grokbuild.desc" = "默认 ~/.grok；影响 config.toml、MCP 与会话历史。"
 "app_settings.config_dir.hermes.desc" = "默认 ~/.hermes；影响 config.yaml。"
+"app_settings.config_dir.kimi_code.desc" = "默认 ~/.kimi-code；影响 config.toml。"
 "app_settings.config_dir.openclaw.desc" = "默认 ~/.openclaw；影响 openclaw.json。"
 "app_settings.config_dir.opencode.desc" = "默认 ~/.config/opencode；影响 opencode.json。"
 "app_settings.config_dir.save" = "保存目录"

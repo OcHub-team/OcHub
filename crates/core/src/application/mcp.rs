@@ -122,12 +122,13 @@ impl Application {
             AppType::GrokBuild => Ok(McpService::import_from_grokbuild(&self.state)?),
             AppType::OpenCode => Ok(McpService::import_from_opencode(&self.state)?),
             AppType::Hermes => Ok(McpService::import_from_hermes(&self.state)?),
-            AppType::ClaudeDesktop | AppType::OpenClaw => {
-                Err(ApplicationError::CapabilityUnsupported {
-                    app: app.to_string(),
-                    capability: "mcp.import",
-                })
-            }
+            AppType::ClaudeDesktop
+            | AppType::CherryStudio
+            | AppType::OpenClaw
+            | AppType::KimiCode => Err(ApplicationError::CapabilityUnsupported {
+                app: app.to_string(),
+                capability: "mcp.import",
+            }),
         }
     }
 

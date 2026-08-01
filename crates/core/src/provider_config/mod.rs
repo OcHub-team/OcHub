@@ -19,19 +19,23 @@ use serde_json::Value;
 use crate::AppType;
 use crate::model::ProviderMeta;
 
+mod cherry_studio;
 mod claude;
 mod claude_desktop;
 mod codex;
 mod grokbuild;
 mod hermes;
+mod kimi_code;
 mod openclaw;
 mod opencode;
 
+pub use cherry_studio::CherryStudioConfig;
 pub use claude::ClaudeConfig;
 pub use claude_desktop::ClaudeDesktopConfig;
 pub use codex::CodexConfig;
 pub use grokbuild::GrokBuildConfig;
 pub use hermes::HermesConfig;
+pub use kimi_code::KimiCodeConfig;
 pub use openclaw::OpenClawConfig;
 pub use opencode::OpenCodeConfig;
 
@@ -347,8 +351,10 @@ pub fn config_for(app: AppType) -> Option<Box<dyn AppConfig>> {
     match app {
         AppType::Claude => Some(Box::new(ClaudeConfig)),
         AppType::ClaudeDesktop => Some(Box::new(ClaudeDesktopConfig)),
+        AppType::CherryStudio => Some(Box::new(CherryStudioConfig)),
         AppType::Codex => Some(Box::new(CodexConfig)),
         AppType::GrokBuild => Some(Box::new(GrokBuildConfig)),
+        AppType::KimiCode => Some(Box::new(KimiCodeConfig)),
         AppType::OpenCode => Some(Box::new(OpenCodeConfig)),
         AppType::OpenClaw => Some(Box::new(OpenClawConfig)),
         AppType::Hermes => Some(Box::new(HermesConfig)),

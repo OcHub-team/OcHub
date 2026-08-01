@@ -49,8 +49,8 @@ connection switcher, or place its local gateway between your tools and upstream
 APIs for centralized routing, compatibility conversion, failover, and usage
 tracking.
 
-OcHub currently manages **Claude Code, Claude Desktop, Codex, Grok Build,
-OpenCode, OpenClaw, and Hermes**.
+OcHub currently manages **Claude Code, Claude Desktop, Codex, Cherry Studio,
+Grok Build, Kimi Code, OpenCode, OpenClaw, and Hermes**.
 
 ## Everything in one place
 
@@ -64,6 +64,8 @@ OpenCode, OpenClaw, and Hermes**.
 | 🔄 | **Sync & backup** | Protect your setup with snapshots and keep OcHub data in sync through supported remote storage |
 | 🖥️ | **Remote nodes** | Switch existing providers on WSL, development machines, and headless servers securely over SSH |
 | ⚡ | **Native Codex modes** | On macOS, launch Codex from OcHub and use Fast or Ultra directly in its native model picker with compatible models and upstreams |
+| 🌙 | **Kimi Code profiles** | Manage native providers, model aliases, limits, capabilities, headers, and credential mappings in `~/.kimi-code/config.toml` |
+| 🍒 | **Cherry Studio import** | Save reusable provider connections in OcHub, then open Cherry Studio's public Deep Link and confirm the import in-app |
 
 ## Two ways to connect
 

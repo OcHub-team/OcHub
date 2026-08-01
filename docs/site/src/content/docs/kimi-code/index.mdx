@@ -1,0 +1,53 @@
+---
+title: Kimi Code
+description: Manage Kimi Code providers, models, limits, capabilities, and native TOML configuration.
+audience: human
+sidebar:
+  order: 9
+  group:
+    label: Kimi Code
+    icon: ph:moon-stars
+---
+
+OcHub manages Kimi Code as a current-connection tool. Each OcHub connection is
+a complete provider-and-model profile. Switching writes the selected profile to
+`~/.kimi-code/config.toml`, updates `default_provider` and `default_model`, and
+keeps unrelated top-level Kimi Code settings intact.
+
+## Add a connection
+
+1. Open **Kimi Code** in the OcHub sidebar and select **Add connection**.
+2. Enter a stable Provider ID. Models reference this value through their
+   `provider` field.
+3. Select the protocol used by the upstream: OpenAI Chat Completions, OpenAI
+   Responses, Anthropic Messages, Kimi, Google GenAI, or Vertex AI.
+4. Enter the Base URL and API key required by that provider.
+5. Add at least one model. Each row needs a unique alias, upstream model ID,
+   and positive context-window size. Output limit, display name, and
+   capabilities are optional.
+6. Set **Default model alias** to one of the aliases in the model table.
+7. Review the `config.toml` preview, save, and select **Switch**.
+
+Capabilities are comma-separated identifiers such as `thinking`, `tool_use`,
+and `image_in`. Custom headers are sent with provider requests. Credential
+environment mappings are written under the provider's `env` table; they do not
+modify the shell environment.
+
+## Existing configuration
+
+When Kimi Code already has a valid active provider, OcHub can discover it as a
+connection. The imported profile contains that provider and the models that
+reference it. Comments and unrelated sections are preserved when OcHub writes
+the selected profile, while stale provider/model entries from the previously
+managed profile are replaced.
+
+Back up `config.toml` before the first switch if it contains hand-written
+provider layouts that you want to retain. Kimi Code support does not currently
+include MCP or skill synchronization.
+
+## Verify
+
+After switching, restart Kimi Code, confirm the expected model is selected, and
+send a short request. If it still uses an old endpoint, verify that OcHub and
+Kimi Code resolve the same home directory and that `default_provider` and
+`default_model` point to entries present in the generated file.

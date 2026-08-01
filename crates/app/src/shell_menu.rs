@@ -56,6 +56,10 @@ impl ShellMenuSnapshot {
         let apps = if quick_switch_enabled {
             enabled_app_types()
                 .into_iter()
+                // Cherry Studio is import-only. Its public URL protocol needs
+                // an app confirmation dialog, so presenting it as a native
+                // background "quick switch" would be misleading.
+                .filter(|app_type| *app_type != AppType::CherryStudio)
                 .map(|app_type| {
                     let providers = ProviderService::list(app, app_type)
                         .map(|providers| {

@@ -3635,6 +3635,8 @@ fn managed_app_label(app: AppType) -> &'static str {
         AppType::ClaudeDesktop => "Claude Desktop",
         AppType::Codex => "Codex",
         AppType::GrokBuild => "Grok Build",
+        AppType::KimiCode => "Kimi Code",
+        AppType::CherryStudio => "Cherry Studio",
         AppType::OpenCode => "OpenCode",
         AppType::OpenClaw => "OpenClaw",
         AppType::Hermes => "Hermes",

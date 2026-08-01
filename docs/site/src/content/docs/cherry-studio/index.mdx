@@ -1,0 +1,48 @@
+---
+title: Cherry Studio
+description: Save provider connections in OcHub and import them through Cherry Studio's public Deep Link protocol.
+audience: human
+sidebar:
+  order: 10
+  group:
+    label: Cherry Studio
+    icon: ph:cherries
+---
+
+Cherry Studio integration is import-only. OcHub stores reusable connection
+details in its own database and uses Cherry Studio's public custom-URL protocol
+to hand them to the installed app. It does not edit Cherry Studio's SQLite
+database or call its internal Electron IPC.
+
+## Import a provider
+
+1. Open **Cherry Studio** in the OcHub sidebar and select **Add connection**.
+2. Choose the matching protocol type: OpenAI Chat Completions, OpenAI
+   Responses, Anthropic Messages, Gemini, Vertex AI, Vertex Anthropic, or
+   Ollama.
+3. Enter the provider Base URL and API key, then save the connection.
+4. Select **Import** on its card.
+5. Cherry Studio opens its provider confirmation dialog. Review the provider
+   name, endpoint, key, and type, then confirm there.
+
+OcHub generates a `cherrystudio://providers/api-keys` Deep Link only when the
+button is clicked. The full API key is read from local storage at that moment;
+it is not placed in rendered UI state, logs, or the clipboard. The key is part
+of the local URL payload delivered to Cherry Studio, so use this action only on
+a trusted machine.
+
+## Scope and limitations
+
+- Cherry Studio must be installed and registered as the handler for the
+  `cherrystudio://` scheme.
+- The public payload imports provider identity, Base URL, API key, and protocol
+  type. Configure models and other Cherry-specific settings in Cherry Studio.
+- Importing the same provider ID can update it after Cherry Studio asks for
+  confirmation.
+- Deleting a connection in OcHub deletes only OcHub's saved copy. OcHub does
+  not remove or synchronize the provider in Cherry Studio.
+- Import is available only for local connections. Remote-node actions and the
+  background quick-switch menu intentionally exclude Cherry Studio.
+
+If Cherry Studio does not open, launch it once so the URL scheme is registered,
+then try **Import** again.

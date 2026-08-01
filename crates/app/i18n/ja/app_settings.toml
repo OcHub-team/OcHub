@@ -19,6 +19,7 @@
 "app_settings.config_dir.codex.desc" = "既定は ~/.codex です。auth.json、config.toml、セッション履歴に影響します。"
 "app_settings.config_dir.grokbuild.desc" = "既定は ~/.grok です。config.toml、MCP、セッション履歴に影響します。"
 "app_settings.config_dir.hermes.desc" = "既定は ~/.hermes です。config.yaml に影響します。"
+"app_settings.config_dir.kimi_code.desc" = "既定は ~/.kimi-code です。config.toml に影響します。"
 "app_settings.config_dir.openclaw.desc" = "既定は ~/.openclaw です。openclaw.json に影響します。"
 "app_settings.config_dir.opencode.desc" = "既定は ~/.config/opencode です。opencode.json に影響します。"
 "app_settings.config_dir.save" = "ディレクトリを保存"

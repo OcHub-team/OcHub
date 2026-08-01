@@ -86,7 +86,9 @@ mod tests {
         for id in [
             "claude",
             "claude-desktop",
+            "cherry-studio",
             "grokbuild",
+            "kimi-code",
             "opencode",
             "openclaw",
         ] {

@@ -1,0 +1,44 @@
+---
+title: Kimi Code
+description: 管理 Kimi Code 的供应商、模型、限制、能力与原生 TOML 配置。
+audience: human
+sidebar:
+  order: 9
+  group:
+    label: Kimi Code
+    icon: ph:moon-stars
+---
+
+OcHub 将 Kimi Code 作为“当前连接切换”工具管理。每个 OcHub 连接都是一套完整的
+供应商与模型配置档。切换时会把选中的配置写入 `~/.kimi-code/config.toml`，更新
+`default_provider` 和 `default_model`，同时保留与供应商无关的 Kimi Code 顶层设置。
+
+## 添加连接
+
+1. 在 OcHub 侧边栏打开 **Kimi Code**，点击**添加连接**。
+2. 输入稳定的 Provider ID；模型会通过 `provider` 字段引用它。
+3. 选择上游使用的协议：OpenAI Chat Completions、OpenAI Responses、Anthropic
+   Messages、Kimi、Google GenAI 或 Vertex AI。
+4. 填写供应商要求的 Base URL 与 API Key。
+5. 至少添加一个模型。每行需要唯一的模型别名、上游模型 ID 和正整数上下文长度；
+   最大输出、显示名与能力为可选项。
+6. 将**默认模型别名**设为模型表里已有的别名。
+7. 检查 `config.toml` 预览，保存后点击**切换**。
+
+能力使用英文逗号分隔，例如 `thinking`、`tool_use`、`image_in`。自定义请求头会随
+供应商请求发送。“凭据环境映射”写入供应商的 `env` 表，不会修改 shell 环境。
+
+## 现有配置
+
+如果 Kimi Code 已有有效的当前供应商，OcHub 可以自动发现为一个连接。导入内容包含
+该供应商及所有引用它的模型。OcHub 写入新配置档时会保留注释与无关区段，并替换上一套
+受管理配置档里已过时的供应商和模型条目。
+
+如果 `config.toml` 中有需要保留的手写供应商结构，首次切换前请先备份。当前 Kimi Code
+适配不包含 MCP 或 Skills 同步。
+
+## 验证
+
+切换后重启 Kimi Code，确认预期模型已选中，再发送一条短请求。如果仍在使用旧端点，
+请确认 OcHub 与 Kimi Code 使用同一个主目录，并检查 `default_provider`、
+`default_model` 是否指向文件中实际存在的条目。

@@ -79,7 +79,7 @@ impl MergeRules<'_> {
 pub(crate) fn tracks_live_drift(app_type: &AppType) -> bool {
     matches!(
         app_type,
-        AppType::Claude | AppType::Codex | AppType::GrokBuild
+        AppType::Claude | AppType::Codex | AppType::GrokBuild | AppType::KimiCode
     )
 }
 
@@ -89,6 +89,7 @@ pub fn live_config_label(app_type: &AppType) -> String {
     let path = match app_type {
         AppType::Codex => crate::apps::codex::get_codex_config_path(),
         AppType::GrokBuild => crate::apps::grokbuild::get_grok_config_path(),
+        AppType::KimiCode => crate::apps::kimi_code::get_kimi_code_config_path(),
         _ => crate::paths::get_claude_settings_path(),
     };
     crate::paths::abbreviate_home(&path)

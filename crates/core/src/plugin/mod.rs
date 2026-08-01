@@ -1,6 +1,6 @@
 //! The app plugin system.
 //!
-//! Every managed app — the six built-ins and future user-defined manifest
+//! Every managed app — the built-ins and future user-defined manifest
 //! apps — is described by one [`AppPlugin`] behind the process-wide
 //! [`registry`]. Per-app *data* (labels, dirs, modes, capability flags) lives
 //! on the trait; per-app *leaf writers* live behind [`LiveConfigOps`];

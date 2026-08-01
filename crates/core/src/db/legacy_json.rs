@@ -51,7 +51,7 @@ impl McpApps {
             AppType::OpenCode => self.opencode,
             AppType::OpenClaw => false,
             AppType::Hermes => self.hermes,
-            AppType::ClaudeDesktop => false,
+            AppType::ClaudeDesktop | AppType::CherryStudio | AppType::KimiCode => false,
         }
     }
 
@@ -63,7 +63,7 @@ impl McpApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::OpenClaw => {}
             AppType::Hermes => self.hermes = enabled,
-            AppType::ClaudeDesktop => {}
+            AppType::ClaudeDesktop | AppType::CherryStudio | AppType::KimiCode => {}
         }
     }
 
@@ -196,7 +196,7 @@ impl SkillApps {
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
             AppType::OpenClaw => false,
-            AppType::ClaudeDesktop => false,
+            AppType::ClaudeDesktop | AppType::CherryStudio | AppType::KimiCode => false,
         }
     }
 
@@ -208,7 +208,7 @@ impl SkillApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::OpenClaw => {}
-            AppType::ClaudeDesktop => {}
+            AppType::ClaudeDesktop | AppType::CherryStudio | AppType::KimiCode => {}
         }
     }
 
@@ -367,7 +367,7 @@ impl CommonConfigSnippets {
     pub fn get(&self, app: &AppType) -> Option<&String> {
         match app {
             AppType::Claude => self.claude.as_ref(),
-            AppType::ClaudeDesktop => None,
+            AppType::ClaudeDesktop | AppType::CherryStudio | AppType::KimiCode => None,
             AppType::Codex => self.codex.as_ref(),
             AppType::GrokBuild => None,
             AppType::OpenCode => self.opencode.as_ref(),
@@ -379,7 +379,7 @@ impl CommonConfigSnippets {
     pub fn set(&mut self, app: &AppType, snippet: Option<String>) {
         match app {
             AppType::Claude => self.claude = snippet,
-            AppType::ClaudeDesktop => {}
+            AppType::ClaudeDesktop | AppType::CherryStudio | AppType::KimiCode => {}
             AppType::Codex => self.codex = snippet,
             AppType::GrokBuild => {}
             AppType::OpenCode => self.opencode = snippet,

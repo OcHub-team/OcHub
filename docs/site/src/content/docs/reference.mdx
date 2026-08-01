@@ -16,13 +16,17 @@ sidebar:
 | Claude Code | Current-connection switching | Yes | Yes | Plugins, role models, sessions |
 | Claude Desktop | Current-connection switching | No | No | Official and third-party connections |
 | Codex | Current-connection switching | Yes | Yes | OAuth, model catalog, session history |
+| Cherry Studio | Confirmed Deep Link import | No | No | Provider and API-key import |
 | Grok Build | Current-connection switching | Yes | No | Profiles and API backends |
+| Kimi Code | Current-connection switching | No | No | Providers, models, limits, capabilities |
 | OpenCode | Multiple connections coexist | Yes | Yes | Multiple models, sessions, OMO |
 | OpenClaw | Multiple connections coexist | No | No | Default model, tools, environment |
 | Hermes | Multiple connections coexist | Yes | Yes | Models, rate limiting, memory |
 
 Current-connection switching emphasizes one live connection. Coexistence writes
 multiple connections into the tool so it or OcHub can select among them.
+Cherry Studio import opens its own confirmation dialog and does not directly
+write the app's database.
 
 ## Default paths
 
@@ -35,6 +39,8 @@ multiple connections into the tool so it or OcHub can select among them.
 | Claude Code | `~/.claude/`; MCP is commonly `~/.claude.json` |
 | Codex | `~/.codex/` |
 | Grok Build | `~/.grok/` |
+| Kimi Code | `~/.kimi-code/` |
+| Cherry Studio | OcHub does not write its data directory; import uses `cherrystudio://` |
 | OpenCode | `~/.config/opencode/` |
 | OpenClaw | `~/.openclaw/` |
 | Hermes | `~/.hermes/` |

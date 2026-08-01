@@ -16,13 +16,16 @@ sidebar:
 | Claude Code | 当前连接切换 | 支持 | 支持 | 插件、角色模型、会话 |
 | Claude Desktop | 当前连接切换 | 不支持 | 不支持 | 官方与第三方连接 |
 | Codex | 当前连接切换 | 支持 | 支持 | OAuth、模型目录、会话历史 |
+| Cherry Studio | Deep Link 确认导入 | 不支持 | 不支持 | 供应商与 API Key 导入 |
 | Grok Build | 当前连接切换 | 支持 | 不支持 | Profile、API Backend |
+| Kimi Code | 当前连接切换 | 不支持 | 不支持 | 供应商、模型、限制与能力 |
 | OpenCode | 多连接共存 | 支持 | 支持 | 多模型、会话、OMO |
 | OpenClaw | 多连接共存 | 不支持 | 不支持 | 默认模型、工具与环境变量 |
 | Hermes | 多连接共存 | 支持 | 支持 | 模型、速率限制与记忆 |
 
 “当前连接切换”表示实时配置重点保存当前连接；“多连接共存”表示多个连接可同时写入，
 再由工具或 OcHub 选择当前项。
+Cherry Studio 导入会打开它自己的确认弹窗，不直接写入应用数据库。
 
 ## 默认路径
 
@@ -35,6 +38,8 @@ sidebar:
 | Claude Code | `~/.claude/`，MCP 通常为 `~/.claude.json` |
 | Codex | `~/.codex/` |
 | Grok Build | `~/.grok/` |
+| Kimi Code | `~/.kimi-code/` |
+| Cherry Studio | OcHub 不写入其数据目录；通过 `cherrystudio://` 导入 |
 | OpenCode | `~/.config/opencode/` |
 | OpenClaw | `~/.openclaw/` |
 | Hermes | `~/.hermes/` |

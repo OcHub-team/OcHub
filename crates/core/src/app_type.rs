@@ -18,6 +18,13 @@ pub enum AppType {
         alias = "claudeDesktop"
     )]
     ClaudeDesktop,
+    #[serde(
+        rename = "cherry-studio",
+        alias = "cherry_studio",
+        alias = "cherryStudio",
+        alias = "cherry"
+    )]
+    CherryStudio,
     Codex,
     #[serde(
         rename = "grokbuild",
@@ -26,6 +33,8 @@ pub enum AppType {
         alias = "grok"
     )]
     GrokBuild,
+    #[serde(rename = "kimi-code", alias = "kimi_code", alias = "kimi")]
+    KimiCode,
     OpenCode,
     OpenClaw,
     Hermes,
@@ -36,8 +45,10 @@ impl AppType {
         match self {
             AppType::Claude => "claude",
             AppType::ClaudeDesktop => "claude-desktop",
+            AppType::CherryStudio => "cherry-studio",
             AppType::Codex => "codex",
             AppType::GrokBuild => "grokbuild",
+            AppType::KimiCode => "kimi-code",
             AppType::OpenCode => "opencode",
             AppType::OpenClaw => "openclaw",
             AppType::Hermes => "hermes",
@@ -72,8 +83,10 @@ impl AppType {
         [
             AppType::Claude,
             AppType::ClaudeDesktop,
+            AppType::CherryStudio,
             AppType::Codex,
             AppType::GrokBuild,
+            AppType::KimiCode,
             AppType::OpenCode,
             AppType::OpenClaw,
             AppType::Hermes,
@@ -89,8 +102,12 @@ impl FromStr for AppType {
         match s {
             "claude" => Ok(AppType::Claude),
             "claude-desktop" | "claude_desktop" | "claudeDesktop" => Ok(AppType::ClaudeDesktop),
+            "cherry-studio" | "cherry_studio" | "cherryStudio" | "cherry" => {
+                Ok(AppType::CherryStudio)
+            }
             "codex" => Ok(AppType::Codex),
             "grokbuild" | "grok-build" | "grok_build" | "grok" => Ok(AppType::GrokBuild),
+            "kimi-code" | "kimi_code" | "kimi" => Ok(AppType::KimiCode),
             "opencode" => Ok(AppType::OpenCode),
             "openclaw" => Ok(AppType::OpenClaw),
             "hermes" => Ok(AppType::Hermes),

@@ -1,4 +1,4 @@
-//! The six built-in app plugins.
+//! The built-in app plugins.
 //!
 //! Thin data + delegation shims: all real behavior stays in `crate::apps`,
 //! `crate::services::provider::live`, and `crate::provider_config`. Each
@@ -68,6 +68,17 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             skills: true,
         },
         BuiltinSpec {
+            app: AppType::CherryStudio,
+            name: "Cherry Studio",
+            icon: "cherry-studio",
+            accent: 0xd23f57,
+            sort: 25,
+            enabled_by_default: true,
+            mode: AppMode::Switch,
+            mcp: false,
+            skills: false,
+        },
+        BuiltinSpec {
             app: AppType::GrokBuild,
             name: "Grok Build",
             icon: "grok",
@@ -76,6 +87,17 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             enabled_by_default: true,
             mode: AppMode::Switch,
             mcp: true,
+            skills: false,
+        },
+        BuiltinSpec {
+            app: AppType::KimiCode,
+            name: "Kimi Code",
+            icon: "kimi-code",
+            accent: 0x1f6feb,
+            sort: 35,
+            enabled_by_default: true,
+            mode: AppMode::Switch,
+            mcp: false,
             skills: false,
         },
         BuiltinSpec {
@@ -164,8 +186,10 @@ impl AppPlugin for BuiltinPlugin {
         Ok(match self.spec.app {
             AppType::Claude => crate::paths::get_claude_config_dir(),
             AppType::ClaudeDesktop => crate::apps::claude_desktop::get_config_library_path()?,
+            AppType::CherryStudio => crate::apps::cherry_studio::get_cherry_studio_home(),
             AppType::Codex => crate::apps::codex::get_codex_config_dir(),
             AppType::GrokBuild => crate::apps::grokbuild::get_grok_config_dir(),
+            AppType::KimiCode => crate::apps::kimi_code::get_kimi_code_config_dir(),
             AppType::OpenCode => crate::apps::opencode::get_opencode_dir(),
             AppType::OpenClaw => crate::apps::openclaw::get_openclaw_dir(),
             AppType::Hermes => crate::apps::hermes::get_hermes_dir(),
@@ -195,8 +219,12 @@ impl LiveConfigOps for BuiltinPlugin {
         match self.spec.app {
             AppType::Claude => live::write_claude_live_snapshot(provider),
             AppType::ClaudeDesktop => crate::apps::claude_desktop::apply_provider(db, provider),
+            // Cherry Studio owns persistence. OcHub applies a provider only by
+            // opening its confirmation-based public import Deep Link.
+            AppType::CherryStudio => Ok(()),
             AppType::Codex => live::write_codex_live_snapshot(provider),
             AppType::GrokBuild => live::write_grokbuild_live_snapshot(provider),
+            AppType::KimiCode => live::write_kimi_code_live_snapshot(provider),
             AppType::OpenCode => live::write_opencode_live_snapshot(provider),
             AppType::OpenClaw => live::write_openclaw_live_snapshot(provider),
             AppType::Hermes => live::write_hermes_live_snapshot(provider),
@@ -217,6 +245,10 @@ impl LiveConfigOps for BuiltinPlugin {
     }
 
     fn read_live(&self) -> Result<Value, AppError> {
-        crate::services::provider::live::read_live_settings(self.spec.app)
+        if self.spec.app == AppType::CherryStudio {
+            Ok(Value::Null)
+        } else {
+            crate::services::provider::live::read_live_settings(self.spec.app)
+        }
     }
 }

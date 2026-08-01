@@ -506,6 +506,8 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grokbuild_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kimi_code_config_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opencode_config_dir: Option<String>,
@@ -525,9 +527,13 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_claude_desktop: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_provider_cherry_studio: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_codex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_grokbuild: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_provider_kimi_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_gemini: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -610,6 +616,7 @@ impl Default for AppSettings {
             claude_config_dir: None,
             codex_config_dir: None,
             grokbuild_config_dir: None,
+            kimi_code_config_dir: None,
             gemini_config_dir: None,
             opencode_config_dir: None,
             openclaw_config_dir: None,
@@ -617,8 +624,10 @@ impl Default for AppSettings {
             app_config_dirs: None,
             current_provider_claude: None,
             current_provider_claude_desktop: None,
+            current_provider_cherry_studio: None,
             current_provider_codex: None,
             current_provider_grokbuild: None,
+            current_provider_kimi_code: None,
             current_provider_gemini: None,
             current_provider_opencode: None,
             current_provider_openclaw: None,
@@ -693,6 +702,7 @@ impl AppSettings {
         Self::normalize_one(&mut self.claude_config_dir);
         Self::normalize_one(&mut self.codex_config_dir);
         Self::normalize_one(&mut self.grokbuild_config_dir);
+        Self::normalize_one(&mut self.kimi_code_config_dir);
         Self::normalize_one(&mut self.gemini_config_dir);
         Self::normalize_one(&mut self.opencode_config_dir);
         Self::normalize_one(&mut self.openclaw_config_dir);
@@ -996,8 +1006,10 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
     match app_type {
         AppType::Claude => settings.current_provider_claude.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop.clone(),
+        AppType::CherryStudio => settings.current_provider_cherry_studio.clone(),
         AppType::Codex => settings.current_provider_codex.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild.clone(),
+        AppType::KimiCode => settings.current_provider_kimi_code.clone(),
         AppType::OpenCode => settings.current_provider_opencode.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
         AppType::Hermes => settings.current_provider_hermes.clone(),
@@ -1009,8 +1021,10 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
     mutate_settings(|settings| match app_type {
         AppType::Claude => settings.current_provider_claude = id_owned.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop = id_owned.clone(),
+        AppType::CherryStudio => settings.current_provider_cherry_studio = id_owned.clone(),
         AppType::Codex => settings.current_provider_codex = id_owned.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild = id_owned.clone(),
+        AppType::KimiCode => settings.current_provider_kimi_code = id_owned.clone(),
         AppType::OpenCode => settings.current_provider_opencode = id_owned.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw = id_owned.clone(),
         AppType::Hermes => settings.current_provider_hermes = id_owned.clone(),

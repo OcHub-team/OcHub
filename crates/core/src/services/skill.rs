@@ -411,7 +411,11 @@ fn agent_slug(app: &AppType) -> Option<&'static str> {
         AppType::Codex => Some("codex"),
         AppType::OpenCode => Some("opencode"),
         AppType::Hermes => Some("hermes-agent"),
-        AppType::GrokBuild | AppType::OpenClaw | AppType::ClaudeDesktop => None,
+        AppType::GrokBuild
+        | AppType::OpenClaw
+        | AppType::ClaudeDesktop
+        | AppType::CherryStudio
+        | AppType::KimiCode => None,
     }
 }
 
@@ -434,7 +438,13 @@ fn get_app_skills_dir(app: &AppType) -> Option<PathBuf> {
         AppType::Codex => crate::apps::codex::get_codex_config_dir(),
         AppType::OpenCode => crate::apps::opencode::get_opencode_dir(),
         AppType::Hermes => crate::apps::hermes::get_hermes_dir(),
-        AppType::GrokBuild | AppType::OpenClaw | AppType::ClaudeDesktop => return None,
+        AppType::GrokBuild
+        | AppType::OpenClaw
+        | AppType::ClaudeDesktop
+        | AppType::CherryStudio
+        | AppType::KimiCode => {
+            return None;
+        }
     };
     Some(config_dir.join("skills"))
 }

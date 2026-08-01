@@ -151,7 +151,10 @@ impl Application {
             .map(|path| path.trim().to_string())
             .filter(|path| !path.is_empty());
         let builtin = AppType::from_app_id(id);
-        if matches!(builtin, Some(AppType::ClaudeDesktop)) {
+        if matches!(
+            builtin,
+            Some(AppType::ClaudeDesktop | AppType::CherryStudio)
+        ) {
             return Err(ApplicationError::CapabilityUnsupported {
                 app: id.to_string(),
                 capability: "app.config-dir-override",
@@ -159,8 +162,10 @@ impl Application {
         }
         crate::settings::mutate_settings(|settings| match builtin {
             Some(AppType::Claude) => settings.claude_config_dir = normalized.clone(),
+            Some(AppType::CherryStudio) => {}
             Some(AppType::Codex) => settings.codex_config_dir = normalized.clone(),
             Some(AppType::GrokBuild) => settings.grokbuild_config_dir = normalized.clone(),
+            Some(AppType::KimiCode) => settings.kimi_code_config_dir = normalized.clone(),
             Some(AppType::OpenCode) => settings.opencode_config_dir = normalized.clone(),
             Some(AppType::OpenClaw) => settings.openclaw_config_dir = normalized.clone(),
             Some(AppType::Hermes) => settings.hermes_config_dir = normalized.clone(),
