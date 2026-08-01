@@ -4,7 +4,7 @@
 >
 > 目标：让 OcHub 桌面版通过 SSH 安全控制只安装了 `ochcli` 的无桌面环境
 >
-> 最后更新：**2026-07-31**
+> 最后更新：**2026-08-01**
 
 本文是架构、协议与安全边界设计。面向用户的安装、WSL 配置、SSH Host Key 核对、
 添加节点、切换 Provider 和故障排查步骤，请阅读
@@ -15,7 +15,7 @@
 journal、跨 SSH 会话幂等恢复和 `remote-desktop` 审计。现有适用于无桌面节点的
 Provider、MCP、Skills、Usage/Pricing、Sessions/全文索引、Network、Settings、
 Sync/Backup、Tools/高级维护、Update、Gateway/Station 页面均由同一
-`WorkspaceBackend` 在本机和远端执行。后续的 rollback、长任务事件、显式文件传输、
+`WorkspaceBackend` 在本机和远端执行。后续的 operation recover/rollback、长任务事件、显式文件传输、
 Gateway Tunnel 和 Fleet 批量编排仍按本文的 typed method 与逐节点 journal 边界演进，
 不通过通用 Shell 或危险降级提前开放。
 
@@ -114,7 +114,7 @@ Remote Nodes 解决以下场景：
 │              │                            │
 │              │ local UDS / named pipe     │
 │              ▼                            │
-│       ochubd / runtime owner               │
+│       ochcli daemon run / runtime owner    │
 │              │                            │
 │              ▼                            │
 │       Application Facade                  │
@@ -687,8 +687,8 @@ Provider，且远端 Gateway 能由 daemon 持续运行。
 ### Phase 2：完整远程工作区（现有无桌面业务页面已完成）
 
 目标不是在 Remote Nodes 管理页继续堆叠快捷操作，而是让工作区选择器决定正常 GUI
-页面背后的 Backend。除纯桌面外观、窗口、托盘等控制端能力外，远端只安装
-`ochcli`/`ochubd` 时应具备与本机相同的管理面。
+页面背后的 Backend。除纯桌面外观、窗口、托盘等控制端能力外，远端只安装一个
+`ochcli` 时应具备与本机相同的管理面。
 
 迁移范围与完成状态：
 
@@ -728,12 +728,40 @@ Provider，且远端 Gateway 能由 daemon 持续运行。
 - 高风险恢复、数据导入和更新安装分别要求 `backup.restore` / `data.import` /
   `update.install` capability；新 Secret 写入仍要求 `allowSecretsWrite`。
 - 协议协商范围为 v1–v2，新增方法依赖 capability；旧 `ochcli` 可以继续建立连接，
-  但完整工作区需要桌面端、`ochcli` 和 `ochubd` 同步升级。
+  但完整工作区和受管更新需要新版桌面端与远端 `ochcli`。
 
 完成条件：所有适用于无桌面环境的 GUI 管理能力在本机与远端拥有一致体验；页面通过
 capability 表达平台或版本差异，而不是退回独立的远程快捷面板。
 
-### Phase 2.1：可靠性与数据面增强（后续演进）
+### Phase 2.1：单文件安装与远程一键更新（已完成）
+
+- 发布包只要求一个 `ochcli`；同一文件同时提供命令、SSH Bridge 和持久 Owner。
+- `ochcli node install` 建立用户级 versions/current 布局、稳定命令入口和用户服务；
+  没有 systemd 的 WSL 使用按需后台 Owner。
+- 新增 `headless.json`，按目标平台记录下载地址、字节数、SHA-256 和 payload minisign
+  签名；未签名发布仍可展示版本，但不能一键安装。
+- `node.update.read` 默认可用；`node.update.install` 和 `node.update.relay` 必须由
+  `allowUpdateInstall = true` 显式授权。
+- 桌面端先读取节点版本和平台，再自动选择远端直连下载或控制端下载后经 SSH 中继。
+- 即使节点连更新清单也无法获取，桌面端仍可自行获取清单并进入中继路径。
+- 中继接收端重新校验 Node ID、平台、长度、哈希与签名，不把控制端当作信任根。
+- 激活通过稳定 `current` 链接完成；Owner 重启后必须报告目标版本，否则自动回滚。
+- SSH 配置若仍指向旧 bootstrap 文件，远程入口会在读协议前移交给受管 `current`，
+  避免桥接协议与 Owner 版本分裂。
+- SSH 可达但远端缺少/无法执行 `ochcli`，或版本早于当前协议时，桌面将失败分类为稳定的
+  本地化故障；详情弹窗保留退出码与原始 stderr，连接行不再展示整段底层错误。
+- 对缺少、过旧、无执行权限或架构错误的 CLI，桌面可先用固定只读脚本识别 Unix 平台，
+  在控制端下载并验签 raw `ochcli`，再通过 Host Key 已确认的 SSH stdin 上传。固定安装脚本
+  只校验长度/哈希、执行 `node install` 并验证稳定入口，不接收任意用户命令、不使用 sudo。
+- 初次安装后必须以稳定绝对路径再次完成远程协议握手并报告清单版本，随后才保存 Node ID、
+  `lastSeenAt` 与连接路径；因此远端非交互 PATH 不包含 `~/.local/bin` 也可继续控制。
+- 首次 bootstrap 只以 SSH 登录权限为授权边界；节点运行后的一般更新仍要求远端显式广告
+  `node.update.install` / `node.update.relay` capability，二者不能混为一个绕过 policy 的入口。
+
+完成条件：WSL、Linux 开发机或无桌面 macOS 只需安装一个 `ochcli`，随后可在桌面连接
+列表中查看版本并安全完成一键更新。
+
+### Phase 2.2：可靠性与数据面增强（后续演进）
 
 - operation recover/rollback。
 - 长任务 progress/cancel 与主动 cache invalidation event。
@@ -782,6 +810,10 @@ capability 表达平台或版本差异，而不是退回独立的远程快捷面
 
 - 远端 daemon 已运行
 - 没有 daemon 时按需启动
+- 单个 `ochcli` 安装后同时提供命令入口与 daemon owner
+- 直连更新与桌面 SSH 中继更新
+- payload 长度、SHA-256、签名和目标平台校验
+- 原子激活、Owner 版本健康检查和失败回滚
 - stale owner endpoint
 - 并发 mutation
 - SSH 在 mutation 中途断开
@@ -813,6 +845,8 @@ GPUI 改动后的验收遵守仓库 `AGENTS.md`：使用 `just qa-app` 构建固
 | 任意远程命令接口 | 扩大攻击面 | 类型化 allowlist，不提供通用 Shell |
 | 远端无 daemon | 长期任务随连接退出 | 按需启动 daemon，明确 ephemeral 状态 |
 | 非交互 SSH PATH 不含 ochcli | 无法探测 | 保存经过验证的绝对路径并提供诊断 |
+| 节点无法访问下载站 | 无法更新 | 控制端验证后经现有 SSH 信任路径中继，节点再次验证 |
+| 更新后 Owner 无法启动 | 节点失联 | 保留 previous 版本、健康检查失败自动回滚 |
 
 ## 17. 首版验收标准
 
@@ -828,6 +862,9 @@ GPUI 改动后的验收遵守仓库 `AGENTS.md`：使用 `just qa-app` 构建固
 10. 断开桌面连接后，远端 daemon/Gateway 可以继续运行。
 11. 桌面始终明确显示当前作用域是本机还是哪一台远端节点。
 12. 版本或 capability 不兼容时拒绝危险降级并给出升级建议。
+13. 远端只安装一个 `ochcli` 即可运行持久 Owner，并且命令与 Owner 不会版本分裂。
+14. 更新可在远端直连和桌面中继之间选择，两条路径都在节点侧验证签名。
+15. 更新重启健康检查失败时恢复 previous 版本。
 
 ## 18. 结论
 

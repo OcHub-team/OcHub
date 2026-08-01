@@ -132,7 +132,7 @@ Releases include `SHA256SUMS` and a GitHub artifact attestation. Packaging,
 signature verification, and release details live in the
 [release guide](packaging/README.md).
 
-The headless archives contain `ochcli` and `ochubd`. See the included README
+The headless archives contain a single self-managing `ochcli` executable. See the included README
 or run `ochcli --help` to configure and operate OcHub without the desktop GUI.
 To control WSL or a development machine from OcHub Desktop, follow the
 [Remote Nodes guide](https://docs.ochub.org/guides/remote-nodes).

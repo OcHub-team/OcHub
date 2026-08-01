@@ -2,6 +2,7 @@ pub mod command;
 pub mod daemon;
 pub mod error;
 pub mod input;
+pub mod node;
 pub mod output;
 pub mod remote;
 pub mod run;

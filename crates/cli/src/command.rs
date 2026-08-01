@@ -253,6 +253,8 @@ pub enum Command {
     Station(StationArgs),
     /// Control this OcHub node over an authenticated SSH stdio channel.
     Remote(RemoteArgs),
+    /// Install and update the single-binary headless node runtime.
+    Node(NodeArgs),
     /// Run and manage the local OcHub daemon.
     Daemon(DaemonArgs),
     /// Generate shell completion.
@@ -1941,6 +1943,51 @@ pub enum RemoteCommand {
 pub enum RemotePolicyCommand {
     Show,
     Validate,
+}
+
+#[derive(Debug, Args)]
+pub struct NodeArgs {
+    #[command(subcommand)]
+    pub command: NodeCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NodeCommand {
+    /// Copy this executable into the managed user installation and start its daemon.
+    Install,
+    /// Show the managed installation, daemon, and update state.
+    Status,
+    /// Check or install a signed headless update.
+    Update {
+        #[command(subcommand)]
+        command: NodeUpdateCommand,
+    },
+    /// Switch back to the version retained before the latest update.
+    Rollback,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NodeUpdateCommand {
+    /// Check the signed headless release manifest and test direct download access.
+    Check,
+    /// Download and atomically install the newest signed node executable.
+    Install,
+    /// Receive a controller-relayed signed executable on stdin.
+    #[command(hide = true)]
+    Receive {
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        signature: String,
+        #[arg(long)]
+        sha256: String,
+        #[arg(long)]
+        size: u64,
+        #[arg(long)]
+        expected_node_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

@@ -77,6 +77,9 @@ pub async fn execute(cli: Cli, output: &Output) -> Result<(), CliError> {
         Command::Remote(args) => {
             return crate::remote::execute(&cli, &args.command, output).await;
         }
+        Command::Node(args) => {
+            return crate::node::execute(&cli, &args.command, output).await;
+        }
         Command::Paths => {
             ochub_core::app_store::refresh_app_config_dir_override();
             return output.success(
@@ -271,6 +274,7 @@ async fn dispatch(application: &Application, cli: &Cli, output: &Output) -> Resu
         | Command::Completion(_)
         | Command::Man(_)
         | Command::Remote(_)
+        | Command::Node(_)
         | Command::Daemon(_) => Ok(()),
     }
 }

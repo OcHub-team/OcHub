@@ -143,6 +143,88 @@ fn probe_reports_protocol_identity_without_starting_a_listener() {
             .iter()
             .any(|capability| capability == "status.read")
     );
+    assert!(
+        value["data"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "node.update.read")
+    );
+    assert!(
+        !value["data"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "node.update.install")
+    );
+}
+
+#[test]
+fn node_update_status_is_available_without_contacting_the_release_server() {
+    let home = tempfile::tempdir().unwrap();
+    let (child, mut stdin, mut stdout, ack) =
+        start_remote(home.path(), "desktop-node-update-status");
+
+    assert!(
+        ack.capabilities
+            .iter()
+            .any(|capability| capability.as_str() == "node.update.read")
+    );
+    assert!(
+        !ack.capabilities
+            .iter()
+            .any(|capability| capability.as_str() == "node.update.install")
+    );
+
+    let status = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "node-update-status",
+        methods::NODE_UPDATE_STATUS,
+        serde_json::Value::Null,
+        (None, None),
+    );
+    assert!(status.ok, "node update status error: {:?}", status.error);
+    assert_eq!(status.data["currentVersion"], env!("CARGO_PKG_VERSION"));
+    assert!(status.data["target"].as_str().is_some());
+    assert_eq!(status.data["managed"], false);
+
+    close_remote(child, stdin, "node-update-status-complete");
+}
+
+#[test]
+fn node_update_install_and_relay_require_explicit_remote_policy() {
+    let home = tempfile::tempdir().unwrap();
+    let config_dir = home.path().join(".ochub");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("remote.toml"),
+        concat!(
+            "schemaVersion = 1\n",
+            "enabled = true\n",
+            "allowWrite = true\n",
+            "allowGatewayLifecycle = true\n",
+            "allowDaemonLifecycle = true\n",
+            "allowSecretsWrite = false\n",
+            "allowBackupRestore = false\n",
+            "allowUpdateInstall = true\n",
+        ),
+    )
+    .unwrap();
+
+    let (child, stdin, _stdout, ack) = start_remote(home.path(), "desktop-node-update-policy");
+    assert!(
+        ack.capabilities
+            .iter()
+            .any(|capability| capability.as_str() == "node.update.install")
+    );
+    assert!(
+        ack.capabilities
+            .iter()
+            .any(|capability| capability.as_str() == "node.update.relay")
+    );
+    close_remote(child, stdin, "node-update-policy-complete");
 }
 
 #[test]

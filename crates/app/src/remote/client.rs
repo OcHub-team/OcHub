@@ -21,6 +21,51 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_DIAGNOSTIC_LINES: usize = 200;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteConnectionIssueKind {
+    CliNotInstalled,
+    NodeUpgradeRequired,
+    DesktopUpgradeRequired,
+    RemoteDisabled,
+    AuthenticationFailed,
+    HostKeyChanged,
+    HostKeyUnknown,
+    ConnectionRefused,
+    ConnectionTimedOut,
+    NetworkUnreachable,
+    CliNotExecutable,
+    ArchitectureMismatch,
+    SystemIncompatible,
+    ProtocolCorrupted,
+    Unknown,
+}
+
+impl RemoteConnectionIssueKind {
+    pub(crate) fn can_bootstrap(self) -> bool {
+        matches!(
+            self,
+            Self::CliNotInstalled
+                | Self::NodeUpgradeRequired
+                | Self::CliNotExecutable
+                | Self::ArchitectureMismatch
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteConnectionIssue {
+    pub kind: RemoteConnectionIssueKind,
+    pub detail: String,
+    pub diagnostics: Vec<String>,
+    pub exit_code: Option<i32>,
+}
+
+impl std::fmt::Display for RemoteConnectionIssue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RemoteClientError {
     #[error("invalid remote host: {0}")]
@@ -33,6 +78,8 @@ pub(crate) enum RemoteClientError {
     Timeout(String),
     #[error("SSH process failed: {0}")]
     Process(String),
+    #[error("{0}")]
+    Connection(RemoteConnectionIssue),
     #[error("remote node rejected the request [{code}]: {message}")]
     Remote {
         code: String,
@@ -52,6 +99,30 @@ pub(crate) enum RemoteClientError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl RemoteClientError {
+    pub(crate) fn ssh_failure(
+        message: impl Into<String>,
+        diagnostics: Vec<String>,
+        exit_code: Option<i32>,
+    ) -> Self {
+        let message = message.into();
+        Self::Connection(classify_connection_issue(&message, &diagnostics, exit_code))
+    }
+
+    pub(crate) fn connection_issue(&self) -> RemoteConnectionIssue {
+        match self {
+            Self::Connection(issue) => issue.clone(),
+            Self::Timeout(message) => RemoteConnectionIssue {
+                kind: RemoteConnectionIssueKind::ConnectionTimedOut,
+                detail: message.clone(),
+                diagnostics: Vec::new(),
+                exit_code: None,
+            },
+            error => classify_connection_issue(&error.to_string(), &[], None),
+        }
+    }
 }
 
 impl From<ochub_protocol::ProtocolError> for RemoteClientError {
@@ -110,10 +181,16 @@ impl RemoteClient {
             .take()
             .ok_or_else(|| RemoteClientError::Process("SSH stderr was not created".to_string()))?;
 
+        // Drain stderr before the protocol handshake. Most actionable startup
+        // failures (missing ochcli, SSH authentication, host-key changes, old
+        // subcommands) happen before the first stdout frame.
+        let diagnostics = Arc::new(Mutex::new(VecDeque::new()));
+        spawn_stderr_drain(stderr, diagnostics.clone());
+
         let device_id = ochub_core::node_identity::load_or_create()
             .ok()
             .map(|identity| identity.node_id);
-        write_frame(
+        if let Err(error) = write_frame(
             &mut stdin,
             &Frame::Hello(HelloFrame {
                 protocol_min: PROTOCOL_MIN,
@@ -123,16 +200,37 @@ impl RemoteClient {
                 device_id,
             }),
         )
-        .await?;
+        .await
+        {
+            return Err(finalize_connect_error(error, &mut child, &diagnostics).await);
+        }
         let mut stdout = BufReader::new(stdout);
-        let handshake = tokio::time::timeout(CONNECT_TIMEOUT, read_handshake(&mut stdout))
-            .await
-            .map_err(|_| RemoteClientError::Timeout("SSH protocol handshake".to_string()))??;
+        let handshake =
+            match tokio::time::timeout(CONNECT_TIMEOUT, read_handshake(&mut stdout)).await {
+                Ok(Ok(handshake)) => handshake,
+                Ok(Err(error)) => {
+                    return Err(finalize_connect_error(error, &mut child, &diagnostics).await);
+                }
+                Err(_) => {
+                    let error = RemoteClientError::Timeout("SSH protocol handshake".to_string());
+                    return Err(finalize_connect_error(error, &mut child, &diagnostics).await);
+                }
+            };
         if handshake.schema_version != SCHEMA_VERSION {
-            return Err(RemoteClientError::Protocol(format!(
-                "remote schema {}, desktop supports {}; upgrade ochcli or the desktop app",
-                handshake.schema_version, SCHEMA_VERSION
-            )));
+            let kind = if handshake.schema_version < SCHEMA_VERSION {
+                RemoteConnectionIssueKind::NodeUpgradeRequired
+            } else {
+                RemoteConnectionIssueKind::DesktopUpgradeRequired
+            };
+            return Err(RemoteClientError::Connection(RemoteConnectionIssue {
+                kind,
+                detail: format!(
+                    "remote schema {}, desktop supports {}",
+                    handshake.schema_version, SCHEMA_VERSION
+                ),
+                diagnostics: diagnostics.lock().await.iter().cloned().collect(),
+                exit_code: None,
+            }));
         }
         if let Some(expected) = &host.remote_node_id
             && expected != &handshake.node.id
@@ -143,8 +241,6 @@ impl RemoteClient {
             )));
         }
 
-        let diagnostics = Arc::new(Mutex::new(VecDeque::new()));
-        spawn_stderr_drain(stderr, diagnostics.clone());
         Ok(Arc::new(Self {
             host,
             handshake,
@@ -351,7 +447,135 @@ fn remote_error(error: RemoteError) -> RemoteClientError {
 }
 
 fn protocol_error(error: ProtocolErrorFrame) -> RemoteClientError {
+    if error.code == "PROTOCOL_INCOMPATIBLE" {
+        let server_min = error.details.get("serverMin").and_then(Value::as_u64);
+        let server_max = error.details.get("serverMax").and_then(Value::as_u64);
+        let kind = if server_max.is_some_and(|server_max| server_max < u64::from(PROTOCOL_MIN)) {
+            RemoteConnectionIssueKind::NodeUpgradeRequired
+        } else if server_min.is_some_and(|server_min| server_min > u64::from(PROTOCOL_MAX)) {
+            RemoteConnectionIssueKind::DesktopUpgradeRequired
+        } else {
+            RemoteConnectionIssueKind::ProtocolCorrupted
+        };
+        return RemoteClientError::Connection(RemoteConnectionIssue {
+            kind,
+            detail: format!("{}: {}", error.code, error.message),
+            diagnostics: Vec::new(),
+            exit_code: None,
+        });
+    }
     RemoteClientError::Protocol(format!("{}: {}", error.code, error.message))
+}
+
+async fn finalize_connect_error(
+    error: RemoteClientError,
+    child: &mut Child,
+    diagnostics: &Arc<Mutex<VecDeque<String>>>,
+) -> RemoteClientError {
+    let mut exit_code = child
+        .try_wait()
+        .ok()
+        .flatten()
+        .and_then(|status| status.code());
+    if exit_code.is_none() && !matches!(error, RemoteClientError::Timeout(_)) {
+        if let Ok(Ok(status)) = tokio::time::timeout(Duration::from_millis(500), child.wait()).await
+        {
+            exit_code = status.code();
+        }
+    } else if matches!(error, RemoteClientError::Timeout(_)) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+    tokio::task::yield_now().await;
+    let lines = diagnostics.lock().await.iter().cloned().collect::<Vec<_>>();
+    if let RemoteClientError::Connection(mut issue) = error {
+        if issue.diagnostics.is_empty() {
+            issue.diagnostics = lines;
+        }
+        issue.exit_code = issue.exit_code.or(exit_code);
+        return RemoteClientError::Connection(issue);
+    }
+    RemoteClientError::Connection(classify_connection_issue(
+        &error.to_string(),
+        &lines,
+        exit_code,
+    ))
+}
+
+fn classify_connection_issue(
+    message: &str,
+    diagnostics: &[String],
+    exit_code: Option<i32>,
+) -> RemoteConnectionIssue {
+    let detail = diagnostics
+        .iter()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| message.to_string());
+    let haystack = format!("{message}\n{}", diagnostics.join("\n")).to_ascii_lowercase();
+    let contains = |needle: &str| haystack.contains(needle);
+    let kind = if (contains("ochcli") && contains("command not found"))
+        || (contains("ochcli") && contains("no such file or directory"))
+        || contains("'ochcli' is not recognized")
+    {
+        RemoteConnectionIssueKind::CliNotInstalled
+    } else if contains("unrecognized subcommand 'remote'")
+        || contains("unrecognized subcommand `remote`")
+        || contains("unexpected argument 'remote'")
+        || contains("found argument 'remote' which wasn't expected")
+    {
+        RemoteConnectionIssueKind::NodeUpgradeRequired
+    } else if contains("remote access is disabled") {
+        RemoteConnectionIssueKind::RemoteDisabled
+    } else if contains("remote host identification has changed")
+        || contains("offending ") && contains("host key")
+    {
+        RemoteConnectionIssueKind::HostKeyChanged
+    } else if contains("host key verification failed") {
+        RemoteConnectionIssueKind::HostKeyUnknown
+    } else if contains("permission denied (publickey")
+        || contains("too many authentication failures")
+        || contains("no supported authentication methods available")
+    {
+        RemoteConnectionIssueKind::AuthenticationFailed
+    } else if contains("connection refused") {
+        RemoteConnectionIssueKind::ConnectionRefused
+    } else if contains("operation timed out")
+        || contains("connection timed out")
+        || contains("protocol handshake") && contains("timed out")
+    {
+        RemoteConnectionIssueKind::ConnectionTimedOut
+    } else if contains("no route to host")
+        || contains("network is unreachable")
+        || contains("could not resolve hostname")
+        || contains("name or service not known")
+    {
+        RemoteConnectionIssueKind::NetworkUnreachable
+    } else if contains("exec format error") || contains("bad cpu type in executable") {
+        RemoteConnectionIssueKind::ArchitectureMismatch
+    } else if contains("glibc_")
+        || contains("version `glibc_")
+        || contains("cannot open shared object file")
+    {
+        RemoteConnectionIssueKind::SystemIncompatible
+    } else if contains("ochcli") && contains("permission denied") {
+        RemoteConnectionIssueKind::CliNotExecutable
+    } else if contains("invalid frame")
+        || contains("without a protocol frame")
+        || contains("did not return helloack")
+        || contains("json error")
+    {
+        RemoteConnectionIssueKind::ProtocolCorrupted
+    } else {
+        RemoteConnectionIssueKind::Unknown
+    };
+    RemoteConnectionIssue {
+        kind,
+        detail,
+        diagnostics: diagnostics.to_vec(),
+        exit_code,
+    }
 }
 
 fn spawn_stderr_drain(
@@ -376,4 +600,69 @@ fn spawn_stderr_drain(
             diagnostics.push_back(line.trim_end().chars().take(2_048).collect());
         }
     });
+}
+
+#[cfg(test)]
+mod issue_tests {
+    use super::*;
+
+    #[test]
+    fn missing_cli_is_not_reported_as_a_generic_protocol_failure() {
+        let issue = classify_connection_issue(
+            "SSH connection closed without a protocol frame",
+            &["bash: line 1: ochcli: command not found".to_string()],
+            Some(127),
+        );
+        assert_eq!(issue.kind, RemoteConnectionIssueKind::CliNotInstalled);
+        assert_eq!(issue.exit_code, Some(127));
+        assert!(issue.detail.contains("command not found"));
+    }
+
+    #[test]
+    fn common_ssh_failures_have_stable_categories() {
+        let cases = [
+            (
+                "root@example: Permission denied (publickey).",
+                RemoteConnectionIssueKind::AuthenticationFailed,
+            ),
+            (
+                "ssh: connect to host example port 22: Connection refused",
+                RemoteConnectionIssueKind::ConnectionRefused,
+            ),
+            (
+                "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
+                RemoteConnectionIssueKind::HostKeyChanged,
+            ),
+            (
+                "ochcli: /lib64/libc.so.6: version `GLIBC_2.39' not found",
+                RemoteConnectionIssueKind::SystemIncompatible,
+            ),
+            (
+                "error: unrecognized subcommand 'remote'",
+                RemoteConnectionIssueKind::NodeUpgradeRequired,
+            ),
+            (
+                "remote access is disabled by the device policy",
+                RemoteConnectionIssueKind::RemoteDisabled,
+            ),
+            (
+                "bash: /tmp/ochcli: cannot execute binary file: Exec format error",
+                RemoteConnectionIssueKind::ArchitectureMismatch,
+            ),
+        ];
+        for (message, expected) in cases {
+            assert_eq!(classify_connection_issue(message, &[], None).kind, expected);
+        }
+    }
+
+    #[test]
+    fn bootstrap_is_only_offered_for_recoverable_cli_failures() {
+        assert!(RemoteConnectionIssueKind::CliNotInstalled.can_bootstrap());
+        assert!(RemoteConnectionIssueKind::NodeUpgradeRequired.can_bootstrap());
+        assert!(RemoteConnectionIssueKind::CliNotExecutable.can_bootstrap());
+        assert!(RemoteConnectionIssueKind::ArchitectureMismatch.can_bootstrap());
+        assert!(!RemoteConnectionIssueKind::AuthenticationFailed.can_bootstrap());
+        assert!(!RemoteConnectionIssueKind::HostKeyChanged.can_bootstrap());
+        assert!(!RemoteConnectionIssueKind::SystemIncompatible.can_bootstrap());
+    }
 }

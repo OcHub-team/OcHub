@@ -173,6 +173,7 @@ jobs:
             dist/*.dmg
             dist/*.app.tar.gz
             dist/*_cli.tar.gz
+            dist/*_ochcli
             dist/*.sig
           if-no-files-found: error
           retention-days: 1
@@ -199,6 +200,7 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*_cli.tar.gz
+            dist/*_ochcli
             dist/*.sig
           if-no-files-found: error
           retention-days: 1
@@ -235,6 +237,8 @@ jobs:
           test "$(find dist -maxdepth 1 -type f -name '*_cli.zip' | wc -l)" -eq 1
           # Updater payloads: one .app.tar.gz per macOS arch.
           test "$(find dist -maxdepth 1 -type f -name '*.app.tar.gz' | wc -l)" -eq 2
+          # Managed headless updater payloads: macOS x2 and Linux/WSL x1.
+          test "$(find dist -maxdepth 1 -type f -name '*_ochcli' | wc -l)" -eq 3
           (
             cd dist
             find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 |
@@ -311,6 +315,77 @@ jobs:
 
           echo "Generated latest.json:"
           cat dist/latest.json
+
+      - name: Generate headless.json
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          base_url="https://github.com/${REPO}/releases/download/${TAG}"
+
+          signature_count="$(find dist -maxdepth 1 -type f -name '*_ochcli.sig' | wc -l)"
+          # Publish the manifest even when release signing is not configured so
+          # nodes can still report the latest version. An empty signature keeps
+          # installation disabled and makes that release check-only.
+          test "${signature_count}" -eq 0 -o "${signature_count}" -eq 3
+
+          target_key() {
+            case "$1" in
+            *_macos_aarch64_ochcli) echo "macos-aarch64" ;;
+            *_macos_x86_64_ochcli) echo "macos-x86_64" ;;
+            *_linux_x86_64_ochcli) echo "linux-x86_64" ;;
+            *) echo "" ;;
+            esac
+          }
+
+          entries=""
+          shopt -s nullglob
+          for payload in dist/*_ochcli; do
+            name="$(basename "${payload}")"
+            key="$(target_key "${name}")"
+            test -n "${key}"
+            sig="${payload}.sig"
+            signature=""
+            if [ "${signature_count}" -eq 3 ]; then
+              test -s "${sig}"
+              signature="$(cat "${sig}")"
+            fi
+            sha256="$(sha256sum "${payload}" | cut -d' ' -f1)"
+            size="$(wc -c < "${payload}" | tr -d '[:space:]')"
+            entry="$(jq -cn \
+              --arg key "${key}" \
+              --arg signature "${signature}" \
+              --arg url "${base_url}/${name}" \
+              --arg sha256 "${sha256}" \
+              --argjson size "${size}" \
+              '{($key): {
+                signature: $signature,
+                url: $url,
+                sha256: $sha256,
+                size: $size
+              }}')"
+            entries="${entries}${entry}"$'\n'
+          done
+
+          printf '%s' "${entries}" | jq -s \
+            --arg version "${VERSION}" \
+            --arg notes "Headless node ${TAG}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              version: $version,
+              notes: $notes,
+              pubDate: $pub_date,
+              protocolMin: 1,
+              protocolMax: 2,
+              targets: add
+            }' > dist/headless.json
+
+          test "$(jq '.targets | length' dist/headless.json)" -eq 3
+          echo "Generated headless.json:"
+          cat dist/headless.json
 
       - name: Attest release packages
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4

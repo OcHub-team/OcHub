@@ -160,7 +160,8 @@ GUI 已运行时，用户在终端切换 Provider。CLI 自动连接 GUI 所属�
 
 ### 4.4 常驻网关
 
-用户不安装 GUI，只安装 CLI/daemon，通过用户级系统服务让 Gateway、健康检查、自动备份和同步持续运行。
+用户不安装 GUI，只安装一个 `ochcli`，通过用户级系统服务让 Gateway、健康检查、
+自动备份和同步持续运行。
 
 ### 4.5 故障恢复
 
@@ -172,11 +173,13 @@ GUI 已运行时，用户在终端切换 Provider。CLI 自动连接 GUI 所属�
 
 | 二进制 | 定位 | 生命周期 |
 |---|---|---|
-| `ochcli` | 用户命令入口 | 通常短生命周期 |
-| `ochubd` | 本地 runtime owner、Gateway 和后台任务 | 常驻，可作为用户级服务 |
+| `ochcli` | 用户命令入口；通过 `daemon run` 同时承担 runtime owner、Gateway 和后台任务 | 命令通常短生命周期，Owner 模式常驻 |
 | `ochub` | 现有 GPUI 应用 | 常驻，可成为 runtime owner |
 
-初期允许 `ochcli daemon run` 前台启动与 `ochubd` 相同的 runtime，方便开发、容器和进程管理器使用。正式安装包提供 `ochubd`。
+正式无桌面安装包只提供 `ochcli`。`ochcli node install` 将同一可执行文件放入受管
+版本目录，并让 launchd/systemd 服务执行 `ochcli daemon run`，避免命令和 Owner
+出现版本分裂。内部 service/unit 名可以继续使用 `ochubd` 以兼容旧安装，但它不再是
+需要用户下载的第二个二进制。
 
 ### 5.2 Runtime 模式
 
@@ -442,7 +445,7 @@ Windows 使用：
 
 ### 7.2 Owner 规则
 
-- GUI、`ochubd` 和前台 runtime 启动时竞争 `owner.lock`。
+- GUI、`ochcli daemon run` 和其他前台 runtime 启动时竞争 `owner.lock`。
 - 获得 owner lock 的进程负责 IPC、后台任务和所有 mutation。
 - 没获得 owner lock 的 GUI 可以连接已有 owner，或明确报告冲突；不建立第二个 Gateway。
 - Direct CLI 在命令期间持有 `mutation.lock`。
@@ -1847,7 +1850,7 @@ CLI 达到“业务全功能”需要满足：
 
 - owner discovery。
 - UDS/Named Pipe IPC。
-- `ochubd` 和 service management。
+- `ochcli daemon run` 和 service management。
 - Gateway 生命周期、Station、Channel、Route、Key。
 - health、autostart 和 graceful shutdown。
 
@@ -1903,7 +1906,7 @@ CLI 达到“业务全功能”需要满足：
 
 本设计给出推荐默认值，实施前只需确认以下产品选择：
 
-1. 面向用户的名称采用 `ochcli`，常驻进程采用 `ochubd`。
+1. 面向用户和发布包统一采用 `ochcli`；常驻模式由 `ochcli daemon run` 提供。
 2. 新 CLI/daemon 首次启动不自动导入 cc-switch。
 3. Provider 漂移的非交互默认值为 `abort`。
 4. Gateway 首版只允许 loopback。

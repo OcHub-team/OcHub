@@ -11,6 +11,7 @@
 //! there is nothing to verify a download against.
 
 pub mod channel;
+pub mod headless;
 pub mod install;
 pub mod manifest;
 pub mod relaunch;
@@ -75,6 +76,14 @@ pub fn current_version() -> &'static str {
 /// never trigger an install.
 pub fn is_newer_than_current(latest: &str) -> bool {
     compare_semver(current_version(), latest).is_some_and(|order| order == Ordering::Less)
+}
+
+/// Whether `latest` is strictly newer than an arbitrary installed version.
+///
+/// Headless nodes report their running version to the controlling desktop, so
+/// the comparison cannot always use this process' package version.
+pub fn is_newer_version(current: &str, latest: &str) -> bool {
+    compare_semver(current, latest).is_some_and(|order| order == Ordering::Less)
 }
 
 /// Whether an automatic check should run now.

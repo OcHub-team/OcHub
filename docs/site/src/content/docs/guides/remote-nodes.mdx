@@ -7,8 +7,9 @@ sidebar:
 ---
 
 Remote Nodes lets one OcHub desktop control OcHub state on a machine that has
-no desktop environment. The remote machine only needs OpenSSH and one `ochcli`
-executable; configuration and AI coding tools continue to run on that machine.
+no desktop environment. The remote machine only needs OpenSSH; if `ochcli` is
+not installed yet, the desktop can install it over SSH after confirmation.
+Configuration and AI coding tools continue to run on that machine.
 
 This is especially useful when your editor or terminal runs in **WSL**, on a
 Linux development machine, or on a remote workstation. Instead of opening an
@@ -63,18 +64,18 @@ computer.
 OcHub does **not** expose arbitrary shell execution or automatically create a
 Gateway data-plane tunnel. The desktop can negotiate the capabilities an older
 node advertises, but the complete workspace requires a current remote
-`ochcli`. Desktop shows a manual-upgrade hint for a legacy node that predates
-the managed updater.
+`ochcli`. A missing or legacy CLI is reported explicitly and can be installed
+or upgraded to the managed version from the connection row.
 
 ## Requirements
 
 Prepare all of the following:
 
-- OcHub Desktop `0.4.21` or later on the controlling computer.
+- OcHub Desktop `0.4.22` or later on the controlling computer.
 - System `ssh` and `ssh-keyscan` on the controlling computer.
 - A reachable OpenSSH server on the remote machine.
-- A compatible `ochcli` on the remote machine, installed with `ochcli node
-  install` for managed update and rollback.
+- A writable home directory for the remote user so OcHub can install managed
+  `ochcli`, or an existing manual installation.
 - SSH key or agent authentication that succeeds without an interactive
   password prompt. OcHub connects with `BatchMode=yes`.
 - At least one provider already stored on the remote node if you want to
@@ -92,6 +93,20 @@ runtime, version, policy, and capability information without asking for a
 password or passphrase.
 
 ## Install ochcli on the remote machine
+
+You normally do not need to log in and install it first. Add the SSH node as
+described below. If detection says that OcHub CLI is not installed, choose
+**Install**. OcHub detects the OS and CPU, downloads and verifies the official
+signed executable on the desktop, then uploads it over the host-key-pinned SSH
+connection. It writes only to the current SSH user's directories, uses no
+`sudo`, and opens no port. Afterward it starts the owner, verifies the reported
+version with the real remote protocol, and saves the stable absolute path, so
+the non-interactive shell does not need `~/.local/bin` in `PATH`.
+
+The same action appears as **Upgrade** for a legacy, non-executable, or
+wrong-architecture CLI. Use the manual fallback below only when the desktop
+cannot fetch the release or automatic installation does not support the
+remote platform.
 
 Download the headless CLI archive for the remote platform from the
 [latest release](https://github.com/OcHub-team/OcHub/releases/latest). It
@@ -183,6 +198,13 @@ The connection list then shows live online state, `ochcli` version, platform,
 and last successful connection. The workspace selector at the top of the
 sidebar lets you move between **This Mac** and saved remote nodes.
 
+Failures are shown as localized categories such as CLI not installed, node or
+desktop upgrade required, SSH authentication failure, changed host key,
+timeout, or incompatible system libraries. Choose **Details** for recovery
+guidance, the SSH exit code, and raw diagnostics; raw errors no longer crowd
+the connection row. Recoverable CLI failures also show **Install** or
+**Upgrade**.
+
 If the selected node is offline, its SSH handshake times out, or capability
 negotiation fails, product pages immediately clear that node's cached data and
 disable remote writes. OcHub **never falls back to executing the action on This
@@ -219,10 +241,11 @@ ochcli --yes node rollback
 ```
 
 Update installation is disabled by policy until you set
-`allowUpdateInstall = true` as described below and reconnect. A node from a
-release before managed update support must be upgraded manually once: replace
-the old CLI with a current `ochcli`, run `ochcli node install`, and reconnect.
-Managed self-update currently supports macOS and Linux, including WSL.
+`allowUpdateInstall = true` as described below and reconnect. For a node from
+before managed update support, choose **Upgrade** in the connection row to
+perform the first managed installation; later releases use the direct/relay
+update dialog. Managed installation and self-update currently support macOS
+and Linux, including WSL.
 
 ## Switch a provider on the remote node
 
@@ -368,11 +391,11 @@ control session.
 | --- | --- |
 | Alias is missing from Add | Put a concrete `Host name` in the controlling computer's SSH config; check `Include` paths, or use Add manually |
 | Permission denied or a prompt is required | Unlock/add the key to your SSH agent and make `ssh -o BatchMode=yes <alias> ochcli remote probe` succeed |
-| `ochcli: command not found` | Put `~/.local/bin` in the non-interactive SSH `PATH`, or enter the managed `ochcli` absolute path |
+| `ochcli: command not found` | Choose **Install** in the connection row; alternatively add `~/.local/bin` to the non-interactive SSH `PATH` or enter the absolute path |
 | Host key changed | Stop. Verify the new fingerprint through a trusted channel before replacing the old OcHub or user `known_hosts` entry |
 | WSL node is offline | Start the distribution and `sshd`; confirm the Windows alias, localhost forwarding, and port |
 | Node connects but no providers appear | Run `ochcli provider import-live --app <app>` or add providers on the remote machine |
-| Update action says manual upgrade | Install a current `ochcli` once with `ochcli node install`, enable `allowUpdateInstall`, then reconnect |
+| Node version is reported as too old | Choose **Upgrade** for the first managed installation; later updates also require `allowUpdateInstall` |
 | Update uses desktop relay | The node cannot reach its exact release asset; the desktop securely downloads, verifies, and streams it over SSH |
 | Protocol/version error | Upgrade Desktop and the remote `ochcli`, then reconnect |
 | Gateway runs but is unavailable on the desktop | It listens on the remote machine; use the remote tool or create a separate, explicit SSH tunnel |

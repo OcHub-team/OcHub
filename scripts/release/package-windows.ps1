@@ -36,7 +36,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $CliBinaryPath = Join-Path $BinaryDir "ochcli.exe"
-$DaemonBinaryPath = Join-Path $BinaryDir "ochubd.exe"
 & $CliBinaryPath version
 if ($LASTEXITCODE -ne 0) {
     throw "CLI release binary smoke test failed"
@@ -164,7 +163,6 @@ $CliZip = Join-Path $OutPath "OcHub_${Version}_windows_x64_cli.zip"
 try {
     New-Item -ItemType Directory -Path $CliRoot | Out-Null
     Copy-Item -LiteralPath $CliBinaryPath -Destination $CliRoot
-    Copy-Item -LiteralPath $DaemonBinaryPath -Destination $CliRoot
     Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination $CliRoot
     Copy-Item `
         -LiteralPath (Join-Path $RepoRoot "docs/CLI-INSTALL.md") `

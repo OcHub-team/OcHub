@@ -28,8 +28,9 @@ staging="$(mktemp -d)"
 trap 'rm -rf "${staging}"' EXIT
 mkdir -p "${staging}/ochcli"
 cp "target/${target}/release/ochcli" "${staging}/ochcli/"
-cp "target/${target}/release/ochubd" "${staging}/ochcli/"
 cp "${repo_root}/LICENSE" "${staging}/ochcli/"
 cp "${repo_root}/docs/CLI-INSTALL.md" "${staging}/ochcli/README.md"
 tar -czf "${out_dir}/OcHub_${version}_linux_x86_64_cli.tar.gz" \
     -C "${staging}" ochcli
+cp "target/${target}/release/ochcli" \
+    "${out_dir}/OcHub_${version}_linux_x86_64_ochcli"

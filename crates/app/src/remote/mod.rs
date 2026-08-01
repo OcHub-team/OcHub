@@ -9,8 +9,17 @@ mod ssh;
 mod ssh_config;
 mod store;
 
-pub(crate) use backend::{ProviderSwitchHandle, WorkspaceBackend, WorkspaceBackendError};
-pub(crate) use client::{RemoteClient, RemoteClientError, RemoteRequestOptions};
-pub(crate) use ssh::{ScannedHostKey, scan_host_keys, trust_host_key};
+pub(crate) use backend::{
+    NodeInstallStatus, NodeUpdateInstallResult, NodeUpdateReport, ProviderSwitchHandle,
+    WorkspaceBackend, WorkspaceBackendError,
+};
+pub(crate) use client::{
+    RemoteClient, RemoteClientError, RemoteConnectionIssue, RemoteConnectionIssueKind,
+    RemoteRequestOptions,
+};
+pub(crate) use ssh::{
+    BootstrapProbe, ScannedHostKey, install_bootstrap, probe_bootstrap, relay_node_update,
+    scan_host_keys, trust_host_key,
+};
 pub(crate) use ssh_config::{SshConfigEntry, discover_ssh_connections};
 pub(crate) use store::{RemoteHost, RemoteHostStore};

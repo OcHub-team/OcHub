@@ -36,6 +36,7 @@ const REMOTE_STATE_SCHEMA_VERSION: u32 = 1;
 const MAX_REMOTE_STATE_BYTES: u64 = 4 * 1024 * 1024;
 
 pub async fn execute(cli: &Cli, command: &RemoteCommand, output: &Output) -> Result<(), CliError> {
+    handoff_to_managed_cli()?;
     match command {
         RemoteCommand::Probe => output.success(&probe(cli).await?, &[]),
         RemoteCommand::Serve { stdio, ephemeral } => {
@@ -61,6 +62,40 @@ pub async fn execute(cli: &Cli, command: &RemoteCommand, output: &Output) -> Res
                 )
             }
         },
+    }
+}
+
+#[cfg(unix)]
+fn handoff_to_managed_cli() -> Result<(), CliError> {
+    use std::os::unix::process::CommandExt as _;
+
+    let Some(managed) = crate::node::managed_entrypoint() else {
+        return Ok(());
+    };
+    let current = std::env::current_exe()?;
+    if paths_refer_to_same_executable(&current, &managed) {
+        return Ok(());
+    }
+
+    // A saved SSH connection may still name the original bootstrap binary.
+    // Replace that process before it reads a protocol frame so every remote
+    // session follows the atomically switched managed version.
+    let error = std::process::Command::new(managed)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    Err(error.into())
+}
+
+#[cfg(not(unix))]
+fn handoff_to_managed_cli() -> Result<(), CliError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn paths_refer_to_same_executable(left: &Path, right: &Path) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
 }
 
@@ -139,6 +174,7 @@ async fn serve_stdio(cli: &Cli, ephemeral: bool) -> Result<(), CliError> {
         protocol_version,
         policy,
         execution,
+        crate::node::RemoteNodeOptions::from_cli(cli),
         hello.device_id,
         node_id,
     );
@@ -589,6 +625,7 @@ struct RemoteSession {
     protocol_version: u32,
     policy: ochub_core::remote_policy::RemotePolicy,
     execution: RemoteExecution,
+    node_options: crate::node::RemoteNodeOptions,
     device_id: Option<String>,
     node_id: String,
 }
@@ -598,6 +635,7 @@ impl RemoteSession {
         protocol_version: u32,
         policy: ochub_core::remote_policy::RemotePolicy,
         execution: RemoteExecution,
+        node_options: crate::node::RemoteNodeOptions,
         device_id: Option<String>,
         node_id: String,
     ) -> Self {
@@ -605,6 +643,7 @@ impl RemoteSession {
             protocol_version,
             policy,
             execution,
+            node_options,
             device_id,
             node_id,
         }
@@ -659,6 +698,14 @@ impl RemoteSession {
         }
         if matches!(
             request.method.as_str(),
+            methods::NODE_UPDATE_STATUS
+                | methods::NODE_UPDATE_CHECK
+                | methods::NODE_UPDATE_INSTALL_DIRECT
+        ) {
+            return self.handle_node_update(request).await;
+        }
+        if matches!(
+            request.method.as_str(),
             methods::PROVIDER_CREATE
                 | methods::PROVIDER_UPDATE
                 | methods::PROVIDER_COMMON_SET
@@ -706,6 +753,45 @@ impl RemoteSession {
             self.execute_mutation_response(request, argv).await
         } else {
             self.execute_response(request, argv, None).await
+        }
+    }
+
+    async fn handle_node_update(&self, request: RequestFrame) -> ResponseFrame {
+        if let Err(error) = expect_empty_params(&request.params) {
+            return error_response(
+                self.protocol_version,
+                request.request_id,
+                "INVALID_ARGUMENT",
+                &error,
+                false,
+                Value::Null,
+            );
+        }
+        let result = match request.method.as_str() {
+            methods::NODE_UPDATE_STATUS => crate::node::status()
+                .await
+                .and_then(|value| serde_json::to_value(value).map_err(CliError::from)),
+            methods::NODE_UPDATE_CHECK => crate::node::check_for_update(true)
+                .await
+                .and_then(|value| serde_json::to_value(value).map_err(CliError::from)),
+            methods::NODE_UPDATE_INSTALL_DIRECT => {
+                crate::node::install_direct_remote(&self.node_options)
+                    .await
+                    .and_then(|value| serde_json::to_value(value).map_err(CliError::from))
+            }
+            _ => unreachable!(),
+        };
+        match result {
+            Ok(data) => ResponseFrame {
+                protocol_version: self.protocol_version,
+                request_id: request.request_id,
+                ok: true,
+                data,
+                warnings: Vec::new(),
+                error: None,
+                revision: None,
+            },
+            Err(error) => cli_error_response(self.protocol_version, request.request_id, error),
         }
     }
 
@@ -3582,6 +3668,10 @@ fn required_capability(method: &str) -> Option<Capability> {
         }
         methods::UPDATE_STATUS | methods::UPDATE_CHECK => Some(Capability::UpdateRead),
         methods::UPDATE_INSTALL => Some(Capability::UpdateInstall),
+        methods::NODE_UPDATE_STATUS | methods::NODE_UPDATE_CHECK => {
+            Some(Capability::NodeUpdateRead)
+        }
+        methods::NODE_UPDATE_INSTALL_DIRECT => Some(Capability::NodeUpdateInstall),
         methods::DATA_DIR_SHOW
         | methods::MIGRATE_CCSWITCH_DETECT
         | methods::MIGRATE_CCSWITCH_PLAN => Some(Capability::DataRead),
@@ -3636,6 +3726,7 @@ fn capabilities(policy: &ochub_core::remote_policy::RemotePolicy) -> Vec<Capabil
         Capability::BackupRead,
         Capability::ToolRead,
         Capability::UpdateRead,
+        Capability::NodeUpdateRead,
         Capability::DataRead,
         Capability::GatewayRead,
         Capability::StationRead,
@@ -3661,8 +3752,10 @@ fn capabilities(policy: &ochub_core::remote_policy::RemotePolicy) -> Vec<Capabil
         values.insert(Capability::BackupRestore);
         values.insert(Capability::DataImport);
     }
-    if policy.allow_update_install {
+    if policy.allow_update_install && crate::node::managed_updates_supported() {
         values.insert(Capability::UpdateInstall);
+        values.insert(Capability::NodeUpdateInstall);
+        values.insert(Capability::NodeUpdateRelay);
     }
     if policy.allow_gateway_lifecycle {
         values.insert(Capability::GatewayLifecycle);
@@ -3823,6 +3916,25 @@ fn error_response(
 mod tests {
     use super::*;
     use ochub_protocol::RequestFrame;
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_symlink_is_recognized_as_the_running_executable() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let versioned = directory.path().join("versions/1.2.3/ochcli");
+        fs::create_dir_all(versioned.parent().unwrap()).unwrap();
+        fs::write(&versioned, b"binary").unwrap();
+        let managed = directory.path().join("ochcli");
+        symlink(&versioned, &managed).unwrap();
+
+        assert!(paths_refer_to_same_executable(&versioned, &managed));
+        assert!(!paths_refer_to_same_executable(
+            &versioned,
+            &directory.path().join("old-ochcli")
+        ));
+    }
 
     fn request(method: &str, params: Value) -> RequestFrame {
         RequestFrame {

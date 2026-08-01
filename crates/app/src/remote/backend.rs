@@ -17,6 +17,7 @@ use ochub_core::services::session_usage::{DataSourceSummary, SessionSyncResult};
 use ochub_core::services::skill::{
     DiscoverableSkill, Skill, SkillUninstallResult, SkillUpdateInfo, SkillsShSearchResult,
 };
+use ochub_core::services::update::headless::HeadlessUpdateCheck;
 use ochub_core::services::usage_stats::{
     DailyStats, LogFilters, ModelPricingInfo, ModelStats, PaginatedLogs, ProviderStats,
     RequestLogDetail, UsageSummary, UsageSummaryByApp,
@@ -33,6 +34,45 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{RemoteClient, RemoteClientError, RemoteRequestOptions};
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub(crate) struct NodeInstallStatus {
+    pub managed: bool,
+    pub current_version: String,
+    pub active_version: Option<String>,
+    pub previous_version: Option<String>,
+    pub target: Option<String>,
+    pub managed_root: std::path::PathBuf,
+    pub executable: std::path::PathBuf,
+    pub command_link: std::path::PathBuf,
+    pub service_mode: String,
+    pub service_definition: Option<std::path::PathBuf>,
+    pub daemon: Value,
+    pub can_self_update: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NodeUpdateReport {
+    pub installation: NodeInstallStatus,
+    pub update: HeadlessUpdateCheck,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub(crate) struct NodeUpdateInstallResult {
+    pub updated: bool,
+    pub strategy: String,
+    pub from_version: String,
+    pub version: String,
+    pub target: String,
+    pub executable: std::path::PathBuf,
+    pub rolled_back: bool,
+    pub daemon: Value,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum WorkspaceBackendError {
@@ -2310,6 +2350,85 @@ impl WorkspaceBackend {
                     .request(methods::UPDATE_CHECK, Value::Null, Default::default())
                     .await?
                     .data)
+            }
+        }
+    }
+
+    pub(crate) async fn node_update_status(
+        &self,
+    ) -> Result<NodeInstallStatus, WorkspaceBackendError> {
+        match self {
+            Self::Local(_) => Err(ApplicationError::CapabilityUnsupported {
+                app: "desktop".to_string(),
+                capability: "node.update.read",
+            }
+            .into()),
+            Self::Remote(client) => {
+                client.require_capability(Capability::NodeUpdateRead)?;
+                let response = client
+                    .request(
+                        methods::NODE_UPDATE_STATUS,
+                        Value::Null,
+                        RemoteRequestOptions {
+                            timeout: Some(std::time::Duration::from_secs(30)),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
+    }
+
+    pub(crate) async fn node_update_check(
+        &self,
+    ) -> Result<NodeUpdateReport, WorkspaceBackendError> {
+        match self {
+            Self::Local(_) => Err(ApplicationError::CapabilityUnsupported {
+                app: "desktop".to_string(),
+                capability: "node.update.read",
+            }
+            .into()),
+            Self::Remote(client) => {
+                client.require_capability(Capability::NodeUpdateRead)?;
+                let response = client
+                    .request(
+                        methods::NODE_UPDATE_CHECK,
+                        Value::Null,
+                        RemoteRequestOptions {
+                            timeout: Some(std::time::Duration::from_secs(60)),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
+    }
+
+    pub(crate) async fn node_update_install_direct(
+        &self,
+    ) -> Result<NodeUpdateInstallResult, WorkspaceBackendError> {
+        match self {
+            Self::Local(_) => Err(ApplicationError::CapabilityUnsupported {
+                app: "desktop".to_string(),
+                capability: "node.update.install",
+            }
+            .into()),
+            Self::Remote(client) => {
+                client.require_capability(Capability::NodeUpdateInstall)?;
+                let response = client
+                    .request(
+                        methods::NODE_UPDATE_INSTALL_DIRECT,
+                        Value::Null,
+                        RemoteRequestOptions {
+                            idempotency_key: Some(uuid::Uuid::new_v4().to_string()),
+                            timeout: Some(std::time::Duration::from_secs(15 * 60)),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
             }
         }
     }

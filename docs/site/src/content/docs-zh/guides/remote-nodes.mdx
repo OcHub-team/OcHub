@@ -6,8 +6,9 @@ sidebar:
   order: 0
 ---
 
-“远程节点”让一台 OcHub 桌面版控制没有桌面环境的机器。远端只需安装 OpenSSH 和
-一个 `ochcli`；AI 编程工具、配置文件和凭据仍然留在远端执行环境中。
+“远程节点”让一台 OcHub 桌面版控制没有桌面环境的机器。远端只需运行 OpenSSH；
+如果尚未安装 `ochcli`，桌面版可以在确认后通过 SSH 一键安装。AI 编程工具、配置文件
+和凭据仍然留在远端执行环境中。
 
 它尤其适合 **WSL、Linux 开发机、远程工作站**：以后更换 API 端点时，不必每次都先
 SSH 登录、寻找配置文件再手动修改。直接在 OcHub 里选择那台机器，然后切换远端已经
@@ -51,18 +52,17 @@ SSH 登录、寻找配置文件再手动修改。直接在 OcHub 里选择那台
 这类操作仍属于控制端，这是有意保留的设备边界。
 
 OcHub 不会提供任意 Shell 执行，也不会自动建立 Gateway 数据面隧道。桌面端可与旧节点
-协商它们已经广告的能力；完整工作区需要新版远端 `ochcli`。对于还不支持受管更新的
-旧节点，桌面端会提示先手动升级一次。
+协商它们已经广告的能力；完整工作区需要新版远端 `ochcli`。缺少 CLI 或版本过旧时，
+连接行会给出明确原因，并可直接安装或升级受管版本。
 
 ## 使用前提
 
 请准备好：
 
-- 控制端安装 OcHub Desktop `0.4.21` 或更高版本。
+- 控制端安装 OcHub Desktop `0.4.22` 或更高版本。
 - 控制端能使用系统 `ssh` 和 `ssh-keyscan`。
 - 远端运行可访问的 OpenSSH Server。
-- 远端安装兼容版本的 `ochcli`；如需受管更新和回滚，请用
-  `ochcli node install` 安装。
+- 远端用户目录可写，以便 OcHub 一键安装受管 `ochcli`；也可以预先手动安装。
 - SSH 密钥或 Agent 鉴权可以在不交互输入密码的情况下完成。OcHub 使用
   `BatchMode=yes` 连接。
 - 如果要切换连接，远端 OcHub 数据库中至少已有一个 Provider。
@@ -78,6 +78,16 @@ ssh -o BatchMode=yes devbox ochcli remote probe
 和 Capability 信息，不能再询问密码或私钥口令。
 
 ## 在远端安装 ochcli
+
+通常不需要先登录远端安装。先按后文添加 SSH 节点；如果探测结果是“远端尚未安装
+OcHub CLI”，点击**安装**。OcHub 会检测系统和 CPU 架构，在桌面端下载并验证官方签名，
+再经已固定主机密钥的 SSH 连接上传。安装只写入当前 SSH 用户的目录，不使用 `sudo`，
+不会开放端口。完成后会启动 Owner、用远程协议验证实际版本，并把稳定绝对路径保存到
+节点记录中，因此非交互 Shell 的 `PATH` 没有 `~/.local/bin` 也能正常连接。
+
+版本过旧、文件没有执行权限或 CPU 架构不匹配时，同一个入口会显示为**升级**并重新安装
+正确平台的受管版本。无法使用桌面下载地址或自动安装不支持的平台时，再使用下面的手动
+方式。
 
 从[最新发布页](https://github.com/OcHub-team/OcHub/releases/latest)下载适合远端平台的
 无桌面 CLI 压缩包。包内只有一个 `ochcli`。Linux 或 WSL 可以这样安装：
@@ -155,6 +165,11 @@ ssh -o BatchMode=yes devbox ochcli remote probe
 随后，连接列表会显示实时在线状态、`ochcli` 版本、平台和上次成功连接时间。侧栏顶部
 的工作区下拉可以在**这台 Mac**和已保存的远程节点之间切换。
 
+连接失败时，列表显示翻译后的故障类型，例如 CLI 未安装、节点需要升级、桌面端需要
+升级、SSH 鉴权失败、主机密钥变化、连接超时或系统库不兼容。点击**查看详情**可查看
+处理建议、SSH 退出码和原始诊断；原始错误不会再挤占连接行。可自动恢复的 CLI 问题会
+同时显示**安装**或**升级**。
+
 如果所选节点离线、SSH 握手超时或能力协商失败，业务页面会立即清空该节点的缓存数据，
 并禁用远端写操作。OcHub **绝不会自动回退到这台 Mac 执行**；请先重新连接节点，再继续
 Provider、网关、设置、同步、工具或更新操作。
@@ -181,8 +196,9 @@ ochcli --yes node rollback
 ```
 
 安装更新默认被策略关闭。按后文把 `allowUpdateInstall = true` 打开并重新连接后，一键
-更新才会出现。早于受管更新功能的旧节点需要手动升级一次：换成新版 `ochcli`，执行
-`ochcli node install`，再重新连接。受管自更新目前支持 macOS 和 Linux（包括 WSL）。
+更新才会出现。早于受管更新功能的旧节点可以直接在连接行点击**升级**完成首次受管安装；
+后续版本再使用更新弹窗的直连/中继策略。受管安装和自更新目前支持 macOS 和 Linux
+（包括 WSL）。
 
 ## 切换远端节点上的连接
 
@@ -307,11 +323,11 @@ allowUpdateInstall = true
 | --- | --- |
 | 添加弹窗里没有别名 | 在控制端 SSH config 中添加明确的 `Host name`，检查 `Include` 路径，或使用手动添加 |
 | Permission denied 或仍要求输入 | 解锁密钥并加入 SSH Agent，直到 `ssh -o BatchMode=yes <alias> ochcli remote probe` 可以直接成功 |
-| `ochcli: command not found` | 把 `~/.local/bin` 加入非交互 SSH 的 `PATH`，或填写受管 `ochcli` 的绝对路径 |
+| `ochcli: command not found` | 在连接行点击**安装**；也可把 `~/.local/bin` 加入非交互 SSH 的 `PATH`，或填写绝对路径 |
 | Host Key 发生变化 | 立即停止；通过可信渠道核对新指纹后，才替换 OcHub 或用户 `known_hosts` 中的旧记录 |
 | WSL 节点离线 | 启动发行版和 `sshd`，检查 Windows 侧别名、本机转发和端口 |
 | 节点能连接但没有 Provider | 在远端执行 `ochcli provider import-live --app <app>` 或添加 Provider |
-| 更新入口提示手动升级 | 先用新版 `ochcli` 执行一次 `ochcli node install`，启用 `allowUpdateInstall` 后重新连接 |
+| 连接行提示节点版本过旧 | 点击**升级**完成首次受管安装；后续更新另需启用 `allowUpdateInstall` |
 | 更新使用桌面中继 | 节点无法访问对应发布文件；桌面端会校验后通过 SSH 安全传输 |
 | 协议/版本不兼容 | 升级桌面端和远端 `ochcli` 后重新连接 |
 | 网关已运行但控制端访问不到 | 网关运行在远端；让远端工具使用它，或单独建立显式 SSH 隧道 |

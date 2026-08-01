@@ -73,11 +73,12 @@ archive_cli_bundle() {
     staging="$(mktemp -d)"
     mkdir -p "${staging}/ochcli"
     cp "target/${target}/release/ochcli" "${staging}/ochcli/"
-    cp "target/${target}/release/ochubd" "${staging}/ochcli/"
     cp "${repo_root}/LICENSE" "${staging}/ochcli/"
     cp "${repo_root}/docs/CLI-INSTALL.md" "${staging}/ochcli/README.md"
     tar -czf "${out_dir}/OcHub_${version}_macos_${arch}_cli.tar.gz" \
         -C "${staging}" ochcli
+    cp "target/${target}/release/ochcli" \
+        "${out_dir}/OcHub_${version}_macos_${arch}_ochcli"
     rm -rf "${staging}"
 }
 

@@ -35,7 +35,8 @@ while IFS= read -r artifact; do
     signed=$((signed + 1))
 done < <(
     find "${out_dir}" -maxdepth 1 -type f \
-        \( -name '*.app.tar.gz' -o -name '*-setup.exe' -o -name '*.AppImage' \) |
+        \( -name '*.app.tar.gz' -o -name '*-setup.exe' -o -name '*.AppImage' \
+        -o -name '*_ochcli' -o -name '*_ochcli.exe' \) |
         sort
 )
 

@@ -7,8 +7,9 @@ sidebar:
 ---
 
 Remote Nodes を使うと、デスクトップ環境のないマシン上の OcHub 状態を 1 台の
-OcHub Desktop から操作できます。リモート側に必要なのは OpenSSH と 1 つの
-`ochcli` だけです。AI コーディングツール、設定、認証情報はリモート環境に残ります。
+OcHub Desktop から操作できます。リモート側に必要なのは OpenSSH だけです。
+`ochcli` が未インストールなら、確認後に Desktop から SSH 経由で導入できます。
+AI コーディングツール、設定、認証情報はリモート環境に残ります。
 
 特に **WSL、Linux 開発マシン、リモートワークステーション**で便利です。API
 エンドポイントを変えるたびに SSH ログインして設定ファイルを探す代わりに、OcHub で
@@ -53,17 +54,17 @@ tray/login、theme、「Finder で開く」などは意図的に操作側 comput
 
 OcHub は任意の Shell 実行や自動 Gateway tunnel を提供しません。古い node とは広告済み
 capability の範囲で接続できますが、完全な workspace には新しい remote `ochcli` が必要です。
-managed updater より前の node には、Desktop が manual upgrade の案内を表示します。
+CLI がない場合や古い場合は理由を明示し、接続行から managed version を install / upgrade できます。
 
 ## 必要条件
 
 次を準備してください。
 
-- 操作側コンピューターに OcHub Desktop `0.4.21` 以降。
+- 操作側コンピューターに OcHub Desktop `0.4.22` 以降。
 - 操作側で system `ssh` と `ssh-keyscan` が利用可能。
 - リモート側で到達可能な OpenSSH Server が稼働。
-- リモート側に互換バージョンの `ochcli`。managed update と rollback を使う場合は
-  `ochcli node install` でインストールする。
+- リモート user の home directory が書き込み可能であること。Desktop から managed
+  `ochcli` を install するか、既存の manual installation を利用できます。
 - 対話的なパスワード入力なしで成功する SSH key または Agent 認証。OcHub は
   `BatchMode=yes` を使用します。
 - 接続を切り替える場合、リモート OcHub DB に少なくとも 1 つ Provider が存在。
@@ -79,6 +80,17 @@ ssh -o BatchMode=yes devbox ochcli remote probe
 passphrase を要求せず、node、runtime、version、policy、capability を返す必要があります。
 
 ## リモートへ ochcli をインストールする
+
+通常は事前に SSH login して install する必要はありません。後述の手順で SSH node を
+追加し、「OcHub CLI がインストールされていません」と表示されたら **Install** を選びます。
+OcHub は OS と CPU を検出し、Desktop 側で公式 executable を download・署名検証して、
+host key 確認済み SSH 経由で upload します。`sudo` は使わず、current SSH user の directory
+だけに書き込み、新しい port も開きません。完了後は Owner を起動し、実際の remote protocol
+で version を確認して stable absolute path を保存します。
+
+古い CLI、実行権限のない CLI、architecture が違う CLI では同じ action が **Upgrade** として
+表示されます。Desktop が release を取得できない場合や platform が未対応の場合だけ、以下の
+manual fallback を使ってください。
 
 [最新リリース](https://github.com/OcHub-team/OcHub/releases/latest)からリモート環境用の
 headless CLI archive をダウンロードします。実行ファイルは `ochcli` ひとつです。
@@ -161,6 +173,11 @@ ssh -o BatchMode=yes devbox ochcli remote probe
 接続一覧には online 状態、`ochcli` version、platform、最終接続時刻が表示されます。
 sidebar 上部の workspace selector で **This Mac** と保存済み remote node を切り替えます。
 
+失敗は CLI 未インストール、node/Desktop の upgrade 必須、SSH authentication、host key
+変更、timeout、system library 非互換などの分類で表示されます。**Details** には対処方法、
+SSH exit code、raw diagnostics が表示され、長い生エラーは接続行に出ません。自動復旧できる
+CLI 問題には **Install** または **Upgrade** も表示されます。
+
 選択中 node が offline、SSH handshake timeout、または capability negotiation 失敗に
 なった場合、各 page はその node の cache を直ちに消去し、remote write を無効にします。
 OcHub が **This Mac で同じ操作を自動実行することはありません**。Provider、gateway、
@@ -193,9 +210,9 @@ ochcli --yes node rollback
 ```
 
 update install は policy で既定無効です。後述の `allowUpdateInstall = true` を設定して
-再接続してください。managed updater より前の node は一度だけ手動で current
-`ochcli` に置き換え、`ochcli node install` を実行して再接続します。managed
-self-update は現在 macOS と Linux（WSL を含む）をサポートします。
+再接続してください。managed updater より前の node は接続行の **Upgrade** で最初の
+managed install を実行できます。以後は direct/relay update dialog を使います。managed
+install と self-update は現在 macOS と Linux（WSL を含む）をサポートします。
 
 ## リモートの Provider を切り替える
 
@@ -326,11 +343,11 @@ policy の変更は次の SSH control session から有効です。
 | --- | --- |
 | Add に alias がない | 操作側 SSH config に具体的な `Host name` を置き、`Include` を確認するか Add manually を使う |
 | Permission denied または prompt | key を SSH Agent へ追加し、`ssh -o BatchMode=yes <alias> ochcli remote probe` を成功させる |
-| `ochcli: command not found` | 非対話 SSH の `PATH` に `~/.local/bin` を加えるか、managed `ochcli` の絶対 path を指定する |
+| `ochcli: command not found` | 接続行の **Install** を選ぶ。または非対話 SSH の `PATH` に `~/.local/bin` を加えるか、絶対 path を指定する |
 | Host Key が変わった | 停止し、信頼できる経路で新 fingerprint を確認してから `known_hosts` の旧記録を置き換える |
 | WSL node が offline | distribution と `sshd` を起動し、Windows alias、localhost forwarding、port を確認する |
 | 接続できるが Provider がない | remote で `ochcli provider import-live --app <app>` または Provider add を実行する |
-| update action が manual upgrade を示す | current `ochcli` で一度 `ochcli node install` を実行し、`allowUpdateInstall` を有効にして再接続する |
+| node version が古いと表示される | **Upgrade** で最初の managed install を実行する。以後の update には `allowUpdateInstall` も必要 |
 | desktop relay が選択された | node が対象 release asset へ到達できないため、Desktop が verify 後に SSH で安全に転送している |
 | protocol/version error | Desktop と remote `ochcli` を更新して再接続する |
 | Gateway が desktop から見えない | Gateway は remote 上にあるため remote tool を使うか、別の SSH tunnel を作成する |

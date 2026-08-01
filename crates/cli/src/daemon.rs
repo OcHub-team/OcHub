@@ -387,6 +387,7 @@ fn remote_command_allowed(command: &Command) -> bool {
             | Command::Completion(_)
             | Command::Man(_)
             | Command::Remote(_)
+            | Command::Node(_)
             | Command::Daemon(_)
             | Command::Gateway(crate::command::GatewayArgs {
                 command: GatewayCommand::Serve
@@ -457,7 +458,7 @@ pub async fn start_background(cli: &Cli) -> Result<ochub_core::runtime::OwnerRec
     .into())
 }
 
-async fn stop_running(cli: &Cli) -> Result<(), CliError> {
+pub(crate) async fn stop_running(cli: &Cli) -> Result<(), CliError> {
     if runtime::active_owner()?.is_none() {
         return Ok(());
     }
@@ -474,6 +475,131 @@ async fn stop_running(cli: &Cli) -> Result<(), CliError> {
     .into())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServiceResumeMode {
+    InstalledService,
+    Background,
+}
+
+pub(crate) fn user_service_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        true
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ProcessCommand::new("systemctl")
+            .args(["--user", "show-environment"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        false
+    }
+}
+
+pub(crate) async fn suspend_for_update(cli: &Cli) -> Result<ServiceResumeMode, CliError> {
+    if let Some(owner) = runtime::active_owner()?
+        && owner.kind == OwnerKind::Gui
+    {
+        return Err(ApplicationError::OwnerConflict(format!(
+            "the desktop GUI owns this data directory (pid {}); quit it before updating the headless node",
+            owner.pid
+        ))
+        .into());
+    }
+
+    let installed = service_definition_path().is_ok_and(|path| path.exists());
+    if installed && user_service_available() {
+        stop_installed_service()?;
+        wait_for_owner_exit().await?;
+        return Ok(ServiceResumeMode::InstalledService);
+    }
+    stop_running(cli).await?;
+    Ok(ServiceResumeMode::Background)
+}
+
+pub(crate) async fn resume_after_update(
+    cli: &Cli,
+    mode: ServiceResumeMode,
+) -> Result<ochub_core::runtime::OwnerRecord, CliError> {
+    match mode {
+        ServiceResumeMode::InstalledService => {
+            // Rewrite the definition as well as starting it: an installation
+            // migrated from the legacy two-binary layout may still point at
+            // the old, version-specific ochubd path.
+            install_service()?;
+            wait_for_owner_ready(cli).await
+        }
+        ServiceResumeMode::Background => start_background(cli).await,
+    }
+}
+
+async fn wait_for_owner_exit() -> Result<(), CliError> {
+    for _ in 0..100 {
+        if runtime::active_owner()?.is_none() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(ApplicationError::RuntimeUnavailable(
+        "runtime did not stop before the node update".to_string(),
+    )
+    .into())
+}
+
+async fn wait_for_owner_ready(cli: &Cli) -> Result<ochub_core::runtime::OwnerRecord, CliError> {
+    for _ in 0..100 {
+        if let Some(owner) = runtime::active_owner()?
+            && crate::runtime_client::ping(cli.socket.as_deref(), 1)
+                .await
+                .is_ok()
+        {
+            return Ok(owner);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(
+        ApplicationError::RuntimeUnavailable("updated daemon did not become ready".to_string())
+            .into(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn stop_installed_service() -> Result<(), CliError> {
+    let path = service_definition_path()?;
+    let uid = command_stdout("id", &["-u"])?;
+    let target = format!("gui/{}", uid.trim());
+    let status = ProcessCommand::new("launchctl")
+        .args(["bootout", &target])
+        .arg(&path)
+        .status()?;
+    if status.success() || runtime::active_owner()?.is_none() {
+        Ok(())
+    } else {
+        Err(ApplicationError::UpstreamRejected(
+            "launchctl could not suspend the OcHub daemon".to_string(),
+        )
+        .into())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn stop_installed_service() -> Result<(), CliError> {
+    checked_command("systemctl", &["--user", "stop", "ochubd.service"])
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn stop_installed_service() -> Result<(), CliError> {
+    Err(ApplicationError::PlatformUnsupported(
+        "daemon service suspension is unsupported on this platform".to_string(),
+    )
+    .into())
+}
+
 #[derive(Debug, Clone)]
 struct DaemonInvocation {
     program: PathBuf,
@@ -481,24 +607,16 @@ struct DaemonInvocation {
 }
 
 fn daemon_invocation() -> Result<DaemonInvocation, CliError> {
-    let current = std::env::current_exe()?;
-    let sibling_name = if cfg!(windows) {
-        "ochubd.exe"
-    } else {
-        "ochubd"
-    };
-    let sibling = current.with_file_name(sibling_name);
-    if sibling.is_file() {
-        Ok(DaemonInvocation {
-            program: sibling,
-            args: Vec::new(),
-        })
-    } else {
-        Ok(DaemonInvocation {
-            program: current,
+    if let Some(managed) = crate::node::managed_entrypoint() {
+        return Ok(DaemonInvocation {
+            program: managed,
             args: vec!["daemon".to_string(), "run".to_string()],
-        })
+        });
     }
+    Ok(DaemonInvocation {
+        program: std::env::current_exe()?,
+        args: vec!["daemon".to_string(), "run".to_string()],
+    })
 }
 
 fn daemon_log_path() -> PathBuf {
@@ -555,7 +673,7 @@ fn set_socket_permissions(path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-fn service_plan() -> Result<Value, CliError> {
+pub(crate) fn service_plan() -> Result<Value, CliError> {
     let invocation = daemon_invocation()?;
     Ok(json!({
         "platform": std::env::consts::OS,
@@ -568,22 +686,22 @@ fn service_plan() -> Result<Value, CliError> {
 }
 
 #[cfg(target_os = "macos")]
-fn service_definition_path() -> Result<PathBuf, CliError> {
+pub(crate) fn service_definition_path() -> Result<PathBuf, CliError> {
     Ok(ochub_core::paths::get_home_dir().join("Library/LaunchAgents/io.ochub.daemon.plist"))
 }
 
 #[cfg(target_os = "linux")]
-fn service_definition_path() -> Result<PathBuf, CliError> {
+pub(crate) fn service_definition_path() -> Result<PathBuf, CliError> {
     Ok(ochub_core::paths::get_home_dir().join(".config/systemd/user/ochubd.service"))
 }
 
 #[cfg(windows)]
-fn service_definition_path() -> Result<PathBuf, CliError> {
+pub(crate) fn service_definition_path() -> Result<PathBuf, CliError> {
     Ok(runtime::runtime_dir().join("ochubd-task.json"))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-fn service_definition_path() -> Result<PathBuf, CliError> {
+pub(crate) fn service_definition_path() -> Result<PathBuf, CliError> {
     Err(ApplicationError::PlatformUnsupported(
         "daemon service installation is unsupported on this platform".to_string(),
     )
@@ -591,7 +709,7 @@ fn service_definition_path() -> Result<PathBuf, CliError> {
 }
 
 #[cfg(target_os = "macos")]
-fn install_service() -> Result<(), CliError> {
+pub(crate) fn install_service() -> Result<(), CliError> {
     let path = service_definition_path()?;
     let invocation = daemon_invocation()?;
     let log = daemon_log_path();
@@ -637,7 +755,7 @@ fn install_service() -> Result<(), CliError> {
 }
 
 #[cfg(target_os = "linux")]
-fn install_service() -> Result<(), CliError> {
+pub(crate) fn install_service() -> Result<(), CliError> {
     let path = service_definition_path()?;
     let invocation = daemon_invocation()?;
     if let Some(parent) = path.parent() {
@@ -662,7 +780,7 @@ fn install_service() -> Result<(), CliError> {
 }
 
 #[cfg(windows)]
-fn install_service() -> Result<(), CliError> {
+pub(crate) fn install_service() -> Result<(), CliError> {
     Err(ApplicationError::PlatformUnsupported(
         "Windows user-level daemon installation is not available in this build".to_string(),
     )
@@ -670,7 +788,7 @@ fn install_service() -> Result<(), CliError> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-fn install_service() -> Result<(), CliError> {
+pub(crate) fn install_service() -> Result<(), CliError> {
     Err(ApplicationError::PlatformUnsupported(
         "daemon service installation is unsupported on this platform".to_string(),
     )

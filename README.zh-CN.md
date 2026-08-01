@@ -124,7 +124,7 @@ brew install --cask --no-quarantine ochub-team/tap/ochub
 发布内容包含 `SHA256SUMS` 和 GitHub 构件证明。打包、签名验证和发布详情请参阅
 [发布指南](packaging/README.md)。
 
-无桌面压缩包内包含 `ochcli` 和 `ochubd`。如需从 OcHub Desktop 控制 WSL 或开发机，
+无桌面压缩包内只包含一个可自管理的 `ochcli`。如需从 OcHub Desktop 控制 WSL 或开发机，
 请阅读[远程节点使用指南](https://docs.ochub.org/zh/guides/remote-nodes)。
 
 ## 从源码构建

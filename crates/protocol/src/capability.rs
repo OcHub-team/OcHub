@@ -70,6 +70,12 @@ pub enum Capability {
     UpdateRead,
     #[serde(rename = "update.install")]
     UpdateInstall,
+    #[serde(rename = "node.update.read")]
+    NodeUpdateRead,
+    #[serde(rename = "node.update.install")]
+    NodeUpdateInstall,
+    #[serde(rename = "node.update.relay")]
+    NodeUpdateRelay,
     #[serde(rename = "data.read")]
     DataRead,
     #[serde(rename = "data.write")]
@@ -127,6 +133,9 @@ impl Capability {
             Self::ToolWrite => "tool.write",
             Self::UpdateRead => "update.read",
             Self::UpdateInstall => "update.install",
+            Self::NodeUpdateRead => "node.update.read",
+            Self::NodeUpdateInstall => "node.update.install",
+            Self::NodeUpdateRelay => "node.update.relay",
             Self::DataRead => "data.read",
             Self::DataWrite => "data.write",
             Self::DataImport => "data.import",

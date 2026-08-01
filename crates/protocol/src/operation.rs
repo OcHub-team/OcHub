@@ -111,6 +111,9 @@ pub mod methods {
     pub const UPDATE_STATUS: &str = "update.status";
     pub const UPDATE_CHECK: &str = "update.check";
     pub const UPDATE_INSTALL: &str = "update.install";
+    pub const NODE_UPDATE_STATUS: &str = "node.update.status";
+    pub const NODE_UPDATE_CHECK: &str = "node.update.check";
+    pub const NODE_UPDATE_INSTALL_DIRECT: &str = "node.update.installDirect";
     pub const DATA_DIR_SHOW: &str = "dataDir.show";
     pub const DATA_DIR_SET: &str = "dataDir.set";
     pub const DATA_DIR_RESET: &str = "dataDir.reset";

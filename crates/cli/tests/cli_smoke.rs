@@ -32,17 +32,49 @@ fn version_does_not_initialize_the_data_store() {
 }
 
 #[test]
-fn daemon_help_does_not_initialize_or_start_the_runtime() {
+fn daemon_help_uses_the_single_cli_binary_without_starting_the_runtime() {
     let home = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_ochubd"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ochcli"))
         .env("OCHUB_TEST_HOME", home.path())
-        .arg("--help")
+        .args(["daemon", "run", "--help"])
         .output()
-        .expect("run ochubd help");
+        .expect("run ochcli daemon help");
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Local owner daemon"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
     assert!(!home.path().join(".ochub/ochub.db").exists());
     assert!(!home.path().join(".ochub/runtime/owner.json").exists());
+}
+
+#[test]
+fn node_status_reports_the_managed_layout_without_installing_it() {
+    let home = tempfile::tempdir().unwrap();
+    let value = json(&ochcli(home.path(), &["--json", "node", "status"]));
+    assert_eq!(value["data"]["managed"], false);
+    assert_eq!(value["data"]["currentVersion"], env!("CARGO_PKG_VERSION"));
+    assert!(value["data"]["managedRoot"].as_str().is_some());
+    assert!(value["data"]["commandLink"].as_str().is_some());
+    assert!(!home.path().join(".ochub/ochub.db").exists());
+}
+
+#[test]
+fn managed_install_plan_runs_the_daemon_from_ochcli() {
+    let home = tempfile::tempdir().unwrap();
+    let value = json(&ochcli(
+        home.path(),
+        &["--json", "--dry-run", "node", "install"],
+    ));
+    assert_eq!(value["data"]["action"], "install-managed-node");
+    assert_eq!(
+        value["data"]["service"]["arguments"],
+        serde_json::json!(["daemon", "run"])
+    );
+    assert!(
+        value["data"]["service"]["program"]
+            .as_str()
+            .unwrap()
+            .ends_with("ochcli")
+    );
+    assert!(!home.path().join(".ochub/ochub.db").exists());
 }
 
 #[test]
@@ -243,12 +275,13 @@ fn daemon_rpc_executes_mutations_and_blocks_direct_bypass() {
     }
 
     let home = tempfile::tempdir().unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_ochubd"))
+    let child = Command::new(env!("CARGO_BIN_EXE_ochcli"))
         .env("OCHUB_TEST_HOME", home.path())
+        .args(["daemon", "run"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn ochubd");
+        .expect("spawn ochcli daemon");
     let mut child = ChildGuard(child);
 
     let mut status = None;
@@ -276,7 +309,7 @@ fn daemon_rpc_executes_mutations_and_blocks_direct_bypass() {
 
     let stopped = json(&ochcli(home.path(), &["--json", "daemon", "stop"]));
     assert_eq!(stopped["data"]["stopped"], true);
-    let status = child.0.wait().expect("wait for ochubd");
+    let status = child.0.wait().expect("wait for ochcli daemon");
     assert!(status.success());
     std::mem::forget(child);
 }
