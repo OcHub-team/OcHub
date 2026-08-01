@@ -1,6 +1,6 @@
 ---
 title: Codex 进阶与易踩坑
-description: 同时保留 ChatGPT 登录与模型供应商转发，理解远程压缩、Responses WebSocket 和本地会话历史。
+description: 使用原生 Fast 与 Ultra 启动 Codex，同时保留 ChatGPT 登录与模型供应商转发，并理解压缩、WebSocket 和会话历史。
 audience: human
 sidebar:
   order: 2
@@ -79,6 +79,63 @@ experimental_bearer_token = "rd-..."
 
 仅仅保留 `auth.json` 不会让第三方 API 自动接受 ChatGPT OAuth。反过来，只有网关密钥也
 不等于已经登录 ChatGPT。
+
+## 使用原生 Fast 与 Ultra 启动 Codex
+
+在 macOS 上打开 OcHub 本机的 **Codex** 应用页面，点击**启动 Codex**。OcHub 会启动一个
+独立的桌面实例，让兼容模型可以直接在 Codex 原生模型选择器中显示并选择 Fast 与 Ultra。
+当模型请求经过自定义模型供应商，而 Codex 原本会因账号权益检查隐藏或清除这些选项时，
+可以使用这种启动方式。
+
+这个启动器确实会执行内存中的 JavaScript 注入。它开启一个仅监听本机回环地址的 Chrome
+DevTools Protocol 端点，在 renderer 的首个应用脚本运行前自动附加，并拦截
+`app-initial-*.js`。补丁解除原生选择器对 Fast、Ultra 的 ChatGPT 账号门禁，同时阻止 Codex
+在 `thread/start` 或 `turn/start` 前清除已经选择的 Fast service tier。模型选择器、React
+组件、设置存储和请求格式仍然全部使用 Codex 自己的实现；已安装的 App 不会被修改或重新签名。
+
+<Steps>
+
+1. **配置并切换 Codex 连接。** 选择直连或模型供应商，并确保面向客户端的模型使用下表中的
+   精确模型 ID。
+
+2. **打开本机 Codex 页面。** 远程节点和非 macOS 版本不会显示这个启动功能。
+
+3. **点击“启动 Codex”。** OcHub 会在 `/Applications` 或 `~/Applications` 中查找
+   `Codex.app` 或 `ChatGPT.app`，启动独立实例，完成首屏注入后再提示成功。
+
+4. **使用输入框下方的原生选择器。** 在 Codex 内选择模型、推理强度和 Fast 模式。
+
+5. **发送一条短请求并检查“用量 → 请求日志”。** 在投入重要工作前，确认模型和上游接受了
+   所选模式。
+
+</Steps>
+
+当前由 OcHub 生成的模型目录只对精确模型 ID 添加能力：
+
+| 模型 ID | Fast | Max | Ultra |
+| --- | --- | --- | --- |
+| `gpt-5.6-sol` | 支持 | 支持 | 支持 |
+| `gpt-5.6-terra` | 支持 | 支持 | 支持 |
+| `gpt-5.6-luna` | 支持 | 支持 | 不支持 |
+
+未知模型或名称相似的第三方模型不会自动继承这些能力。若 Codex 已经为精确模型提供目录条目，
+OcHub 会保留该条目自身的能力元数据。
+
+<Aside type="caution" title="解锁选择器不会凭空增加上游能力">
+
+对自定义 Provider 而言，Fast 通过 Codex 的 priority service tier 发送；Ultra 是可能使用
+subagents 的推理强度。中转站和最终模型必须真正实现所请求的行为。上游可能忽略该值、拒绝请求、
+采用不同计费，或者仍按标准速度运行。ChatGPT credits 下的 Fast 与 API Priority processing
+属于不同的计费链路。
+
+</Aside>
+
+注入只对 OcHub 启动的实例有效。保持 OcHub 运行，后续新建的 renderer 才能继续被处理；退出
+Codex 后，需要再次从 OcHub 启动。调试监听只绑定 `127.0.0.1`，OcHub 也会拒绝非回环目标。
+
+Codex 更新导致预期的 renderer 门禁结构变化时，补丁会直接停止并报告注入失败。此时请退出
+所有 Codex 或 ChatGPT App 窗口，安装更新的 OcHub 版本后再试。不要反复从 Dock 打开失败的
+实例，因为这样会绕过 OcHub 启动器。
 
 ## 压缩到底压缩了什么
 
@@ -203,5 +260,8 @@ Codex 会在会话 `session_meta` 和线程索引中记录 `model_provider`。�
 - OpenAI [Codex 认证与会话](https://learn.chatgpt.com/docs/auth)说明登录缓存和凭据存储。
 - OpenAI [Codex CLI 命令](https://learn.chatgpt.com/docs/developer-commands.md?surface=cli)
   说明 `/compact`、`/resume`、`/archive` 和 `/delete`。
-- “Provider 名称触发远程压缩”、Responses-only 路由保护、UUID 历史迁移和具体文件扫描范围
-  是 OcHub 针对当前 Codex 行为实现的兼容层，不是 OpenAI 承诺的永久协议。
+- OpenAI [Codex 模型选择](https://learn.chatgpt.com/docs/models.md)说明模型、推理、Max 与 Ultra。
+- OpenAI [Codex 速度指南](https://learn.chatgpt.com/docs/agent-configuration/speed.md)
+  区分 ChatGPT Fast 模式与 API Priority processing。
+- “Provider 名称触发远程压缩”、Responses-only 路由保护、原生选择器注入、UUID 历史迁移和
+  具体文件扫描范围是 OcHub 针对当前 Codex 行为实现的兼容层，不是 OpenAI 承诺的永久协议。

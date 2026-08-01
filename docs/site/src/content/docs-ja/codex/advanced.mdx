@@ -1,6 +1,6 @@
 ---
 title: Codex の高度な設定と落とし穴
-description: ChatGPT ログインを保持したモデルプロバイダー転送、リモート圧縮、Responses WebSocket、ローカル履歴を理解します。
+description: ネイティブ Fast/Ultra で Codex を起動し、ChatGPT ログインを保持した転送、圧縮、WebSocket、履歴を理解します。
 audience: human
 sidebar:
   order: 2
@@ -81,6 +81,66 @@ experimental_bearer_token = "rd-..."
 
 `auth.json` を保持してもサードパーティー API が ChatGPT OAuth を受け入れるわけではありません。
 ゲートウェイキーだけを持っていても、ChatGPT へログイン済みとは限りません。
+
+## ネイティブ Fast と Ultra で Codex を起動する
+
+macOS の OcHub でローカルの **Codex** アプリページを開き、**Codex を起動**をクリック
+します。OcHub は独立したデスクトップインスタンスを起動し、対応モデルの Fast と Ultra を
+Codex 標準モデルピッカーで直接表示・選択できるようにします。カスタムモデルプロバイダーを
+使い、通常のアカウント権限判定が選択肢を隠す、または消去する場合に利用します。
+
+このランチャーはメモリ内 JavaScript インジェクションを実行します。ループバックだけで待ち
+受ける Chrome DevTools Protocol エンドポイントを開き、renderer の最初のアプリスクリプトが
+実行される前に自動接続して `app-initial-*.js` をインターセプトします。パッチは Fast と Ultra
+の ChatGPT アカウント制限を解除し、`thread/start` または `turn/start` の直前に選択済み Fast
+service tier が消去されないようにします。ピッカー、React コンポーネント、設定ストレージ、
+要求形式は Codex 標準実装のままです。インストール済み App の変更や再署名は行いません。
+
+<Steps>
+
+1. **Codex 接続を設定して切り替えます。** 直結またはモデルプロバイダーを選び、クライアント
+   モデルに下表の正確な ID を使います。
+
+2. **ローカル Codex ページを開きます。** リモートノードと macOS 以外では利用できません。
+
+3. **「Codex を起動」をクリックします。** OcHub は `/Applications` または
+   `~/Applications` の `Codex.app` / `ChatGPT.app` を探し、独立インスタンスを起動して、
+   最初のドキュメントへ注入してから成功を表示します。
+
+4. **コンポーザー下の標準ピッカーを使います。** Codex 内でモデル、推論強度、Fast を選びます。
+
+5. **短い要求を送り、「使用量 → リクエストログ」を確認します。** 重要な作業の前に、モデルと
+   上流が選択したモードを受け入れたことを確認します。
+
+</Steps>
+
+現在、OcHub 生成カタログの能力は正確なモデル ID だけに適用されます。
+
+| モデル ID | Fast | Max | Ultra |
+| --- | --- | --- | --- |
+| `gpt-5.6-sol` | 対応 | 対応 | 対応 |
+| `gpt-5.6-terra` | 対応 | 対応 | 対応 |
+| `gpt-5.6-luna` | 対応 | 対応 | 非対応 |
+
+不明なモデルや似た名前のサードパーティーモデルは能力を継承しません。Codex が正確なモデル
+エントリーを提供済みの場合、その能力メタデータを保持します。
+
+<Aside type="caution" title="ピッカーの解除は上流能力を追加しません">
+
+カスタム Provider の Fast は Codex の priority service tier で送信されます。Ultra は
+subagents を利用できる推論強度です。リレーと最終モデルが要求された動作を実装する必要が
+あります。上流は値を無視、拒否、別料金で処理、または標準速度で実行する可能性があります。
+ChatGPT credits の Fast と API Priority processing は別の課金経路です。
+
+</Aside>
+
+注入は OcHub から起動したインスタンスだけで有効です。新しい renderer も処理できるよう
+OcHub を実行したままにし、Codex 終了後は再度 OcHub から起動してください。デバッグ待受は
+`127.0.0.1` に限定され、OcHub はループバック以外のターゲットを拒否します。
+
+Codex 更新で想定した renderer 制限の形が変わると、パッチは安全側で停止して注入失敗を
+表示します。すべての Codex / ChatGPT App ウィンドウを終了し、新しい OcHub があれば更新後に
+再試行してください。Dock から失敗したインスタンスを開くと OcHub ランチャーを経由しません。
 
 ## 圧縮は何を圧縮するのか
 
@@ -198,5 +258,9 @@ Codex はセッションメタデータとスレッド索引に `model_provider`
 - OpenAI [Codex 認証とセッション](https://learn.chatgpt.com/docs/auth)：ログインキャッシュと保存。
 - OpenAI [Codex CLI コマンド](https://learn.chatgpt.com/docs/developer-commands.md?surface=cli)：
   `/compact`、`/resume`、`/archive`、`/delete`。
-- Provider 名によるリモート圧縮判定、Responses-only 保護、UUID 履歴移行、具体的な走査パスは
-  現在の Codex 向け OcHub 互換動作であり、OpenAI が保証する永久プロトコルではありません。
+- OpenAI [Codex モデル選択](https://learn.chatgpt.com/docs/models.md)：モデル、推論、Max、Ultra。
+- OpenAI [Codex 速度ガイド](https://learn.chatgpt.com/docs/agent-configuration/speed.md)：
+  ChatGPT Fast モードと API Priority processing の違い。
+- Provider 名によるリモート圧縮判定、Responses-only 保護、標準ピッカーへの注入、UUID 履歴
+  移行、具体的な走査パスは現在の Codex 向け OcHub 互換動作であり、OpenAI が保証する永久
+  プロトコルではありません。

@@ -1,6 +1,6 @@
 ---
 title: Advanced Codex pitfalls
-description: Keep ChatGPT login while routing through a model provider, and understand remote compaction, Responses WebSocket, and local session history.
+description: Launch Codex with native Fast and Ultra, keep ChatGPT login with a model provider, and understand compaction, WebSocket, and history.
 audience: human
 sidebar:
   order: 2
@@ -87,6 +87,76 @@ There are two independent authentication chains:
 
 Keeping `auth.json` does not make a third-party API accept ChatGPT OAuth.
 Having only the gateway key does not mean Codex is signed in to ChatGPT.
+
+## Launch Codex with native Fast and Ultra
+
+On macOS, open the local **Codex** app page in OcHub and click **Launch Codex**.
+OcHub starts a separate desktop instance whose native model picker can expose
+Fast and Ultra for compatible models. This is useful when inference is routed
+through a custom model provider and the normal account entitlement check would
+otherwise hide or clear those choices.
+
+The launcher performs an in-memory JavaScript injection. It opens a
+loopback-only Chrome DevTools Protocol endpoint, attaches to each renderer
+before its first application script runs, and intercepts
+`app-initial-*.js`. The patch removes the native picker's ChatGPT-account gates
+for Fast and Ultra and prevents Codex from clearing the selected Fast service
+tier before `thread/start` or `turn/start`. It keeps Codex's own picker, React
+components, setting storage, and request format. The installed application is
+not modified or re-signed.
+
+<Steps>
+
+1. **Configure and switch the Codex connection.** Select a direct connection or
+   model provider whose client-facing model is one of the supported exact model
+   IDs below.
+
+2. **Open the local Codex page.** The launcher is intentionally unavailable for
+   remote nodes and non-macOS builds.
+
+3. **Click Launch Codex.** OcHub finds `Codex.app` or `ChatGPT.app` in
+   `/Applications` or `~/Applications`, starts a separate instance, injects the
+   first renderer document, and then reports success.
+
+4. **Use the native picker beneath the composer.** Choose the model, reasoning
+   effort, and Fast mode in Codex itself.
+
+5. **Send a short request and inspect Usage → Request logs.** Confirm the model
+   and upstream accepted the selected mode before using it for important work.
+
+</Steps>
+
+Current generated-catalog capabilities are exact-match only:
+
+| Model ID | Fast | Max | Ultra |
+| --- | --- | --- | --- |
+| `gpt-5.6-sol` | Yes | Yes | Yes |
+| `gpt-5.6-terra` | Yes | Yes | Yes |
+| `gpt-5.6-luna` | Yes | Yes | No |
+
+Unknown or similarly named third-party models do not inherit these capabilities.
+An exact model entry already supplied by Codex keeps its own capability metadata.
+
+<Aside type="caution" title="Unlocking the picker does not add an upstream capability">
+
+For a custom provider, Fast is sent through Codex's priority service tier and
+Ultra is a reasoning effort that can use subagents. The relay and final model
+must implement the requested behavior. An upstream may ignore the value, reject
+the request, bill it differently, or run it at standard speed. ChatGPT credit
+Fast mode and API Priority processing are separate billing paths.
+
+</Aside>
+
+The injection lasts only for the instance launched by OcHub. Keep OcHub running
+so newly created renderer documents can also be patched, and launch through
+OcHub again after quitting Codex. The debugging listener is bound to
+`127.0.0.1`; OcHub rejects non-loopback targets.
+
+The patch deliberately fails closed when a Codex update changes the expected
+renderer gates. If OcHub reports that injection failed, quit all Codex or
+ChatGPT app windows, install a newer OcHub build if available, and launch again.
+Do not repeatedly open the failed instance from the Dock, because that bypasses
+the OcHub launcher.
 
 ## What compaction actually compacts
 
@@ -235,6 +305,11 @@ Practical rules:
   explains login caching and credential storage.
 - OpenAI's [Codex CLI commands](https://learn.chatgpt.com/docs/developer-commands.md?surface=cli)
   documents `/compact`, `/resume`, `/archive`, and `/delete`.
+- OpenAI's [Codex model selection](https://learn.chatgpt.com/docs/models.md)
+  describes model, reasoning, Max, and Ultra controls.
+- OpenAI's [Codex speed guide](https://learn.chatgpt.com/docs/agent-configuration/speed.md)
+  distinguishes ChatGPT Fast mode from API Priority processing.
 - Provider-name remote-compaction detection, Responses-only routing guards,
-  UUID history migration, and exact scanned file paths are OcHub compatibility
-  behavior for current Codex versions, not a permanent OpenAI protocol promise.
+  native-picker injection, UUID history migration, and exact scanned file paths
+  are OcHub compatibility behavior for current Codex versions, not a permanent
+  OpenAI protocol promise.

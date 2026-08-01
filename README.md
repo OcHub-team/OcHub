@@ -63,6 +63,7 @@ OpenCode, OpenClaw, and Hermes**.
 | 📊 | **Sessions & usage** | Browse local CLI sessions and understand tokens, cache, latency, requests, and estimated cost |
 | 🔄 | **Sync & backup** | Protect your setup with snapshots and keep OcHub data in sync through supported remote storage |
 | 🖥️ | **Remote nodes** | Switch existing providers on WSL, development machines, and headless servers securely over SSH |
+| ⚡ | **Native Codex modes** | On macOS, launch Codex from OcHub and use Fast or Ultra directly in its native model picker with compatible models and upstreams |
 
 ## Two ways to connect
 
@@ -85,6 +86,21 @@ upstream.
 **Best for:** sharing an upstream across tools, normalizing model names,
 converting API formats, tracking usage centrally, or building a resilient
 multi-provider setup.
+
+### Native Codex Fast and Ultra launcher
+
+On macOS, the Codex app page includes **Launch Codex**. It starts a separate
+Codex desktop instance and unlocks Fast and Ultra in the app's native model
+picker for compatible GPT-5.6 models. OcHub intercepts the renderer script in
+memory over a loopback-only debugging connection; it does not modify or re-sign
+the installed Codex application.
+
+This makes the native controls selectable and preserves the selected Fast
+service tier in Codex requests. The configured model provider must still
+support the requested service tier and reasoning effort. Launch Codex through
+OcHub each time you need the unlock. See the
+[advanced Codex guide](https://docs.ochub.org/codex/advanced#launch-codex-with-native-fast-and-ultra)
+for supported models, security boundaries, and troubleshooting.
 
 ## Built for the desktop
 

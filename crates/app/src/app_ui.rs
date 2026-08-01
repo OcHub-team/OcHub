@@ -188,6 +188,10 @@ pub struct AppRoot {
     provider_loaded_scope: Option<String>,
     provider_reload_generation: u64,
     provider_action_in_flight: bool,
+    /// Set while the local Codex desktop launcher is waiting for its main CDP
+    /// renderer. This is independent from provider mutations and only affects
+    /// the Codex page header action.
+    codex_launch_in_flight: bool,
     current: String,
     gateway_routes: Vec<GatewayRoute>,
     gateway_keys: Vec<GatewayKey>,
@@ -937,6 +941,7 @@ impl AppRoot {
             provider_loaded_scope: None,
             provider_reload_generation: 0,
             provider_action_in_flight: false,
+            codex_launch_in_flight: false,
             current: String::new(),
             gateway_routes: Vec::new(),
             gateway_keys: Vec::new(),
@@ -1632,6 +1637,33 @@ impl AppRoot {
         self.editor = None;
         self.showing_app_settings = true;
         cx.notify();
+    }
+
+    fn launch_codex_app(&mut self, cx: &mut Context<Self>) {
+        if self.codex_launch_in_flight || self.active_remote_scope.is_some() {
+            return;
+        }
+        self.codex_launch_in_flight = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result =
+                crate::core_async::run(ochub_core::apps::codex_app_launcher::launch_codex_app())
+                    .await
+                    .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                this.codex_launch_in_flight = false;
+                match result {
+                    Ok(launch) if launch.reused => {
+                        this.notify_success(t(k::SHELL_CODEX_LAUNCH_REUSED), cx)
+                    }
+                    Ok(_) => this.notify_success(t(k::SHELL_CODEX_LAUNCH_SUCCEEDED), cx),
+                    Err(error) => this.notify_error(t(k::SHELL_CODEX_LAUNCH_FAILED), error, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
@@ -3969,6 +4001,34 @@ impl AppRoot {
             .flex()
             .flex_row()
             .gap_2()
+            .when(
+                app == AppType::Codex && self.active_remote_scope.is_none(),
+                |s| {
+                    if self.codex_launch_in_flight {
+                        s.child(components::disabled_button(
+                            "launch-codex-app",
+                            t(k::SHELL_CODEX_LAUNCHING),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                            true,
+                        ))
+                    } else {
+                        s.child(
+                            components::icon_button(
+                                "launch-codex-app",
+                                t(k::SHELL_CODEX_LAUNCH),
+                                IconName::AgentCodex,
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.launch_codex_app(cx);
+                                },
+                            )),
+                        )
+                    }
+                },
+            )
             .child(
                 components::icon_button(
                     "add-provider",

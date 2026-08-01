@@ -61,6 +61,7 @@ OpenCode、OpenClaw 和 Hermes**。
 | 📊 | **会话与用量** | 浏览本地 CLI 会话，查看 Token、缓存、延迟、请求量和预估成本 |
 | 🔄 | **同步与备份** | 通过快照保护配置，并使用受支持的远程存储同步 OcHub 数据 |
 | 🖥️ | **远程节点** | 通过 SSH 安全切换 WSL、开发机和无桌面服务器上已有的 Provider |
+| ⚡ | **Codex 原生模式** | 在 macOS 上从 OcHub 启动 Codex，通过原生模型选择器选择兼容模型和上游所支持的 Fast 或 Ultra |
 
 ## 两种连接方式
 
@@ -79,6 +80,17 @@ OpenCode、OpenClaw 和 Hermes**。
 
 **适合：**在多个工具间共享上游、统一模型名称、转换 API 格式、集中统计用量，
 或搭建更可靠的多供应商方案。
+
+### Codex 原生 Fast 与 Ultra 启动器
+
+在 macOS 的 Codex 应用页面点击**启动 Codex**，OcHub 会启动一个独立的 Codex 桌面实例，
+并为兼容的 GPT-5.6 模型解锁应用原生模型选择器中的 Fast 与 Ultra。OcHub 只通过绑定到
+本机回环地址的调试连接在内存中拦截 renderer 脚本，不修改或重新签名已安装的 Codex App。
+
+这项功能让原生控件可选，并确保 Codex 请求保留所选的 Fast service tier；模型供应商仍须
+真正支持对应的服务档位与推理强度。每次需要解锁时都应从 OcHub 启动 Codex。支持的模型、
+安全边界与排障方法见
+[Codex 进阶指南](https://docs.ochub.org/zh/codex/advanced#使用原生-fast-与-ultra-启动-codex)。
 
 ## 为桌面而生
 

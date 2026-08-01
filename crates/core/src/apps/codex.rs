@@ -14,7 +14,7 @@ use toml_edit::{DocumentMut, Item};
 pub const OCHUB_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 pub const OCHUB_CODEX_MODEL_CATALOG_FILENAME: &str = "ochub-model-catalog.json";
 const LEGACY_CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
-const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
+const CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG: &str = "gpt-5.5";
 
 /// Reserved built-in provider IDs from OpenAI Codex's config/model-provider
 /// catalog. Keep in sync with Codex `RESERVED_MODEL_PROVIDER_IDS` and legacy
@@ -357,6 +357,7 @@ fn codex_catalog_model_entry(
     display_name: &str,
     context_window: u64,
     priority: usize,
+    exact_template: bool,
 ) -> Value {
     let mut entry = template.clone();
     let Some(entry_obj) = entry.as_object_mut() else {
@@ -369,12 +370,84 @@ fn codex_catalog_model_entry(
     entry_obj.insert("context_window".to_string(), json!(context_window));
     entry_obj.insert("max_context_window".to_string(), json!(context_window));
     entry_obj.insert("priority".to_string(), json!(1000 + priority));
-    entry_obj.insert("additional_speed_tiers".to_string(), json!([]));
-    entry_obj.insert("service_tiers".to_string(), json!([]));
+    // Exact Codex catalog entries carry product capabilities such as the
+    // native Fast service tier. A gpt-5.5 fallback cloned for an unrelated
+    // third-party model must not inherit those capabilities. Known GPT-5.6
+    // slugs are safe to enrich from their public Codex capability contract
+    // even when an older local CLI does not have an exact template yet.
+    let known_capabilities = apply_known_codex_model_capabilities(entry_obj, model);
+    if !exact_template && !known_capabilities {
+        entry_obj.insert("additional_speed_tiers".to_string(), json!([]));
+        entry_obj.insert("service_tiers".to_string(), json!([]));
+    }
+    // Generated catalogs are used with custom providers. Responses Lite is an
+    // OpenAI transport optimization and must not be inferred from a bundled
+    // OpenAI entry for an arbitrary endpoint.
+    entry_obj.insert("use_responses_lite".to_string(), json!(false));
     entry_obj.insert("availability_nux".to_string(), Value::Null);
     entry_obj.insert("upgrade".to_string(), Value::Null);
 
     entry
+}
+
+fn reasoning_level(effort: &str, description: &str) -> Value {
+    json!({ "effort": effort, "description": description })
+}
+
+/// Apply the native Codex picker capabilities for model slugs whose contract
+/// is known. This is deliberately exact-match only: a third-party model whose
+/// name merely contains "gpt-5.6" must not acquire Fast or Ultra accidentally.
+fn apply_known_codex_model_capabilities(
+    entry: &mut serde_json::Map<String, Value>,
+    model: &str,
+) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    let (default_reasoning_level, include_ultra, multi_agent_version) = match normalized.as_str() {
+        "gpt-5.6-sol" => ("low", true, "v2"),
+        "gpt-5.6-terra" => ("medium", true, "v2"),
+        "gpt-5.6-luna" => ("medium", false, "v1"),
+        _ => return false,
+    };
+
+    let mut reasoning_levels = vec![
+        reasoning_level("low", "Fast responses with lighter reasoning"),
+        reasoning_level(
+            "medium",
+            "Balances speed and reasoning depth for everyday tasks",
+        ),
+        reasoning_level("high", "Greater reasoning depth for complex problems"),
+        reasoning_level("xhigh", "Extra high reasoning depth for complex problems"),
+        reasoning_level("max", "Maximum reasoning depth for the hardest problems"),
+    ];
+    if include_ultra {
+        reasoning_levels.push(reasoning_level(
+            "ultra",
+            "Maximum reasoning with automatic task delegation",
+        ));
+    }
+
+    entry.insert(
+        "default_reasoning_level".to_string(),
+        json!(default_reasoning_level),
+    );
+    entry.insert(
+        "supported_reasoning_levels".to_string(),
+        Value::Array(reasoning_levels),
+    );
+    entry.insert("additional_speed_tiers".to_string(), json!(["fast"]));
+    entry.insert(
+        "service_tiers".to_string(),
+        json!([{
+            "id": "priority",
+            "name": "Fast",
+            "description": "1.5x speed, increased usage"
+        }]),
+    );
+    entry.insert(
+        "multi_agent_version".to_string(),
+        json!(multi_agent_version),
+    );
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,20 +509,22 @@ fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCa
     specs
 }
 
-fn find_codex_model_template(catalog: &Value) -> Option<Value> {
+fn find_codex_model_template(catalog: &Value, slug: &str) -> Option<Value> {
     catalog
         .get("models")
         .and_then(|models| models.as_array())
         .and_then(|models| {
             models.iter().find(|model| {
-                model.get("slug").and_then(|slug| slug.as_str())
-                    == Some(CODEX_MODEL_CATALOG_TEMPLATE_SLUG)
+                model
+                    .get("slug")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(slug))
             })
         })
         .cloned()
 }
 
-fn load_codex_model_template_from_cache() -> Result<Option<Value>, AppError> {
+fn load_codex_model_catalog_from_cache() -> Result<Option<Value>, AppError> {
     let path = get_codex_config_dir().join("models_cache.json");
     if !path.exists() {
         return Ok(None);
@@ -457,7 +532,7 @@ fn load_codex_model_template_from_cache() -> Result<Option<Value>, AppError> {
 
     let text = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
     let catalog: Value = serde_json::from_str(&text).map_err(|e| AppError::json(&path, e))?;
-    Ok(find_codex_model_template(&catalog))
+    Ok(Some(catalog))
 }
 
 /// Fixed candidates for locating the `codex` CLI when it is not on the process
@@ -627,7 +702,7 @@ fn codex_cli_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
+fn load_codex_model_catalog_from_bundled() -> Result<Option<Value>, AppError> {
     for candidate in codex_cli_candidates() {
         let candidate_label = candidate.to_string_lossy();
         let output = match Command::new(&candidate)
@@ -656,8 +731,8 @@ fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
                 continue;
             }
         };
-        if let Some(template) = find_codex_model_template(&catalog) {
-            return Ok(Some(template));
+        if catalog.get("models").and_then(Value::as_array).is_some() {
+            return Ok(Some(catalog));
         }
     }
 
@@ -675,41 +750,27 @@ fn load_codex_model_template_static() -> Option<Value> {
     }
 }
 
-fn load_codex_model_catalog_template() -> Result<Value, AppError> {
-    // ① models_cache.json (created by Codex when it connects to OpenAI)
-    if let Some(template) = load_codex_model_template_from_cache()? {
-        return Ok(template);
+fn load_codex_model_catalog_template_source() -> Result<Value, AppError> {
+    // A cache written by Codex is the cheapest and best-matched source. Keep
+    // the complete catalog so each configured model can select an exact entry
+    // without spawning the CLI once per model.
+    if let Some(catalog) = load_codex_model_catalog_from_cache()?
+        && find_codex_model_template(&catalog, CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG).is_some()
+    {
+        return Ok(catalog);
     }
-    // ② codex CLI (PATH + platform-specific common paths)
-    if let Some(template) = load_codex_model_template_from_bundled()? {
-        return Ok(template);
+    if let Some(catalog) = load_codex_model_catalog_from_bundled()?
+        && find_codex_model_template(&catalog, CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG).is_some()
+    {
+        return Ok(catalog);
     }
-    // ③ Static fallback bundled at compile time
     if let Some(template) = load_codex_model_template_static() {
-        return Ok(template);
+        return Ok(json!({ "models": [template] }));
     }
 
     Err(AppError::Message(format!(
-        "Codex model catalog template `{CODEX_MODEL_CATALOG_TEMPLATE_SLUG}` not found. Please start Codex once so models_cache.json is available, or ensure the `codex` CLI is on PATH."
+        "Codex model catalog template `{CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG}` not found. Please start Codex once so models_cache.json is available, or ensure the `codex` CLI is on PATH."
     )))
-}
-
-fn codex_model_catalog_from_specs(specs: &[CodexCatalogModelSpec], template: &Value) -> Value {
-    let entries: Vec<Value> = specs
-        .iter()
-        .enumerate()
-        .map(|(index, spec)| {
-            codex_catalog_model_entry(
-                template,
-                &spec.model,
-                &spec.display_name,
-                spec.context_window,
-                index,
-            )
-        })
-        .collect();
-
-    json!({ "models": entries })
 }
 
 fn codex_model_catalog_from_settings(
@@ -721,8 +782,30 @@ fn codex_model_catalog_from_settings(
         return Ok(None);
     }
 
-    let template = load_codex_model_catalog_template()?;
-    Ok(Some(codex_model_catalog_from_specs(&specs, &template)))
+    let template_source = load_codex_model_catalog_template_source()?;
+    let fallback_template = find_codex_model_template(
+        &template_source,
+        CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG,
+    )
+    .ok_or_else(|| {
+        AppError::Message(format!(
+            "Codex model catalog template `{CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG}` is missing from the selected source"
+        ))
+    })?;
+    let mut entries = Vec::with_capacity(specs.len());
+    for (index, spec) in specs.iter().enumerate() {
+        let exact_template = find_codex_model_template(&template_source, &spec.model);
+        let template = exact_template.as_ref().unwrap_or(&fallback_template);
+        entries.push(codex_catalog_model_entry(
+            template,
+            &spec.model,
+            &spec.display_name,
+            spec.context_window,
+            index,
+            exact_template.is_some(),
+        ));
+    }
+    Ok(Some(json!({ "models": entries })))
 }
 
 fn set_codex_model_catalog_json_field(
@@ -2250,7 +2333,20 @@ model = "gpt-4"
             }
         });
         let specs = codex_catalog_model_specs(&settings, r#"model_context_window = 128000"#);
-        let catalog = codex_model_catalog_from_specs(&specs, &template);
+        let catalog = json!({
+            "models": specs
+                .iter()
+                .enumerate()
+                .map(|(index, spec)| codex_catalog_model_entry(
+                    &template,
+                    &spec.model,
+                    &spec.display_name,
+                    spec.context_window,
+                    index,
+                    false,
+                ))
+                .collect::<Vec<_>>()
+        });
         let models = catalog
             .get("models")
             .and_then(|value| value.as_array())
@@ -2299,6 +2395,33 @@ model = "gpt-4"
                 .is_some_and(|value| value.is_null()),
             "generated third-party entries should not inherit GPT-5.5 launch messaging"
         );
+    }
+
+    #[test]
+    fn known_gpt56_models_expose_native_fast_max_and_ultra_capabilities() {
+        let template = load_codex_model_template_static().expect("static template");
+        let sol =
+            codex_catalog_model_entry(&template, "gpt-5.6-sol", "GPT-5.6-Sol", 272_000, 0, false);
+        let luna =
+            codex_catalog_model_entry(&template, "gpt-5.6-luna", "GPT-5.6-Luna", 272_000, 1, false);
+
+        let sol_efforts = sol["supported_reasoning_levels"]
+            .as_array()
+            .expect("Sol reasoning levels");
+        assert!(sol_efforts.iter().any(|entry| entry["effort"] == "max"));
+        assert!(sol_efforts.iter().any(|entry| entry["effort"] == "ultra"));
+        assert_eq!(sol["additional_speed_tiers"], json!(["fast"]));
+        assert_eq!(sol["service_tiers"][0]["id"], "priority");
+        assert_eq!(sol["multi_agent_version"], "v2");
+        assert_eq!(sol["use_responses_lite"], false);
+
+        let luna_efforts = luna["supported_reasoning_levels"]
+            .as_array()
+            .expect("Luna reasoning levels");
+        assert!(luna_efforts.iter().any(|entry| entry["effort"] == "max"));
+        assert!(!luna_efforts.iter().any(|entry| entry["effort"] == "ultra"));
+        assert_eq!(luna["additional_speed_tiers"], json!(["fast"]));
+        assert_eq!(luna["multi_agent_version"], "v1");
     }
 
     #[test]
@@ -2528,7 +2651,7 @@ name = "any"
             load_codex_model_template_static().expect("static template must parse as valid JSON");
         assert_eq!(
             template.get("slug").and_then(|v| v.as_str()),
-            Some("gpt-5.5"),
+            Some(CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG),
             "static template slug must be gpt-5.5"
         );
     }
