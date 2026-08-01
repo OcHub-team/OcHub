@@ -1011,6 +1011,10 @@ impl AppRoot {
         )
         .detach();
         cx.subscribe(&this.remote_view, |this, view, event, cx| {
+            if matches!(event, RemoteEvent::NodeNamesChanged) {
+                cx.notify();
+                return;
+            }
             if let RemoteEvent::ManageRequested { id } = event {
                 this.select_remote_scope(id.clone(), cx);
                 return;
@@ -3367,11 +3371,7 @@ impl AppRoot {
         let active_remote = self.active_remote_scope.clone();
         let mut labels = vec![t(k::SHELL_SIDEBAR_SCOPE_LOCAL).to_string()];
         let mut targets = vec![None];
-        labels.extend(
-            items
-                .iter()
-                .map(|item| format!("{} · {}", item.label, item.target)),
-        );
+        labels.extend(items.iter().map(|item| item.name.clone()));
         targets.extend(items.iter().map(|item| Some(item.id.clone())));
         let selected = active_remote
             .as_deref()

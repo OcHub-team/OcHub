@@ -339,19 +339,27 @@ operation.inspect
 
 ```json
 {
-  "id": "local-connection-id",
-  "label": "Production GPU",
-  "sshAlias": "prod-gpu-01",
-  "remoteNodeId": "4b518b86-...",
-  "hostKeyFingerprint": "SHA256:...",
-  "ochcliPath": "ochcli",
-  "tags": ["production", "gpu"],
-  "lastSeenAt": "2026-07-30T00:00:00Z"
+  "schemaVersion": 2,
+  "hosts": [
+    {
+      "id": "local-connection-id",
+      "sshAlias": "prod-gpu-01",
+      "remoteNodeId": "4b518b86-...",
+      "hostKeyFingerprint": "SHA256:...",
+      "ochcliPath": "ochcli",
+      "tags": ["production", "gpu"],
+      "lastSeenAt": "2026-07-30T00:00:00Z"
+    }
+  ]
 }
 ```
 
 不保存密码、私钥内容或 Provider Secret。该文件是设备本地连接信息，默认不进入
 OcHub 云同步、远端数据库或普通数据库备份。
+
+连接记录也不保存用户自定义的节点名称。界面名称来自 OCH 协议握手中的
+`node.hostname`；在尚未完成握手或节点离线时，暂时使用 `sshAlias` 作为连接标识。
+从 schema 1 升级时会删除原有的 `label` 字段，并将记录重写为 schema 2。
 
 ## 8. 写操作与一致性
 
@@ -537,7 +545,8 @@ Local backend 调用进程内 Application Facade；Remote backend 发送远程�
 创建入口。
 
 不同节点可以使用稳定但克制的 scope 色彩。远端 mutation 对话框必须同时显示图标、
-节点标签、`user@host` 和操作摘要。
+OCH 上报的 hostname、`user@host` 和操作摘要。工作区下拉框只显示 OCH hostname，
+不再拼接或维护一份本地节点名称。
 
 ### 11.2 节点管理页
 
@@ -567,7 +576,7 @@ Local backend 调用进程内 Application Facade；Remote backend 发送远程�
 - Connect / Disconnect
 - Test connection
 - Open node
-- Edit label/tags
+- Edit tags
 - Verify Host Key
 - Start/install daemon
 - View diagnostics
@@ -579,7 +588,7 @@ Local backend 调用进程内 Application Facade；Remote backend 发送远程�
 
 Fleet 在单节点 Remote Nodes 稳定后提供：
 
-- 节点标签和机器组
+- 机器标签和机器组
 - 版本和 capability 矩阵
 - Provider/MCP/Skill 一致性扫描
 - declarative manifest 的多节点 plan

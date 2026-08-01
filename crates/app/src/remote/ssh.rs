@@ -692,7 +692,6 @@ mod tests {
     fn host() -> RemoteHost {
         RemoteHost {
             id: "node-1".to_string(),
-            label: "Dev".to_string(),
             ssh_alias: "dev@example.test".to_string(),
             hostname: Some("example.test".to_string()),
             port: Some(22),

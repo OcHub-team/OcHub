@@ -83,6 +83,7 @@ enum ProbeState {
 #[derive(Clone)]
 struct NodeProbe {
     state: ProbeState,
+    hostname: Option<String>,
     version: Option<String>,
     platform: Option<String>,
     quick_update_supported: bool,
@@ -93,6 +94,7 @@ impl NodeProbe {
     fn checking() -> Self {
         Self {
             state: ProbeState::Checking,
+            hostname: None,
             version: None,
             platform: None,
             quick_update_supported: false,
@@ -104,6 +106,7 @@ impl NodeProbe {
         let handshake = client.handshake();
         Self {
             state: ProbeState::Online,
+            hostname: Some(handshake.node.hostname.clone()),
             version: Some(handshake.server_version.clone()),
             platform: Some(format!("{} · {}", handshake.node.os, handshake.node.arch)),
             quick_update_supported: handshake.capabilities.contains(&Capability::NodeUpdateRead),
@@ -114,6 +117,7 @@ impl NodeProbe {
     fn offline(error: &crate::remote::RemoteClientError) -> Self {
         Self {
             state: ProbeState::Offline,
+            hostname: None,
             version: None,
             platform: None,
             quick_update_supported: false,
@@ -228,14 +232,14 @@ impl NodeUpdateDialog {
 #[derive(Clone)]
 pub(crate) struct RemoteScopeItem {
     pub id: String,
-    pub label: String,
-    pub target: String,
+    pub name: String,
 }
 
 #[derive(Clone)]
 pub(crate) enum RemoteEvent {
     ConnectionChanged { id: String, connected: bool },
     ManageRequested { id: String },
+    NodeNamesChanged,
 }
 
 pub struct RemoteView {
@@ -251,7 +255,6 @@ pub struct RemoteView {
     ssh_config_entries: Vec<SshConfigEntry>,
     selected_ssh_config: Option<usize>,
     ssh_config_error: Option<String>,
-    label_input: Entity<TextInput>,
     target_input: Entity<TextInput>,
     hostname_input: Entity<TextInput>,
     port_input: Entity<TextInput>,
@@ -282,7 +285,6 @@ impl RemoteView {
             ),
         };
         let selected_id = store.hosts().first().map(|host| host.id.clone());
-        let label_input = cx.new(|cx| TextInput::new(cx, t(k::REMOTE_FIELD_LABEL)));
         let target_input = cx.new(|cx| TextInput::new(cx, SharedString::from("user@host")));
         let hostname_input =
             cx.new(|cx| TextInput::new(cx, SharedString::from("host.example.com")));
@@ -296,7 +298,7 @@ impl RemoteView {
             input.set_content("ochcli", cx);
             input
         });
-        Self {
+        let mut this = Self {
             store,
             selected_id,
             connection_state: ConnectionState::Disconnected,
@@ -309,7 +311,6 @@ impl RemoteView {
             ssh_config_entries: Vec::new(),
             selected_ssh_config: None,
             ssh_config_error: None,
-            label_input,
             target_input,
             hostname_input,
             port_input,
@@ -325,7 +326,12 @@ impl RemoteView {
             scroll: ScrollHandle::new(),
             status,
             status_level,
-        }
+        };
+        // Saved connections no longer carry a second, local display name.
+        // Probe immediately so every workspace surface can use the hostname
+        // reported by OCH, even before the Remote page is opened.
+        this.probe_nodes(cx);
+        this
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
@@ -358,10 +364,25 @@ impl RemoteView {
             .iter()
             .map(|host| RemoteScopeItem {
                 id: host.id.clone(),
-                label: host.label.clone(),
-                target: host.ssh_alias.clone(),
+                name: self.node_name(host),
             })
             .collect()
+    }
+
+    fn node_name(&self, host: &RemoteHost) -> String {
+        self.client
+            .as_ref()
+            .filter(|client| client.host().id == host.id)
+            .map(|client| client.handshake().node.hostname.clone())
+            .or_else(|| {
+                self.node_probes
+                    .get(&host.id)
+                    .and_then(|probe| probe.hostname.clone())
+            })
+            // A live OCH handshake is not available while a connection is
+            // being added or is unreachable. The SSH target is a transient UI
+            // fallback, not a separately persisted display name.
+            .unwrap_or_else(|| host.ssh_alias.clone())
     }
 
     pub(crate) fn backend_for_scope(&self, id: &str) -> Option<WorkspaceBackend> {
@@ -432,8 +453,6 @@ impl RemoteView {
     fn show_manual_add(&mut self, cx: &mut Context<Self>) {
         self.add_mode = AddMode::Manual;
         self.scanned_keys.clear();
-        self.label_input
-            .update(cx, |input, cx| input.set_content("", cx));
         self.target_input
             .update(cx, |input, cx| input.set_content("", cx));
         self.hostname_input
@@ -473,8 +492,6 @@ impl RemoteView {
         if self.has_ssh_alias(&entry.alias) {
             return;
         }
-        self.label_input
-            .update(cx, |input, cx| input.set_content(&entry.alias, cx));
         self.target_input
             .update(cx, |input, cx| input.set_content(&entry.alias, cx));
         self.hostname_input
@@ -491,10 +508,9 @@ impl RemoteView {
         if self.busy {
             return;
         }
-        let label = self.label_input.read(cx).content().trim().to_string();
         let target = self.target_input.read(cx).content().trim().to_string();
         let hostname = self.hostname_input.read(cx).content().trim().to_string();
-        if label.is_empty() || target.is_empty() || hostname.is_empty() {
+        if target.is_empty() || hostname.is_empty() {
             self.set_status(t(k::REMOTE_ERROR_REQUIRED), NotificationLevel::Error);
             cx.notify();
             return;
@@ -555,7 +571,6 @@ impl RemoteView {
         }
         let host = RemoteHost {
             id: uuid::Uuid::new_v4().to_string(),
-            label: self.label_input.read(cx).content().trim().to_string(),
             ssh_alias: self.target_input.read(cx).content().trim().to_string(),
             hostname: Some(self.hostname_input.read(cx).content().trim().to_string()),
             port: Some(port),
@@ -631,6 +646,7 @@ impl RemoteView {
                 for (id, probe) in results {
                     this.node_probes.insert(id, probe);
                 }
+                cx.emit(RemoteEvent::NodeNamesChanged);
                 cx.notify();
             })
             .ok();
@@ -686,7 +702,7 @@ impl RemoteView {
                 match result {
                     Ok((client, backend, snapshot)) => {
                         let node_id = client.handshake().node.id.clone();
-                        let node_label = client.host().label.clone();
+                        let node_name = client.handshake().node.hostname.clone();
                         let host_id = client.host().id.clone();
                         let probe = NodeProbe::online(&client);
                         this.client = Some(client);
@@ -704,7 +720,7 @@ impl RemoteView {
                                 );
                             } else {
                                 this.set_status(
-                                    tf!(k::REMOTE_SUCCESS_CONNECTED, node = node_label),
+                                    tf!(k::REMOTE_SUCCESS_CONNECTED, node = node_name),
                                     NotificationLevel::Success,
                                 );
                             }
@@ -721,6 +737,7 @@ impl RemoteView {
                                 id.clone(),
                                 NodeProbe {
                                     state: ProbeState::Offline,
+                                    hostname: None,
                                     version: None,
                                     platform: None,
                                     quick_update_supported: false,
@@ -1523,6 +1540,7 @@ impl RemoteView {
         let Some((host, issue)) = self.issue_dialog.as_ref() else {
             return div();
         };
+        let node_name = self.node_name(host);
         let close_footer =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_issue_details(cx));
         let close_icon =
@@ -1582,7 +1600,7 @@ impl RemoteView {
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text())
-                            .child(SharedString::from(host.label.clone())),
+                            .child(SharedString::from(node_name)),
                     )
                     .child(
                         div()
@@ -1670,6 +1688,7 @@ impl RemoteView {
         let Some(dialog) = self.bootstrap_dialog.as_ref() else {
             return div();
         };
+        let node_name = self.node_name(&dialog.host);
         let close_header =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_node_bootstrap(cx));
         let close_done =
@@ -1726,7 +1745,7 @@ impl RemoteView {
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme::text())
-                                    .child(SharedString::from(dialog.host.label.clone())),
+                                    .child(SharedString::from(node_name)),
                             )
                             .child(
                                 div()
@@ -1905,6 +1924,7 @@ impl RemoteView {
         let Some(dialog) = self.update_dialog.as_ref() else {
             return div();
         };
+        let node_name = self.node_name(&dialog.host);
         let close = cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_node_update(cx));
         let install =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.install_node_update(cx));
@@ -1967,7 +1987,7 @@ impl RemoteView {
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme::text())
-                                    .child(SharedString::from(dialog.host.label.clone())),
+                                    .child(SharedString::from(node_name)),
                             )
                             .child(
                                 div()
@@ -2558,12 +2578,6 @@ impl RemoteView {
             .flex_col()
             .gap_4()
             .child(components::field(
-                t(k::REMOTE_FIELD_LABEL),
-                true,
-                None,
-                self.label_input.clone(),
-            ))
-            .child(components::field(
                 t(k::REMOTE_FIELD_TARGET),
                 true,
                 Some(t(k::REMOTE_FIELD_TARGET_HELP)),
@@ -2740,6 +2754,7 @@ impl RemoteView {
             .iter()
             .map(|host| {
                 let id = host.id.clone();
+                let node_name = self.node_name(host);
                 let connected = self.selected_id.as_deref() == Some(host.id.as_str())
                     && self.connection_state == ConnectionState::Connected;
                 let probe = self.node_probes.get(&host.id);
@@ -2842,7 +2857,7 @@ impl RemoteView {
                             .role(gpui::Role::Switch)
                             .aria_label(SharedString::from(format!(
                                 "{} · {}",
-                                host.label, state_label
+                                node_name, state_label
                             )))
                             .aria_toggled(if connected {
                                 gpui::Toggled::True
@@ -2873,7 +2888,7 @@ impl RemoteView {
                                             .text_sm()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text())
-                                            .child(SharedString::from(host.label.clone())),
+                                            .child(SharedString::from(node_name)),
                                     )
                                     .when(connected, |row| {
                                         row.child(components::badge(

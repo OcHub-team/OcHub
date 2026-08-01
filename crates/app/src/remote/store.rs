@@ -5,13 +5,13 @@ use serde::{Deserialize, Serialize};
 
 use super::RemoteClientError;
 
-const REMOTE_HOSTS_SCHEMA_VERSION: u32 = 1;
+const REMOTE_HOSTS_SCHEMA_VERSION: u32 = 2;
+const LEGACY_REMOTE_HOSTS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RemoteHost {
     pub id: String,
-    pub label: String,
     pub ssh_alias: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
@@ -35,7 +35,6 @@ fn default_ochcli_path() -> String {
 
 impl RemoteHost {
     pub(crate) fn validate(&self) -> Result<(), RemoteClientError> {
-        validate_label(&self.label)?;
         validate_ssh_alias(&self.ssh_alias)?;
         validate_ochcli_path(&self.ochcli_path)?;
         if self.id.trim().is_empty() || self.id.len() > 128 {
@@ -95,7 +94,10 @@ impl RemoteHostStore {
             source,
         })?;
         let document: RemoteHostsDocument = serde_json::from_slice(&bytes)?;
-        if document.schema_version != REMOTE_HOSTS_SCHEMA_VERSION {
+        if !matches!(
+            document.schema_version,
+            LEGACY_REMOTE_HOSTS_SCHEMA_VERSION | REMOTE_HOSTS_SCHEMA_VERSION
+        ) {
             return Err(RemoteClientError::InvalidHost(format!(
                 "remote hosts schema {} is incompatible with supported schema {}",
                 document.schema_version, REMOTE_HOSTS_SCHEMA_VERSION
@@ -114,10 +116,18 @@ impl RemoteHostStore {
                 "remote hosts file contains duplicate connection ids".to_string(),
             ));
         }
-        enforce_private_permissions(path)?;
-        Ok(Self {
+        let store = Self {
             hosts: document.hosts,
-        })
+        };
+        if document.schema_version == LEGACY_REMOTE_HOSTS_SCHEMA_VERSION {
+            // Schema 1 stored a user-defined `label` on every connection. The
+            // field is ignored while decoding and this rewrite removes it;
+            // node names now come from the OCH protocol handshake.
+            store.save_at(path)?;
+        } else {
+            enforce_private_permissions(path)?;
+        }
+        Ok(store)
     }
 
     pub(crate) fn hosts(&self) -> &[RemoteHost] {
@@ -139,7 +149,7 @@ impl RemoteHostStore {
         } else {
             self.hosts.push(host);
         }
-        self.hosts.sort_by_key(|host| host.label.to_lowercase());
+        self.hosts.sort_by_key(|host| host.ssh_alias.to_lowercase());
         self.save()
     }
 
@@ -234,16 +244,6 @@ pub(crate) fn validate_scan_hostname(value: &str) -> Result<(), RemoteClientErro
     Ok(())
 }
 
-fn validate_label(value: &str) -> Result<(), RemoteClientError> {
-    let value = value.trim();
-    if value.is_empty() || value.len() > 80 || value.chars().any(char::is_control) {
-        return Err(RemoteClientError::InvalidHost(
-            "label must contain 1 to 80 printable characters".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 fn enforce_private_permissions(path: &Path) -> Result<(), RemoteClientError> {
     #[cfg(unix)]
     {
@@ -262,11 +262,10 @@ fn enforce_private_permissions(path: &Path) -> Result<(), RemoteClientError> {
 mod tests {
     use super::*;
 
-    fn host(id: &str, label: &str) -> RemoteHost {
+    fn host(id: &str, ssh_alias: &str) -> RemoteHost {
         RemoteHost {
             id: id.to_string(),
-            label: label.to_string(),
-            ssh_alias: "user@example.test".to_string(),
+            ssh_alias: ssh_alias.to_string(),
             hostname: Some("example.test".to_string()),
             port: Some(22),
             remote_node_id: None,
@@ -282,15 +281,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("remote-hosts.json");
         let mut store = RemoteHostStore::default();
-        store.hosts.push(host("b", "Zulu"));
-        store.hosts.push(host("a", "Alpha"));
+        store.hosts.push(host("b", "zulu"));
+        store.hosts.push(host("a", "alpha"));
         store
             .hosts
-            .sort_by(|left, right| left.label.cmp(&right.label));
+            .sort_by(|left, right| left.ssh_alias.cmp(&right.ssh_alias));
         store.save_at(&path).unwrap();
         let loaded = RemoteHostStore::load_at(&path).unwrap();
-        assert_eq!(loaded.hosts()[0].label, "Alpha");
-        assert_eq!(loaded.hosts()[1].label, "Zulu");
+        assert_eq!(loaded.hosts()[0].ssh_alias, "alpha");
+        assert_eq!(loaded.hosts()[1].ssh_alias, "zulu");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -299,6 +298,32 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn schema_one_labels_are_removed_during_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("remote-hosts.json");
+        fs::write(
+            &path,
+            r#"{
+                "schemaVersion": 1,
+                "hosts": [{
+                    "id": "legacy",
+                    "label": "Duplicated name",
+                    "sshAlias": "dev",
+                    "ochcliPath": "ochcli"
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = RemoteHostStore::load_at(&path).unwrap();
+        assert_eq!(loaded.hosts()[0].ssh_alias, "dev");
+        let migrated: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(migrated["schemaVersion"], REMOTE_HOSTS_SCHEMA_VERSION);
+        assert!(migrated["hosts"][0].get("label").is_none());
     }
 
     #[test]
