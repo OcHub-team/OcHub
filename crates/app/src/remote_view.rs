@@ -84,7 +84,6 @@ enum ProbeState {
 #[derive(Clone)]
 struct NodeProbe {
     state: ProbeState,
-    hostname: Option<String>,
     version: Option<String>,
     platform: Option<String>,
     quick_update_supported: bool,
@@ -95,7 +94,6 @@ impl NodeProbe {
     fn checking() -> Self {
         Self {
             state: ProbeState::Checking,
-            hostname: None,
             version: None,
             platform: None,
             quick_update_supported: false,
@@ -107,7 +105,6 @@ impl NodeProbe {
         let handshake = client.handshake();
         Self {
             state: ProbeState::Online,
-            hostname: Some(handshake.node.hostname.clone()),
             version: Some(handshake.server_version.clone()),
             platform: Some(format!("{} · {}", handshake.node.os, handshake.node.arch)),
             quick_update_supported: handshake.capabilities.contains(&Capability::NodeUpdateRead),
@@ -118,7 +115,6 @@ impl NodeProbe {
     fn offline(error: &crate::remote::RemoteClientError) -> Self {
         Self {
             state: ProbeState::Offline,
-            hostname: None,
             version: None,
             platform: None,
             quick_update_supported: false,
@@ -276,7 +272,6 @@ pub(crate) struct RemoteScopeItem {
 pub(crate) enum RemoteEvent {
     ConnectionChanged { id: String, connected: bool },
     ManageRequested { id: String },
-    NodeNamesChanged,
 }
 
 pub struct RemoteView {
@@ -364,9 +359,8 @@ impl RemoteView {
             status,
             status_level,
         };
-        // Saved connections no longer carry a second, local display name.
-        // Probe immediately so every workspace surface can use the hostname
-        // reported by OCH, even before the Remote page is opened.
+        // Probe immediately so connection health and version details are
+        // available even before the Remote page is opened.
         this.probe_nodes(cx);
         this
     }
@@ -401,25 +395,9 @@ impl RemoteView {
             .iter()
             .map(|host| RemoteScopeItem {
                 id: host.id.clone(),
-                name: self.node_name(host),
+                name: configured_node_name(host),
             })
             .collect()
-    }
-
-    fn node_name(&self, host: &RemoteHost) -> String {
-        self.client
-            .as_ref()
-            .filter(|client| client.host().id == host.id)
-            .map(|client| client.handshake().node.hostname.clone())
-            .or_else(|| {
-                self.node_probes
-                    .get(&host.id)
-                    .and_then(|probe| probe.hostname.clone())
-            })
-            // A live OCH handshake is not available while a connection is
-            // being added or is unreachable. The SSH target is a transient UI
-            // fallback, not a separately persisted display name.
-            .unwrap_or_else(|| host.ssh_alias.clone())
     }
 
     pub(crate) fn backend_for_scope(&self, id: &str) -> Option<WorkspaceBackend> {
@@ -683,7 +661,6 @@ impl RemoteView {
                 for (id, probe) in results {
                     this.node_probes.insert(id, probe);
                 }
-                cx.emit(RemoteEvent::NodeNamesChanged);
                 cx.notify();
             })
             .ok();
@@ -739,7 +716,7 @@ impl RemoteView {
                 match result {
                     Ok((client, backend, snapshot)) => {
                         let node_id = client.handshake().node.id.clone();
-                        let node_name = client.handshake().node.hostname.clone();
+                        let node_name = configured_node_name(client.host());
                         let host_id = client.host().id.clone();
                         let probe = NodeProbe::online(&client);
                         this.client = Some(client);
@@ -774,7 +751,6 @@ impl RemoteView {
                                 id.clone(),
                                 NodeProbe {
                                     state: ProbeState::Offline,
-                                    hostname: None,
                                     version: None,
                                     platform: None,
                                     quick_update_supported: false,
@@ -1678,7 +1654,7 @@ impl RemoteView {
         let Some((host, issue)) = self.issue_dialog.as_ref() else {
             return div();
         };
-        let node_name = self.node_name(host);
+        let node_name = configured_node_name(host);
         let close_footer =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_issue_details(cx));
         let close_icon =
@@ -1826,7 +1802,7 @@ impl RemoteView {
         let Some(dialog) = self.bootstrap_dialog.as_ref() else {
             return div();
         };
-        let node_name = self.node_name(&dialog.host);
+        let node_name = configured_node_name(&dialog.host);
         let close_header =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_node_bootstrap(cx));
         let close_done =
@@ -2062,7 +2038,7 @@ impl RemoteView {
         let Some(dialog) = self.update_dialog.as_ref() else {
             return div();
         };
-        let node_name = self.node_name(&dialog.host);
+        let node_name = configured_node_name(&dialog.host);
         let close = cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_node_update(cx));
         let install =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.install_node_update(cx));
@@ -2963,7 +2939,7 @@ impl RemoteView {
             .iter()
             .map(|host| {
                 let id = host.id.clone();
-                let node_name = self.node_name(host);
+                let node_name = configured_node_name(host);
                 let connected = self.selected_id.as_deref() == Some(host.id.as_str())
                     && self.connection_state == ConnectionState::Connected;
                 let probe = self.node_probes.get(&host.id);
@@ -3312,6 +3288,10 @@ impl gpui::Render for RemoteView {
     }
 }
 
+fn configured_node_name(host: &RemoteHost) -> String {
+    host.ssh_alias.clone()
+}
+
 fn format_update_size(bytes: u64) -> String {
     const MIB: f64 = 1024.0 * 1024.0;
     if bytes >= 1024 * 1024 {
@@ -3441,6 +3421,23 @@ mod node_update_tests {
     use ochub_core::services::update::headless::{HeadlessPlatformEntry, HeadlessUpdateManifest};
 
     use super::*;
+
+    #[test]
+    fn configured_node_name_uses_the_saved_ssh_alias() {
+        let host = RemoteHost {
+            id: "node-id".to_string(),
+            ssh_alias: "production-node".to_string(),
+            hostname: Some("192.0.2.10".to_string()),
+            port: Some(22),
+            remote_node_id: None,
+            host_key_fingerprint: None,
+            ochcli_path: "ochcli".to_string(),
+            tags: Vec::new(),
+            last_seen_at: None,
+        };
+
+        assert_eq!(configured_node_name(&host), "production-node");
+    }
 
     #[test]
     fn automatic_updates_prefer_the_observable_relay_route() {

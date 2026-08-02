@@ -1055,10 +1055,6 @@ impl AppRoot {
         )
         .detach();
         cx.subscribe(&this.remote_view, |this, view, event, cx| {
-            if matches!(event, RemoteEvent::NodeNamesChanged) {
-                cx.notify();
-                return;
-            }
             if let RemoteEvent::ManageRequested { id } = event {
                 this.select_remote_scope(id.clone(), cx);
                 return;
