@@ -253,6 +253,10 @@ fn validate_signature(value: &str) -> Result<(), RemoteClientError> {
     Ok(())
 }
 
+// This is the transport boundary for a relayed update: keeping the validated
+// release metadata and the two progress controls explicit makes call-site
+// mistakes harder to hide inside a loosely typed options bag.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn relay_node_update(
     host: &RemoteHost,
     node_id: &str,

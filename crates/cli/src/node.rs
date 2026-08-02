@@ -644,11 +644,9 @@ fn stage_version(
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&staging, fs::Permissions::from_mode(0o755))?;
     }
-    if verify_executable {
-        if let Err(error) = verify_staged_executable(&staging, version) {
-            let _ = fs::remove_file(&staging);
-            return Err(error);
-        }
+    if verify_executable && let Err(error) = verify_staged_executable(&staging, version) {
+        let _ = fs::remove_file(&staging);
+        return Err(error);
     }
     if let Err(error) = fs::rename(&staging, &destination) {
         let _ = fs::remove_file(&staging);
@@ -724,19 +722,18 @@ fn garbage_collect_managed_root(root: &Path) -> Result<(), CliError> {
     }
     if root == managed_root()
         && let Some(parent) = command_link().parent()
+        && parent.is_dir()
     {
-        if parent.is_dir() {
-            for entry in fs::read_dir(parent)? {
-                let entry = entry?;
-                if entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name.starts_with(".ochcli-"))
-                {
-                    let metadata = fs::symlink_metadata(entry.path())?;
-                    if metadata.file_type().is_symlink() || metadata.is_file() {
-                        fs::remove_file(entry.path())?;
-                    }
+        for entry in fs::read_dir(parent)? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(".ochcli-"))
+            {
+                let metadata = fs::symlink_metadata(entry.path())?;
+                if metadata.file_type().is_symlink() || metadata.is_file() {
+                    fs::remove_file(entry.path())?;
                 }
             }
         }
@@ -748,6 +745,7 @@ fn acquire_update_lock(root: &Path) -> Result<File, CliError> {
     fs::create_dir_all(root)?;
     let lock = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(root.join(".update.lock"))?;
