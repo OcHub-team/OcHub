@@ -1880,6 +1880,10 @@ pub enum StationCommand {
     Probe {
         id: String,
     },
+    /// Query New API or Sub2API quota with the station's saved API key.
+    Quota {
+        id: String,
+    },
     Models {
         id: String,
     },

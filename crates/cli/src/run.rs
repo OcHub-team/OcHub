@@ -4351,6 +4351,10 @@ async fn run_station(
             require_online(cli, "gateway station probe")?;
             output.success(&application.probe_gateway_station(id).await?, &[])
         }
+        StationCommand::Quota { id } => {
+            require_online(cli, "gateway station quota query")?;
+            output.success(&application.gateway_station_key_quota(id).await?, &[])
+        }
         StationCommand::Models { id } => {
             output.success(&application.gateway_station_models(id)?, &[])
         }

@@ -246,6 +246,22 @@ pub async fn query_usage(
         .and_then(|s| s.template_type.as_deref())
         .unwrap_or("");
 
+    // Official login providers use credentials owned by their CLI instead of
+    // a provider API key. Keep this native route independent of usage_script:
+    // seeded official cards have no script metadata, and a user should not
+    // need to configure one merely to read the account's remaining percent.
+    if provider.category.as_deref() == Some("official")
+        && matches!(
+            app_type,
+            AppType::Claude | AppType::Codex | AppType::KimiCode | AppType::GrokBuild
+        )
+    {
+        let quota = crate::services::subscription::get_subscription_quota(app_type.as_str())
+            .await
+            .map_err(|e| AppError::Message(format!("Failed to query subscription quota: {e}")))?;
+        return Ok(subscription_quota_to_usage_result(quota, false));
+    }
+
     if template_type == TEMPLATE_TYPE_GITHUB_COPILOT {
         let account_id = provider
             .meta

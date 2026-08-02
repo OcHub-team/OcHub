@@ -2906,6 +2906,7 @@ fn argv_for_request(request: &RequestFrame) -> Result<Vec<String>, String> {
         methods::STATION_GET
         | methods::STATION_DELETE
         | methods::STATION_PROBE
+        | methods::STATION_QUOTA
         | methods::STATION_MODELS => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2919,6 +2920,7 @@ fn argv_for_request(request: &RequestFrame) -> Result<Vec<String>, String> {
                 methods::STATION_GET => "show",
                 methods::STATION_DELETE => "delete",
                 methods::STATION_PROBE => "probe",
+                methods::STATION_QUOTA => "quota",
                 methods::STATION_MODELS => "models",
                 _ => unreachable!(),
             };
@@ -3685,6 +3687,7 @@ fn required_capability(method: &str) -> Option<Capability> {
             Some(Capability::StationRead)
         }
         methods::STATION_PROBE
+        | methods::STATION_QUOTA
         | methods::STATION_DETECT_DIALECTS
         | methods::STATION_FETCH_MODELS
         | methods::STATION_TEST_ENDPOINT => Some(Capability::StationNetwork),
@@ -4144,6 +4147,14 @@ mod tests {
             ))
             .unwrap(),
             vec!["station", "disable", "station-1"]
+        );
+        assert_eq!(
+            argv_for_request(&request(
+                methods::STATION_QUOTA,
+                json!({"stationId": "station-1"})
+            ))
+            .unwrap(),
+            vec!["station", "quota", "station-1"]
         );
         assert_eq!(
             argv_for_request(&request(

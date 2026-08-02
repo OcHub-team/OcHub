@@ -2017,7 +2017,11 @@ impl ProviderEditor {
         self.source == ProviderSource::Direct
             && matches!(
                 self.app_type,
-                AppType::Claude | AppType::ClaudeDesktop | AppType::Codex
+                AppType::Claude
+                    | AppType::ClaudeDesktop
+                    | AppType::Codex
+                    | AppType::KimiCode
+                    | AppType::GrokBuild
             )
             && self.category.read(cx).content().trim() == "official"
     }
@@ -3639,7 +3643,10 @@ impl ProviderEditor {
         let Some(section) = self.schema.get(section_index) else {
             return gpui::Empty.into_any_element();
         };
-        if official_login && section.title == "端点与鉴权" {
+        if official_login
+            && (section.title == "端点与鉴权"
+                || (self.app_type == AppType::KimiCode && section_index == 0))
+        {
             return self.render_official_auth_section();
         }
 

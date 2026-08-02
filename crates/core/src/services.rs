@@ -13,6 +13,7 @@ pub mod codex_oauth_models;
 pub mod coding_plan;
 pub mod config;
 pub mod env;
+pub mod key_quota;
 pub mod mcp;
 pub mod model_fetch;
 pub mod network_proxy;

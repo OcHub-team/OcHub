@@ -133,6 +133,7 @@ pub mod methods {
     pub const STATION_DELETE: &str = "station.delete";
     pub const STATION_SET_ENABLED: &str = "station.setEnabled";
     pub const STATION_PROBE: &str = "station.probe";
+    pub const STATION_QUOTA: &str = "station.quota";
     pub const STATION_MODELS: &str = "station.models";
     pub const STATION_DETECT_DIALECTS: &str = "station.detectDialects";
     pub const STATION_FETCH_MODELS: &str = "station.fetchModels";

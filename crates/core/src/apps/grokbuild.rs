@@ -159,7 +159,9 @@ pub fn read_grok_live_settings() -> Result<Value, AppError> {
         return Err(AppError::Config("Grok Build 配置文件不存在".into()));
     }
     let config = fs::read_to_string(&path).map_err(|error| AppError::io(&path, error))?;
-    validate_config_toml(&config)?;
+    // The official xAI OAuth profile intentionally uses an empty config and
+    // lets Grok Build supply its built-in model catalogue.
+    validate_config_toml_syntax(&config)?;
     Ok(json!({ "config": config }))
 }
 
@@ -169,7 +171,11 @@ pub fn write_grok_provider_live(provider: &Provider) -> Result<(), AppError> {
         .get("config")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::Config("Grok Build 配置缺少 config 字段".into()))?;
-    validate_config_toml(config)?;
+    if provider.category.as_deref() == Some("official") {
+        validate_config_toml_syntax(config)?;
+    } else {
+        validate_config_toml(config)?;
+    }
     crate::paths::write_text_file(&get_grok_config_path(), config)
 }
 

@@ -10,6 +10,8 @@
 use crate::app_type::AppType;
 
 pub(crate) const CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID: &str = "claude-desktop-official";
+pub(crate) const GROKBUILD_OFFICIAL_PROVIDER_ID: &str = "grokbuild-official";
+pub(crate) const KIMI_CODE_OFFICIAL_PROVIDER_ID: &str = "kimi-code-official";
 
 /// 单条官方供应商种子定义。
 pub(crate) struct OfficialProviderSeed {
@@ -23,7 +25,7 @@ pub(crate) struct OfficialProviderSeed {
     pub settings_config_json: &'static str,
 }
 
-/// Claude / Claude Desktop / Codex 的官方预设。
+/// Claude / Claude Desktop / Codex / Kimi Code / Grok Build 的官方预设。
 ///
 /// id 固定，便于幂等检查；name 直接用英文原名（与前端预设一致），不做 i18n。
 pub(crate) const OFFICIAL_SEEDS: &[OfficialProviderSeed] = &[
@@ -57,6 +59,42 @@ pub(crate) const OFFICIAL_SEEDS: &[OfficialProviderSeed] = &[
         // 空 auth + 空 config 让用户走 ChatGPT Plus/Pro OAuth
         settings_config_json: r#"{"auth":{},"config":""}"#,
     },
+    OfficialProviderSeed {
+        id: KIMI_CODE_OFFICIAL_PROVIDER_ID,
+        app_type: AppType::KimiCode,
+        name: "Kimi Code Official",
+        website_url: "https://www.kimi.com/code/",
+        icon: "kimi-code",
+        icon_color: "#4F46E5",
+        // OAuth token lives in credentials/kimi-code.json. This snapshot only
+        // restores the managed provider/model references used by Kimi Code.
+        settings_config_json: r#"{
+            "default_model":"kimi-code/k3",
+            "providers":{"managed:kimi-code":{
+                "type":"kimi",
+                "api_key":"",
+                "base_url":"https://api.kimi.com/coding/v1",
+                "oauth":{"storage":"file","key":"oauth/kimi-code"}
+            }},
+            "models":{"kimi-code/k3":{
+                "provider":"managed:kimi-code",
+                "model":"k3",
+                "max_context_size":1048576,
+                "capabilities":["thinking","always_thinking","image_in","video_in","tool_use"],
+                "display_name":"K3"
+            }}
+        }"#,
+    },
+    OfficialProviderSeed {
+        id: GROKBUILD_OFFICIAL_PROVIDER_ID,
+        app_type: AppType::GrokBuild,
+        name: "Grok Official",
+        website_url: "https://x.ai/grok",
+        icon: "grok",
+        icon_color: "currentColor",
+        // Empty config makes Grok Build use its built-in models and xAI OAuth.
+        settings_config_json: r#"{"config":""}"#,
+    },
 ];
 
 /// 判断给定的 provider id 是否属于内置官方种子。
@@ -79,5 +117,22 @@ mod tests {
 
         assert_eq!(seed.app_type, AppType::ClaudeDesktop);
         assert!(is_official_seed_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID));
+    }
+
+    #[test]
+    fn official_seeds_include_kimi_and_grok() {
+        let kimi = OFFICIAL_SEEDS
+            .iter()
+            .find(|seed| seed.id == KIMI_CODE_OFFICIAL_PROVIDER_ID)
+            .expect("Kimi Code official seed");
+        assert_eq!(kimi.app_type, AppType::KimiCode);
+        assert!(is_official_seed_id(KIMI_CODE_OFFICIAL_PROVIDER_ID));
+
+        let grok = OFFICIAL_SEEDS
+            .iter()
+            .find(|seed| seed.id == GROKBUILD_OFFICIAL_PROVIDER_ID)
+            .expect("Grok Build official seed");
+        assert_eq!(grok.app_type, AppType::GrokBuild);
+        assert_eq!(grok.settings_config_json, r#"{"config":""}"#);
     }
 }

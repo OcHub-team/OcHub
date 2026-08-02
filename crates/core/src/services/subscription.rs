@@ -4,6 +4,7 @@
 //! 第一层：仅读取凭据，不实现登录/刷新。
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::paths as config;
@@ -304,6 +305,9 @@ pub const TIER_SEVEN_DAY_SONNET: &str = "seven_day_sonnet";
 /// Coding Plan（Kimi / MiniMax）的周窗口 tier 名。与 `coding_plan::query_*`
 /// 写入、tray 渲染、commands::provider 扁平化三处共用同一标识。
 pub const TIER_WEEKLY_LIMIT: &str = "weekly_limit";
+
+/// Grok Build 新版积分系统的月窗口 tier 名。
+pub const TIER_MONTHLY_LIMIT: &str = "monthly_limit";
 
 const KNOWN_TIERS: &[&str] = &[
     TIER_FIVE_HOUR,
@@ -735,6 +739,413 @@ pub(crate) async fn query_codex_quota(
     }
 }
 
+// ── Kimi Code 凭据与额度 ──────────────────────────────────
+
+#[derive(Deserialize)]
+struct KimiOAuthCredentials {
+    access_token: Option<String>,
+    expires_at: Option<f64>,
+}
+
+fn read_kimi_credentials() -> (Option<String>, CredentialStatus, Option<String>) {
+    let path = crate::apps::kimi_code::get_kimi_code_config_dir()
+        .join("credentials")
+        .join("kimi-code.json");
+    if !path.exists() {
+        return (None, CredentialStatus::NotFound, None);
+    }
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                None,
+                CredentialStatus::ParseError,
+                Some(format!("Failed to read Kimi Code credentials: {error}")),
+            );
+        }
+    };
+    let credentials: KimiOAuthCredentials = match serde_json::from_str(&content) {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return (
+                None,
+                CredentialStatus::ParseError,
+                Some(format!("Failed to parse Kimi Code credentials: {error}")),
+            );
+        }
+    };
+    let Some(token) = credentials
+        .access_token
+        .filter(|token| !token.trim().is_empty())
+    else {
+        return (
+            None,
+            CredentialStatus::ParseError,
+            Some("Kimi Code access_token is empty or missing".to_string()),
+        );
+    };
+    let expired = credentials
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now_seconds_f64());
+    if expired {
+        return (
+            Some(token),
+            CredentialStatus::Expired,
+            Some("Kimi Code OAuth token has expired. Please run `kimi login`.".to_string()),
+        );
+    }
+    (Some(token), CredentialStatus::Valid, None)
+}
+
+fn json_f64(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+}
+
+fn quota_utilization(limit: f64, remaining: f64) -> f64 {
+    if limit <= 0.0 {
+        return 0.0;
+    }
+    ((limit - remaining).max(0.0) / limit * 100.0).clamp(0.0, 100.0)
+}
+
+fn quota_reset_time(value: &Value) -> Option<String> {
+    if let Some(value) = value.as_str() {
+        return Some(value.to_string());
+    }
+    let timestamp = value.as_i64()?;
+    let millis = if timestamp < 1_000_000_000_000 {
+        timestamp * 1_000
+    } else {
+        timestamp
+    };
+    chrono::DateTime::from_timestamp_millis(millis).map(|time| time.to_rfc3339())
+}
+
+fn kimi_quota_from_body(body: &Value) -> SubscriptionQuota {
+    let mut tiers = Vec::new();
+    if let Some(limits) = body.get("limits").and_then(Value::as_array) {
+        for item in limits {
+            let detail = item.get("detail").unwrap_or(item);
+            let Some(limit) = detail.get("limit").and_then(json_f64) else {
+                continue;
+            };
+            let remaining = detail.get("remaining").and_then(json_f64).unwrap_or(0.0);
+            tiers.push(QuotaTier {
+                name: TIER_FIVE_HOUR.to_string(),
+                utilization: quota_utilization(limit, remaining),
+                resets_at: detail.get("resetTime").and_then(quota_reset_time),
+                used_value_usd: None,
+                max_value_usd: None,
+            });
+        }
+    }
+    if let Some(usage) = body.get("usage")
+        && let Some(limit) = usage.get("limit").and_then(json_f64)
+    {
+        let remaining = usage.get("remaining").and_then(json_f64).unwrap_or(0.0);
+        tiers.push(QuotaTier {
+            name: TIER_WEEKLY_LIMIT.to_string(),
+            utilization: quota_utilization(limit, remaining),
+            resets_at: usage.get("resetTime").and_then(quota_reset_time),
+            used_value_usd: None,
+            max_value_usd: None,
+        });
+    }
+
+    SubscriptionQuota {
+        tool: "kimi-code".to_string(),
+        credential_status: CredentialStatus::Valid,
+        credential_message: None,
+        success: true,
+        tiers,
+        extra_usage: None,
+        error: None,
+        queried_at: Some(now_millis()),
+    }
+}
+
+async fn query_kimi_quota(access_token: &str) -> SubscriptionQuota {
+    let response = crate::http_client::get()
+        .get("https://api.kimi.com/coding/v1/usages")
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            return SubscriptionQuota::error(
+                "kimi-code",
+                CredentialStatus::Valid,
+                format!("Network error: {error}"),
+            );
+        }
+    };
+    let status = response.status();
+    if matches!(
+        status,
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+    ) {
+        return SubscriptionQuota::error(
+            "kimi-code",
+            CredentialStatus::Expired,
+            format!("Authentication failed (HTTP {status}). Please run `kimi login`."),
+        );
+    }
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return SubscriptionQuota::error(
+            "kimi-code",
+            CredentialStatus::Valid,
+            format!("API error (HTTP {status}): {body}"),
+        );
+    }
+    match response.json::<Value>().await {
+        Ok(body) => kimi_quota_from_body(&body),
+        Err(error) => SubscriptionQuota::error(
+            "kimi-code",
+            CredentialStatus::Valid,
+            format!("Failed to parse API response: {error}"),
+        ),
+    }
+}
+
+// ── Grok Build 凭据与额度 ─────────────────────────────────
+
+#[derive(Deserialize)]
+struct GrokOAuthCredentials {
+    key: Option<String>,
+    user_id: Option<String>,
+    auth_mode: Option<String>,
+    expires_at: Option<String>,
+    oidc_issuer: Option<String>,
+}
+
+type GrokCredentials = (
+    Option<String>,
+    Option<String>,
+    CredentialStatus,
+    Option<String>,
+);
+
+fn read_grok_credentials() -> GrokCredentials {
+    let path = crate::apps::grokbuild::get_grok_config_dir().join("auth.json");
+    if !path.exists() {
+        return (None, None, CredentialStatus::NotFound, None);
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                None,
+                None,
+                CredentialStatus::ParseError,
+                Some(format!("Failed to read Grok auth file: {error}")),
+            );
+        }
+    };
+    let store: serde_json::Map<String, Value> = match serde_json::from_str(&content) {
+        Ok(store) => store,
+        Err(error) => {
+            return (
+                None,
+                None,
+                CredentialStatus::ParseError,
+                Some(format!("Failed to parse Grok auth JSON: {error}")),
+            );
+        }
+    };
+
+    let candidate = store
+        .iter()
+        .filter_map(|(scope, value)| {
+            let credentials = serde_json::from_value::<GrokOAuthCredentials>(value.clone()).ok()?;
+            let mode = credentials.auth_mode.as_deref()?.to_ascii_lowercase();
+            if mode == "api_key" || mode == "apikey" {
+                return None;
+            }
+            let first_party_scope = scope.starts_with("https://auth.x.ai::");
+            let first_party_issuer = credentials
+                .oidc_issuer
+                .as_deref()
+                .is_some_and(|issuer| issuer.trim_end_matches('/') == "https://auth.x.ai");
+            (first_party_scope || first_party_issuer).then_some(credentials)
+        })
+        .next();
+    let Some(credentials) = candidate else {
+        return (
+            None,
+            None,
+            CredentialStatus::NotFound,
+            Some("Grok Build is not using an xAI OAuth login".to_string()),
+        );
+    };
+    let Some(token) = credentials.key.filter(|token| !token.trim().is_empty()) else {
+        return (
+            None,
+            None,
+            CredentialStatus::ParseError,
+            Some("Grok OAuth token is empty or missing".to_string()),
+        );
+    };
+    let Some(user_id) = credentials
+        .user_id
+        .filter(|user_id| !user_id.trim().is_empty())
+    else {
+        return (
+            Some(token),
+            None,
+            CredentialStatus::ParseError,
+            Some("Grok OAuth user_id is empty or missing".to_string()),
+        );
+    };
+    let expired = credentials
+        .expires_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|expires_at| expires_at <= chrono::Utc::now());
+    if expired {
+        return (
+            Some(token),
+            Some(user_id),
+            CredentialStatus::Expired,
+            Some("Grok OAuth token has expired. Please run `grok login`.".to_string()),
+        );
+    }
+    (Some(token), Some(user_id), CredentialStatus::Valid, None)
+}
+
+fn grok_quota_from_body(body: &Value) -> SubscriptionQuota {
+    let Some(config) = body.get("config").and_then(Value::as_object) else {
+        return SubscriptionQuota::error(
+            "grokbuild",
+            CredentialStatus::Valid,
+            "Grok billing response did not include quota data".to_string(),
+        );
+    };
+    let utilization = config
+        .get("creditUsagePercent")
+        .and_then(json_f64)
+        .or_else(|| {
+            let limit = config
+                .get("monthlyLimit")
+                .and_then(|value| value.get("val"))
+                .and_then(json_f64)?;
+            let used = config
+                .get("used")
+                .and_then(|value| value.get("val"))
+                .and_then(json_f64)?;
+            (limit > 0.0).then_some((used / limit * 100.0).clamp(0.0, 100.0))
+        });
+    let Some(utilization) = utilization else {
+        return SubscriptionQuota::error(
+            "grokbuild",
+            CredentialStatus::Valid,
+            "Grok billing response did not include a usage percentage".to_string(),
+        );
+    };
+    let current_period = config.get("currentPeriod");
+    let period_type = current_period
+        .and_then(|period| period.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let name = if period_type.contains("WEEKLY") {
+        TIER_WEEKLY_LIMIT
+    } else if period_type.contains("MONTHLY") {
+        TIER_MONTHLY_LIMIT
+    } else {
+        "billing_period"
+    };
+    let resets_at = current_period
+        .and_then(|period| period.get("end"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            config
+                .get("billingPeriodEnd")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        });
+
+    SubscriptionQuota {
+        tool: "grokbuild".to_string(),
+        credential_status: CredentialStatus::Valid,
+        credential_message: body
+            .get("subscriptionTier")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        success: true,
+        tiers: vec![QuotaTier {
+            name: name.to_string(),
+            utilization: utilization.clamp(0.0, 100.0),
+            resets_at,
+            used_value_usd: None,
+            max_value_usd: None,
+        }],
+        extra_usage: None,
+        error: None,
+        queried_at: Some(now_millis()),
+    }
+}
+
+async fn query_grok_quota(access_token: &str, user_id: &str) -> SubscriptionQuota {
+    let base = std::env::var("GROK_CLI_CHAT_PROXY_BASE_URL")
+        .unwrap_or_else(|_| "https://cli-chat-proxy.grok.com/v1".to_string());
+    let url = format!("{}/billing?format=credits", base.trim_end_matches('/'));
+    let response = crate::http_client::get()
+        .get(url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("X-XAI-Token-Auth", "xai-grok-cli")
+        .header("x-userid", user_id)
+        .header("x-grok-client-version", env!("CARGO_PKG_VERSION"))
+        .header("User-Agent", "grok-cli")
+        .header("Accept", "application/json")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            return SubscriptionQuota::error(
+                "grokbuild",
+                CredentialStatus::Valid,
+                format!("Network error: {error}"),
+            );
+        }
+    };
+    let status = response.status();
+    if matches!(
+        status,
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+    ) {
+        return SubscriptionQuota::error(
+            "grokbuild",
+            CredentialStatus::Expired,
+            format!("Authentication failed (HTTP {status}). Please run `grok login`."),
+        );
+    }
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return SubscriptionQuota::error(
+            "grokbuild",
+            CredentialStatus::Valid,
+            format!("API error (HTTP {status}): {body}"),
+        );
+    }
+    match response.json::<Value>().await {
+        Ok(body) => grok_quota_from_body(&body),
+        Err(error) => SubscriptionQuota::error(
+            "grokbuild",
+            CredentialStatus::Valid,
+            format!("Failed to parse API response: {error}"),
+        ),
+    }
+}
+
 // ── 入口函数 ──────────────────────────────────────────────
 
 /// 查询指定 CLI 工具的官方订阅额度
@@ -812,6 +1223,50 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                 }
             }
         }
+        "kimi" | "kimi-code" => {
+            let (token, status, message) = read_kimi_credentials();
+            query_token_quota("kimi-code", token, status, message, |token| async move {
+                query_kimi_quota(&token).await
+            })
+            .await
+        }
+        "grok" | "grokbuild" => {
+            let (token, user_id, status, message) = read_grok_credentials();
+            match status {
+                CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found("grokbuild")),
+                CredentialStatus::ParseError => Ok(SubscriptionQuota::error(
+                    "grokbuild",
+                    CredentialStatus::ParseError,
+                    message.unwrap_or_else(|| "Failed to parse Grok credentials".to_string()),
+                )),
+                CredentialStatus::Expired | CredentialStatus::Valid => {
+                    let Some(token) = token else {
+                        return Ok(SubscriptionQuota::error(
+                            "grokbuild",
+                            CredentialStatus::ParseError,
+                            "Grok OAuth token is missing".to_string(),
+                        ));
+                    };
+                    let Some(user_id) = user_id else {
+                        return Ok(SubscriptionQuota::error(
+                            "grokbuild",
+                            CredentialStatus::ParseError,
+                            "Grok OAuth user_id is missing".to_string(),
+                        ));
+                    };
+                    let result = query_grok_quota(&token, &user_id).await;
+                    if result.success || matches!(status, CredentialStatus::Valid) {
+                        Ok(result)
+                    } else {
+                        Ok(SubscriptionQuota::error(
+                            "grokbuild",
+                            CredentialStatus::Expired,
+                            message.unwrap_or_else(|| "Grok OAuth token has expired".to_string()),
+                        ))
+                    }
+                }
+            }
+        }
         _ => Ok(SubscriptionQuota::not_found(tool)),
     }
 }
@@ -823,4 +1278,105 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn now_seconds_f64() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+async fn query_token_quota<F, Fut>(
+    tool: &str,
+    token: Option<String>,
+    status: CredentialStatus,
+    message: Option<String>,
+    query: F,
+) -> Result<SubscriptionQuota, String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = SubscriptionQuota>,
+{
+    match status {
+        CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found(tool)),
+        CredentialStatus::ParseError => Ok(SubscriptionQuota::error(
+            tool,
+            CredentialStatus::ParseError,
+            message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
+        )),
+        CredentialStatus::Expired | CredentialStatus::Valid => {
+            let Some(token) = token else {
+                return Ok(SubscriptionQuota::error(
+                    tool,
+                    CredentialStatus::ParseError,
+                    "OAuth token is missing".to_string(),
+                ));
+            };
+            let result = query(token).await;
+            if result.success || matches!(status, CredentialStatus::Valid) {
+                Ok(result)
+            } else {
+                Ok(SubscriptionQuota::error(
+                    tool,
+                    CredentialStatus::Expired,
+                    message.unwrap_or_else(|| "OAuth token has expired".to_string()),
+                ))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod official_quota_tests {
+    use super::{
+        TIER_MONTHLY_LIMIT, TIER_WEEKLY_LIMIT, grok_quota_from_body, kimi_quota_from_body,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn kimi_usage_is_converted_to_used_percentages() {
+        let quota = kimi_quota_from_body(&json!({
+            "limits": [{
+                "detail": {"limit": 1000, "remaining": 750, "resetTime": 2_000_000_000}
+            }],
+            "usage": {"limit": "4000", "remaining": "1000", "resetTime": "2026-08-09T00:00:00Z"}
+        }));
+        assert!(quota.success);
+        assert_eq!(quota.tiers.len(), 2);
+        assert_eq!(quota.tiers[0].utilization, 25.0);
+        assert_eq!(quota.tiers[1].name, TIER_WEEKLY_LIMIT);
+        assert_eq!(quota.tiers[1].utilization, 75.0);
+    }
+
+    #[test]
+    fn grok_credit_usage_percent_and_period_are_parsed() {
+        let quota = grok_quota_from_body(&json!({
+            "config": {
+                "creditUsagePercent": 37.5,
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_MONTHLY",
+                    "end": "2026-09-01T00:00:00Z"
+                }
+            },
+            "subscriptionTier": "SuperGrok"
+        }));
+        assert!(quota.success);
+        assert_eq!(quota.tiers[0].name, TIER_MONTHLY_LIMIT);
+        assert_eq!(quota.tiers[0].utilization, 37.5);
+        assert_eq!(quota.credential_message.as_deref(), Some("SuperGrok"));
+    }
+
+    #[test]
+    fn grok_legacy_monthly_limit_is_supported() {
+        let quota = grok_quota_from_body(&json!({
+            "config": {
+                "monthlyLimit": {"val": 2000},
+                "used": {"val": 500},
+                "billingPeriodEnd": "2026-09-01T00:00:00Z"
+            }
+        }));
+        assert!(quota.success);
+        assert_eq!(quota.tiers[0].utilization, 25.0);
+    }
 }

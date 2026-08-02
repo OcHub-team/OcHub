@@ -2815,6 +2815,28 @@ impl WorkspaceBackend {
         }
     }
 
+    pub(crate) async fn station_quota(
+        &self,
+        station_id: &str,
+    ) -> Result<ochub_core::UsageResult, WorkspaceBackendError> {
+        match self {
+            Self::Local(application) => {
+                Ok(application.gateway_station_key_quota(station_id).await?)
+            }
+            Self::Remote(client) => {
+                client.require_capability(Capability::StationNetwork)?;
+                let response = client
+                    .request(
+                        methods::STATION_QUOTA,
+                        json!({ "stationId": station_id }),
+                        Default::default(),
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
+    }
+
     pub(crate) async fn detect_station_dialects(
         &self,
         url: &str,

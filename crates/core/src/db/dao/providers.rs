@@ -1,3 +1,4 @@
+use crate::app_type::AppType;
 use crate::db::{Database, lock_conn};
 use crate::error::AppError;
 use crate::model::{Provider, ProviderMeta};
@@ -627,6 +628,33 @@ impl Database {
         Ok(inserted)
     }
 
+    /// One-time expansion for official-login providers added after the
+    /// original `official_providers_seeded` flag shipped. Existing databases
+    /// have that flag already, so Kimi Code and Grok Build need their own
+    /// migration marker; after this pass, deleting either seed remains sticky.
+    pub fn init_official_quota_providers(&self) -> Result<usize, AppError> {
+        use crate::db::dao::providers_seed::{
+            GROKBUILD_OFFICIAL_PROVIDER_ID, KIMI_CODE_OFFICIAL_PROVIDER_ID,
+        };
+
+        const FLAG: &str = "official_quota_providers_seeded_v1";
+        if self.get_bool_flag(FLAG).unwrap_or(false) {
+            return Ok(0);
+        }
+
+        let mut inserted = 0;
+        for (id, app_type) in [
+            (KIMI_CODE_OFFICIAL_PROVIDER_ID, AppType::KimiCode),
+            (GROKBUILD_OFFICIAL_PROVIDER_ID, AppType::GrokBuild),
+        ] {
+            if self.ensure_official_seed_by_id(id, app_type)? {
+                inserted += 1;
+            }
+        }
+        self.set_setting(FLAG, "true")?;
+        Ok(inserted)
+    }
+
     /// 按 id 兜底插入单条 official seed（仅当目标表中该 id 不存在时插入）。
     ///
     /// 与 `init_default_official_providers` 不同：
@@ -743,6 +771,26 @@ mod ensure_official_seed_tests {
         assert_eq!(
             after.name, "My Custom Backup",
             "customization must not be overwritten"
+        );
+    }
+
+    #[test]
+    fn late_official_quota_seeds_run_once() {
+        let db = Database::memory().expect("memory db");
+        db.set_setting("official_providers_seeded", "true")
+            .expect("simulate existing database");
+
+        assert_eq!(db.init_official_quota_providers().unwrap(), 2);
+        assert_eq!(db.init_official_quota_providers().unwrap(), 0);
+        assert!(
+            db.get_provider_by_id("kimi-code-official", AppType::KimiCode.as_str())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            db.get_provider_by_id("grokbuild-official", AppType::GrokBuild.as_str())
+                .unwrap()
+                .is_some()
         );
     }
 

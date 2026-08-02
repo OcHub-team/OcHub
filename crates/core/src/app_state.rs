@@ -93,6 +93,14 @@ impl AppState {
             Err(e) => log::warn!("failed to seed official providers: {e}"),
         }
 
+        match self.db.init_official_quota_providers() {
+            Ok(count) if count > 0 => {
+                log::info!("seeded {count} official quota provider(s)")
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("failed to seed official quota providers: {e}"),
+        }
+
         match self.db.backfill_missing_usage_costs() {
             Ok(count) if count > 0 => {
                 log::info!("backfilled historical usage costs for {count} row(s)")

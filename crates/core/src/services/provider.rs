@@ -1180,7 +1180,11 @@ impl ProviderService {
                     .ok_or_else(|| {
                         AppError::Config("Grok Build 配置缺少 config 字段".to_string())
                     })?;
-                crate::apps::grokbuild::validate_config_toml(config)?;
+                if provider.category.as_deref() == Some("official") {
+                    crate::apps::grokbuild::validate_config_toml_syntax(config)?;
+                } else {
+                    crate::apps::grokbuild::validate_config_toml(config)?;
+                }
             }
             AppType::KimiCode => {
                 let settings = provider.settings_config.as_object().ok_or_else(|| {

@@ -11,8 +11,9 @@ use crate::gateway::{
     ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayEndpointTestResult, GatewayKey,
     GatewayModelRule, GatewayReasoningConfig, GatewayRoute, GatewayStatus,
 };
+use crate::services::key_quota;
 use crate::services::provider::{DriftResolution, ProviderService};
-use crate::{AppId, AppType};
+use crate::{AppId, AppType, UsageResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -654,6 +655,28 @@ impl Application {
             );
         }
         Ok(results)
+    }
+
+    /// Query the commercial relay's quota using the same key saved for
+    /// inference. New API and Sub2API are detected from their response shape.
+    pub async fn gateway_station_key_quota(&self, id: &str) -> ApplicationResult<UsageResult> {
+        let station = self.get_gateway_station(id)?;
+        let channel = station
+            .channels
+            .iter()
+            .find(|channel| channel.enabled && !channel.api_key.trim().is_empty())
+            .or_else(|| {
+                station
+                    .channels
+                    .iter()
+                    .find(|channel| !channel.api_key.trim().is_empty())
+            })
+            .ok_or_else(|| {
+                ApplicationError::InvalidInput("station does not have an API key".to_string())
+            })?;
+        key_quota::query_key_quota(&channel.base_url, &channel.api_key)
+            .await
+            .map_err(ApplicationError::InvalidInput)
     }
 
     pub fn gateway_station_models(&self, id: &str) -> ApplicationResult<Vec<String>> {

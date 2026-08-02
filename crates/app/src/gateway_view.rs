@@ -20,7 +20,9 @@ use ochub_core::gateway::types::{
     GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
 };
 use ochub_core::services::provider::ProviderService;
-use ochub_core::{AppState, AppType, ModelProviderImportManifest, prepare_model_provider_import};
+use ochub_core::{
+    AppState, AppType, ModelProviderImportManifest, UsageResult, prepare_model_provider_import,
+};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -439,6 +441,8 @@ pub struct GatewayView {
     connection_loading: bool,
     connection_info: Option<apply::ApplyResult>,
     reveal_connection_key: bool,
+    quota_loading: HashSet<String>,
+    quota_results: HashMap<String, UsageResult>,
     rows: Arc<[GatewayRow]>,
     list_state: ListState,
     enabled_apps: Arc<[AppType]>,
@@ -538,6 +542,8 @@ impl GatewayView {
             connection_loading: false,
             connection_info: None,
             reveal_connection_key: false,
+            quota_loading: HashSet::new(),
+            quota_results: HashMap::new(),
             rows: Arc::from([]),
             list_state: ListState::new(0, ListAlignment::Top, px(640.)),
             enabled_apps: Arc::from([]),
@@ -640,6 +646,8 @@ impl GatewayView {
         self.connection_loading = false;
         self.connection_info = None;
         self.reveal_connection_key = false;
+        self.quota_loading.clear();
+        self.quota_results.clear();
         self.stations.clear();
         self.import_candidates.clear();
         self.installed_station_apps.clear();
@@ -657,6 +665,8 @@ impl GatewayView {
         self.connection_loading = false;
         self.connection_info = None;
         self.reveal_connection_key = false;
+        self.quota_loading.clear();
+        self.quota_results.clear();
         self.reload(cx);
     }
 
@@ -1501,6 +1511,63 @@ impl GatewayView {
         .detach();
     }
 
+    fn query_station_quota(&mut self, route_id: String, cx: &mut Context<Self>) {
+        if self.quota_loading.contains(&route_id) {
+            return;
+        }
+        let station_id = route_id
+            .strip_prefix(apply::STATION_ROUTE_PREFIX)
+            .unwrap_or(&route_id)
+            .to_string();
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        self.quota_loading.insert(route_id.clone());
+        self.quota_results.remove(&route_id);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = backend
+                .station_quota(&station_id)
+                .await
+                .map_err(|error| error.to_string());
+            this.update(cx, |this, cx| {
+                this.quota_loading.remove(&route_id);
+                match result {
+                    Ok(result) if result.success => {
+                        let summary = format_station_quota(&result)
+                            .unwrap_or_else(|| raw(k::GATEWAY_CARD_QUOTA_NO_DATA).to_string());
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::GATEWAY_CARD_QUOTA, quota = summary),
+                            cx,
+                        );
+                        this.quota_results.insert(route_id, result);
+                    }
+                    Ok(result) => {
+                        let error = result
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| raw(k::GATEWAY_CARD_QUOTA_NO_DATA).to_string());
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::GATEWAY_STATUS_QUOTA_FAILED, error = error),
+                            cx,
+                        );
+                        this.quota_results.insert(route_id, result);
+                    }
+                    Err(error) => this.set_status(
+                        NotificationLevel::Error,
+                        tf!(k::GATEWAY_STATUS_QUOTA_FAILED, error = error),
+                        cx,
+                    ),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn request_delete(&mut self, route_id: String, name: String, cx: &mut Context<Self>) {
         let active_apps: Vec<AppType> = self
             .installed_station_apps
@@ -2104,6 +2171,7 @@ impl GatewayView {
         let enabled = station.is_enabled();
         let route_id = station.route.id.clone();
         let route_id_for_toggle = route_id.clone();
+        let route_id_for_quota = route_id.clone();
         let route_id_for_edit = route_id.clone();
         let route_id_for_delete = route_id.clone();
         let station_name = station.route.name.clone();
@@ -2160,6 +2228,11 @@ impl GatewayView {
             .editor
             .as_ref()
             .is_some_and(|editor| editor.route_id == station.route.id);
+        let quota_loading = self.quota_loading.contains(&station.route.id);
+        let quota_summary = self
+            .quota_results
+            .get(&station.route.id)
+            .and_then(format_station_quota);
         components::card()
             .gap_3()
             .when(editing, |panel| panel.opacity(components::DISABLED_OPACITY))
@@ -2242,7 +2315,12 @@ impl GatewayView {
                                     .text_color(theme::subtext())
                                     .text_xs()
                                     .child(SharedString::from(model_summary)),
-                            ),
+                            )
+                            .when_some(quota_summary, |column, quota| {
+                                column.child(div().text_color(theme::accent()).text_xs().child(
+                                    SharedString::from(tf!(k::GATEWAY_CARD_QUOTA, quota = quota)),
+                                ))
+                            }),
                     )
                     .child(
                         div()
@@ -2272,6 +2350,26 @@ impl GatewayView {
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.toggle_station(route_id_for_toggle.clone(), cx);
                                     })),
+                            )
+                            .child(
+                                components::button(
+                                    SharedString::from(format!(
+                                        "station-quota-{}",
+                                        station.route.id
+                                    )),
+                                    if quota_loading {
+                                        t(k::GATEWAY_ACTION_QUERYING_QUOTA)
+                                    } else {
+                                        t(k::GATEWAY_ACTION_QUERY_QUOTA)
+                                    },
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.query_station_quota(route_id_for_quota.clone(), cx);
+                                    },
+                                )),
                             )
                             .child(
                                 components::button(
@@ -3619,6 +3717,43 @@ fn section_title(
 fn masked_secret(secret: &str) -> String {
     let visible = secret.len().min(7);
     format!("{}••••••••", &secret[..visible])
+}
+
+fn format_station_quota(result: &UsageResult) -> Option<String> {
+    if !result.success {
+        return None;
+    }
+    let parts = result
+        .data
+        .as_ref()?
+        .iter()
+        .filter_map(|item| {
+            let name = item.plan_name.as_deref().unwrap_or("");
+            let unlimited = item
+                .extra
+                .as_deref()
+                .and_then(|extra| serde_json::from_str::<serde_json::Value>(extra).ok())
+                .and_then(|extra| extra.get("unlimited").and_then(|value| value.as_bool()))
+                .unwrap_or(false);
+            let value = if unlimited {
+                raw(k::GATEWAY_CARD_QUOTA_UNLIMITED).to_string()
+            } else {
+                let remaining = item.remaining?;
+                match item.unit.as_deref() {
+                    Some("USD") => format!("${remaining:.2}"),
+                    Some(unit) if !unit.is_empty() => format!("{remaining:.2} {unit}"),
+                    _ => format!("{remaining:.2}"),
+                }
+            };
+            Some(if name.is_empty() {
+                value
+            } else {
+                format!("{name} {value}")
+            })
+        })
+        .take(3)
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 fn dialect_label(dialect: Dialect) -> &'static str {
