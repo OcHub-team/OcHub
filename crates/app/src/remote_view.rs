@@ -7,11 +7,12 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::StreamExt as _;
 use gpui::{
     Context, Entity, FontWeight, MouseButton, ScrollHandle, SharedString, Window, div, prelude::*,
-    px,
+    px, relative,
 };
 use ochub_core::application::AppSummary;
 use ochub_protocol::Capability;
@@ -177,11 +178,24 @@ impl NodeBootstrapDialog {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeUpdateStrategy {
     Automatic,
     Direct,
     Relay,
+}
+
+fn resolve_node_update_strategy(
+    requested: NodeUpdateStrategy,
+    direct_download: bool,
+    relay_available: bool,
+) -> NodeUpdateStrategy {
+    match requested {
+        NodeUpdateStrategy::Automatic if relay_available => NodeUpdateStrategy::Relay,
+        NodeUpdateStrategy::Automatic if direct_download => NodeUpdateStrategy::Direct,
+        NodeUpdateStrategy::Automatic => NodeUpdateStrategy::Relay,
+        strategy => strategy,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -189,10 +203,19 @@ enum NodeUpdatePhase {
     Checking,
     Ready,
     Downloading,
+    Uploading,
     Installing,
     Reconnecting,
     Complete,
     Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Copy)]
+struct NodeUpdateProgress {
+    phase: NodeUpdatePhase,
+    done: u64,
+    total: u64,
 }
 
 struct NodeUpdateDialog {
@@ -203,6 +226,9 @@ struct NodeUpdateDialog {
     phase: NodeUpdatePhase,
     result: Option<NodeUpdateInstallResult>,
     error: Option<String>,
+    progress: Option<(u64, u64)>,
+    cancelled: Arc<AtomicBool>,
+    effective_strategy: Option<NodeUpdateStrategy>,
 }
 
 impl NodeUpdateDialog {
@@ -215,6 +241,9 @@ impl NodeUpdateDialog {
             phase: NodeUpdatePhase::Checking,
             result: None,
             error: None,
+            progress: None,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            effective_strategy: None,
         }
     }
 
@@ -223,8 +252,16 @@ impl NodeUpdateDialog {
             self.phase,
             NodeUpdatePhase::Checking
                 | NodeUpdatePhase::Downloading
+                | NodeUpdatePhase::Uploading
                 | NodeUpdatePhase::Installing
                 | NodeUpdatePhase::Reconnecting
+        )
+    }
+
+    fn cancellable(&self) -> bool {
+        matches!(
+            self.phase,
+            NodeUpdatePhase::Checking | NodeUpdatePhase::Downloading | NodeUpdatePhase::Uploading
         )
     }
 }
@@ -813,16 +850,6 @@ impl RemoteView {
         cx.notify();
     }
 
-    fn toggle_host(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.selected_id.as_deref() == Some(id.as_str())
-            && self.connection_state == ConnectionState::Connected
-        {
-            self.disconnect(cx);
-        } else {
-            cx.emit(RemoteEvent::ManageRequested { id });
-        }
-    }
-
     fn open_issue_details(&mut self, id: String, cx: &mut Context<Self>) {
         let Some(host) = self.store.get(&id).cloned() else {
             return;
@@ -1180,6 +1207,16 @@ impl RemoteView {
                 if dialog.host.id != id {
                     return;
                 }
+                if dialog.cancelled.load(Ordering::Relaxed) {
+                    if let Ok((client, _)) = result {
+                        cx.spawn(async move |_this, _cx| {
+                            let _ =
+                                crate::core_async::run(async move { client.close().await }).await;
+                        })
+                        .detach();
+                    }
+                    return;
+                }
                 match result {
                     Ok((client, report)) => {
                         dialog.client = Some(client);
@@ -1239,6 +1276,45 @@ impl RemoteView {
         cx.notify();
     }
 
+    fn cancel_node_update(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.update_dialog.as_mut() else {
+            return;
+        };
+        if !dialog.cancellable() {
+            return;
+        }
+        dialog.cancelled.store(true, Ordering::Relaxed);
+        dialog.phase = NodeUpdatePhase::Cancelled;
+        dialog.progress = None;
+        dialog.error = None;
+
+        let direct = dialog.effective_strategy == Some(NodeUpdateStrategy::Direct);
+        let client = direct.then(|| dialog.client.clone()).flatten();
+        let host_id = dialog.host.id.clone();
+        if self.selected_id.as_deref() == Some(host_id.as_str()) {
+            self.busy = false;
+            if direct {
+                self.client = None;
+                self.backend = None;
+                self.connection_state = ConnectionState::Disconnected;
+                cx.emit(RemoteEvent::ConnectionChanged {
+                    id: host_id,
+                    connected: false,
+                });
+            } else {
+                self.connection_state = ConnectionState::Connected;
+            }
+        }
+        if let Some(client) = client {
+            cx.spawn(async move |_this, _cx| {
+                let _ = crate::core_async::run(async move { client.close().await }).await;
+            })
+            .detach();
+        }
+        self.probe_nodes(cx);
+        cx.notify();
+    }
+
     fn install_node_update(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.update_dialog.as_mut() else {
             return;
@@ -1260,13 +1336,15 @@ impl RemoteView {
             cx.notify();
             return;
         }
-        let strategy = match dialog.strategy {
-            NodeUpdateStrategy::Automatic if report.update.direct_download => {
-                NodeUpdateStrategy::Direct
-            }
-            NodeUpdateStrategy::Automatic => NodeUpdateStrategy::Relay,
-            strategy => strategy,
-        };
+        let relay_available = client
+            .handshake()
+            .capabilities
+            .contains(&Capability::NodeUpdateRelay);
+        let strategy = resolve_node_update_strategy(
+            dialog.strategy,
+            report.update.direct_download,
+            relay_available,
+        );
         let required = match strategy {
             NodeUpdateStrategy::Direct => Capability::NodeUpdateInstall,
             NodeUpdateStrategy::Relay => Capability::NodeUpdateRelay,
@@ -1278,12 +1356,12 @@ impl RemoteView {
             cx.notify();
             return;
         }
-        dialog.phase = if strategy == NodeUpdateStrategy::Relay {
-            NodeUpdatePhase::Downloading
-        } else {
-            NodeUpdatePhase::Installing
-        };
+        dialog.phase = NodeUpdatePhase::Downloading;
+        dialog.progress = None;
+        dialog.cancelled.store(false, Ordering::Relaxed);
+        dialog.effective_strategy = Some(strategy);
         dialog.error = None;
+        let cancelled = dialog.cancelled.clone();
         let host = dialog.host.clone();
         let host_id = host.id.clone();
         let active = self.selected_id.as_deref() == Some(host_id.as_str())
@@ -1293,8 +1371,30 @@ impl RemoteView {
             self.busy = true;
         }
         cx.notify();
+        let (progress_tx, mut progress_rx) =
+            futures::channel::mpsc::unbounded::<NodeUpdateProgress>();
+        let progress_host_id = host_id.clone();
+        cx.spawn(async move |this, cx| {
+            while let Some(progress) = progress_rx.next().await {
+                this.update(cx, |this, cx| {
+                    if let Some(dialog) = this
+                        .update_dialog
+                        .as_mut()
+                        .filter(|dialog| dialog.host.id == progress_host_id)
+                        .filter(|dialog| !dialog.cancelled.load(Ordering::Relaxed))
+                    {
+                        dialog.phase = progress.phase;
+                        dialog.progress = Some((progress.done, progress.total));
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             let install_client = client.clone();
+            let install_cancelled = cancelled.clone();
             let install = crate::core_async::run(async move {
                 match strategy {
                     NodeUpdateStrategy::Direct => {
@@ -1321,10 +1421,28 @@ impl RemoteView {
                                     manifest.version, node.os, node.arch
                                 )
                             })?;
-                        let payload =
-                            ochub_core::services::update::headless::download(entry)
-                                .await
-                                .map_err(|error| error.to_string())?;
+                        let entry_size = entry.size;
+                        let download_progress = progress_tx.clone();
+                        let download_cancelled = install_cancelled.clone();
+                        let payload = ochub_core::services::update::headless::download_with_progress(
+                            entry,
+                            Some(Box::new(move |done, total| {
+                                let _ = download_progress.unbounded_send(NodeUpdateProgress {
+                                    phase: NodeUpdatePhase::Downloading,
+                                    done,
+                                    total: total.unwrap_or(entry_size),
+                                });
+                            })),
+                            Some(Box::new(move || {
+                                download_cancelled.load(Ordering::Relaxed)
+                            })),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                        if install_cancelled.load(Ordering::Relaxed) {
+                            return Err("node update was cancelled".to_string());
+                        }
+                        let upload_progress = progress_tx.clone();
                         let value = relay_node_update(
                             install_client.host(),
                             &node.id,
@@ -1332,6 +1450,18 @@ impl RemoteView {
                             target,
                             entry,
                             &payload,
+                            install_cancelled.clone(),
+                            move |done, total| {
+                                let _ = upload_progress.unbounded_send(NodeUpdateProgress {
+                                    phase: if done == total {
+                                        NodeUpdatePhase::Installing
+                                    } else {
+                                        NodeUpdatePhase::Uploading
+                                    },
+                                    done,
+                                    total,
+                                });
+                            },
                         )
                         .await
                         .map_err(|error| error.to_string())?;
@@ -1342,17 +1472,25 @@ impl RemoteView {
             })
             .await;
             let Ok(result) = install else {
+                let install_error = install.unwrap_err();
                 this.update(cx, |this, cx| {
                     if let Some(dialog) = this
                         .update_dialog
                         .as_mut()
                         .filter(|dialog| dialog.host.id == host_id)
                     {
-                        dialog.phase = NodeUpdatePhase::Failed;
-                        dialog.error = Some(install.unwrap_err());
+                        if dialog.cancelled.load(Ordering::Relaxed) {
+                            dialog.phase = NodeUpdatePhase::Cancelled;
+                            dialog.error = None;
+                        } else {
+                            dialog.phase = NodeUpdatePhase::Failed;
+                            dialog.error = Some(install_error);
+                        }
                     }
                     if active {
-                        this.connection_state = ConnectionState::Connected;
+                        if strategy == NodeUpdateStrategy::Relay {
+                            this.connection_state = ConnectionState::Connected;
+                        }
                         this.busy = false;
                     }
                     this.probe_nodes(cx);
@@ -1928,6 +2066,8 @@ impl RemoteView {
         let close = cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_node_update(cx));
         let install =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.install_node_update(cx));
+        let cancel =
+            cx.listener(|this: &mut Self, _: &(), _window, cx| this.cancel_node_update(cx));
         let automatic = cx.listener(|this: &mut Self, _: &(), _window, cx| {
             this.select_node_update_strategy(NodeUpdateStrategy::Automatic, cx)
         });
@@ -1956,6 +2096,7 @@ impl RemoteView {
             NodeUpdatePhase::Downloading => {
                 (t(k::REMOTE_UPDATE_PHASE_DOWNLOADING), BadgeTone::Accent)
             }
+            NodeUpdatePhase::Uploading => (t(k::REMOTE_UPDATE_PHASE_UPLOADING), BadgeTone::Accent),
             NodeUpdatePhase::Installing => {
                 (t(k::REMOTE_UPDATE_PHASE_INSTALLING), BadgeTone::Accent)
             }
@@ -1964,6 +2105,7 @@ impl RemoteView {
             }
             NodeUpdatePhase::Complete => (t(k::REMOTE_UPDATE_PHASE_COMPLETE), BadgeTone::Success),
             NodeUpdatePhase::Failed => (t(k::REMOTE_UPDATE_PHASE_FAILED), BadgeTone::Danger),
+            NodeUpdatePhase::Cancelled => (t(k::REMOTE_UPDATE_PHASE_CANCELLED), BadgeTone::Neutral),
         };
         let mut body = components::modal_body()
             .id("remote-node-update-body")
@@ -1999,10 +2141,12 @@ impl RemoteView {
                     .child(components::badge(phase_tone, phase_label)),
             );
         if let Some(report) = &dialog.report {
-            let route = if report.update.direct_download {
-                t(k::REMOTE_UPDATE_ROUTE_DIRECT)
-            } else {
+            let relay_selected = dialog.strategy == NodeUpdateStrategy::Relay
+                || (dialog.strategy == NodeUpdateStrategy::Automatic && relay_allowed);
+            let route = if relay_selected {
                 t(k::REMOTE_UPDATE_ROUTE_RELAY)
+            } else {
+                t(k::REMOTE_UPDATE_ROUTE_DIRECT)
             };
             let rows = vec![
                 layout::row()
@@ -2064,18 +2208,22 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_UPDATE_NETWORK),
-                        report
-                            .update
-                            .direct_error
-                            .clone()
-                            .map(SharedString::from)
-                            .unwrap_or_else(|| route.clone()),
+                        if relay_selected {
+                            route.clone()
+                        } else {
+                            report
+                                .update
+                                .direct_error
+                                .clone()
+                                .map(SharedString::from)
+                                .unwrap_or_else(|| route.clone())
+                        },
                     ))
                     .child(components::badge(
-                        if report.update.direct_download {
+                        if !relay_selected && report.update.direct_download {
                             BadgeTone::Success
                         } else {
-                            BadgeTone::Warning
+                            BadgeTone::Neutral
                         },
                         route,
                     ))
@@ -2221,6 +2369,55 @@ impl RemoteView {
                     .child(SharedString::from(error.clone())),
             );
         }
+        if matches!(
+            dialog.phase,
+            NodeUpdatePhase::Downloading | NodeUpdatePhase::Uploading | NodeUpdatePhase::Installing
+        ) {
+            let progress = dialog.progress.map(|(done, total)| {
+                let fraction = if total == 0 {
+                    0.0
+                } else {
+                    (done as f32 / total as f32).clamp(0.0, 1.0)
+                };
+                (done, total, fraction)
+            });
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .rounded_lg()
+                    .bg(theme::surface_hover())
+                    .px_4()
+                    .py_3()
+                    .child(div().text_xs().text_color(theme::subtext()).child(
+                        if let Some((done, total, fraction)) = progress {
+                            SharedString::from(tf!(
+                                k::REMOTE_UPDATE_PROGRESS,
+                                done = format_update_size(done),
+                                total = format_update_size(total),
+                                percent = format!("{:.0}", fraction * 100.0)
+                            ))
+                        } else {
+                            t(k::REMOTE_UPDATE_PROGRESS_WAITING)
+                        },
+                    ))
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(6.))
+                            .rounded_full()
+                            .bg(theme::inset())
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(progress.map_or(0.08, |(_, _, fraction)| fraction)))
+                                    .rounded_full()
+                                    .bg(theme::accent()),
+                            ),
+                    ),
+            );
+        }
         if let Some(result) = &dialog.result {
             body = body.child(
                 div()
@@ -2246,10 +2443,10 @@ impl RemoteView {
                 .report
                 .as_ref()
                 .is_some_and(|report| match dialog.strategy {
-                    NodeUpdateStrategy::Automatic if report.update.direct_download => {
-                        direct_allowed
+                    NodeUpdateStrategy::Automatic if relay_allowed => true,
+                    NodeUpdateStrategy::Automatic => {
+                        direct_allowed && report.update.direct_download
                     }
-                    NodeUpdateStrategy::Automatic => relay_allowed,
                     NodeUpdateStrategy::Direct => direct_allowed && report.update.direct_download,
                     NodeUpdateStrategy::Relay => relay_allowed,
                 });
@@ -2260,7 +2457,16 @@ impl RemoteView {
                     && report.update.signed
                     && report.installation.can_self_update
             });
-        let primary = if can_install {
+        let primary = if dialog.cancellable() {
+            components::button(
+                "remote-node-update-cancel",
+                t(k::REMOTE_UPDATE_CANCEL),
+                ButtonTone::Neutral,
+                ButtonSize::Md,
+            )
+            .on_click(move |_event, window, cx| cancel(&(), window, cx))
+            .into_any_element()
+        } else if can_install {
             components::button(
                 "remote-node-update-install",
                 t(k::REMOTE_UPDATE_INSTALL),
@@ -2272,7 +2478,10 @@ impl RemoteView {
         } else {
             components::disabled_button(
                 "remote-node-update-install-disabled",
-                if dialog.phase == NodeUpdatePhase::Complete {
+                if matches!(
+                    dialog.phase,
+                    NodeUpdatePhase::Complete | NodeUpdatePhase::Cancelled
+                ) {
                     t(k::REMOTE_UPDATE_DONE)
                 } else if dialog
                     .report
@@ -2816,15 +3025,11 @@ impl RemoteView {
                 } else {
                     probe.is_some_and(|probe| probe.quick_update_supported)
                 };
-                let toggle_id = id.clone();
                 let update_id = id.clone();
                 let bootstrap_id = id.clone();
                 let details_id = id.clone();
                 let manage_id = id.clone();
                 let remove_id = id.clone();
-                let toggle = cx.listener(move |this: &mut Self, _: &(), _window, cx| {
-                    this.toggle_host(toggle_id.clone(), cx)
-                });
                 let manage = cx.listener(move |_this: &mut Self, _: &(), _window, cx| {
                     cx.emit(RemoteEvent::ManageRequested {
                         id: manage_id.clone(),
@@ -2851,23 +3056,6 @@ impl RemoteView {
                     .min_h(px(82.))
                     .px_4()
                     .py_3()
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("remote-toggle-{}", host.id)))
-                            .role(gpui::Role::Switch)
-                            .aria_label(SharedString::from(format!(
-                                "{} · {}",
-                                node_name, state_label
-                            )))
-                            .aria_toggled(if connected {
-                                gpui::Toggled::True
-                            } else {
-                                gpui::Toggled::False
-                            })
-                            .cursor_pointer()
-                            .child(layout::toggle(connected))
-                            .on_click(move |_event, window, cx| toggle(&(), window, cx)),
-                    )
                     .child(icon(IconName::Globe, theme::accent(), 18.))
                     .child(
                         div()
@@ -3253,6 +3441,22 @@ mod node_update_tests {
     use ochub_core::services::update::headless::{HeadlessPlatformEntry, HeadlessUpdateManifest};
 
     use super::*;
+
+    #[test]
+    fn automatic_updates_prefer_the_observable_relay_route() {
+        assert_eq!(
+            resolve_node_update_strategy(NodeUpdateStrategy::Automatic, true, true),
+            NodeUpdateStrategy::Relay
+        );
+        assert_eq!(
+            resolve_node_update_strategy(NodeUpdateStrategy::Automatic, true, false),
+            NodeUpdateStrategy::Direct
+        );
+        assert_eq!(
+            resolve_node_update_strategy(NodeUpdateStrategy::Direct, true, true),
+            NodeUpdateStrategy::Direct
+        );
+    }
 
     #[test]
     fn desktop_manifest_fallback_keeps_an_offline_node_relay_updatable() {

@@ -4,11 +4,12 @@
 //! runs `ochcli daemon run` through a stable `current` symlink, so a release
 //! cannot leave the command and its background owner at different versions.
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 
 use clap::Parser as _;
+use fs2::FileExt as _;
 use ochub_core::application::ApplicationError;
 use ochub_core::runtime::{self, OwnerKind};
 use ochub_core::services::update::headless::{
@@ -343,6 +344,8 @@ pub(crate) async fn check_for_update(probe_direct: bool) -> Result<NodeUpdateRep
 
 async fn install_current(cli: &Cli) -> Result<(NodeInstallStatus, Vec<String>), CliError> {
     ensure_supported_platform()?;
+    let _update_lock = acquire_update_lock(&managed_root())?;
+    let _ = garbage_collect_managed_root(&managed_root());
     let current = std::env::current_exe()?;
     let version = env!("CARGO_PKG_VERSION");
     let payload = fs::read(&current)?;
@@ -351,6 +354,7 @@ async fn install_current(cli: &Cli) -> Result<(NodeInstallStatus, Vec<String>), 
     let _resume = crate::daemon::suspend_for_update(cli).await?;
     activate_version(&managed_root(), version)?;
     install_command_link(&managed_root())?;
+    let _ = garbage_collect_managed_root(&managed_root());
 
     let mut warnings = Vec::new();
     if crate::daemon::user_service_available() {
@@ -476,6 +480,8 @@ pub(crate) async fn install_verified_payload(
     strategy: &str,
 ) -> Result<NodeUpdateInstallResult, CliError> {
     ensure_supported_platform()?;
+    let _update_lock = acquire_update_lock(&managed_root())?;
+    let _ = garbage_collect_managed_root(&managed_root());
     validate_token(version, "version")?;
     if headless::current_target_key().as_deref() != Some(target) {
         return Err(ApplicationError::PlatformUnsupported(format!(
@@ -520,6 +526,7 @@ pub(crate) async fn install_verified_payload(
             },
             Err(error) => Err(error),
         };
+        let _ = garbage_collect_managed_root(&managed_root());
         return match rollback_result {
             Ok(_) => Err(ApplicationError::PartialFailure {
                 message: format!(
@@ -542,6 +549,8 @@ pub(crate) async fn install_verified_payload(
         };
     }
 
+    let _ = garbage_collect_managed_root(&managed_root());
+
     Ok(NodeUpdateInstallResult {
         updated: true,
         strategy: strategy.to_string(),
@@ -555,6 +564,7 @@ pub(crate) async fn install_verified_payload(
 }
 
 async fn rollback(cli: &Cli) -> Result<NodeUpdateInstallResult, CliError> {
+    let _update_lock = acquire_update_lock(&managed_root())?;
     let state = read_state(&managed_root())?
         .ok_or_else(|| CliError::InvalidInput("managed node state does not exist".to_string()))?;
     let previous = state.previous_version.clone().ok_or_else(|| {
@@ -572,6 +582,7 @@ async fn rollback(cli: &Cli) -> Result<NodeUpdateInstallResult, CliError> {
         restore_managed_state(&managed_root(), &state)?;
         crate::daemon::resume_after_update(cli, resume).await?;
         verify_runtime_version(&current).await?;
+        let _ = garbage_collect_managed_root(&managed_root());
         return Err(ApplicationError::PartialFailure {
             message: format!(
                 "rollback target failed health verification and the original version was restored: {rollback_error}"
@@ -584,6 +595,7 @@ async fn rollback(cli: &Cli) -> Result<NodeUpdateInstallResult, CliError> {
         }
         .into());
     }
+    let _ = garbage_collect_managed_root(&managed_root());
     Ok(NodeUpdateInstallResult {
         updated: true,
         strategy: "rollback".to_string(),
@@ -633,10 +645,114 @@ fn stage_version(
         fs::set_permissions(&staging, fs::Permissions::from_mode(0o755))?;
     }
     if verify_executable {
-        verify_staged_executable(&staging, version)?;
+        if let Err(error) = verify_staged_executable(&staging, version) {
+            let _ = fs::remove_file(&staging);
+            return Err(error);
+        }
     }
-    fs::rename(&staging, &destination)?;
+    if let Err(error) = fs::rename(&staging, &destination) {
+        let _ = fs::remove_file(&staging);
+        return Err(error.into());
+    }
     Ok(destination)
+}
+
+/// Retain only the active and rollback versions and remove artifacts left by
+/// interrupted atomic writes. Every candidate is resolved beneath the managed
+/// root and symlinks are removed as links rather than followed.
+fn garbage_collect_managed_root(root: &Path) -> Result<(), CliError> {
+    if !root.exists() {
+        return Ok(());
+    }
+    let state = read_state(root)?;
+    let active = state.as_ref().map(|state| state.active_version.as_str());
+    let previous = state
+        .as_ref()
+        .and_then(|state| state.previous_version.as_deref());
+
+    let versions = root.join("versions");
+    if versions.is_dir() {
+        for entry in fs::read_dir(&versions)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if validate_token(name, "version").is_err() {
+                continue;
+            }
+            let retained = active == Some(name) || previous == Some(name);
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if !retained {
+                if metadata.file_type().is_symlink() || metadata.is_file() {
+                    fs::remove_file(entry.path())?;
+                } else if metadata.is_dir() {
+                    fs::remove_dir_all(entry.path())?;
+                }
+                continue;
+            }
+            if metadata.is_dir() {
+                for staged in fs::read_dir(entry.path())? {
+                    let staged = staged?;
+                    let staged_name = staged.file_name();
+                    if staged_name
+                        .to_str()
+                        .is_some_and(|name| name.starts_with('.') && name.ends_with(".tmp"))
+                    {
+                        let staged_metadata = fs::symlink_metadata(staged.path())?;
+                        if staged_metadata.file_type().is_symlink() || staged_metadata.is_file() {
+                            fs::remove_file(staged.path())?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(".current-"))
+        {
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_symlink() || metadata.is_file() {
+                fs::remove_file(entry.path())?;
+            }
+        }
+    }
+    if root == managed_root()
+        && let Some(parent) = command_link().parent()
+    {
+        if parent.is_dir() {
+            for entry in fs::read_dir(parent)? {
+                let entry = entry?;
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(".ochcli-"))
+                {
+                    let metadata = fs::symlink_metadata(entry.path())?;
+                    if metadata.file_type().is_symlink() || metadata.is_file() {
+                        fs::remove_file(entry.path())?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn acquire_update_lock(root: &Path) -> Result<File, CliError> {
+    fs::create_dir_all(root)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(root.join(".update.lock"))?;
+    lock.lock_exclusive()?;
+    Ok(lock)
 }
 
 fn verify_staged_executable(path: &Path, version: &str) -> Result<(), CliError> {
@@ -823,6 +939,7 @@ mod tests {
         }
         activate_version(root, "1.0.0").unwrap();
         activate_version(root, "1.1.0").unwrap();
+        garbage_collect_managed_root(root).unwrap();
         let state = read_state(root).unwrap().unwrap();
         assert_eq!(state.active_version, "1.1.0");
         assert_eq!(state.previous_version.as_deref(), Some("1.0.0"));
@@ -830,6 +947,7 @@ mod tests {
             fs::read_link(root.join("current")).unwrap(),
             Path::new("versions").join("1.1.0")
         );
+        assert!(root.join("versions/1.0.0").is_dir());
     }
 
     #[test]
@@ -847,6 +965,7 @@ mod tests {
         activate_version(root, "1.1.0").unwrap();
 
         restore_managed_state(root, &prior).unwrap();
+        garbage_collect_managed_root(root).unwrap();
 
         let restored = read_state(root).unwrap().unwrap();
         assert_eq!(restored.active_version, "1.0.0");
@@ -855,6 +974,32 @@ mod tests {
             fs::read_link(root.join("current")).unwrap(),
             Path::new("versions").join("1.0.0")
         );
+        assert!(!root.join("versions/1.1.0").exists());
+    }
+
+    #[test]
+    fn garbage_collection_removes_old_versions_and_atomic_write_debris() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        for version in ["0.8.0", "0.9.0", "1.0.0"] {
+            let version_dir = root.join("versions").join(version);
+            fs::create_dir_all(&version_dir).unwrap();
+            fs::write(version_dir.join(executable_name()), b"binary").unwrap();
+        }
+        activate_version(root, "0.9.0").unwrap();
+        activate_version(root, "1.0.0").unwrap();
+        fs::write(root.join("versions/1.0.0/.interrupted.tmp"), b"partial").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("versions/1.0.0", root.join(".current-stale")).unwrap();
+
+        garbage_collect_managed_root(root).unwrap();
+
+        assert!(!root.join("versions/0.8.0").exists());
+        assert!(root.join("versions/0.9.0").is_dir());
+        assert!(root.join("versions/1.0.0").is_dir());
+        assert!(!root.join("versions/1.0.0/.interrupted.tmp").exists());
+        #[cfg(unix)]
+        assert!(!root.join(".current-stale").exists());
     }
 
     #[test]

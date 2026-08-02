@@ -3,6 +3,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -258,6 +260,8 @@ pub(crate) async fn relay_node_update(
     target: &str,
     entry: &HeadlessPlatformEntry,
     payload: &[u8],
+    cancelled: Arc<AtomicBool>,
+    progress: impl Fn(u64, u64),
 ) -> Result<Value, RemoteClientError> {
     if payload.len() as u64 != entry.size {
         return Err(RemoteClientError::Protocol(format!(
@@ -271,7 +275,18 @@ pub(crate) async fn relay_node_update(
     let mut stdin = child.stdin.take().ok_or_else(|| {
         RemoteClientError::Process("SSH update stdin was not created".to_string())
     })?;
-    stdin.write_all(payload).await?;
+    let mut sent = 0_u64;
+    for chunk in payload.chunks(64 * 1024) {
+        if cancelled.load(Ordering::Relaxed) {
+            let _ = child.kill().await;
+            return Err(RemoteClientError::Process(
+                "relayed node update was cancelled".to_string(),
+            ));
+        }
+        stdin.write_all(chunk).await?;
+        sent += chunk.len() as u64;
+        progress(sent, entry.size);
+    }
     stdin.shutdown().await?;
     drop(stdin);
     let output = tokio::time::timeout(Duration::from_secs(15 * 60), child.wait_with_output())

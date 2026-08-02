@@ -22,6 +22,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 
+/// Progress of a headless executable download, in bytes.
+pub type ProgressFn = Box<dyn Fn(u64, Option<u64>) + Send + Sync>;
+pub type CancelFn = Box<dyn Fn() -> bool + Send + Sync>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct HeadlessPlatformEntry {
@@ -202,6 +206,14 @@ pub async fn probe_download(url: &str) -> Result<()> {
 }
 
 pub async fn download(entry: &HeadlessPlatformEntry) -> Result<Vec<u8>> {
+    download_with_progress(entry, None, None).await
+}
+
+pub async fn download_with_progress(
+    entry: &HeadlessPlatformEntry,
+    progress: Option<ProgressFn>,
+    cancelled: Option<CancelFn>,
+) -> Result<Vec<u8>> {
     validate_entry(entry)?;
     let response = crate::http_client::get()
         .get(&entry.url)
@@ -229,12 +241,21 @@ pub async fn download(entry: &HeadlessPlatformEntry) -> Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(entry.size.min(MAX_PAYLOAD_BYTES) as usize);
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
+        if cancelled.as_ref().is_some_and(|cancelled| cancelled()) {
+            return Err(AppError::Message("节点更新下载已取消".to_string()));
+        }
         let chunk =
             chunk.map_err(|error| AppError::Message(format!("下载节点更新中断: {error}")))?;
         if payload.len().saturating_add(chunk.len()) > MAX_PAYLOAD_BYTES as usize {
             return Err(AppError::Message("节点更新包超过大小限制".to_string()));
         }
         payload.extend_from_slice(&chunk);
+        if let Some(report) = progress.as_ref() {
+            report(payload.len() as u64, Some(entry.size));
+        }
+    }
+    if cancelled.as_ref().is_some_and(|cancelled| cancelled()) {
+        return Err(AppError::Message("节点更新下载已取消".to_string()));
     }
     verify_payload(&payload, entry)?;
     Ok(payload)
