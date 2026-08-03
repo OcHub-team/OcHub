@@ -17,6 +17,9 @@ use gpui::{
 
 use crate::theme;
 
+const STANDARD_HANDLE_RATIO: f32 = 1. / 3.;
+const EXTREMUM_HANDLE_RATIO: f32 = 0.42;
+
 /// An animated area + line chart over an evenly-spaced series of values.
 #[derive(IntoElement)]
 pub struct AreaChart {
@@ -100,7 +103,7 @@ impl RenderOnce for AreaChart {
                     return;
                 };
                 paint_area(geometry, line, fill_top, fill_bottom, progress, window);
-                paint_hover(bounds, geometry, &hover_labels, line, window, cx);
+                paint_hover(bounds, geometry, &hover_labels, line, progress, window, cx);
             },
         )
         .w_full()
@@ -204,9 +207,8 @@ fn paint_area(
 }
 
 /// Append a smooth curve through `pts[1..]`, assuming the builder's current point is
-/// already `pts[0]`. Uses the quadratic-midpoint technique: each segment curves to the
-/// midpoint of the next pair using the shared vertex as the control point, which keeps
-/// the line continuous and smooth without overshoot.
+/// already `pts[0]`. Monotone cubic Hermite interpolation keeps every sample on the
+/// rendered line without introducing overshoot between adjacent values.
 fn smooth_through_scaled(
     builder: &mut PathBuilder,
     pts: &[(f32, f32)],
@@ -218,30 +220,91 @@ fn smooth_through_scaled(
     if n < 2 {
         return;
     }
-    if n == 2 {
-        builder.line_to(point(px(pts[1].0), px(y(pts[1].1))));
-        return;
-    }
-    for i in 1..n - 1 {
-        let mid_x = (pts[i].0 + pts[i + 1].0) / 2.0;
-        let mid_y = y((pts[i].1 + pts[i + 1].1) / 2.0);
-        builder.curve_to(
-            point(px(mid_x), px(mid_y)),
-            point(px(pts[i].0), px(y(pts[i].1))),
+    let tangents = monotone_tangents(pts);
+    for i in 0..n - 1 {
+        let (x1, y1) = pts[i];
+        let (x2, y2) = pts[i + 1];
+        let width = x2 - x1;
+        let outgoing_width = width * handle_ratio(pts, i);
+        let incoming_width = width * handle_ratio(pts, i + 1);
+        let control_a = (x1 + outgoing_width, y1 + tangents[i] * outgoing_width);
+        let control_b = (x2 - incoming_width, y2 - tangents[i + 1] * incoming_width);
+        builder.cubic_bezier_to(
+            point(px(x2), px(y(y2))),
+            point(px(control_a.0), px(y(control_a.1))),
+            point(px(control_b.0), px(y(control_b.1))),
         );
     }
-    builder.line_to(point(px(pts[n - 1].0), px(y(pts[n - 1].1))));
+}
+
+/// Widen the horizontal handles around a true local peak or valley. The
+/// tangent there is already zero, so this rounds the turn without changing the
+/// sample value or allowing the curve to overshoot it.
+fn handle_ratio(pts: &[(f32, f32)], index: usize) -> f32 {
+    if index == 0 || index + 1 >= pts.len() {
+        return STANDARD_HANDLE_RATIO;
+    }
+
+    let incoming = pts[index].1 - pts[index - 1].1;
+    let outgoing = pts[index + 1].1 - pts[index].1;
+    if incoming != 0. && outgoing != 0. && incoming.signum() != outgoing.signum() {
+        EXTREMUM_HANDLE_RATIO
+    } else {
+        STANDARD_HANDLE_RATIO
+    }
+}
+
+/// Calculate shape-preserving tangents for a series with strictly increasing x.
+fn monotone_tangents(pts: &[(f32, f32)]) -> Vec<f32> {
+    let n = pts.len();
+    if n < 2 {
+        return vec![0.; n];
+    }
+
+    let slopes = pts
+        .windows(2)
+        .map(|pair| {
+            let width = pair[1].0 - pair[0].0;
+            if width.abs() <= f32::EPSILON {
+                0.
+            } else {
+                (pair[1].1 - pair[0].1) / width
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut tangents = vec![0.; n];
+    tangents[0] = slopes[0];
+    tangents[n - 1] = slopes[n - 2];
+
+    for i in 1..n - 1 {
+        let previous = slopes[i - 1];
+        let next = slopes[i];
+        if previous == 0. || next == 0. || previous.signum() != next.signum() {
+            tangents[i] = 0.;
+            continue;
+        }
+
+        let previous_width = pts[i].0 - pts[i - 1].0;
+        let next_width = pts[i + 1].0 - pts[i].0;
+        let previous_weight = 2. * next_width + previous_width;
+        let next_weight = next_width + 2. * previous_width;
+        tangents[i] =
+            (previous_weight + next_weight) / (previous_weight / previous + next_weight / next);
+    }
+
+    tangents
 }
 
 /// Crosshair + tooltip for the bucket nearest the pointer, painted above the
 /// area/line. No-op when hover labels are absent or the pointer is outside the
-/// chart. The overlay tracks the fully-drawn curve (progress = 1), so it stays
-/// put while the draw-in animation plays underneath.
+/// chart. The overlay uses the same draw-in progress as the curve so the marker
+/// remains attached during animation as well as after it completes.
 fn paint_hover(
     bounds: Bounds<Pixels>,
     geom: &ChartGeom,
     labels: &[SharedString],
     line: Hsla,
+    progress: f32,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -255,9 +318,10 @@ fn paint_hover(
     let n = geom.pts.len();
     let rel = ((f32::from(mouse.x) - geom.x0) / geom.width).clamp(0.0, 1.0);
     let ix = (rel * (n - 1) as f32).round() as usize;
-    let Some(&(dot_x, dot_y)) = geom.pts.get(ix) else {
+    let Some(&(dot_x, raw_dot_y)) = geom.pts.get(ix) else {
         return;
     };
+    let dot_y = geom.baseline - (geom.baseline - raw_dot_y) * progress;
     let Some(label) = labels.get(ix) else {
         return;
     };
@@ -318,4 +382,45 @@ fn paint_hover(
         window,
         cx,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EXTREMUM_HANDLE_RATIO, STANDARD_HANDLE_RATIO, handle_ratio, monotone_tangents};
+
+    #[test]
+    fn monotone_tangents_flatten_local_extrema() {
+        let points = [(0., 10.), (1., 0.), (2., 8.), (3., 8.), (4., 12.)];
+
+        let tangents = monotone_tangents(&points);
+
+        assert_eq!(tangents, vec![-10., 0., 0., 0., 4.]);
+    }
+
+    #[test]
+    fn monotone_tangents_preserve_a_steady_slope() {
+        let points = [(0., 1.), (2., 5.), (5., 11.)];
+
+        let tangents = monotone_tangents(&points);
+
+        assert_eq!(tangents, vec![2., 2., 2.]);
+    }
+
+    #[test]
+    fn local_extrema_get_wider_horizontal_handles() {
+        let points = [(0., 10.), (1., 0.), (2., 8.), (3., 4.)];
+
+        assert_eq!(handle_ratio(&points, 0), STANDARD_HANDLE_RATIO);
+        assert_eq!(handle_ratio(&points, 1), EXTREMUM_HANDLE_RATIO);
+        assert_eq!(handle_ratio(&points, 2), EXTREMUM_HANDLE_RATIO);
+        assert_eq!(handle_ratio(&points, 3), STANDARD_HANDLE_RATIO);
+    }
+
+    #[test]
+    fn monotone_and_flat_samples_keep_standard_handles() {
+        let points = [(0., 10.), (1., 5.), (2., 5.), (3., 0.)];
+
+        assert_eq!(handle_ratio(&points, 1), STANDARD_HANDLE_RATIO);
+        assert_eq!(handle_ratio(&points, 2), STANDARD_HANDLE_RATIO);
+    }
 }
