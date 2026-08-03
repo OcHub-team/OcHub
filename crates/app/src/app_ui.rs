@@ -144,44 +144,6 @@ fn open_cherry_studio_deeplink(deeplink: &str) -> Result<(), String> {
         })
 }
 
-fn format_official_quota_result(result: UsageResult) -> Result<String, String> {
-    if !result.success {
-        return Err(result
-            .error
-            .unwrap_or_else(|| raw(k::SHELL_QUOTA_NO_DATA).to_string()));
-    }
-
-    let parts = result
-        .data
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|item| {
-            let remaining = item.remaining.or_else(|| Some(item.total? - item.used?))?;
-            if !remaining.is_finite() {
-                return None;
-            }
-            let label = match item.plan_name.as_deref().unwrap_or_default() {
-                "five_hour" => raw(k::SHELL_QUOTA_TIER_FIVE_HOUR).to_string(),
-                "seven_day" | "weekly_limit" => raw(k::SHELL_QUOTA_TIER_WEEKLY).to_string(),
-                "seven_day_opus" => raw(k::SHELL_QUOTA_TIER_WEEKLY_OPUS).to_string(),
-                "seven_day_sonnet" => raw(k::SHELL_QUOTA_TIER_WEEKLY_SONNET).to_string(),
-                "monthly_limit" => raw(k::SHELL_QUOTA_TIER_MONTHLY).to_string(),
-                "" => raw(k::SHELL_QUOTA_TIER_REMAINING).to_string(),
-                other => other.replace('_', " "),
-            };
-            Some(format!("{label} {:.0}%", remaining.clamp(0.0, 100.0)))
-        })
-        .collect::<Vec<_>>();
-
-    if parts.is_empty() {
-        Err(result
-            .error
-            .unwrap_or_else(|| raw(k::SHELL_QUOTA_NO_DATA).to_string()))
-    } else {
-        Ok(parts.join(" · "))
-    }
-}
-
 /// Which top-level section the main panel renders.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -250,10 +212,14 @@ pub struct AppRoot {
     provider_loaded_scope: Option<String>,
     provider_reload_generation: u64,
     provider_action_in_flight: bool,
-    /// Latest official-account quota summary, keyed by `<app>:<provider>`.
-    /// Kept presentation-only so a failed refresh never mutates provider data.
-    provider_quota_results: HashMap<String, SharedString>,
+    /// Latest official-account quota result, keyed by `<app>:<provider>`.
+    /// Kept presentation-only so a failed refresh never mutates provider data,
+    /// and kept unformatted so the card line and the detail dialog read the
+    /// same numbers.
+    provider_quota_results: HashMap<String, UsageResult>,
     provider_quota_in_flight: Option<String>,
+    /// Provider whose quota detail dialog is open, as `(provider id, name)`.
+    provider_quota_detail: Option<(String, String)>,
     /// Set while the local Codex desktop launcher is waiting for its main CDP
     /// renderer. This is independent from provider mutations and only affects
     /// the Codex page header action.
@@ -776,6 +742,11 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        // Read-only, so it closes before anything with unsaved state below it.
+        if self.provider_quota_detail.take().is_some() {
+            cx.notify();
+            return;
+        }
         // Escape leaves the file exactly as the user left it.
         if self.pending_drift.take().is_some() {
             cx.notify();
@@ -1009,6 +980,7 @@ impl AppRoot {
             provider_action_in_flight: false,
             provider_quota_results: HashMap::new(),
             provider_quota_in_flight: None,
+            provider_quota_detail: None,
             codex_launch_in_flight: false,
             current: String::new(),
             gateway_routes: Vec::new(),
@@ -1683,6 +1655,9 @@ impl AppRoot {
             self.selected_app = app;
             self.section = Section::Providers;
             self.editor = None;
+            // Quota results are keyed by app, so a dialog left open would be
+            // showing another app's numbers under this app's provider name.
+            self.provider_quota_detail = None;
             self.showing_app_settings = false;
             self.reload(cx);
             cx.notify();
@@ -1701,6 +1676,117 @@ impl AppRoot {
             )
     }
 
+    /// The quota line for an official-account provider.
+    ///
+    /// The hero and the list row render the same one from the same stored
+    /// result, so the card at the top of the page can never disagree with the
+    /// row for the same provider further down.
+    fn render_quota_line(
+        &self,
+        id_prefix: &str,
+        provider_id: &str,
+        name: &SharedString,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let key = Self::official_quota_key(self.selected_app, provider_id);
+        let entries = self
+            .provider_quota_results
+            .get(&key)
+            .map(|result| crate::quota::parse(result).map_err(|_| ()));
+        let loading = self.provider_quota_in_flight.as_deref() == Some(key.as_str());
+        let state = match (loading, &entries) {
+            (true, _) => crate::quota::QuotaState::Loading,
+            (false, None) => crate::quota::QuotaState::Idle,
+            (false, Some(Ok(entries))) => crate::quota::QuotaState::Ready(entries),
+            (false, Some(Err(()))) => crate::quota::QuotaState::Failed,
+        };
+        let refresh_id = provider_id.to_string();
+        let refresh_name = name.to_string();
+        let detail_id = provider_id.to_string();
+        let detail_name = name.to_string();
+        crate::quota::line(
+            &format!("{id_prefix}-quota-{provider_id}"),
+            name,
+            state,
+            cx.listener(move |this, _event, _window, cx| {
+                this.do_query_provider_quota(refresh_id.clone(), refresh_name.clone(), cx);
+            }),
+            cx.listener(move |this, _event, _window, cx| {
+                this.provider_quota_detail = Some((detail_id.clone(), detail_name.clone()));
+                cx.notify();
+            }),
+        )
+        .into_any_element()
+    }
+
+    /// The quota detail dialog: what the card's one-line summary had to cut.
+    fn render_quota_detail(
+        &self,
+        provider_id: String,
+        name: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let key = Self::official_quota_key(self.selected_app, &provider_id);
+        let entries = self
+            .provider_quota_results
+            .get(&key)
+            .and_then(|result| crate::quota::parse(result).ok())
+            .unwrap_or_default();
+        let loading = self.provider_quota_in_flight.as_deref() == Some(key.as_str());
+        let refresh_name = name.clone();
+        components::modal_overlay(
+            components::modal_card()
+                .child(components::modal_header(t(k::QUOTA_DETAIL_TITLE)))
+                .child(
+                    components::modal_body()
+                        .child(
+                            div()
+                                .text_color(theme::muted())
+                                .text_xs()
+                                .child(SharedString::from(name)),
+                        )
+                        .child(crate::quota::detail_body(&entries)),
+                )
+                .child(components::modal_footer(vec![
+                    components::button(
+                        "provider-quota-detail-refresh",
+                        if loading {
+                            t(k::QUOTA_ACTION_QUERYING)
+                        } else {
+                            t(k::QUOTA_DETAIL_REFRESH)
+                        },
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.do_query_provider_quota(provider_id.clone(), refresh_name.clone(), cx);
+                    }))
+                    .into_any_element(),
+                    components::button(
+                        "provider-quota-detail-close",
+                        t(k::QUOTA_DETAIL_CLOSE),
+                        ButtonTone::Primary,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.provider_quota_detail = None;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                ])),
+        )
+        // Read-only dialog: clicking away is the fastest way out, and the card
+        // itself is occluded so only the backdrop dismisses.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, cx| {
+                this.provider_quota_detail = None;
+                cx.notify();
+            }),
+        )
+        .into_any_element()
+    }
+
     fn do_query_provider_quota(
         &mut self,
         provider_id: String,
@@ -1713,18 +1799,15 @@ impl AppRoot {
         }
         let Some(backend) = self.workspace_backend(cx) else {
             self.notify_error(
-                t(k::SHELL_QUOTA_FAILED),
+                SharedString::from(tf!(k::SHELL_QUOTA_FAILED, name = provider_name)),
                 "remote workspace is not connected".to_string(),
                 cx,
             );
             return;
         };
 
+        // No "querying…" notification: the card's own line says so, in place.
         self.provider_quota_in_flight = Some(key.clone());
-        self.notify_info(
-            SharedString::from(tf!(k::SHELL_QUOTA_QUERYING, name = provider_name)),
-            cx,
-        );
         let app_id = self.selected_app.app_id();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
@@ -1740,28 +1823,28 @@ impl AppRoot {
                         serde_json::from_value::<UsageResult>(value)
                             .map_err(|error| error.to_string())
                     })
-                    .and_then(format_official_quota_result)
             })
             .await;
             this.update(cx, |this, cx| {
                 this.provider_quota_in_flight = None;
-                match result {
-                    Ok(summary) => {
-                        this.provider_quota_results
-                            .insert(key, SharedString::from(summary.clone()));
-                        this.notify_success(
-                            SharedString::from(tf!(
-                                k::SHELL_QUOTA_RESULT,
-                                name = provider_name,
-                                quota = summary
-                            )),
-                            cx,
-                        );
-                    }
-                    Err(error) => {
-                        this.notify_error(t(k::SHELL_QUOTA_FAILED), error, cx);
-                    }
+                // Success is reported by the card line itself; only the failure
+                // reason needs a notification, since the line has no room for it.
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => UsageResult {
+                        success: false,
+                        data: None,
+                        error: Some(error),
+                    },
+                };
+                if let Err(error) = crate::quota::parse(&result) {
+                    this.notify_error(
+                        SharedString::from(tf!(k::SHELL_QUOTA_FAILED, name = provider_name)),
+                        error,
+                        cx,
+                    );
                 }
+                this.provider_quota_results.insert(key, result);
                 cx.notify();
             })
             .ok();
@@ -3775,11 +3858,8 @@ impl AppRoot {
         };
         let provider_name = self.provider_name(provider);
         let is_official_quota = Self::is_official_quota_provider(self.selected_app, provider);
-        let quota_key = Self::official_quota_key(self.selected_app, &provider.id);
-        let quota_summary = self.provider_quota_results.get(&quota_key).cloned();
-        let quota_querying = self.provider_quota_in_flight.as_deref() == Some(quota_key.as_str());
-        let quota_id = provider.id.clone();
-        let quota_name = provider_name.to_string();
+        let quota_line = is_official_quota
+            .then(|| self.render_quota_line("provider", &provider.id, &provider_name, cx));
         let is_additive = self.selected_app.is_additive_mode();
         let is_in_live = provider
             .meta
@@ -3945,15 +4025,7 @@ impl AppRoot {
                                     }),
                             )
                             .child(div().text_color(theme::muted()).text_xs().child(base_url))
-                            .when_some(quota_summary, |column, summary| {
-                                column.child(
-                                    div()
-                                        .text_color(theme::accent())
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(summary),
-                                )
-                            }),
+                            .children(quota_line),
                     ),
             )
             .child(
@@ -3965,32 +4037,6 @@ impl AppRoot {
                     .gap_2()
                     .py_3()
                     .pr_4()
-                    .when(is_official_quota, |actions| {
-                        actions.child(
-                            components::action_button(
-                                SharedString::from(format!("quota-{}", provider.id)),
-                                if quota_querying {
-                                    t(k::SHELL_ACTION_QUERYING_QUOTA)
-                                } else {
-                                    t(k::SHELL_ACTION_QUERY_QUOTA)
-                                },
-                                false,
-                            )
-                            .aria_label(SharedString::from(tf!(
-                                k::SHELL_ACTION_QUERY_QUOTA_ARIA,
-                                name = provider_name
-                            )))
-                            .on_click(cx.listener(
-                                move |this, _event, _window, cx| {
-                                    this.do_query_provider_quota(
-                                        quota_id.clone(),
-                                        quota_name.clone(),
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
-                    })
                     .child(
                         components::action_button(
                             SharedString::from(format!("edit-{}", provider.id)),
@@ -4080,15 +4126,12 @@ impl AppRoot {
         let current = self.providers.iter().find(|p| p.id == self.current);
         let has_current = current.is_some();
         let is_gateway = current.is_some_and(Provider::is_local_gateway);
-        let has_official_quota =
-            current.is_some_and(|provider| Self::is_official_quota_provider(app, provider));
-        let hero_quota_key = current.map(|provider| Self::official_quota_key(app, &provider.id));
-        let hero_quota_summary = hero_quota_key
-            .as_ref()
-            .and_then(|key| self.provider_quota_results.get(key))
-            .cloned();
-        let hero_quota_querying =
-            hero_quota_key.as_deref() == self.provider_quota_in_flight.as_deref();
+        let hero_quota_line = current
+            .filter(|provider| Self::is_official_quota_provider(app, provider))
+            .map(|provider| {
+                let name = self.provider_name(provider);
+                self.render_quota_line("hero", &provider.id, &name, cx)
+            });
 
         let icon_tile = div()
             .flex()
@@ -4182,15 +4225,7 @@ impl AppRoot {
                                     .child(endpoint),
                             ),
                     )
-                    .when_some(hero_quota_summary.clone(), |column, summary| {
-                        column.child(
-                            div()
-                                .text_color(theme::accent())
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(summary),
-                        )
-                    })
+                    .children(hero_quota_line)
             }
             None => div()
                 .flex()
@@ -4223,53 +4258,20 @@ impl AppRoot {
         let actions = current.map(|provider| {
             let edit_id = provider.id.clone();
             let provider_name = self.provider_name(provider);
-            let quota_id = provider.id.clone();
-            let quota_name = provider_name.to_string();
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .when(has_official_quota, |actions| {
-                    actions.child(
-                        components::action_button(
-                            SharedString::from(format!("hero-quota-{}", provider.id)),
-                            if hero_quota_querying {
-                                t(k::SHELL_ACTION_QUERYING_QUOTA)
-                            } else {
-                                t(k::SHELL_ACTION_QUERY_QUOTA)
-                            },
-                            false,
-                        )
-                        .aria_label(SharedString::from(tf!(
-                            k::SHELL_ACTION_QUERY_QUOTA_ARIA,
-                            name = provider_name
-                        )))
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.do_query_provider_quota(
-                                    quota_id.clone(),
-                                    quota_name.clone(),
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
-                })
-                .child(
-                    components::action_button(
-                        SharedString::from(format!("hero-edit-{}", provider.id)),
-                        t(k::SHELL_ACTION_EDIT),
-                        false,
-                    )
-                    .aria_label(SharedString::from(tf!(
-                        k::SHELL_ACTION_EDIT_ARIA,
-                        name = provider_name
-                    )))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.open_edit_editor_by_id(&edit_id, cx);
-                    })),
+            div().flex().flex_row().items_center().gap_2().child(
+                components::action_button(
+                    SharedString::from(format!("hero-edit-{}", provider.id)),
+                    t(k::SHELL_ACTION_EDIT),
+                    false,
                 )
+                .aria_label(SharedString::from(tf!(
+                    k::SHELL_ACTION_EDIT_ARIA,
+                    name = provider_name
+                )))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.open_edit_editor_by_id(&edit_id, cx);
+                })),
+            )
         });
 
         let mut card = components::panel()
@@ -4542,6 +4544,9 @@ impl Render for AppRoot {
                             .into_any_element(),
                         ])),
                 ))
+            })
+            .when_some(self.provider_quota_detail.clone(), |root, (id, name)| {
+                root.child(self.render_quota_detail(id, name, cx))
             })
             .when_some(self.pending_drift.clone(), |root, pending| {
                 root.child(self.render_drift_modal(pending, cx))

@@ -1,0 +1,40 @@
+# 简体中文 —— 额度行与额度明细弹窗（参考目录）。
+#
+# `quota.*` 属于 `crates/app/src/quota.rs`：服务商卡片（官方订阅额度）和中转站
+# 卡片（转发站额度）共用同一份文案，一处改动两处生效。
+#
+# 百分比一律是「剩余」而不是「已用」，所以 `quota.value.*` 必须把方向写进文案
+# 里——单看 `82%` 没人知道是剩八成还是用掉八成。
+#
+# `quota.entry*` 是一档额度在卡片单行里的拼法，`quota.separator` 把各档接起来；
+# 括号和间隔属于文案，不同语言的标点宽度不一样，别搬到 Rust 里去拼。
+
+"quota.action.query" = "查询额度"
+"quota.action.querying" = "查询中…"
+"quota.detail.aria" = "查看 {name} 的额度明细"
+"quota.detail.close" = "关闭"
+"quota.detail.empty" = "本次查询没有返回任何额度档位。"
+"quota.detail.refresh" = "刷新"
+"quota.detail.title" = "额度明细"
+"quota.entry" = "{label} {value}"
+"quota.entry.with_reset" = "{label} {value}（{reset}）"
+"quota.failed" = "额度查询失败，点击重试"
+"quota.invalid" = "不可用：{message}"
+"quota.no_data" = "未返回可用额度"
+"quota.refresh.aria" = "刷新 {name} 的额度"
+"quota.reset.days" = "{days} 天后重置"
+"quota.reset.done" = "已重置"
+"quota.reset.hours" = "{hours} 小时后重置"
+"quota.reset.minutes" = "{minutes} 分钟后重置"
+"quota.reset.soon" = "即将重置"
+"quota.separator" = " · "
+"quota.tier.balance" = "余额"
+"quota.tier.five_hour" = "5 小时"
+"quota.tier.monthly" = "每月"
+"quota.tier.weekly" = "每周"
+"quota.tier.weekly_opus" = "每周 Opus"
+"quota.tier.weekly_sonnet" = "每周 Sonnet"
+"quota.value.remaining" = "剩 {value}"
+"quota.value.remaining_of" = "剩 {value} / {total}"
+"quota.value.remaining_percent" = "剩 {percent}%"
+"quota.value.unlimited" = "无限额度"
