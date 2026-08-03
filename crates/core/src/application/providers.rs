@@ -537,12 +537,28 @@ fn is_secret_key(key: &str) -> bool {
         || normalized.ends_with("_key")
 }
 
+/// Whether a value under a secret-looking key can actually hold a credential.
+///
+/// Numbers and booleans never do, and [`is_secret_key`] matches on the
+/// substring `token`, which every token *counter* in the usage schema also
+/// carries: `totalInputTokens`, `inputTokens`, `firstTokenMs`. Masking those
+/// turned each one into the string `******`, so every remote usage response
+/// failed to deserialize into its `u64`/`u32` field and the whole page came
+/// back empty. Credentials are always strings here; masking only non-scalars
+/// keeps a hypothetical structured secret covered too.
+fn is_redactable(value: &serde_json::Value) -> bool {
+    !matches!(
+        value,
+        serde_json::Value::Null | serde_json::Value::Number(_) | serde_json::Value::Bool(_)
+    )
+}
+
 pub fn redact_json(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => serde_json::Value::Object(
             map.iter()
                 .map(|(key, value)| {
-                    let redacted = if is_secret_key(key) && !value.is_null() {
+                    let redacted = if is_secret_key(key) && is_redactable(value) {
                         serde_json::Value::String("******".to_string())
                     } else {
                         redact_json(value)
@@ -554,7 +570,7 @@ pub fn redact_json(value: &serde_json::Value) -> serde_json::Value {
         serde_json::Value::Array(values)
             if values.len() == 2
                 && values[0].as_str().is_some_and(is_secret_key)
-                && !values[1].is_null() =>
+                && is_redactable(&values[1]) =>
         {
             serde_json::Value::Array(vec![
                 values[0].clone(),
@@ -597,6 +613,34 @@ mod tests {
                     "Authorization": "******"
                 },
                 "extraHeaders": [["x-api-key", "******"]]
+            })
+        );
+    }
+
+    /// Token *counters* are numbers, and every one of them is named `*Tokens`.
+    /// Masking them shipped `"******"` where the client expected `u64`, which
+    /// is what emptied the usage page on remote nodes.
+    #[test]
+    fn keeps_numeric_token_counters_intact_while_masking_string_credentials() {
+        let input = serde_json::json!({
+            "totalRequests": 42,
+            "totalInputTokens": 1234,
+            "realTotalTokens": 9999,
+            "firstTokenMs": 120,
+            "accessToken": "sk-secret",
+            "refreshToken": "rt-secret",
+            "logs": [{ "inputTokens": 7, "outputTokens": 8, "apiKey": "sk-live" }]
+        });
+        assert_eq!(
+            redact_json(&input),
+            serde_json::json!({
+                "totalRequests": 42,
+                "totalInputTokens": 1234,
+                "realTotalTokens": 9999,
+                "firstTokenMs": 120,
+                "accessToken": "******",
+                "refreshToken": "******",
+                "logs": [{ "inputTokens": 7, "outputTokens": 8, "apiKey": "******" }]
             })
         );
     }

@@ -4322,4 +4322,30 @@ mod tests {
         assert!(!encoded.contains("scalar-live-secret"));
         assert!(!encoded.contains("scalar-incoming-secret"));
     }
+
+    /// Every usage payload is full of `*Tokens` counters, and the secret-key
+    /// rule matches on the substring `token`. Masking them shipped `"******"`
+    /// where the desktop expects `u64`, so a remote node answered every usage
+    /// query with a deserialization error and rendered an empty page.
+    #[test]
+    fn usage_payloads_survive_the_boundary_with_their_token_counters() {
+        let summary = ochub_core::services::usage_stats::UsageSummary {
+            total_requests: 42,
+            total_cost: "1.234500".to_string(),
+            total_input_tokens: 1_000,
+            total_output_tokens: 2_000,
+            total_cache_creation_tokens: 3_000,
+            total_cache_read_tokens: 4_000,
+            success_rate: 100.0,
+            real_total_tokens: 10_000,
+            cache_hit_rate: 0.4,
+        };
+
+        let safe = remote_safe_value(&serde_json::to_value(&summary).unwrap());
+        let decoded: ochub_core::services::usage_stats::UsageSummary =
+            serde_json::from_value(safe).expect("a redacted usage summary must still deserialize");
+
+        assert_eq!(decoded.total_input_tokens, 1_000);
+        assert_eq!(decoded.real_total_tokens, 10_000);
+    }
 }
