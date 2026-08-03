@@ -93,12 +93,26 @@ archive_cli_bundle() {
 # failure was invisible in CI because packaging itself succeeded.
 verify_signed() {
     local path="$1"
+    local details
     printf 'verifying signature: %s\n' "${path}"
     if ! codesign --verify --deep --strict --verbose=2 "${path}"; then
         printf 'signature verification failed for %s\n' "${path}" >&2
         exit 1
     fi
-    codesign -dv --verbose=2 "${path}" 2>&1 | grep -E '^(Authority|TeamIdentifier|CodeDirectory)' || true
+    details="$(codesign -dv --verbose=4 "${path}" 2>&1)"
+    printf '%s\n' "${details}" | grep -E '^(Authority|TeamIdentifier|CodeDirectory)' || true
+
+    if [[ "${developer_id_signing}" == true ]]; then
+        if ! grep -q '^Authority=Developer ID Application:' <<<"${details}"; then
+            printf 'Developer ID authority missing from %s\n' "${path}" >&2
+            exit 1
+        fi
+        if ! grep -Fxq "TeamIdentifier=${expected_team_id}" <<<"${details}"; then
+            printf 'expected TeamIdentifier=%s on %s\n' \
+                "${expected_team_id}" "${path}" >&2
+            exit 1
+        fi
+    fi
 }
 
 verify_signed_outputs() {
@@ -112,8 +126,8 @@ verify_signed_outputs() {
 
 # Three signing paths, in descending order of what the user experiences:
 #
-#   1. Developer ID + notarization -- the app opens with no warning at all.
-#      The only option that lets a new user install by double-clicking.
+#   1. Developer ID -- produces an Apple-trusted identity. With notarization
+#      credentials it also opens with no warning on first launch.
 #   2. Self-signed certificate -- Gatekeeper still refuses (its trust anchor is
 #      Apple's root, and a self-signed cert has no chain to it), so the user
 #      must approve once in System Settings > Privacy & Security. What this
@@ -125,14 +139,14 @@ verify_signed_outputs() {
 signing_identity=""
 notarize=false
 signed=true
+developer_id_signing=false
+expected_team_id=""
 if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     signing_identity="${APPLE_SIGNING_IDENTITY}"
-    notarize=true
+    developer_id_signing=true
     required_signing_vars=(
         APPLE_CERTIFICATE
         APPLE_CERTIFICATE_PASSWORD
-        APPLE_ID
-        APPLE_PASSWORD
         APPLE_TEAM_ID
     )
     for variable in "${required_signing_vars[@]}"; do
@@ -141,7 +155,26 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
             exit 1
         fi
     done
+    expected_team_id="${APPLE_TEAM_ID}"
+
+    if [[ -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" ]]; then
+        notarize=true
+    elif [[ -n "${APPLE_ID:-}" || -n "${APPLE_PASSWORD:-}" ]]; then
+        printf 'APPLE_ID and APPLE_PASSWORD must be configured together for notarization.\n' >&2
+        exit 1
+    else
+        # GitHub Actions expands missing secrets to empty strings. cargo-packager
+        # checks presence rather than content for notarization variables, so
+        # remove them entirely when this is a signing-only build.
+        unset APPLE_ID APPLE_PASSWORD APPLE_KEYCHAIN_PROFILE
+        unset APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
+        printf 'signing with Developer ID without notarization\n'
+    fi
 elif [[ -n "${MACOS_SELFSIGN_CERTIFICATE:-}" ]]; then
+    if [[ "${MACOS_REQUIRE_DEVELOPER_ID_SIGNATURE:-false}" == true ]]; then
+        printf 'Developer ID signing is required; refusing self-signed fallback.\n' >&2
+        exit 1
+    fi
     if [[ -z "${MACOS_SELFSIGN_IDENTITY:-}" ]]; then
         printf 'MACOS_SELFSIGN_IDENTITY is required alongside MACOS_SELFSIGN_CERTIFICATE.\n' >&2
         exit 1
@@ -168,6 +201,10 @@ elif [[ -n "${MACOS_SELFSIGN_CERTIFICATE:-}" ]]; then
     unset APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
     printf 'signing with a self-signed certificate; Gatekeeper will still ask the user to approve once\n'
 else
+    if [[ "${MACOS_REQUIRE_DEVELOPER_ID_SIGNATURE:-false}" == true ]]; then
+        printf 'Developer ID signing is required; signing credentials are missing.\n' >&2
+        exit 1
+    fi
     printf 'no signing credentials; producing an UNSIGNED build\n' >&2
     printf 'macOS will report it as damaged when downloaded with quarantine set\n' >&2
     # Falls through to the same packager invocation as the signed paths rather

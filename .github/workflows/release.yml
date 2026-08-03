@@ -116,24 +116,50 @@ jobs:
       - name: Install cargo-packager
         run: cargo binstall cargo-packager --version 0.11.8 --locked --no-confirm
 
+      # A GitHub release must never silently fall back to the local-development
+      # self-signed or unsigned packaging paths. Check this before the expensive
+      # Rust build so a missing/renamed secret fails immediately.
+      - name: Require macOS Developer ID credentials
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for variable in \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_TEAM_ID; do
+            if [ -z "${!variable:-}" ]; then
+              printf '%s must be configured for macOS releases\n' "${variable}" >&2
+              exit 1
+            fi
+          done
+
+          if [[ -n "${APPLE_ID:-}" && -z "${APPLE_PASSWORD:-}" ]] || \
+             [[ -z "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" ]]; then
+            printf 'APPLE_ID and APPLE_PASSWORD must be configured together for notarization\n' >&2
+            exit 1
+          fi
+
       - name: Package macOS
         if: matrix.kind == 'macos'
         shell: bash
         env:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
+          MACOS_REQUIRE_DEVELOPER_ID_SIGNATURE: "true"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Fallback when no Developer ID is configured. Produces a valid seal
-          # so macOS stops calling the app damaged, and a stable identity so
-          # per-app approvals survive updates. Gatekeeper still asks the user
-          # to approve once; only Developer ID + notarization removes that.
-          MACOS_SELFSIGN_CERTIFICATE: ${{ secrets.MACOS_SELFSIGN_CERTIFICATE }}
-          MACOS_SELFSIGN_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SELFSIGN_CERTIFICATE_PASSWORD }}
-          MACOS_SELFSIGN_IDENTITY: ${{ secrets.MACOS_SELFSIGN_IDENTITY }}
         run: ./scripts/release/package-macos.sh dist
 
       - name: Package Windows

@@ -59,7 +59,8 @@ app is damaged.
 
 | Configured | User experience on first launch |
 | --- | --- |
-| `APPLE_SIGNING_IDENTITY` + notarization secrets | Opens with no warning |
+| Developer ID signing + notarization secrets | Opens with no warning |
+| Developer ID signing only | Apple identity is present, but Gatekeeper can still require approval |
 | `MACOS_SELFSIGN_CERTIFICATE` + identity | "Unverified developer" — approve once in System Settings › Privacy & Security |
 | Neither | **"App is damaged"** — most users delete it |
 
@@ -104,17 +105,27 @@ self-signed certificate as a *valid* identity (`security find-identity -v`
 reports zero), so `codesign -s "OcHub Self Signed"` fails with "no identity
 found"; referring to it by hash is what works.
 
-## Optional platform signing
+## Platform signing
 
-Unsigned packages are built when no signing secrets are configured. To enable
-macOS signing and notarization, configure all of these GitHub Actions secrets:
+GitHub release builds require Developer ID signing and fail rather than falling
+back to a self-signed or unsigned macOS package. Configure these GitHub Actions
+secrets:
 
 - `APPLE_SIGNING_IDENTITY`
 - `APPLE_CERTIFICATE` (base64-encoded Developer ID Application `.p12`)
 - `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_TEAM_ID`
+
+Signing and notarization are separate. To notarize the signed app and DMG so
+Gatekeeper allows first launch without manual approval, additionally configure
+both:
+
 - `APPLE_ID`
 - `APPLE_PASSWORD` (an app-specific password)
-- `APPLE_TEAM_ID`
+
+Local packaging still supports self-signed and unsigned fallbacks for forks and
+development. Set `MACOS_REQUIRE_DEVELOPER_ID_SIGNATURE=true` to make a local run
+fail unless Developer ID credentials are present.
 
 To enable Windows Authenticode signing, configure both:
 
