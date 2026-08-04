@@ -548,6 +548,68 @@ impl ToolsView {
         );
     }
 
+    fn export_diagnostics(&mut self, cx: &mut Context<Self>) {
+        if self.io_busy || self.workspace_remote {
+            return;
+        }
+        self.io_busy = true;
+        cx.notify();
+        let directory = ochub_core::paths::get_app_config_dir();
+        let suggested_name = format!(
+            "OcHub-diagnostics-{}.zip",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
+        let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+        cx.spawn(async move |this, cx| {
+            let path = match receiver.await {
+                Ok(Ok(Some(path))) => Some(path),
+                _ => None,
+            };
+            let Some(path) = path else {
+                this.update(cx, |this, cx| {
+                    this.io_busy = false;
+                    cx.notify();
+                })
+                .ok();
+                return;
+            };
+            let display_path = path.display().to_string();
+            let result = cx
+                .background_spawn(async move { crate::diagnostics::export_bundle(&path) })
+                .await;
+            this.update(cx, move |this, cx| {
+                this.io_busy = false;
+                match result {
+                    Ok(()) => {
+                        log::info!(
+                            target: "ochub::diagnostics",
+                            "diagnostics exported to {display_path}"
+                        );
+                        this.set_status(
+                            NotificationLevel::Success,
+                            tf!(k::TOOLS_DIAGNOSTICS_EXPORTED, path = display_path),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            target: "ochub::diagnostics",
+                            "diagnostics export failed: {error}"
+                        );
+                        this.set_status(
+                            NotificationLevel::Error,
+                            tf!(k::TOOLS_DIAGNOSTICS_EXPORT_FAILED, error = error),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn open_config_dir(&mut self, app: AppType, cx: &mut Context<Self>) {
         self.run_io(
             cx,
@@ -2877,6 +2939,31 @@ impl ToolsView {
                                         },
                                     )),
                                 ),
+                        )
+                        .child(
+                            div().flex().flex_row().flex_wrap().gap_2().child(
+                                components::button(
+                                    "export-diagnostics",
+                                    if self.io_busy {
+                                        t(k::TOOLS_CLI_BUSY)
+                                    } else {
+                                        t(k::TOOLS_APP_EXPORT_DIAGNOSTICS)
+                                    },
+                                    ButtonTone::Neutral,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.export_diagnostics(cx);
+                                    },
+                                )),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::muted())
+                                .child(t(k::TOOLS_APP_DIAGNOSTICS_DESC)),
                         ),
                 )
                 .into_any_element(),

@@ -13,6 +13,7 @@ mod chart;
 mod code_editor;
 mod components;
 mod core_async;
+mod diagnostics;
 mod diff_view;
 mod fold;
 mod gallery_view;
@@ -340,7 +341,7 @@ fn main() {
     }
 
     shell_support::setup_panic_hook();
-    env_logger_init();
+    diagnostics::install_logging();
     // Startup can print and log before a window ever opens — a second launch
     // reports the running instance and exits right here. Resolve the locale from
     // the persisted setting first so those lines are in the user's language;
@@ -593,40 +594,5 @@ mod version_arg_tests {
         assert!(version_requested(["ochub", "-V"]));
         assert!(!version_requested(["ochub"]));
         assert!(!version_requested(["--version"]));
-    }
-}
-
-/// Minimal stderr logger so init failures are never silent.
-/// Level via `RUST_LOG` (error/warn/info/debug/trace), default info.
-struct StderrLogger;
-
-static LOGGER: StderrLogger = StderrLogger;
-
-impl log::Log for StderrLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            eprintln!(
-                "[{}] {}: {}",
-                record.level(),
-                record.target(),
-                record.args()
-            );
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-fn env_logger_init() {
-    let level = std::env::var("RUST_LOG")
-        .ok()
-        .and_then(|v| v.parse::<log::LevelFilter>().ok())
-        .unwrap_or(log::LevelFilter::Info);
-    if log::set_logger(&LOGGER).is_ok() {
-        log::set_max_level(level);
     }
 }

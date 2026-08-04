@@ -64,6 +64,7 @@ pub fn setup_panic_hook() {
         if let Some(parent) = log_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
+        crate::diagnostics::harden_existing_private_file(&log_path);
 
         // Guard the time formatting so a nested panic can't mask the report.
         let timestamp = panic::catch_unwind(|| {
@@ -110,7 +111,18 @@ pub fn setup_panic_hook() {
              {sub}\nStack Trace (Backtrace)\n{sub}\n{backtrace}\n\n{separator}\n"
         );
 
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        let mut options = OpenOptions::new();
+        options.create(true).append(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let is_symlink = fs::symlink_metadata(&log_path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
+        if !is_symlink && let Ok(mut file) = options.open(&log_path) {
+            crate::diagnostics::harden_existing_private_file(&log_path);
             let _ = file.write_all(entry.as_bytes());
             let _ = file.flush();
             eprintln!("\n[OcHub] Crash log saved to: {}", log_path.display());
