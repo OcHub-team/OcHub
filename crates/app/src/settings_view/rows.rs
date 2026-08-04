@@ -1,11 +1,13 @@
 //! The adapter between `cx.listener` and the four `layout` rows.
 //!
-//! Each helper takes a [`RowId`] and pulls the element id, the label key and
-//! the description key out of [`search::entry`], so no page ever writes an id
-//! literal or repeats the `move |window, cx| listener(&(), window, cx)`
-//! boilerplate. `desc_override` is for the rows whose description is a live
-//! readout (the resolved data directory, the update state) rather than static
-//! copy; search still matches against the static key.
+//! Each helper takes a [`RowId`] and pulls the element id and the label key out
+//! of [`search::entry`], so no page ever writes an id literal or repeats the
+//! `move |window, cx| listener(&(), window, cx)` boilerplate.
+//!
+//! A row renders a second line only when `desc_override` carries a live readout
+//! (the resolved data directory, the sync summary). The static `desc` key is
+//! never drawn — it stays in [`search::RowEntry`] purely so search keeps
+//! matching against the wording a user would think to type.
 
 use gpui::{AnyElement, Context, SharedString, Window, div, prelude::*};
 
@@ -32,7 +34,7 @@ pub(super) fn switch(
     layout::switch_row(
         entry.id,
         t(entry.label),
-        desc_override.unwrap_or_else(|| t(entry.desc)),
+        desc_override,
         on,
         disabled,
         move |window, cx| activate(&(), window, cx),
@@ -68,7 +70,7 @@ pub(super) fn select(
     layout::select_row(
         entry.id,
         t(entry.label),
-        desc_override.unwrap_or_else(|| t(entry.desc)),
+        desc_override,
         options,
         selected,
         state,
@@ -93,7 +95,7 @@ pub(super) fn nav(
     layout::navigate_row(
         entry.id,
         t(entry.label),
-        desc_override.unwrap_or_else(|| t(entry.desc)),
+        desc_override,
         value,
         disabled,
         move |window, cx| activate(&(), window, cx),
@@ -119,7 +121,7 @@ pub(super) fn act(
     layout::action_row(
         entry.id,
         t(entry.label),
-        desc_override.unwrap_or_else(|| t(entry.desc)),
+        desc_override,
         action,
         tone,
         disabled,
@@ -130,18 +132,14 @@ pub(super) fn act(
 
 /// One section as a virtualized list item: header above a grouped card, with
 /// its own bottom spacing (the list draws no inter-item gap).
-pub(super) fn group_block(
-    title: impl Into<SharedString>,
-    description: impl Into<SharedString>,
-    rows: Vec<AnyElement>,
-) -> AnyElement {
+pub(super) fn group_block(title: impl Into<SharedString>, rows: Vec<AnyElement>) -> AnyElement {
     div()
         .flex()
         .flex_col()
         .gap_3()
         .pb_3()
         .w_full()
-        .child(layout::section_header(title, description))
+        .child(layout::section_header(title, None))
         .child(layout::group(rows))
         .into_any_element()
 }

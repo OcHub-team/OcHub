@@ -43,7 +43,6 @@
 "sessions.filter.reset" = "Reset"
 "sessions.header.refresh" = "Refresh"
 "sessions.header.scanning" = "Scanning…"
-"sessions.header.subtitle" = "Browse and manage the transcripts saved by the CLIs on this machine."
 "sessions.header.title" = "Sessions"
 "sessions.index_wait.hint" = "The first build reads every transcript; once it finishes you can search conversation text. The index is kept, so later passes are incremental."
 "sessions.index_wait.skip" = "Browse the list meanwhile"

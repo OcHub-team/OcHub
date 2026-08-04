@@ -3252,7 +3252,9 @@ impl AppRoot {
                 .gap_2()
                 .child(layout::section_header(
                     t(k::SHELL_FIRST_RUN_IMPORT_HEADING),
-                    SharedString::from(ochub_core::paths::abbreviate_home(&source.path)),
+                    Some(SharedString::from(ochub_core::paths::abbreviate_home(
+                        &source.path,
+                    ))),
                 ))
                 .child(layout::group(Self::import_item_rows(source)))
                 .child(

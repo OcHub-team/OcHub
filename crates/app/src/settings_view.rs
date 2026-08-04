@@ -790,12 +790,7 @@ impl SettingsView {
 
     /// A sub-page header: back button, then the same title/subtitle column
     /// [`layout::page_header`] draws. Esc returns as well.
-    fn sub_page_header(
-        &self,
-        title: SharedString,
-        subtitle: SharedString,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    fn sub_page_header(&self, title: SharedString, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex()
             .flex_row()
@@ -816,29 +811,15 @@ impl SettingsView {
                 .on_click(cx.listener(|this, _event, _window, cx| this.go(Page::Root, cx))),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme::text())
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(subtitle),
-                    ),
+                div().flex().flex_col().flex_1().min_w_0().gap_1().child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme::text())
+                        .text_xl()
+                        .font_weight(FontWeight::BOLD)
+                        .child(title),
+                ),
             )
     }
 

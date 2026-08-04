@@ -41,7 +41,10 @@ impl GalleryView {
             .flex_col()
             .gap_3()
             .w_full()
-            .child(layout::section_header(title, description))
+            .child(layout::section_header(
+                title,
+                Some(SharedString::from(description)),
+            ))
             .child(body)
     }
 }
@@ -99,7 +102,7 @@ impl gpui::Render for GalleryView {
             ))
             .child(components::field_row(
                 "随应用自动启动",
-                "启动 OcHub 时自动拉起网关（端点地址保持稳定）。",
+                Some("启动 OcHub 时自动拉起网关（端点地址保持稳定）。".into()),
                 layout::toggle(true),
             ));
 
@@ -148,14 +151,14 @@ impl gpui::Render for GalleryView {
             layout::row()
                 .child(layout::row_label(
                     "要求 API key",
-                    "推理端点要求本地 key，用量按 key 归因。",
+                    Some("推理端点要求本地 key，用量按 key 归因。".into()),
                 ))
                 .child(layout::toggle(true))
                 .into_any_element(),
             layout::row()
                 .child(layout::row_label(
                     "随应用自动启动",
-                    "启动 OcHub 时自动拉起网关（端点地址保持稳定）。",
+                    Some("启动 OcHub 时自动拉起网关（端点地址保持稳定）。".into()),
                 ))
                 .child(layout::toggle(false))
                 .into_any_element(),
@@ -212,7 +215,7 @@ impl gpui::Render for GalleryView {
                 .child(components::disclosure(
                     "g-d1",
                     "网络设置",
-                    "监听地址、超时与重试策略",
+                    Some("监听地址、超时与重试策略".into()),
                     true,
                 ))
                 .child(
@@ -225,7 +228,7 @@ impl gpui::Render for GalleryView {
                 .child(components::disclosure(
                     "g-d2",
                     "流式健康检测",
-                    "对SSE 流做周期性探测与自愈",
+                    Some("对SSE 流做周期性探测与自愈".into()),
                     false,
                 )),
         );

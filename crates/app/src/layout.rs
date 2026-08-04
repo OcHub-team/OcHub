@@ -266,10 +266,11 @@ pub fn wide_column() -> gpui::Div {
         .max_w(px(WIDE_MAX_WIDTH))
 }
 
-/// A section header above a [`group`]: small semibold title + muted one-line caption.
+/// A section header above a [`group`]: small semibold title, plus a muted line
+/// reserved for data (a count, a path) — never for explaining what the section is.
 pub fn section_header(
     title: impl Into<SharedString>,
-    description: impl Into<SharedString>,
+    description: Option<SharedString>,
 ) -> gpui::Div {
     div()
         .flex()
@@ -283,12 +284,14 @@ pub fn section_header(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title.into()),
         )
-        .child(
-            div()
-                .text_color(theme::muted())
-                .text_xs()
-                .child(description.into()),
-        )
+        .when_some(description, |header, description| {
+            header.child(
+                div()
+                    .text_color(theme::muted())
+                    .text_xs()
+                    .child(description),
+            )
+        })
 }
 
 /// Wrap a set of rows into a single rounded grouped card with inset hairline dividers
@@ -333,10 +336,7 @@ pub fn row() -> gpui::Div {
 
 /// The left-hand label + description column shared by every grouped row: a semibold
 /// label over a muted, two-line-clamped description, taking the remaining width.
-pub fn row_label(
-    label: impl Into<SharedString>,
-    description: impl Into<SharedString>,
-) -> gpui::Div {
+pub fn row_label(label: impl Into<SharedString>, description: Option<SharedString>) -> gpui::Div {
     div()
         .flex()
         .flex_col()
@@ -349,13 +349,15 @@ pub fn row_label(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(label.into()),
         )
-        .child(
-            div()
-                .text_color(theme::muted())
-                .text_xs()
-                .line_clamp(2)
-                .child(description.into()),
-        )
+        .when_some(description, |row, description| {
+            row.child(
+                div()
+                    .text_color(theme::muted())
+                    .text_xs()
+                    .line_clamp(2)
+                    .child(description),
+            )
+        })
 }
 
 /// The switch pill used by grouped toggle rows: blue (accent) when on, neutral when
@@ -512,7 +514,7 @@ fn with_activation(
 pub fn switch_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
-    description: impl Into<SharedString>,
+    description: Option<SharedString>,
     on: bool,
     disabled: bool,
     on_toggle: impl Fn(&mut Window, &mut App) + 'static,
@@ -555,7 +557,7 @@ pub fn switch_row(
 pub fn select_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
-    description: impl Into<SharedString>,
+    description: Option<SharedString>,
     options: &[&str],
     selected: usize,
     state: SelectRowState,
@@ -652,7 +654,7 @@ pub fn select_row(
 pub fn navigate_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
-    description: impl Into<SharedString>,
+    description: Option<SharedString>,
     value: Option<SharedString>,
     disabled: bool,
     on_open: impl Fn(&mut Window, &mut App) + 'static,
@@ -714,7 +716,7 @@ pub fn navigate_row(
 pub fn action_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
-    description: impl Into<SharedString>,
+    description: Option<SharedString>,
     action: impl Into<SharedString>,
     tone: ButtonTone,
     disabled: bool,

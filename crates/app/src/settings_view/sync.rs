@@ -782,11 +782,7 @@ impl SettingsView {
 
         layout::page()
             .relative()
-            .child(self.sub_page_header(
-                t(k::SETTINGS_SYNC_PAGE_TITLE),
-                t(k::SETTINGS_SYNC_PAGE_DESC),
-                cx,
-            ))
+            .child(self.sub_page_header(t(k::SETTINGS_SYNC_PAGE_TITLE), cx))
             .child(layout::scroll_body(
                 "settings-sync-body",
                 &self.sync_scroll,
@@ -848,11 +844,7 @@ impl SettingsView {
                 error = error
             ))));
         }
-        section(
-            t(k::SETTINGS_SYNC_SECTION_STATUS),
-            t(k::SETTINGS_SYNC_SECTION_STATUS_DESC),
-            card.into_any_element(),
-        )
+        section(t(k::SETTINGS_SYNC_SECTION_STATUS), card.into_any_element())
     }
 
     fn render_sync_connection(&self) -> gpui::Div {
@@ -871,7 +863,6 @@ impl SettingsView {
         }
         section(
             t(k::SETTINGS_SYNC_SECTION_CONNECTION),
-            t(k::SETTINGS_SYNC_SECTION_CONNECTION_DESC),
             card.into_any_element(),
         )
     }
@@ -893,7 +884,7 @@ impl SettingsView {
             layout::action_row(
                 "sync-test",
                 t(k::SETTINGS_SYNC_TEST_LABEL),
-                t(k::SETTINGS_SYNC_TEST_DESC),
+                None,
                 t(k::SETTINGS_SYNC_TEST_ACTION),
                 ButtonTone::Neutral,
                 busy || self.draft_incomplete(cx),
@@ -903,7 +894,7 @@ impl SettingsView {
             layout::action_row(
                 "sync-upload",
                 t(k::SETTINGS_SYNC_UPLOAD_LABEL),
-                t(k::SETTINGS_SYNC_UPLOAD_DESC),
+                None,
                 t(k::SETTINGS_SYNC_UPLOAD_ACTION),
                 ButtonTone::Neutral,
                 acts_on_stored,
@@ -913,7 +904,7 @@ impl SettingsView {
             layout::action_row(
                 "sync-restore",
                 t(k::SETTINGS_SYNC_RESTORE_LABEL),
-                t(k::SETTINGS_SYNC_RESTORE_DESC),
+                None,
                 t(k::SETTINGS_SYNC_RESTORE_ACTION),
                 ButtonTone::Danger,
                 acts_on_stored,
@@ -923,19 +914,18 @@ impl SettingsView {
         ];
         section(
             t(k::SETTINGS_SYNC_SECTION_ACTIONS),
-            t(k::SETTINGS_SYNC_SECTION_ACTIONS_DESC),
             layout::group(rows).into_any_element(),
         )
     }
 }
 
-fn section(title: SharedString, description: SharedString, body: gpui::AnyElement) -> gpui::Div {
+fn section(title: SharedString, body: gpui::AnyElement) -> gpui::Div {
     div()
         .flex()
         .flex_col()
         .gap_3()
         .w_full()
-        .child(layout::section_header(title, description))
+        .child(layout::section_header(title, None))
         .child(body)
 }
 

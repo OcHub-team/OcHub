@@ -48,7 +48,7 @@ pub struct AppSettingsView {
 
 /// Whether an app has any app-scoped settings worth a gear button.
 pub fn app_has_settings(app: AppType) -> bool {
-    config_dir_meta(app).is_some() || matches!(app, AppType::Claude | AppType::Codex)
+    config_dir_placeholder(app).is_some() || matches!(app, AppType::Claude | AppType::Codex)
 }
 
 impl AppSettingsView {
@@ -156,7 +156,7 @@ impl AppSettingsView {
         settings: &AppSettings,
         cx: &mut Context<Self>,
     ) -> Option<Entity<TextInput>> {
-        let (placeholder, _desc) = config_dir_meta(app_type)?;
+        let placeholder = config_dir_placeholder(app_type)?;
         let current = read_config_dir(settings, app_type).unwrap_or_default();
         Some(cx.new(|cx| {
             let mut input = TextInput::new(cx, placeholder);
@@ -262,7 +262,7 @@ impl AppSettingsView {
             .id(toggle.id)
             .cursor_pointer()
             .hover(|s| s.bg(theme::surface_hover()))
-            .child(layout::row_label(toggle.label, toggle.description))
+            .child(layout::row_label(toggle.label, None))
             .child(layout::toggle(on))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.toggle(toggle, cx);
@@ -271,7 +271,6 @@ impl AppSettingsView {
 
     fn render_config_dir(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let input = self.config_dir.as_ref()?;
-        let (_placeholder, desc) = config_dir_meta(self.app_type)?;
         let save_button = if self.saving || !self.workspace_available {
             components::disabled_button(
                 "app-settings-save-dir",
@@ -301,7 +300,7 @@ impl AppSettingsView {
                 .w_full()
                 .child(layout::section_header(
                     t(k::APP_SETTINGS_CONFIG_DIR_TITLE),
-                    desc,
+                    None,
                 ))
                 .child(
                     components::card()
@@ -321,7 +320,7 @@ impl Render for AppSettingsView {
 
         let header = layout::page_header(
             SharedString::from(tf!(k::APP_SETTINGS_HEADER_TITLE, app = app_label(app_type))),
-            Some(t(k::APP_SETTINGS_HEADER_SUBTITLE)),
+            None,
         )
         .child(
             components::button(
@@ -339,7 +338,7 @@ impl Render for AppSettingsView {
         if !toggles.is_empty() {
             column = column.child(layout::section_header(
                 t(k::APP_SETTINGS_BEHAVIOR_TITLE),
-                t(k::APP_SETTINGS_BEHAVIOR_DESC),
+                None,
             ));
             let rows: Vec<gpui::AnyElement> = toggles
                 .into_iter()
@@ -367,7 +366,6 @@ struct AppToggle {
     id: &'static str,
     path: &'static str,
     label: &'static str,
-    description: &'static str,
     get: fn(&AppSettings) -> bool,
 }
 
@@ -378,14 +376,12 @@ fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
                 id: "app-set-claude-plugin",
                 path: "enableClaudePluginIntegration",
                 label: raw(k::APP_SETTINGS_CLAUDE_PLUGIN_LABEL),
-                description: raw(k::APP_SETTINGS_CLAUDE_PLUGIN_DESC),
                 get: |s| s.enable_claude_plugin_integration,
             },
             AppToggle {
                 id: "app-set-claude-onboarding",
                 path: "skipClaudeOnboarding",
                 label: raw(k::APP_SETTINGS_CLAUDE_ONBOARDING_LABEL),
-                description: raw(k::APP_SETTINGS_CLAUDE_ONBOARDING_DESC),
                 get: |s| s.skip_claude_onboarding,
             },
         ],
@@ -395,14 +391,12 @@ fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
                     id: "app-set-codex-preserve-auth",
                     path: "preserveCodexOfficialAuthOnSwitch",
                     label: raw(k::APP_SETTINGS_CODEX_PRESERVE_AUTH_LABEL),
-                    description: raw(k::APP_SETTINGS_CODEX_PRESERVE_AUTH_DESC),
                     get: |s| s.preserve_codex_official_auth_on_switch,
                 },
                 AppToggle {
                     id: "app-set-codex-unify-history",
                     path: "unifyCodexSessionHistory",
                     label: raw(k::APP_SETTINGS_CODEX_UNIFY_HISTORY_LABEL),
-                    description: raw(k::APP_SETTINGS_CODEX_UNIFY_HISTORY_DESC),
                     get: |s| s.unify_codex_session_history,
                 },
             ];
@@ -411,7 +405,6 @@ fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
                     id: "app-set-codex-migrate-history",
                     path: "unifyCodexMigrateExisting",
                     label: raw(k::APP_SETTINGS_CODEX_MIGRATE_HISTORY_LABEL),
-                    description: raw(k::APP_SETTINGS_CODEX_MIGRATE_HISTORY_DESC),
                     get: |s| s.unify_codex_migrate_existing.unwrap_or(false),
                 });
             }
@@ -422,21 +415,15 @@ fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
 }
 
 /// The placeholder + description for an app's config-dir override, or `None`.
-fn config_dir_meta(app: AppType) -> Option<(&'static str, &'static str)> {
+fn config_dir_placeholder(app: AppType) -> Option<&'static str> {
     match app {
-        AppType::Claude => Some(("~/.claude", raw(k::APP_SETTINGS_CONFIG_DIR_CLAUDE_DESC))),
-        AppType::Codex => Some(("~/.codex", raw(k::APP_SETTINGS_CONFIG_DIR_CODEX_DESC))),
-        AppType::GrokBuild => Some(("~/.grok", raw(k::APP_SETTINGS_CONFIG_DIR_GROKBUILD_DESC))),
-        AppType::KimiCode => Some((
-            "~/.kimi-code",
-            raw(k::APP_SETTINGS_CONFIG_DIR_KIMI_CODE_DESC),
-        )),
-        AppType::OpenCode => Some((
-            "~/.config/opencode",
-            raw(k::APP_SETTINGS_CONFIG_DIR_OPENCODE_DESC),
-        )),
-        AppType::OpenClaw => Some(("~/.openclaw", raw(k::APP_SETTINGS_CONFIG_DIR_OPENCLAW_DESC))),
-        AppType::Hermes => Some(("~/.hermes", raw(k::APP_SETTINGS_CONFIG_DIR_HERMES_DESC))),
+        AppType::Claude => Some("~/.claude"),
+        AppType::Codex => Some("~/.codex"),
+        AppType::GrokBuild => Some("~/.grok"),
+        AppType::KimiCode => Some("~/.kimi-code"),
+        AppType::OpenCode => Some("~/.config/opencode"),
+        AppType::OpenClaw => Some("~/.openclaw"),
+        AppType::Hermes => Some("~/.hermes"),
         AppType::ClaudeDesktop | AppType::CherryStudio => None,
     }
 }

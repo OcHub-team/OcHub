@@ -405,14 +405,14 @@ impl NetworkView {
             .child(layout::switch_row(
                 "network-proxy-enabled",
                 t(k::NETWORK_FIELD_ENABLED_LABEL),
-                t(k::NETWORK_FIELD_ENABLED_DESC),
+                None,
                 self.enabled,
                 false,
                 move |window, cx| toggle(&(), window, cx),
             ))
             .child(components::field_row(
                 t(k::NETWORK_FIELD_PROTOCOL_LABEL),
-                SharedString::default(),
+                None,
                 components::segmented(
                     "network-proxy-protocol",
                     &[
@@ -438,7 +438,7 @@ impl NetworkView {
                             .child(components::field_with_error(
                                 t(k::NETWORK_FIELD_HOST_LABEL),
                                 true,
-                                Some(t(k::NETWORK_FIELD_HOST_DESC)),
+                                None,
                                 self.host_error.map(|error| {
                                     error_text(
                                         error,
@@ -474,19 +474,18 @@ impl NetworkView {
                     .child(div().flex_1().min_w(px(180.)).child(components::field(
                         t(k::NETWORK_FIELD_USERNAME_LABEL),
                         false,
-                        Some(t(k::NETWORK_FIELD_USERNAME_DESC)),
+                        None,
                         div().w_full().child(self.username_input.clone()),
                     )))
                     .child(div().flex_1().min_w(px(180.)).child(components::field(
                         t(k::NETWORK_FIELD_PASSWORD_LABEL),
                         false,
-                        Some(t(k::NETWORK_FIELD_PASSWORD_DESC)),
+                        None,
                         div().w_full().child(self.password_input.clone()),
                     ))),
             );
         section(
             t(k::NETWORK_SECTION_CONNECTION_TITLE),
-            t(k::NETWORK_SECTION_CONNECTION_DESC),
             card.into_any_element(),
         )
     }
@@ -498,7 +497,7 @@ impl NetworkView {
         let row = layout::action_row(
             "network-proxy-test",
             t(k::NETWORK_TEST_LABEL),
-            t(k::NETWORK_TEST_DESC),
+            None,
             t(k::NETWORK_TEST_ACTION),
             ButtonTone::Neutral,
             self.saving || self.testing || incomplete || !self.workspace_available,
@@ -506,7 +505,6 @@ impl NetworkView {
         );
         section(
             t(k::NETWORK_SECTION_TEST_TITLE),
-            t(k::NETWORK_SECTION_TEST_DESC),
             layout::group(vec![row.into_any_element()]).into_any_element(),
         )
     }
@@ -580,10 +578,7 @@ impl Render for NetworkView {
 
         layout::page()
             .relative()
-            .child(
-                layout::page_header(t(k::NETWORK_PAGE_TITLE), Some(t(k::NETWORK_PAGE_DESC)))
-                    .child(actions),
-            )
+            .child(layout::page_header(t(k::NETWORK_PAGE_TITLE), None).child(actions))
             .child(layout::scroll_body(
                 "network-proxy-body",
                 &self.scroll,
@@ -594,13 +589,13 @@ impl Render for NetworkView {
 
 crate::notifications::impl_status_toasts_leveled!(NetworkView);
 
-fn section(title: SharedString, description: SharedString, body: AnyElement) -> gpui::Div {
+fn section(title: SharedString, body: AnyElement) -> gpui::Div {
     div()
         .flex()
         .flex_col()
         .gap_3()
         .w_full()
-        .child(layout::section_header(title, description))
+        .child(layout::section_header(title, None))
         .child(body)
 }
 

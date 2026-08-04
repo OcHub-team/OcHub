@@ -27,11 +27,7 @@ impl SettingsView {
     pub(super) fn render_apps(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         layout::page()
             .relative()
-            .child(self.sub_page_header(
-                t(k::SETTINGS_APPS_PAGE_TITLE),
-                t(k::SETTINGS_APPS_PAGE_DESC),
-                cx,
-            ))
+            .child(self.sub_page_header(t(k::SETTINGS_APPS_PAGE_TITLE), cx))
             .child(layout::virtual_body(
                 "settings-apps-body",
                 gpui::list(
@@ -61,23 +57,14 @@ impl SettingsView {
                     .map(|plugin| {
                         let id = plugin.id().as_str().to_string();
                         let label = plugin.display_name().to_string();
-                        let description = if plugin.is_user_manifest() {
-                            tf!(k::SETTINGS_APPS_PLUGIN_DESC_USER, app = label)
-                        } else {
-                            tf!(k::SETTINGS_APPS_PLUGIN_DESC, app = label)
-                        };
                         let enabled = self.app_is_enabled(plugin.as_ref());
                         // "至少保留一个启用的应用" is a rule about which switch
-                        // can be flipped, so it disables the switch and says why
-                        // in the description. Erroring after the click made the
-                        // refusal look like a failure.
+                        // can be flipped, so it disables the switch and says why.
+                        // Erroring after the click made the refusal look like a
+                        // failure. It is the only line these rows still carry.
                         let last_one = enabled && enabled_count <= 1;
                         let busy = self.toggling.contains(&id);
-                        let description = if last_one {
-                            t(k::SETTINGS_APPS_KEEP_ONE_ENABLED)
-                        } else {
-                            SharedString::from(description)
-                        };
+                        let description = last_one.then(|| t(k::SETTINGS_APPS_KEEP_ONE_ENABLED));
                         let toggle_id = id.clone();
                         layout::switch_row(
                             SharedString::from(format!("app-{id}")),
@@ -92,11 +79,7 @@ impl SettingsView {
                         .into_any_element()
                     })
                     .collect();
-                super::rows::group_block(
-                    t(k::SETTINGS_APPS_SECTION_ENABLED),
-                    t(k::SETTINGS_APPS_SECTION_ENABLED_DESC),
-                    rows,
-                )
+                super::rows::group_block(t(k::SETTINGS_APPS_SECTION_ENABLED), rows)
             }
             1 => {
                 if self.plugin_load_errors.is_empty() {
@@ -117,11 +100,7 @@ impl SettingsView {
                             .into_any_element()
                     })
                     .collect();
-                super::rows::group_block(
-                    t(k::SETTINGS_APPS_SECTION_ERRORS),
-                    t(k::SETTINGS_APPS_SECTION_ERRORS_DESC),
-                    rows,
-                )
+                super::rows::group_block(t(k::SETTINGS_APPS_SECTION_ERRORS), rows)
             }
             2 => {
                 let dir = ochub_core::plugin::user_plugins_dir();
@@ -129,7 +108,7 @@ impl SettingsView {
                     layout::action_row(
                         "apps-reload",
                         t(k::SETTINGS_APPS_RELOAD_LABEL),
-                        t(k::SETTINGS_APPS_RELOAD_DESC),
+                        None,
                         t(k::SETTINGS_APPS_RELOAD_ACTION),
                         ButtonTone::Neutral,
                         self.settings_busy,
@@ -141,7 +120,7 @@ impl SettingsView {
                     layout::action_row(
                         "apps-dir",
                         t(k::SETTINGS_APPS_PLUGINS_DIR_LABEL),
-                        SharedString::from(dir.to_string_lossy().to_string()),
+                        Some(SharedString::from(dir.to_string_lossy().to_string())),
                         t(k::SETTINGS_ACTION_OPEN),
                         ButtonTone::Neutral,
                         self.settings_busy,
@@ -151,11 +130,7 @@ impl SettingsView {
                     )
                     .into_any_element(),
                 ];
-                super::rows::group_block(
-                    t(k::SETTINGS_APPS_SECTION_USER),
-                    t(k::SETTINGS_APPS_SECTION_USER_DESC),
-                    rows,
-                )
+                super::rows::group_block(t(k::SETTINGS_APPS_SECTION_USER), rows)
             }
             _ => gpui::Empty.into_any_element(),
         }

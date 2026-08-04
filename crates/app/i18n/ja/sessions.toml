@@ -43,7 +43,6 @@
 "sessions.filter.reset" = "リセット"
 "sessions.header.refresh" = "更新"
 "sessions.header.scanning" = "スキャン中…"
-"sessions.header.subtitle" = "このパソコンの CLI に保存された会話履歴を閲覧・管理します。"
 "sessions.header.title" = "セッション"
 "sessions.index_wait.hint" = "初回は全ての会話履歴を読み込みます。完了すると本文を検索できます。インデックスは保存され、以降は差分更新のみです。"
 "sessions.index_wait.skip" = "先に一覧を見る"

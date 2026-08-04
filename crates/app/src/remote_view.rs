@@ -1869,12 +1869,6 @@ impl RemoteView {
                             ),
                     )
                     .child(components::badge(phase_tone, phase_label.clone())),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::subtext())
-                    .child(t(k::REMOTE_BOOTSTRAP_DESC)),
             );
         if let Some(prepared) = &dialog.prepared {
             let destination = prepared.probe.home.join(".local/bin/ochcli");
@@ -1882,10 +1876,10 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_BOOTSTRAP_PLATFORM),
-                        SharedString::from(format!(
+                        Some(SharedString::from(format!(
                             "{} · {}",
                             prepared.probe.os, prepared.probe.arch
-                        )),
+                        ))),
                     ))
                     .child(components::badge(
                         BadgeTone::Neutral,
@@ -1895,12 +1889,14 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_BOOTSTRAP_CURRENT),
-                        prepared
-                            .probe
-                            .existing_cli
-                            .as_ref()
-                            .map(|path| SharedString::from(path.display().to_string()))
-                            .unwrap_or_else(|| t(k::REMOTE_BOOTSTRAP_NOT_INSTALLED)),
+                        Some(
+                            prepared
+                                .probe
+                                .existing_cli
+                                .as_ref()
+                                .map(|path| SharedString::from(path.display().to_string()))
+                                .unwrap_or_else(|| t(k::REMOTE_BOOTSTRAP_NOT_INSTALLED)),
+                        ),
                     ))
                     .child(components::badge(
                         BadgeTone::Neutral,
@@ -1915,7 +1911,7 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_BOOTSTRAP_LATEST),
-                        SharedString::from(format_update_size(prepared.entry.size)),
+                        Some(SharedString::from(format_update_size(prepared.entry.size))),
                     ))
                     .child(components::badge(
                         BadgeTone::Accent,
@@ -1925,7 +1921,7 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_BOOTSTRAP_DESTINATION),
-                        SharedString::from(destination.display().to_string()),
+                        Some(SharedString::from(destination.display().to_string())),
                     ))
                     .child(components::badge(BadgeTone::Success, "SSH"))
                     .into_any_element(),
@@ -2128,7 +2124,7 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_UPDATE_CURRENT),
-                        SharedString::from(report.update.current_version.clone()),
+                        Some(SharedString::from(report.update.current_version.clone())),
                     ))
                     .child(components::badge(
                         BadgeTone::Neutral,
@@ -2138,7 +2134,7 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_UPDATE_LATEST),
-                        SharedString::from(report.update.latest_version.clone()),
+                        Some(SharedString::from(report.update.latest_version.clone())),
                     ))
                     .child(components::badge(
                         if report.update.has_update {
@@ -2156,7 +2152,7 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_UPDATE_TARGET),
-                        SharedString::from(report.update.target.clone()),
+                        Some(SharedString::from(report.update.target.clone())),
                     ))
                     .child(components::badge(
                         BadgeTone::Neutral,
@@ -2170,7 +2166,9 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_UPDATE_INSTALLATION),
-                        SharedString::from(report.installation.managed_root.display().to_string()),
+                        Some(SharedString::from(
+                            report.installation.managed_root.display().to_string(),
+                        )),
                     ))
                     .child(components::badge(
                         if report.installation.managed {
@@ -2184,7 +2182,7 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         t(k::REMOTE_UPDATE_NETWORK),
-                        if relay_selected {
+                        Some(if relay_selected {
                             route.clone()
                         } else {
                             report
@@ -2193,7 +2191,7 @@ impl RemoteView {
                                 .clone()
                                 .map(SharedString::from)
                                 .unwrap_or_else(|| route.clone())
-                        },
+                        }),
                     ))
                     .child(components::badge(
                         if !relay_selected && report.update.direct_download {
@@ -2282,12 +2280,6 @@ impl RemoteView {
                                 )
                                 .into_any_element()
                             }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::muted())
-                            .child(t(k::REMOTE_UPDATE_STRATEGY_DESC)),
                     ),
             );
             if report.update.has_update
@@ -2679,12 +2671,6 @@ impl RemoteView {
                     .min_h_0()
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(theme::subtext())
-                            .child(t(k::REMOTE_ADD_CONFIG_DESC)),
-                    )
-                    .child(
-                        div()
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::muted())
@@ -2819,12 +2805,6 @@ impl RemoteView {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme::subtext())
-                            .child(t(k::REMOTE_ADD_DESC)),
-                    )
                     .child(fields),
             )
             .child(
@@ -2880,7 +2860,7 @@ impl RemoteView {
                 layout::row()
                     .child(layout::row_label(
                         SharedString::from(key.key_type.clone()),
-                        SharedString::from(key.fingerprint.clone()),
+                        Some(SharedString::from(key.fingerprint.clone())),
                     ))
                     .child(components::badge(BadgeTone::Warning, "SSH"))
                     .into_any_element()
@@ -3190,7 +3170,10 @@ impl RemoteView {
             .child(
                 layout::section_header(
                     t(k::REMOTE_CONNECTION_TITLE),
-                    tf!(k::REMOTE_CONNECTION_COUNT, count = self.store.hosts().len()),
+                    Some(SharedString::from(tf!(
+                        k::REMOTE_CONNECTION_COUNT,
+                        count = self.store.hosts().len()
+                    ))),
                 )
                 .child(if self.probing {
                     components::disabled_button(
@@ -3211,12 +3194,6 @@ impl RemoteView {
                     .on_click(move |_event, window, cx| retry(&(), window, cx))
                     .into_any_element()
                 }),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme::muted())
-                    .child(t(k::REMOTE_CONNECTION_DESC)),
             )
             .child(layout::group(rows))
     }
@@ -3263,10 +3240,7 @@ impl gpui::Render for RemoteView {
             layout::wide_column().child(self.render_connection_list(cx))
         };
         let mut page = layout::page()
-            .child(
-                layout::page_header(t(k::REMOTE_PAGE_TITLE), Some(t(k::REMOTE_PAGE_DESC)))
-                    .child(action),
-            )
+            .child(layout::page_header(t(k::REMOTE_PAGE_TITLE), None).child(action))
             .child(layout::scroll_body(
                 "remote-nodes-body",
                 &self.scroll,

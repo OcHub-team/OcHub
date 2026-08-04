@@ -263,11 +263,11 @@ pub fn field_error(message: impl Into<SharedString>) -> gpui::Div {
         .child(message.into())
 }
 
-/// Horizontal field for grouped settings rows: semibold label + muted
-/// description on the left (flex_1), control pinned right.
+/// Horizontal field for grouped settings rows: semibold label on the left
+/// (flex_1), control pinned right. The muted second line is for live data only.
 pub fn field_row(
     label: impl Into<SharedString>,
-    description: impl Into<SharedString>,
+    description: Option<SharedString>,
     control: impl IntoElement,
 ) -> gpui::Div {
     div()
@@ -1040,7 +1040,7 @@ pub fn modal_footer(actions: Vec<AnyElement>) -> gpui::Div {
 pub fn disclosure(
     id: &'static str,
     title: impl Into<SharedString>,
-    detail: impl Into<SharedString>,
+    detail: Option<SharedString>,
     expanded: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let title = title.into();
@@ -1077,12 +1077,9 @@ pub fn disclosure(
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(title),
                 )
-                .child(
-                    div()
-                        .text_color(theme::muted())
-                        .text_xs()
-                        .child(detail.into()),
-                ),
+                .when_some(detail, |column, detail| {
+                    column.child(div().text_color(theme::muted()).text_xs().child(detail))
+                }),
         )
 }
 

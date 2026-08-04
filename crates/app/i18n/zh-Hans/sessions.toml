@@ -45,7 +45,6 @@
 "sessions.filter.reset" = "重置"
 "sessions.header.refresh" = "刷新"
 "sessions.header.scanning" = "扫描中…"
-"sessions.header.subtitle" = "浏览与管理本机 CLI 的对话记录。"
 "sessions.header.title" = "会话"
 "sessions.index_wait.hint" = "首次建立索引需要读取全部对话记录，完成后即可按正文搜索。索引会保存下来，之后只做增量更新。"
 "sessions.index_wait.skip" = "先浏览列表"

@@ -34,7 +34,6 @@
 "mcp.form.spec.label" = "サーバー JSON"
 "mcp.form.title.add" = "MCP サーバーを追加"
 "mcp.form.title.edit" = "MCP サーバーを編集"
-"mcp.page.subtitle" = "MCP を一元管理し、Claude、Codex、Gemini、OpenCode、Hermes に同期します。"
 "mcp.page.title" = "MCP サーバー"
 "mcp.status.app_toggled" = "アプリの有効状態を更新しました"
 "mcp.status.created" = "サーバーを作成しました"

@@ -825,7 +825,7 @@ impl Render for McpView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(t(k::MCP_PAGE_TITLE), Some(t(k::MCP_PAGE_SUBTITLE))).child(
+                layout::page_header(t(k::MCP_PAGE_TITLE), None).child(
                     div()
                         .flex()
                         .flex_row()

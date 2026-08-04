@@ -46,6 +46,8 @@ pub(super) struct RowEntry {
     pub id: &'static str,
     pub group: Key,
     pub label: Key,
+    /// Search-only: never rendered. Rows show a second line only when they have
+    /// live data to put there (see [`super::rows`]).
     pub desc: Key,
     /// Terms a user might search for that the visible copy does not contain.
     pub keywords: &'static [&'static str],
@@ -335,7 +337,7 @@ impl SettingsView {
                     .into_any_element()
             })
             .collect();
-        super::rows::group_block(t(k::SETTINGS_SEARCH_TITLE), t(k::SETTINGS_PAGE_DESC), rows)
+        super::rows::group_block(t(k::SETTINGS_SEARCH_TITLE), rows)
     }
 }
 

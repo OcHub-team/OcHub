@@ -2548,11 +2548,7 @@ impl Render for SessionsView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(
-                    t(k::SESSIONS_HEADER_TITLE),
-                    Some(t(k::SESSIONS_HEADER_SUBTITLE)),
-                )
-                .child(
+                layout::page_header(t(k::SESSIONS_HEADER_TITLE), None).child(
                     components::icon_button_tone(
                         "sessions-refresh",
                         if scanning {

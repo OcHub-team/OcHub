@@ -1658,7 +1658,7 @@ impl SkillsView {
             .gap_3()
             .child(layout::section_header(
                 t(k::SKILLS_MARKET_SECTION_TITLE),
-                t(k::SKILLS_MARKET_SECTION_DESC),
+                None,
             ))
             .child(
                 div()
@@ -1841,7 +1841,10 @@ impl SkillsView {
                 layout::row()
                     .child(layout::row_label(
                         format!("{}/{}", repo.owner, repo.name),
-                        tf!(k::SKILLS_REPO_BRANCH, branch = repo.branch),
+                        Some(SharedString::from(tf!(
+                            k::SKILLS_REPO_BRANCH,
+                            branch = repo.branch
+                        ))),
                     ))
                     .child(
                         div()
@@ -1879,7 +1882,7 @@ impl SkillsView {
             .gap_3()
             .child(layout::section_header(
                 t(k::SKILLS_REPO_SECTION_TITLE),
-                t(k::SKILLS_REPO_SECTION_DESC),
+                None,
             ));
         if !rows.is_empty() {
             col = col.child(layout::group(rows));
@@ -1928,7 +1931,10 @@ impl SkillsView {
             .gap_3()
             .child(layout::section_header(
                 t(k::SKILLS_REPO_RESULTS_TITLE),
-                tf!(k::SKILLS_REPO_RESULTS_DESC, count = self.discoverable.len()),
+                Some(SharedString::from(tf!(
+                    k::SKILLS_REPO_RESULTS_DESC,
+                    count = self.discoverable.len()
+                ))),
             ));
         if self.discoverable.is_empty() {
             col = col.child(components::empty_state(
@@ -2085,10 +2091,7 @@ impl SkillsView {
             .flex()
             .flex_col()
             .gap_3()
-            .child(layout::section_header(
-                "导入技能",
-                "从本地 ZIP 安装，或把应用目录中已有的技能纳入统一管理。",
-            ))
+            .child(layout::section_header("导入技能", None))
             .child(
                 div()
                     .flex()
@@ -2179,10 +2182,7 @@ impl SkillsView {
             .flex()
             .flex_col()
             .gap_3()
-            .child(layout::section_header(
-                "卸载备份",
-                "卸载技能时自动创建，最多保留 20 份；恢复时会重新启用原来的应用。",
-            ));
+            .child(layout::section_header("卸载备份", None));
         if self.backups.is_empty() {
             col = col.child(components::empty_state(
                 IconName::Archive,
@@ -2347,10 +2347,7 @@ impl Render for SkillsView {
 
         layout::page()
             .relative()
-            .child(layout::page_header(
-                t(k::SKILLS_HEADER_TITLE),
-                Some(t(k::SKILLS_HEADER_SUBTITLE)),
-            ))
+            .child(layout::page_header(t(k::SKILLS_HEADER_TITLE), None))
             .child(layout::virtual_body(
                 "skills-list-body",
                 list,

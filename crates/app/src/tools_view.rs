@@ -2883,7 +2883,7 @@ impl ToolsView {
                             .w_full()
                             .child(layout::section_header(
                                 t(k::TOOLS_SECTION_CONFIG_TITLE),
-                                t(k::TOOLS_SECTION_CONFIG_DESC),
+                                None,
                             ))
                             .children(config_rows),
                     )
@@ -2896,10 +2896,7 @@ impl ToolsView {
                         .flex_col()
                         .gap_3()
                         .w_full()
-                        .child(layout::section_header(
-                            t(k::TOOLS_SECTION_APP_TITLE),
-                            t(k::TOOLS_SECTION_APP_DESC),
-                        ))
+                        .child(layout::section_header(t(k::TOOLS_SECTION_APP_TITLE), None))
                         .child(
                             div()
                                 .flex()
@@ -2985,10 +2982,7 @@ impl ToolsView {
                             .flex_col()
                             .gap_3()
                             .w_full()
-                            .child(layout::section_header(
-                                t(k::TOOLS_SECTION_CLI_TITLE),
-                                t(k::TOOLS_SECTION_CLI_DESC),
-                            ))
+                            .child(layout::section_header(t(k::TOOLS_SECTION_CLI_TITLE), None))
                             .child(
                                 div()
                                     .flex()
@@ -3097,10 +3091,7 @@ impl ToolsView {
                             .flex_col()
                             .gap_3()
                             .w_full()
-                            .child(layout::section_header(
-                                t(k::TOOLS_SECTION_ENV_TITLE),
-                                t(k::TOOLS_SECTION_ENV_DESC),
-                            ))
+                            .child(layout::section_header(t(k::TOOLS_SECTION_ENV_TITLE), None))
                             .child(
                                 div()
                                     .flex()
@@ -3196,10 +3187,7 @@ impl ToolsView {
                             .flex_col()
                             .gap_3()
                             .w_full()
-                            .child(layout::section_header(
-                                t(k::TOOLS_SECTION_DATA_TITLE),
-                                t(k::TOOLS_SECTION_DATA_DESC),
-                            ))
+                            .child(layout::section_header(t(k::TOOLS_SECTION_DATA_TITLE), None))
                             .child(
                                 div()
                                     .flex()
@@ -3343,7 +3331,7 @@ impl ToolsView {
                         components::disclosure(
                             "tools-advanced",
                             t(k::TOOLS_ADVANCED_TITLE),
-                            t(k::TOOLS_ADVANCED_DESC),
+                            None,
                             self.show_advanced_tools,
                         )
                         .on_click(cx.listener(
@@ -3889,7 +3877,7 @@ impl Render for ToolsView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(t(k::TOOLS_PAGE_TITLE), Some(t(k::TOOLS_PAGE_SUBTITLE))).child(
+                layout::page_header(t(k::TOOLS_PAGE_TITLE), None).child(
                     components::icon_button_tone(
                         "tools-refresh",
                         t(k::TOOLS_ACTION_REFRESH),

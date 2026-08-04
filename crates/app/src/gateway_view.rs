@@ -2188,10 +2188,9 @@ impl GatewayView {
     }
 
     fn render_connection_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let panel = components::card().gap_3().child(section_title(
-            t(k::GATEWAY_CONNECTION_TITLE),
-            t(k::GATEWAY_CONNECTION_DESCRIPTION),
-        ));
+        let panel = components::card()
+            .gap_3()
+            .child(section_title(t(k::GATEWAY_CONNECTION_TITLE)));
         let panel = match self.connection_info.clone() {
             None => panel.child(div().text_color(theme::muted()).text_sm().child(
                 if self.connection_loading {
@@ -2340,21 +2339,10 @@ impl GatewayView {
             })
             .collect::<HashSet<_>>()
             .len();
-        let mut model_summary = tf!(
+        let model_summary = tf!(
             k::GATEWAY_CARD_MODELS,
             count = apply::station_models(&station.route, &station.channels).len(),
         );
-        match station.route.reasoning.mode {
-            GatewayReasoningMode::Auto => {}
-            GatewayReasoningMode::Passthrough => {
-                model_summary.push_str(" · ");
-                model_summary.push_str(raw(k::GATEWAY_CARD_REASONING_PASSTHROUGH));
-            }
-            GatewayReasoningMode::Disabled => {
-                model_summary.push_str(" · ");
-                model_summary.push_str(raw(k::GATEWAY_CARD_REASONING_DISABLED));
-            }
-        }
         let dialect_badges: Vec<gpui::AnyElement> = Dialect::ALL
             .into_iter()
             .filter(|dialect| {
@@ -3328,13 +3316,6 @@ impl GatewayView {
                         .py_3()
                         .rounded_lg()
                         .bg(theme::accent_soft())
-                        .child(
-                            div()
-                                .text_color(theme::accent())
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(t(k::GATEWAY_DEEPLINK_DESCRIPTION)),
-                        )
                         .when_some(editor.import_source.clone(), |notice, source| {
                             notice.child(div().text_color(theme::subtext()).text_xs().child(
                                 SharedString::from(tf!(
@@ -3355,19 +3336,13 @@ impl GatewayView {
             })
             .when(!apply_target_rows.is_empty(), |panel| {
                 panel
-                    .child(section_title(
-                        t(k::GATEWAY_DEEPLINK_APPLY_TITLE),
-                        t(k::GATEWAY_DEEPLINK_APPLY_DESCRIPTION),
-                    ))
+                    .child(section_title(t(k::GATEWAY_DEEPLINK_APPLY_TITLE)))
                     .children(apply_target_rows)
                     .when_some(editor.apply_targets_error.clone(), |panel, error| {
                         panel.child(div().text_color(theme::red()).text_xs().child(error))
                     })
             })
-            .child(section_title(
-                t(k::GATEWAY_EDITOR_CONNECTION_TITLE),
-                t(k::GATEWAY_EDITOR_CONNECTION_DESCRIPTION),
-            ))
+            .child(section_title(t(k::GATEWAY_EDITOR_CONNECTION_TITLE)))
             // A Deep Link import is a review of what the link carries; offering
             // to overwrite it with something else there would only confuse.
             .when(!editor.is_deeplink_import, |panel| {
@@ -3429,10 +3404,7 @@ impl GatewayView {
                         )),
                     ),
             )
-            .child(section_title(
-                t(k::GATEWAY_EDITOR_CAPABILITIES_TITLE),
-                t(k::GATEWAY_EDITOR_CAPABILITIES_DESCRIPTION),
-            ))
+            .child(section_title(t(k::GATEWAY_EDITOR_CAPABILITIES_TITLE)))
             .child(components::field(
                 t(k::GATEWAY_EDITOR_DIALECT_LABEL),
                 true,
@@ -3457,10 +3429,7 @@ impl GatewayView {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(section_title(
-                        t(k::GATEWAY_EDITOR_ENDPOINTS_TITLE),
-                        t(k::GATEWAY_EDITOR_ENDPOINTS_DESCRIPTION),
-                    ))
+                    .child(section_title(t(k::GATEWAY_EDITOR_ENDPOINTS_TITLE)))
                     .child(
                         components::button(
                             "station-endpoint-add",
@@ -3488,30 +3457,20 @@ impl GatewayView {
                     .bg(theme::accent_soft())
                     .child(icon(IconName::Check, theme::accent(), 14.))
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_color(theme::accent())
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t(k::GATEWAY_EDITOR_ROUTING_AUTO_TITLE)),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::subtext())
-                                    .text_xs()
-                                    .child(t(k::GATEWAY_EDITOR_ROUTING_AUTO_DESCRIPTION)),
-                            ),
+                        div().flex().flex_col().gap(px(2.)).child(
+                            div()
+                                .text_color(theme::accent())
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(t(k::GATEWAY_EDITOR_ROUTING_AUTO_TITLE)),
+                        ),
                     ),
             )
             .child(
                 components::disclosure(
                     "station-advanced",
                     t(k::GATEWAY_EDITOR_ADVANCED_TITLE),
-                    t(k::GATEWAY_EDITOR_ADVANCED_DESCRIPTION),
+                    None,
                     editor.show_advanced,
                 )
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -3532,23 +3491,13 @@ impl GatewayView {
                             .rounded_lg()
                             .bg(theme::surface())
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.))
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(t(k::GATEWAY_EDITOR_WEBSOCKET_TITLE)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(theme::subtext())
-                                            .text_xs()
-                                            .child(t(k::GATEWAY_EDITOR_WEBSOCKET_DESCRIPTION)),
-                                    ),
+                                div().flex().flex_col().gap(px(2.)).child(
+                                    div()
+                                        .text_color(theme::text())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(t(k::GATEWAY_EDITOR_WEBSOCKET_TITLE)),
+                                ),
                             )
                             .child(
                                 layout::toggle(editor.websocket_enabled)
@@ -3566,10 +3515,7 @@ impl GatewayView {
                                     })),
                             ),
                     )
-                    .child(section_title(
-                        t(k::GATEWAY_EDITOR_REASONING_TITLE),
-                        t(k::GATEWAY_EDITOR_REASONING_DESCRIPTION),
-                    ))
+                    .child(section_title(t(k::GATEWAY_EDITOR_REASONING_TITLE)))
                     .child(components::field(
                         t(k::GATEWAY_EDITOR_REASONING_LABEL),
                         false,
@@ -3636,10 +3582,7 @@ impl GatewayView {
             .collect();
         components::card()
             .gap_3()
-            .child(section_title(
-                t(k::GATEWAY_IMPORT_TITLE),
-                t(k::GATEWAY_IMPORT_DESCRIPTION),
-            ))
+            .child(section_title(t(k::GATEWAY_IMPORT_TITLE)))
             .when(self.import_candidates.is_empty(), |panel| {
                 panel.child(
                     div()
@@ -3809,11 +3752,7 @@ impl Render for GatewayView {
             .relative()
             .when(!deeplink_preview, |page| {
                 page.child(
-                    layout::page_header(
-                        t(k::GATEWAY_PAGE_TITLE),
-                        Some(t(k::GATEWAY_PAGE_SUBTITLE)),
-                    )
-                    .child(
+                    layout::page_header(t(k::GATEWAY_PAGE_TITLE), None).child(
                         div()
                             .flex()
                             .flex_row()
@@ -3929,27 +3868,14 @@ impl Render for GatewayView {
     }
 }
 
-fn section_title(
-    title: impl Into<SharedString>,
-    description: impl Into<SharedString>,
-) -> gpui::Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(
-            div()
-                .text_color(theme::text())
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title.into()),
-        )
-        .child(
-            div()
-                .text_color(theme::muted())
-                .text_xs()
-                .child(description.into()),
-        )
+fn section_title(title: impl Into<SharedString>) -> gpui::Div {
+    div().flex().flex_col().gap_1().child(
+        div()
+            .text_color(theme::text())
+            .text_sm()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(title.into()),
+    )
 }
 
 fn masked_secret(secret: &str) -> String {

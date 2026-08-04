@@ -29,13 +29,12 @@ impl SettingsView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(t(k::SETTINGS_PAGE_TITLE), Some(t(k::SETTINGS_PAGE_DESC)))
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(gpui::px(220.))
-                            .child(self.search.clone()),
-                    ),
+                layout::page_header(t(k::SETTINGS_PAGE_TITLE), None).child(
+                    div()
+                        .flex_none()
+                        .w(gpui::px(220.))
+                        .child(self.search.clone()),
+                ),
             )
             .child(layout::virtual_body(
                 "settings-body",
@@ -60,11 +59,7 @@ impl SettingsView {
             0 => {
                 let language = self.render_row(RowId::Language, cx);
                 let terminal = self.render_row(RowId::Terminal, cx);
-                rows::group_block(
-                    t(k::SETTINGS_GENERAL_TITLE),
-                    t(k::SETTINGS_GENERAL_DESC),
-                    vec![language, terminal],
-                )
+                rows::group_block(t(k::SETTINGS_GENERAL_TITLE), vec![language, terminal])
             }
             1 => {
                 let mut group = vec![
@@ -87,19 +82,11 @@ impl SettingsView {
                             .into_any_element(),
                     );
                 }
-                rows::group_block(
-                    t(k::SETTINGS_STARTUP_TITLE),
-                    t(k::SETTINGS_STARTUP_DESC),
-                    group,
-                )
+                rows::group_block(t(k::SETTINGS_STARTUP_TITLE), group)
             }
             2 => {
                 let open = self.render_row(RowId::AppsOpen, cx);
-                rows::group_block(
-                    t(k::SETTINGS_APPS_TITLE),
-                    t(k::SETTINGS_APPS_DESC),
-                    vec![open],
-                )
+                rows::group_block(t(k::SETTINGS_APPS_TITLE), vec![open])
             }
             3 => {
                 let mut group = vec![self.render_row(RowId::DataDir, cx)];
@@ -120,7 +107,7 @@ impl SettingsView {
                     group.push(self.render_row(RowId::SessionIndexReclaimNow, cx));
                     group.push(self.render_row(RowId::SessionIndexDelete, cx));
                 }
-                rows::group_block(t(k::SETTINGS_DATA_TITLE), t(k::SETTINGS_DATA_DESC), group)
+                rows::group_block(t(k::SETTINGS_DATA_TITLE), group)
             }
             4 => {
                 let group = vec![
@@ -128,7 +115,7 @@ impl SettingsView {
                     self.render_row(RowId::SyncAuto, cx),
                     self.render_row(RowId::SyncOpen, cx),
                 ];
-                rows::group_block(t(k::SETTINGS_SYNC_TITLE), t(k::SETTINGS_SYNC_DESC), group)
+                rows::group_block(t(k::SETTINGS_SYNC_TITLE), group)
             }
             _ => gpui::Empty.into_any_element(),
         }

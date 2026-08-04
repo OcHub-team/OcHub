@@ -2094,7 +2094,7 @@ impl ProviderEditor {
             .w_full()
             .child(layout::section_header(
                 t(k::PROVIDER_EDITOR_OFFICIAL_SECTION_TITLE),
-                t(k::PROVIDER_EDITOR_OFFICIAL_SECTION_CAPTION),
+                None,
             ))
             .child(
                 components::card()
@@ -2112,12 +2112,6 @@ impl ProviderEditor {
                                 k::PROVIDER_EDITOR_OFFICIAL_TITLE,
                                 app = app_label
                             ))),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(t(k::PROVIDER_EDITOR_OFFICIAL_DESC)),
                     ),
             )
             .into_any_element()
@@ -3296,12 +3290,6 @@ impl ProviderEditor {
                 components::modal_body()
                     .flex_1()
                     .min_h_0()
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(t(k::PROVIDER_EDITOR_RAW_DESC)),
-                    )
                     .when_some(raw.error.clone(), |s, err| {
                         s.child(div().text_color(theme::red()).text_xs().child(err))
                     })
@@ -3356,7 +3344,7 @@ impl ProviderEditor {
             .w_full()
             .child(layout::section_header(
                 t(k::PROVIDER_EDITOR_COMMON_CONFIG_SECTION_TITLE),
-                t(k::PROVIDER_EDITOR_COMMON_CONFIG_SECTION_CAPTION),
+                None,
             ))
             .child(
                 div()
@@ -3366,22 +3354,12 @@ impl ProviderEditor {
                     .justify_between()
                     .gap_2()
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .text_sm()
-                                    .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_TOGGLE_LABEL)),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_TOGGLE_DESC)),
-                            ),
+                        div().flex().flex_col().gap_1().child(
+                            div()
+                                .text_color(theme::text())
+                                .text_sm()
+                                .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_TOGGLE_LABEL)),
+                        ),
                     )
                     .child(
                         div()
@@ -3400,12 +3378,6 @@ impl ProviderEditor {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_SHARED_DESC)),
-                    )
                     .child(
                         components::button(
                             "common-config-extract",
@@ -3467,16 +3439,7 @@ impl ProviderEditor {
                     .child(components::modal_header(t(
                         k::PROVIDER_EDITOR_CONVERT_TITLE,
                     )))
-                    .child(
-                        components::modal_body()
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(t(k::PROVIDER_EDITOR_CONVERT_DESC)),
-                            )
-                            .child(targets),
-                    )
+                    .child(components::modal_body().child(targets))
                     .child(components::modal_footer(vec![
                         components::button(
                             "convert-cancel",
@@ -3507,7 +3470,7 @@ impl ProviderEditor {
                     column.child(components::field(
                         t(k::PROVIDER_EDITOR_SOURCE_LABEL),
                         false,
-                        Some(t(k::PROVIDER_EDITOR_SOURCE_HELP)),
+                        None,
                         self.render_source_selector(cx),
                     ))
                 },
@@ -3860,17 +3823,12 @@ impl ProviderEditor {
             return gpui::Empty.into_any_element();
         }
 
-        let caption = if section.advanced {
-            raw(k::PROVIDER_EDITOR_FORM_ADVANCED_CAPTION)
-        } else {
-            ""
-        };
         let mut column = div()
             .flex()
             .flex_col()
             .gap_3()
             .w_full()
-            .child(layout::section_header(section.title.clone(), caption));
+            .child(layout::section_header(section.title.clone(), None));
         for field in fields {
             column = column.child(self.render_field(field, stack_grid, cx));
         }

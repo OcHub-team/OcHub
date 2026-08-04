@@ -34,7 +34,6 @@
 "mcp.form.spec.label" = "Server JSON"
 "mcp.form.title.add" = "New MCP server"
 "mcp.form.title.edit" = "Edit MCP server"
-"mcp.page.subtitle" = "Manage MCP servers in one place and sync them to Claude, Codex, Gemini, OpenCode and Hermes."
 "mcp.page.title" = "MCP servers"
 "mcp.status.app_toggled" = "App selection updated"
 "mcp.status.created" = "Server created"

@@ -216,7 +216,7 @@ impl AboutView {
         layout::switch_row(
             "about-auto-update",
             t(k::SETTINGS_ABOUT_AUTOUPDATE_LABEL),
-            t(k::SETTINGS_ABOUT_AUTOUPDATE_DESC),
+            None,
             self.settings.auto_update_check,
             false,
             move |window, cx| toggle(&(), window, cx),
@@ -241,7 +241,7 @@ impl AboutView {
         layout::action_row(
             "about-update",
             t(k::SETTINGS_ABOUT_UPDATE_LABEL),
-            self.update_row_description(),
+            Some(self.update_row_description()),
             if installable {
                 t(k::SETTINGS_UPDATE_INSTALL)
             } else {
@@ -276,7 +276,7 @@ impl AboutView {
         layout::action_row(
             "about-release",
             t(k::SETTINGS_ABOUT_RELEASE_LABEL),
-            t(k::SETTINGS_ABOUT_RELEASE_DESC),
+            None,
             t(k::SETTINGS_ACTION_OPEN),
             tone,
             false,
@@ -647,10 +647,7 @@ impl Render for AboutView {
             self.render_release_row(cx),
         ];
         layout::page()
-            .child(layout::page_header(
-                t(k::SETTINGS_ABOUT_TITLE),
-                Some(t(k::SETTINGS_ABOUT_DESC)),
-            ))
+            .child(layout::page_header(t(k::SETTINGS_ABOUT_TITLE), None))
             .child(layout::scroll_body(
                 "about-body",
                 &self.scroll,

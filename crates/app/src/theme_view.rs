@@ -1606,10 +1606,7 @@ impl ThemeView {
                 .gap_5()
                 .w_full()
                 .pb_3()
-                .child(layout::section_header(
-                    t(k::THEME_MODE_SECTION_TITLE),
-                    t(k::THEME_MODE_SECTION_DESC),
-                ))
+                .child(layout::section_header(t(k::THEME_MODE_SECTION_TITLE), None))
                 .child(
                     components::card()
                         .flex()
@@ -1617,15 +1614,12 @@ impl ThemeView {
                         .items_center()
                         .justify_between()
                         .gap_4()
-                        .child(layout::row_label(
-                            t(k::THEME_MODE_ROW_LABEL),
-                            t(k::THEME_MODE_ROW_DESC),
-                        ))
+                        .child(layout::row_label(t(k::THEME_MODE_ROW_LABEL), None))
                         .child(mode_control),
                 )
                 .child(layout::section_header(
                     t(k::THEME_LIBRARY_SECTION_TITLE),
-                    t(k::THEME_LIBRARY_SECTION_DESC),
+                    None,
                 ))
                 .into_any_element();
         }
@@ -1661,7 +1655,7 @@ impl ThemeView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(t(k::THEME_PAGE_TITLE), Some(t(k::THEME_PAGE_SUBTITLE))).child(
+                layout::page_header(t(k::THEME_PAGE_TITLE), None).child(
                     components::icon_button_tone(
                         "theme-import",
                         t(k::THEME_IMPORT_BUTTON),
@@ -1790,30 +1784,15 @@ impl ThemeView {
     /// The group name is an identity — `descriptor.group` is matched against it
     /// with `==` — so it is never rendered directly; this maps it to text that
     /// follows the locale.
-    fn token_group_header(group: &str) -> (SharedString, SharedString) {
+    fn token_group_title(group: &str) -> SharedString {
         match group {
-            "文字与边框" => (
-                t(k::THEME_EDITOR_TOKENS_TEXT_TITLE),
-                t(k::THEME_EDITOR_TOKENS_TEXT_DESC),
-            ),
-            "强调与选中" => (
-                t(k::THEME_EDITOR_TOKENS_ACCENT_TITLE),
-                t(k::THEME_EDITOR_TOKENS_ACCENT_DESC),
-            ),
-            "状态" => (
-                t(k::THEME_EDITOR_TOKENS_STATUS_TITLE),
-                t(k::THEME_EDITOR_TOKENS_STATUS_DESC),
-            ),
-            "效果" => (
-                t(k::THEME_EDITOR_TOKENS_EFFECT_TITLE),
-                t(k::THEME_EDITOR_TOKENS_EFFECT_DESC),
-            ),
+            "文字与边框" => t(k::THEME_EDITOR_TOKENS_TEXT_TITLE),
+            "强调与选中" => t(k::THEME_EDITOR_TOKENS_ACCENT_TITLE),
+            "状态" => t(k::THEME_EDITOR_TOKENS_STATUS_TITLE),
+            "效果" => t(k::THEME_EDITOR_TOKENS_EFFECT_TITLE),
             // "表面", and the unreachable rest: the groups reaching here all come
             // from `THEME_EDITOR_BLOCKS`.
-            _ => (
-                t(k::THEME_EDITOR_TOKENS_SURFACE_TITLE),
-                t(k::THEME_EDITOR_TOKENS_SURFACE_DESC),
-            ),
+            _ => t(k::THEME_EDITOR_TOKENS_SURFACE_TITLE),
         }
     }
 
@@ -1853,7 +1832,7 @@ impl ThemeView {
             ThemeEditorBlock::Preview => shell
                 .child(layout::section_header(
                     t(k::THEME_EDITOR_PREVIEW_SECTION_TITLE),
-                    t(k::THEME_EDITOR_PREVIEW_SECTION_DESC),
+                    None,
                 ))
                 .child(
                     div()
@@ -1868,7 +1847,7 @@ impl ThemeView {
             ThemeEditorBlock::Information => shell
                 .child(layout::section_header(
                     t(k::THEME_EDITOR_INFO_SECTION_TITLE),
-                    t(k::THEME_EDITOR_INFO_SECTION_DESC),
+                    None,
                 ))
                 .child(
                     components::card()
@@ -1901,7 +1880,7 @@ impl ThemeView {
                 shell
                     .child(layout::section_header(
                         t(k::THEME_EDITOR_VARIANT_SECTION_TITLE),
-                        t(k::THEME_EDITOR_VARIANT_SECTION_DESC),
+                        None,
                     ))
                     .child(
                         div()
@@ -1953,12 +1932,12 @@ impl ThemeView {
                 shell
                     .child(layout::section_header(
                         t(k::THEME_EDITOR_MATERIAL_SECTION_TITLE),
-                        t(k::THEME_EDITOR_MATERIAL_SECTION_DESC),
+                        None,
                     ))
                     .child(layout::group(vec![
                         components::field_row(
                             t(k::THEME_EDITOR_MATERIAL_WINDOW_BACKGROUND_LABEL),
-                            t(k::THEME_EDITOR_MATERIAL_WINDOW_BACKGROUND_DESC),
+                            None,
                             components::segmented(
                                 "theme-editor-window-background",
                                 &[
@@ -1972,13 +1951,13 @@ impl ThemeView {
                         .into_any_element(),
                         components::field_row(
                             t(k::THEME_EDITOR_MATERIAL_SIDEBAR_OPACITY_LABEL),
-                            t(k::THEME_EDITOR_MATERIAL_SIDEBAR_OPACITY_DESC),
+                            None,
                             Self::render_opacity_input(sidebar_opacity),
                         )
                         .into_any_element(),
                         components::field_row(
                             t(k::THEME_EDITOR_MATERIAL_CONTENT_OPACITY_LABEL),
-                            t(k::THEME_EDITOR_MATERIAL_CONTENT_OPACITY_DESC),
+                            None,
                             Self::render_opacity_input(content_opacity),
                         )
                         .into_any_element(),
@@ -1991,15 +1970,15 @@ impl ThemeView {
                     .into_iter()
                     .map(|(index, input)| Self::render_color_row(index, palette, input))
                     .collect::<Vec<_>>();
-                let (group_title, group_description) = Self::token_group_header(group);
+                let group_title = Self::token_group_title(group);
                 shell
                     .when(group == "表面", |section| {
                         section.child(layout::section_header(
                             t(k::THEME_EDITOR_TOKENS_SECTION_TITLE),
-                            t(k::THEME_EDITOR_TOKENS_SECTION_DESC),
+                            None,
                         ))
                     })
-                    .child(layout::section_header(group_title, group_description))
+                    .child(layout::section_header(group_title, None))
                     .child(layout::group(rows))
                     .into_any_element()
             }
@@ -2025,7 +2004,7 @@ impl ThemeView {
             .child(
                 layout::page_header(
                     SharedString::from(tf!(k::THEME_EDITOR_TITLE, name = editor.family.name)),
-                    Some(t(k::THEME_EDITOR_SUBTITLE)),
+                    None,
                 )
                 .child(
                     div()

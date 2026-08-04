@@ -38,7 +38,6 @@
 "mcp.form.spec.label" = "服务器 JSON"
 "mcp.form.title.add" = "新增 MCP 服务器"
 "mcp.form.title.edit" = "编辑 MCP 服务器"
-"mcp.page.subtitle" = "统一管理 MCP，并同步到 Claude、Codex、Gemini、OpenCode 和 Hermes。"
 "mcp.page.title" = "MCP 服务器"
 "mcp.status.app_toggled" = "应用启用状态已更新"
 "mcp.status.created" = "服务器已创建"

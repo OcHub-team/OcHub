@@ -2713,10 +2713,7 @@ impl UsageView {
 
         components::card()
             .p_0()
-            .child(table_title(
-                raw(k::USAGE_PROVIDERS_TITLE),
-                t(k::USAGE_PROVIDERS_SUBTITLE),
-            ))
+            .child(table_title(raw(k::USAGE_PROVIDERS_TITLE), None))
             .child(components::table_header(&[
                 raw(k::USAGE_PROVIDERS_COL_PROVIDER),
                 raw(k::USAGE_PROVIDERS_COL_REQUESTS),
@@ -2774,10 +2771,7 @@ impl UsageView {
 
         components::card()
             .p_0()
-            .child(table_title(
-                raw(k::USAGE_MODELS_TITLE),
-                t(k::USAGE_MODELS_SUBTITLE),
-            ))
+            .child(table_title(raw(k::USAGE_MODELS_TITLE), None))
             .child(components::table_header(&[
                 raw(k::USAGE_MODELS_COL_MODEL),
                 raw(k::USAGE_MODELS_COL_REQUESTS),
@@ -2951,12 +2945,12 @@ impl UsageView {
                     .p_0()
                     .child(table_title(
                         raw(k::USAGE_LOGS_TITLE),
-                        tf!(
+                        Some(SharedString::from(tf!(
                             k::USAGE_LOGS_SUBTITLE,
                             page = page + 1,
                             pages = total_pages,
                             total = self.log_total
-                        ),
+                        ))),
                     ))
                     .child(components::table_header(&[
                         raw(k::USAGE_LOGS_COL_TIME),
@@ -3417,12 +3411,12 @@ impl UsageView {
                             .p_0()
                             .child(table_title(
                                 raw(k::USAGE_PRICING_LIST_TITLE),
-                                tf!(
+                                Some(SharedString::from(tf!(
                                     k::USAGE_PRICING_LIST_SUBTITLE,
                                     page = page + 1,
                                     pages = total_pages,
                                     total = pricing_total
-                                ),
+                                ))),
                             ))
                             .child(components::table_header(&[
                                 raw(k::USAGE_PRICING_COL_MODEL_ID),
@@ -3682,7 +3676,7 @@ impl UsageView {
                     components::disclosure(
                         "usage-trend-toggle",
                         t(k::USAGE_TREND_TOGGLE_TITLE),
-                        tf!(k::USAGE_TREND_TOGGLE_DETAIL, count = self.daily.len()),
+                        None,
                         self.show_trend,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -3701,7 +3695,7 @@ impl UsageView {
                     components::disclosure(
                         "usage-scope-toggle",
                         t(k::USAGE_SCOPE_TOGGLE_TITLE),
-                        t(k::USAGE_SCOPE_TOGGLE_DETAIL),
+                        None,
                         self.show_scope_options,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -3726,11 +3720,7 @@ impl UsageView {
                     components::disclosure(
                         "usage-pricing-toggle",
                         t(k::USAGE_PRICING_TOGGLE_TITLE),
-                        tf!(
-                            k::USAGE_PRICING_TOGGLE_DETAIL,
-                            catalog = self.pricing_catalog.entry_count,
-                            manual = self.pricing.len()
-                        ),
+                        None,
                         self.show_pricing,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -3753,21 +3743,18 @@ impl Render for UsageView {
         layout::page()
             .relative()
             .child(
-                layout::page_header(t(k::USAGE_HEADER_TITLE), Some(t(k::USAGE_HEADER_SUBTITLE)))
-                    .child(
-                        components::icon_button_tone(
-                            "usage-refresh",
-                            t(k::USAGE_HEADER_REFRESH),
-                            IconName::Refresh,
-                            ButtonTone::Neutral,
-                            ButtonSize::Sm,
-                        )
-                        .on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                this.reload(cx);
-                            },
-                        )),
-                    ),
+                layout::page_header(t(k::USAGE_HEADER_TITLE), None).child(
+                    components::icon_button_tone(
+                        "usage-refresh",
+                        t(k::USAGE_HEADER_REFRESH),
+                        IconName::Refresh,
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.reload(cx);
+                    })),
+                ),
             )
             .child(layout::wide_virtual_body(
                 "usage-body",
@@ -4180,7 +4167,7 @@ fn set_input(
 }
 
 /// 表格标题块：卡片顶部的标题 + 说明（配合 `components::card().p_0()` 使用）。
-fn table_title(title: &'static str, subtitle: impl Into<SharedString>) -> gpui::Div {
+fn table_title(title: &'static str, subtitle: Option<SharedString>) -> gpui::Div {
     div()
         .flex()
         .flex_col()
@@ -4194,12 +4181,9 @@ fn table_title(title: &'static str, subtitle: impl Into<SharedString>) -> gpui::
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )
-        .child(
-            div()
-                .text_color(theme::muted())
-                .text_xs()
-                .child(subtitle.into()),
-        )
+        .when_some(subtitle, |column, subtitle| {
+            column.child(div().text_color(theme::muted()).text_xs().child(subtitle))
+        })
 }
 
 /// 纯文本表格单元格（等宽 grid 轨道内截断）。
