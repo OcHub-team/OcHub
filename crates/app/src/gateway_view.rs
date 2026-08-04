@@ -17,7 +17,7 @@ use ochub_core::application::GatewayStation;
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{
     Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule,
-    GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
+    GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute, StationQuotaApi,
 };
 use ochub_core::provider_config::{Sponsor, sponsors};
 use ochub_core::services::provider::ProviderService;
@@ -90,6 +90,7 @@ fn relay_station(station: GatewayStation) -> RelayStation {
         model_rules,
         reasoning,
         websocket_enabled,
+        quota_api,
         enabled,
         created_at,
     } = station;
@@ -104,6 +105,7 @@ fn relay_station(station: GatewayStation) -> RelayStation {
             model_rules,
             reasoning,
             websocket_enabled,
+            quota_api,
             enabled,
             created_at,
         },
@@ -157,6 +159,7 @@ impl GatewayPageLoad {
                     model_rules: Vec::new(),
                     reasoning: GatewayReasoningConfig::default(),
                     websocket_enabled: false,
+                    quota_api: None,
                     enabled: channel.enabled,
                     created_at: chrono::Utc::now().timestamp(),
                 },
@@ -410,6 +413,7 @@ struct StationEditor {
     high_budget: Entity<TextInput>,
     max_budget: Entity<TextInput>,
     websocket_enabled: bool,
+    quota_api: Option<StationQuotaApi>,
     enabled: bool,
     show_advanced: bool,
     reveal_key: bool,
@@ -820,6 +824,7 @@ impl GatewayView {
             rules,
             reasoning,
             websocket_enabled,
+            quota_api,
             enabled,
         ) = match station {
             Some(station) => {
@@ -837,6 +842,7 @@ impl GatewayView {
                     station.route.model_rules.clone(),
                     station.route.reasoning.clone(),
                     station.route.websocket_enabled,
+                    station.route.quota_api,
                     station.route.enabled,
                 )
             }
@@ -851,6 +857,7 @@ impl GatewayView {
                 Vec::new(),
                 GatewayReasoningConfig::default(),
                 false,
+                None,
                 true,
             ),
         };
@@ -983,6 +990,7 @@ impl GatewayView {
             high_budget: cx.new(|cx| text_input(cx, "16000", &reasoning.high_budget.to_string())),
             max_budget: cx.new(|cx| text_input(cx, "32000", &reasoning.max_budget.to_string())),
             websocket_enabled,
+            quota_api,
             enabled,
             show_advanced,
             reveal_key: false,
@@ -1202,6 +1210,18 @@ impl GatewayView {
         }
     }
 
+    /// Pick the quota console this provider exposes. Index 0 is "none", which
+    /// is what hides the quota action on the card.
+    fn select_quota_api(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.editor {
+            editor.quota_api = index
+                .checked_sub(1)
+                .and_then(|index| StationQuotaApi::ALL.get(index).copied());
+            self.list_state.remeasure();
+            cx.notify();
+        }
+    }
+
     fn save_editor(&mut self, cx: &mut Context<Self>) {
         if self.mutation_in_flight {
             return;
@@ -1373,6 +1393,7 @@ impl GatewayView {
                 max_budget,
             },
             websocket_enabled: editor.websocket_enabled,
+            quota_api: editor.quota_api,
             enabled: editor.enabled,
             created_at: editor.created_at,
         };
@@ -1409,6 +1430,7 @@ impl GatewayView {
             model_rules: route.model_rules.clone(),
             reasoning: route.reasoning.clone(),
             websocket_enabled: route.websocket_enabled,
+            quota_api: None,
             enabled: route.enabled,
             created_at: route.created_at,
         };
@@ -2471,21 +2493,25 @@ impl GatewayView {
                                     .text_xs()
                                     .child(SharedString::from(model_summary)),
                             )
-                            .child(quota::line(
-                                &format!("station-quota-{}", station.route.id),
-                                &station_name,
-                                quota_state,
-                                cx.listener(move |this, _event, _window, cx| {
-                                    this.query_station_quota(route_id_for_quota.clone(), cx);
-                                }),
-                                cx.listener(move |this, _event, _window, cx| {
-                                    this.quota_detail = Some((
-                                        route_id_for_detail.clone(),
-                                        station_name_for_detail.clone(),
-                                    ));
-                                    cx.notify();
-                                }),
-                            )),
+                            // No quota console declared, no quota line: the
+                            // action only ever led to "not recognized" there.
+                            .when(station.route.quota_api.is_some(), |column| {
+                                column.child(quota::line(
+                                    &format!("station-quota-{}", station.route.id),
+                                    &station_name,
+                                    quota_state,
+                                    cx.listener(move |this, _event, _window, cx| {
+                                        this.query_station_quota(route_id_for_quota.clone(), cx);
+                                    }),
+                                    cx.listener(move |this, _event, _window, cx| {
+                                        this.quota_detail = Some((
+                                            route_id_for_detail.clone(),
+                                            station_name_for_detail.clone(),
+                                        ));
+                                        cx.notify();
+                                    }),
+                                ))
+                            }),
                     )
                     .child(
                         div()
@@ -3184,6 +3210,31 @@ impl GatewayView {
             })
             .collect();
         let model_field = self.render_station_model_picker(editor, cx);
+        // The quota console is stated, not detected: nothing about an inference
+        // endpoint reveals whether a New API or Sub2API panel sits behind it.
+        let quota_index = editor
+            .quota_api
+            .and_then(|api| StationQuotaApi::ALL.iter().position(|item| *item == api))
+            .map_or(0, |index| index + 1);
+        let quota_labels: Vec<&str> = vec![
+            raw(k::GATEWAY_EDITOR_QUOTA_NONE),
+            raw(k::GATEWAY_EDITOR_QUOTA_NEW_API),
+            raw(k::GATEWAY_EDITOR_QUOTA_SUB2API),
+        ];
+        let on_quota_select = cx.listener(|this, index: &usize, _window, cx| {
+            this.select_quota_api(*index, cx);
+        });
+        let quota_field = components::field(
+            t(k::GATEWAY_EDITOR_QUOTA_LABEL),
+            false,
+            None,
+            components::segmented(
+                "station-quota-api",
+                &quota_labels,
+                quota_index,
+                move |index, window, cx| on_quota_select(&index, window, cx),
+            ),
+        );
         let apply_target_rows: Vec<gpui::AnyElement> = editor
             .apply_targets
             .iter()
@@ -3418,6 +3469,7 @@ impl GatewayView {
                     .children(dialect_controls),
             ))
             .child(model_field)
+            .child(quota_field)
             .when_some(editor.dialects_error.clone(), |panel, error| {
                 panel.child(div().text_color(theme::red()).text_xs().child(error))
             })

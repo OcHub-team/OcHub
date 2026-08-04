@@ -9,7 +9,7 @@ use crate::gateway::apply;
 use crate::gateway::types::GatewayAppModelPolicy;
 use crate::gateway::{
     ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayEndpointTestResult, GatewayKey,
-    GatewayModelRule, GatewayReasoningConfig, GatewayRoute, GatewayStatus,
+    GatewayModelRule, GatewayReasoningConfig, GatewayRoute, GatewayStatus, StationQuotaApi,
 };
 use crate::services::key_quota;
 use crate::services::provider::{DriftResolution, ProviderService};
@@ -32,6 +32,8 @@ pub struct GatewayStation {
     pub reasoning: GatewayReasoningConfig,
     #[serde(default)]
     pub websocket_enabled: bool,
+    #[serde(default)]
+    pub quota_api: Option<StationQuotaApi>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -487,6 +489,7 @@ impl Application {
                 model_rules: Vec::new(),
                 reasoning: GatewayReasoningConfig::default(),
                 websocket_enabled: false,
+                quota_api: None,
                 enabled: channel.enabled,
                 created_at: 0,
             };
@@ -566,6 +569,7 @@ impl Application {
             model_rules: station.model_rules.clone(),
             reasoning: station.reasoning.clone(),
             websocket_enabled: station.websocket_enabled,
+            quota_api: None,
             enabled: station.enabled,
             created_at: if station.created_at == 0 {
                 chrono::Utc::now().timestamp()
@@ -674,7 +678,10 @@ impl Application {
             .ok_or_else(|| {
                 ApplicationError::InvalidInput("station does not have an API key".to_string())
             })?;
-        key_quota::query_key_quota(&channel.base_url, &channel.api_key)
+        let api = station.quota_api.ok_or_else(|| {
+            ApplicationError::InvalidInput("station has no quota console configured".to_string())
+        })?;
+        key_quota::query_key_quota(&channel.base_url, &channel.api_key, api)
             .await
             .map_err(ApplicationError::InvalidInput)
     }
@@ -858,6 +865,7 @@ fn station_from_route(route: GatewayRoute, channels: Vec<GatewayChannel>) -> Gat
         model_rules: route.model_rules,
         reasoning: route.reasoning,
         websocket_enabled: route.websocket_enabled,
+        quota_api: None,
         enabled: route.enabled,
         created_at: route.created_at,
     }
@@ -878,6 +886,7 @@ fn station_route(station: &GatewayStation) -> GatewayRoute {
         model_rules: station.model_rules.clone(),
         reasoning: station.reasoning.clone(),
         websocket_enabled: station.websocket_enabled,
+        quota_api: station.quota_api,
         enabled: station.enabled,
         created_at: station.created_at,
     }

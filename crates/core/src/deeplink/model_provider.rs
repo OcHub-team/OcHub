@@ -13,7 +13,7 @@ use crate::error::AppError;
 use crate::gateway::apply;
 use crate::gateway::types::{
     Dialect, GatewayChannel, GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode,
-    GatewayRoute, pattern_matches,
+    GatewayRoute, StationQuotaApi, pattern_matches,
 };
 use crate::{AppState, AppType};
 
@@ -133,6 +133,10 @@ pub struct ModelProviderImportManifest {
     pub models: Vec<String>,
     #[serde(default)]
     pub websocket_enabled: bool,
+    /// Which quota console the relay exposes, if any. A share link that omits
+    /// it imports a provider with the quota action hidden.
+    #[serde(default)]
+    pub quota_api: Option<StationQuotaApi>,
     pub endpoints: Vec<ModelProviderImportEndpoint>,
     #[serde(default)]
     pub apply_to: Vec<ModelProviderImportTarget>,
@@ -432,6 +436,7 @@ pub fn prepare_model_provider_import(
             .collect(),
         reasoning: manifest.reasoning.clone().into(),
         websocket_enabled: manifest.websocket_enabled,
+        quota_api: manifest.quota_api,
         enabled: manifest.enabled,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -572,6 +577,7 @@ mod tests {
             dialects: vec![Dialect::Messages, Dialect::Responses],
             models: vec!["claude-*".to_string()],
             websocket_enabled: false,
+            quota_api: None,
             endpoints: vec![ModelProviderImportEndpoint {
                 base_url: "https://api.aster.example/".to_string(),
             }],

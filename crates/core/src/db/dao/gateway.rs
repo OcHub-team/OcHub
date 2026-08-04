@@ -4,6 +4,7 @@ use crate::db::{Database, lock_conn, to_json_string};
 use crate::error::AppError;
 use crate::gateway::types::{
     Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayReasoningConfig, GatewayRoute,
+    StationQuotaApi,
 };
 use rusqlite::params;
 
@@ -49,12 +50,17 @@ fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
         reasoning: serde_json::from_str(&reasoning)
             .unwrap_or_else(|_| GatewayReasoningConfig::default()),
         websocket_enabled: row.get(8)?,
-        enabled: row.get(9)?,
-        created_at: row.get(10)?,
+        // An unrecognized value reads as "no console" rather than failing the
+        // row: a database written by a newer build must still load here.
+        quota_api: row
+            .get::<_, Option<String>>(9)?
+            .and_then(|value| value.parse::<StationQuotaApi>().ok()),
+        enabled: row.get(10)?,
+        created_at: row.get(11)?,
     })
 }
 
-const ROUTE_COLUMNS: &str = "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, websocket_enabled, enabled, created_at";
+const ROUTE_COLUMNS: &str = "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, websocket_enabled, quota_api, enabled, created_at";
 
 impl Database {
     // -- settings blob ------------------------------------------------------
@@ -194,8 +200,8 @@ impl Database {
         tx.execute(
             "INSERT INTO gateway_routes (
                 id, name, website_url, app_type, channel_ids, default_model, model_rules,
-                reasoning, websocket_enabled, enabled, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                reasoning, websocket_enabled, quota_api, enabled, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, website_url = excluded.website_url,
                 app_type = excluded.app_type,
@@ -204,6 +210,7 @@ impl Database {
                 model_rules = excluded.model_rules,
                 reasoning = excluded.reasoning,
                 websocket_enabled = excluded.websocket_enabled,
+                quota_api = excluded.quota_api,
                 enabled = excluded.enabled",
             params![
                 route.id,
@@ -215,6 +222,7 @@ impl Database {
                 to_json_string(&route.model_rules)?,
                 to_json_string(&route.reasoning)?,
                 route.websocket_enabled,
+                route.quota_api.map(StationQuotaApi::as_str),
                 route.enabled,
                 route.created_at,
             ],
@@ -333,8 +341,8 @@ impl Database {
         conn.execute(
             "INSERT INTO gateway_routes (
                 id, name, website_url, app_type, channel_ids, default_model, model_rules,
-                reasoning, websocket_enabled, enabled, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                reasoning, websocket_enabled, quota_api, enabled, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, website_url = excluded.website_url,
                 app_type = excluded.app_type,
@@ -343,6 +351,7 @@ impl Database {
                 model_rules = excluded.model_rules,
                 reasoning = excluded.reasoning,
                 websocket_enabled = excluded.websocket_enabled,
+                quota_api = excluded.quota_api,
                 enabled = excluded.enabled",
             params![
                 route.id,
@@ -354,6 +363,7 @@ impl Database {
                 to_json_string(&route.model_rules)?,
                 to_json_string(&route.reasoning)?,
                 route.websocket_enabled,
+                route.quota_api.map(StationQuotaApi::as_str),
                 route.enabled,
                 route.created_at,
             ],
@@ -481,7 +491,7 @@ mod tests {
     use crate::db::Database;
     use crate::gateway::types::{
         Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayConfig, GatewayKey,
-        GatewayModelRule, GatewayReasoningConfig, GatewayRoute,
+        GatewayModelRule, GatewayReasoningConfig, GatewayRoute, StationQuotaApi,
     };
 
     fn channel(id: &str) -> GatewayChannel {
@@ -544,6 +554,7 @@ mod tests {
             model_rules: Vec::new(),
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 1,
         };
@@ -569,6 +580,74 @@ mod tests {
         assert!(
             db.get_gateway_route_by_id("station-route:invalid")
                 .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The quota console is what decides whether the card offers a quota
+    /// action at all, so it has to survive a write/read cycle — and an
+    /// unreadable value must degrade to "no console", not fail the whole row.
+    #[test]
+    fn quota_api_round_trips_and_tolerates_unknown_values() {
+        let db = Database::memory().unwrap();
+        db.upsert_gateway_channel(&channel("a")).unwrap();
+        let mut route = GatewayRoute {
+            id: "route".into(),
+            name: "route".into(),
+            website_url: None,
+            app_type: None,
+            channel_ids: vec!["a".into()],
+            default_model: None,
+            model_rules: Vec::new(),
+            reasoning: GatewayReasoningConfig::default(),
+            websocket_enabled: false,
+            quota_api: Some(StationQuotaApi::NewApi),
+            enabled: true,
+            created_at: 0,
+        };
+        db.upsert_gateway_route(&route).unwrap();
+        assert_eq!(
+            db.get_gateway_route_by_id("route")
+                .unwrap()
+                .unwrap()
+                .quota_api,
+            Some(StationQuotaApi::NewApi)
+        );
+
+        route.quota_api = Some(StationQuotaApi::Sub2Api);
+        db.upsert_gateway_route(&route).unwrap();
+        assert_eq!(
+            db.get_gateway_route_by_id("route")
+                .unwrap()
+                .unwrap()
+                .quota_api,
+            Some(StationQuotaApi::Sub2Api)
+        );
+
+        route.quota_api = None;
+        db.upsert_gateway_route(&route).unwrap();
+        assert!(
+            db.get_gateway_route_by_id("route")
+                .unwrap()
+                .unwrap()
+                .quota_api
+                .is_none()
+        );
+
+        // A console name written by a newer build.
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE gateway_routes SET quota_api = 'from-the-future' WHERE id = 'route'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            db.get_gateway_route_by_id("route")
+                .unwrap()
+                .unwrap()
+                .quota_api
                 .is_none()
         );
     }
@@ -601,6 +680,7 @@ mod tests {
             ],
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 1,
         })
@@ -669,6 +749,7 @@ mod tests {
             }],
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 1,
         };

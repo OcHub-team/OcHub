@@ -1007,6 +1007,7 @@ mod tests {
             model_rules: vec![],
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: true,
+            quota_api: None,
             enabled: true,
             created_at: 1,
         })

@@ -315,6 +315,43 @@ fn default_max_budget() -> u32 {
     32_000
 }
 
+/// The relay console a station's key quota can be read from.
+///
+/// Both contracts authenticate with the same bearer key used for inference, but
+/// live at different paths and answer in different shapes. Which one a station
+/// speaks is not discoverable from its inference endpoint, so it is a stated
+/// property of the station rather than something probed: an unset value means
+/// the station has no quota console and OcHub never asks it for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StationQuotaApi {
+    NewApi,
+    Sub2Api,
+}
+
+impl StationQuotaApi {
+    pub const ALL: [Self; 2] = [Self::NewApi, Self::Sub2Api];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NewApi => "new_api",
+            Self::Sub2Api => "sub2api",
+        }
+    }
+}
+
+impl std::str::FromStr for StationQuotaApi {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "new_api" => Ok(Self::NewApi),
+            "sub2api" => Ok(Self::Sub2Api),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Per-client routing profile. App-managed profiles use `app_type`; generic
 /// clients may leave it empty and bind through a manually issued key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,6 +380,10 @@ pub struct GatewayRoute {
     /// must itself support Responses over WebSocket end to end.
     #[serde(default)]
     pub websocket_enabled: bool,
+    /// Which quota console this provider exposes, if any. `None` hides the
+    /// quota action entirely — see [`StationQuotaApi`].
+    #[serde(default)]
+    pub quota_api: Option<StationQuotaApi>,
     pub enabled: bool,
     pub created_at: i64,
 }
@@ -572,6 +613,7 @@ mod tests {
             }],
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 1,
         };
@@ -597,6 +639,7 @@ mod tests {
             }],
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 1,
         };

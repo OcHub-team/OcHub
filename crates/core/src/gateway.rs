@@ -27,7 +27,7 @@ pub mod types;
 pub use service::{GatewayService, GatewayStatus};
 pub use types::{
     ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayEndpointTestResult, GatewayKey,
-    GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
+    GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute, StationQuotaApi,
 };
 
 /// Generate a fresh local API key secret (`rd-` + 32 hex chars).

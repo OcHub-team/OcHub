@@ -1,9 +1,12 @@
-//! API-key quota discovery for relay stations.
+//! API-key quota readout for relay stations.
 //!
 //! New API and Sub2API both expose a read-only endpoint authenticated by the
-//! same bearer key used for inference. Their endpoint paths and response shapes
-//! differ, so this module probes the two well-known contracts and normalizes
-//! them into the existing [`UsageResult`] model.
+//! same bearer key used for inference. Their paths and response shapes differ,
+//! and nothing about an inference endpoint reveals which console (if any) sits
+//! behind it — so the station states which one it speaks and this module talks
+//! to exactly that one, normalizing into the existing [`UsageResult`] model.
+//! Probing both was worse than useless: on a provider with neither, it spent
+//! two requests to produce an error the user could do nothing about.
 
 use std::time::Duration;
 
@@ -11,52 +14,64 @@ use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 use url::Url;
 
+use crate::gateway::StationQuotaApi;
 use crate::model::{UsageData, UsageResult};
 
 const DEFAULT_NEW_API_QUOTA_PER_UNIT: f64 = 500_000.0;
 
-pub async fn query_key_quota(base_url: &str, api_key: &str) -> Result<UsageResult, String> {
+pub async fn query_key_quota(
+    base_url: &str,
+    api_key: &str,
+    api: StationQuotaApi,
+) -> Result<UsageResult, String> {
     if api_key.trim().is_empty() {
         return Ok(failure("API key is empty"));
     }
     let root = service_root(base_url)?;
     let client = crate::http_client::get();
 
-    let sub2api = request_json(
-        &client,
-        root.join("v1/usage").map_err(|error| error.to_string())?,
-        api_key,
-    )
-    .await;
-    if let Ok((status, body)) = &sub2api
-        && status.is_success()
-        && let Some(result) = parse_sub2api(body)
-    {
-        return Ok(result);
+    match api {
+        StationQuotaApi::Sub2Api => {
+            let response = request_json(
+                &client,
+                root.join("v1/usage").map_err(|error| error.to_string())?,
+                api_key,
+            )
+            .await;
+            if let Ok((status, body)) = &response
+                && status.is_success()
+                && let Some(result) = parse_sub2api(body)
+            {
+                return Ok(result);
+            }
+            Ok(failure(&format!(
+                "Sub2API quota endpoint did not answer ({})",
+                request_error_summary(&response)
+            )))
+        }
+        StationQuotaApi::NewApi => {
+            let response = request_json(
+                &client,
+                root.join("api/usage/token/")
+                    .map_err(|error| error.to_string())?,
+                api_key,
+            )
+            .await;
+            if let Ok((status, body)) = &response
+                && status.is_success()
+                && let Some(raw) = parse_new_api_raw(body)
+            {
+                let quota_per_unit = query_new_api_quota_per_unit(&client, &root)
+                    .await
+                    .unwrap_or(DEFAULT_NEW_API_QUOTA_PER_UNIT);
+                return Ok(format_new_api(raw, quota_per_unit));
+            }
+            Ok(failure(&format!(
+                "New API quota endpoint did not answer ({})",
+                request_error_summary(&response)
+            )))
+        }
     }
-
-    let new_api = request_json(
-        &client,
-        root.join("api/usage/token/")
-            .map_err(|error| error.to_string())?,
-        api_key,
-    )
-    .await;
-    if let Ok((status, body)) = &new_api
-        && status.is_success()
-        && let Some(raw) = parse_new_api_raw(body)
-    {
-        let quota_per_unit = query_new_api_quota_per_unit(&client, &root)
-            .await
-            .unwrap_or(DEFAULT_NEW_API_QUOTA_PER_UNIT);
-        return Ok(format_new_api(raw, quota_per_unit));
-    }
-
-    Ok(failure(&format!(
-        "Key quota endpoint was not recognized (Sub2API: {}; New API: {})",
-        request_error_summary(&sub2api),
-        request_error_summary(&new_api)
-    )))
 }
 
 fn service_root(base_url: &str) -> Result<Url, String> {
@@ -354,7 +369,10 @@ mod tests {
     };
     use serde_json::json;
 
-    use super::{format_new_api, parse_new_api_raw, parse_sub2api, query_key_quota, service_root};
+    use super::{
+        StationQuotaApi, format_new_api, parse_new_api_raw, parse_sub2api, query_key_quota,
+        service_root,
+    };
 
     async fn serve(router: Router) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -456,9 +474,13 @@ mod tests {
             }),
         );
         let base = serve(router).await;
-        let result = query_key_quota(&format!("{base}/v1"), "sk-sub2api")
-            .await
-            .unwrap();
+        let result = query_key_quota(
+            &format!("{base}/v1"),
+            "sk-sub2api",
+            StationQuotaApi::Sub2Api,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.data.unwrap()[0].remaining, Some(5.0));
     }
 
@@ -499,7 +521,9 @@ mod tests {
                 }),
             );
         let base = serve(router).await;
-        let result = query_key_quota(&base, "sk-new-api").await.unwrap();
+        let result = query_key_quota(&base, "sk-new-api", StationQuotaApi::NewApi)
+            .await
+            .unwrap();
         let quota = &result.data.unwrap()[0];
         assert_eq!(quota.total, Some(6.0));
         assert_eq!(quota.used, Some(1.0));

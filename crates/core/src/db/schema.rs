@@ -293,6 +293,7 @@ impl Database {
                 model_rules TEXT NOT NULL DEFAULT '[]',
                 reasoning TEXT NOT NULL DEFAULT '{}',
                 websocket_enabled INTEGER NOT NULL DEFAULT 0,
+                quota_api TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL,
                 sort_index INTEGER
@@ -698,6 +699,20 @@ impl Database {
                             })?;
                         }
                         Self::set_user_version(conn, 11)?;
+                    }
+                    11 => {
+                        if Self::table_exists(conn, "gateway_routes")?
+                            && !Self::has_column(conn, "gateway_routes", "quota_api")?
+                        {
+                            conn.execute(
+                                "ALTER TABLE gateway_routes ADD COLUMN quota_api TEXT",
+                                [],
+                            )
+                            .map_err(|e| {
+                                AppError::Database(format!("为模型供应商添加额度查询接口失败: {e}"))
+                            })?;
+                        }
+                        Self::set_user_version(conn, 12)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(

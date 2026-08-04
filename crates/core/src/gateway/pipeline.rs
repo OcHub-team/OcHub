@@ -2993,6 +2993,7 @@ mod tests {
                 ..GatewayReasoningConfig::default()
             },
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 1,
         })

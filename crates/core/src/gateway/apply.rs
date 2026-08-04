@@ -171,6 +171,7 @@ pub fn ensure_app_route(state: &AppState, app_type: AppType) -> Result<GatewayRo
         model_rules: Vec::new(),
         reasoning: GatewayReasoningConfig::default(),
         websocket_enabled: false,
+        quota_api: None,
         enabled: true,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -202,6 +203,7 @@ pub fn ensure_station_route(
         model_rules: Vec::new(),
         reasoning: GatewayReasoningConfig::default(),
         websocket_enabled: false,
+        quota_api: None,
         enabled: channel.enabled,
         created_at: chrono::Utc::now().timestamp(),
     };
@@ -1036,6 +1038,7 @@ pub fn generic_client_info(state: &AppState, base_url: &str) -> Result<ApplyResu
                 model_rules: Vec::new(),
                 reasoning: GatewayReasoningConfig::default(),
                 websocket_enabled: false,
+                quota_api: None,
                 enabled: true,
                 created_at: chrono::Utc::now().timestamp(),
             };
@@ -1337,6 +1340,7 @@ mod tests {
             ],
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 0,
         };
@@ -1429,6 +1433,7 @@ mod tests {
             model_rules: Vec::new(),
             reasoning: GatewayReasoningConfig::default(),
             websocket_enabled: false,
+            quota_api: None,
             enabled: true,
             created_at: 2,
         };
