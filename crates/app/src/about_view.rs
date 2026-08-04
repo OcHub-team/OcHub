@@ -56,6 +56,14 @@ impl UpdateState {
             _ => None,
         }
     }
+
+    /// Adopt a successful background check without interrupting work the user
+    /// already started from this page.
+    fn adopt_automatic_check(&mut self, info: UpdateCheckResult) {
+        if !self.checking && !self.installing {
+            self.info = Some(info);
+        }
+    }
 }
 
 pub struct AboutView {
@@ -117,6 +125,23 @@ impl AboutView {
         self.workspace_available = false;
         self.workspace_version = None;
         self.update = UpdateState::default();
+        cx.notify();
+    }
+
+    /// Mirror the shell's automatic update result into the local About page.
+    ///
+    /// The shell owns the once-a-day poll, while this view owns the install
+    /// button. Keeping the full result here makes the button immediately turn
+    /// into “Update now” when that poll has already found an installable build.
+    pub(crate) fn adopt_automatic_update_check(
+        &mut self,
+        info: UpdateCheckResult,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_remote {
+            return;
+        }
+        self.update.adopt_automatic_check(info);
         cx.notify();
     }
 
@@ -669,4 +694,44 @@ fn open_url(url: &str) -> Result<(), String> {
                 Err(tf!(k::SETTINGS_ERROR_EXIT_STATUS, status = status))
             }
         })
+}
+
+#[cfg(test)]
+mod update_state_tests {
+    use super::UpdateState;
+    use ochub_core::services::UpdateCheckResult;
+
+    fn installable_update() -> UpdateCheckResult {
+        UpdateCheckResult {
+            current_version: "0.5.0".to_string(),
+            latest_version: Some("0.5.1".to_string()),
+            has_update: true,
+            release_url: "https://example.com/release".to_string(),
+            release_notes: None,
+            published_at: None,
+            install_channel: "macos-app".to_string(),
+            can_self_install: true,
+        }
+    }
+
+    #[test]
+    fn an_automatic_check_makes_the_update_immediately_installable() {
+        let mut state = UpdateState::default();
+
+        state.adopt_automatic_check(installable_update());
+
+        assert!(state.can_install());
+    }
+
+    #[test]
+    fn an_automatic_check_does_not_replace_an_install_in_progress() {
+        let mut state = UpdateState {
+            installing: true,
+            ..UpdateState::default()
+        };
+
+        state.adopt_automatic_check(installable_update());
+
+        assert!(state.info.is_none());
+    }
 }

@@ -273,6 +273,10 @@ pub struct AppRoot {
     /// the sidebar, and unlike the one-shot toast it persists for as long as the
     /// update does — the dot is the affordance a user comes back to.
     available_update: Option<SharedString>,
+    /// Full result from the most recent automatic poll. The sidebar only needs
+    /// the version above; About also needs install eligibility so its action
+    /// can become “Update now” without making the user check a second time.
+    automatic_update_check: Option<ochub_core::services::UpdateCheckResult>,
 }
 
 /// Cached row plan for the virtualized provider list. It is replaced only when
@@ -908,7 +912,13 @@ impl AppRoot {
                             // version, the badge lasts as long as the update.
                             if this
                                 .update(cx, |this, cx| {
+                                    this.automatic_update_check = Some(info.clone());
                                     this.set_available_update(badge, cx);
+                                    if this.active_remote_scope.is_none() {
+                                        this.about_view.update(cx, |about, cx| {
+                                            about.adopt_automatic_update_check(info.clone(), cx);
+                                        });
+                                    }
                                     if notify {
                                         this.notifications.update(cx, |host, cx| {
                                             host.info(
@@ -1015,6 +1025,7 @@ impl AppRoot {
                 let settings = ochub_core::settings::get_settings();
                 Self::seeded_badge(settings.auto_update_check, settings.skipped_update_version)
             },
+            automatic_update_check: None,
         };
         cx.subscribe(
             &this.app_settings_view,
@@ -1569,8 +1580,17 @@ impl AppRoot {
 
     fn reload_about_workspace(&mut self, cx: &mut Context<Self>) {
         if let Some(backend) = self.workspace_backend(cx) {
-            self.about_view
-                .update(cx, |view, cx| view.set_workspace(backend, cx));
+            let automatic_update_check = self
+                .active_remote_scope
+                .is_none()
+                .then(|| self.automatic_update_check.clone())
+                .flatten();
+            self.about_view.update(cx, |view, cx| {
+                view.set_workspace(backend, cx);
+                if let Some(info) = automatic_update_check {
+                    view.adopt_automatic_update_check(info, cx);
+                }
+            });
         } else {
             self.about_view
                 .update(cx, |view, cx| view.set_workspace_unavailable(cx));
