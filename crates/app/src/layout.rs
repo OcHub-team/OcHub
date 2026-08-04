@@ -371,10 +371,15 @@ pub fn toggle(on: bool) -> gpui::Div {
         .p(px(2.))
         .flex()
         .when(on, |s| s.justify_end())
+        // Off state uses `border_strong`, not `surface_hover`: the hover tint
+        // sits one step from the card it is drawn on, which in the dark palette
+        // put a #2d2e29 track on a #22231f card behind a still darker knob —
+        // the whole control disappeared. `border_strong` is the one neutral
+        // that stays legible against both a white and a near-black surface.
         .bg(if on {
             theme::accent()
         } else {
-            theme::surface_hover()
+            theme::border_strong()
         })
         .child(
             div()
