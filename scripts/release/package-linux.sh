@@ -3,7 +3,10 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
-target="${CARGO_BUILD_TARGET:-x86_64-unknown-linux-gnu}"
+# Deliberately not CARGO_BUILD_TARGET: sccache hashes every CARGO_* variable in
+# the environment into its Rust cache key, so setting that one here would make
+# every crate miss against a cache warmed by a plain `cargo build --target`.
+target="${OCHUB_BUILD_TARGET:-x86_64-unknown-linux-gnu}"
 out_dir="${1:-dist}"
 
 cd "${repo_root}"

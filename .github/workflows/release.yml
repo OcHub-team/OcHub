@@ -101,10 +101,16 @@ jobs:
       # Keep Cargo's registry, Git checkouts, and installed tools warm. Rust
       # compilation outputs are cached by sccache instead of duplicating the
       # entire target directory (~1.1GB per platform in prior releases).
+      #
+      # add-job-id-key must stay false on both sides: it puts GITHUB_JOB in the
+      # key, and this job (`build`) is not the one that saves (`release-cache`
+      # in ci.yml), so leaving it on meant every release started from an empty
+      # registry -- re-cloning zed/gpui and rebuilding cargo-packager.
       - name: Cache Cargo inputs and tools
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: release-${{ matrix.target }}
+          add-job-id-key: false
           cache-bin: true
           cache-targets: false
           save-if: false
@@ -173,7 +179,7 @@ jobs:
         if: matrix.kind == 'macos'
         shell: bash
         env:
-          CARGO_BUILD_TARGET: ${{ matrix.target }}
+          OCHUB_BUILD_TARGET: ${{ matrix.target }}
           MACOS_REQUIRE_DEVELOPER_ID_SIGNATURE: "true"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -195,7 +201,7 @@ jobs:
         if: matrix.kind == 'linux'
         shell: bash
         env:
-          CARGO_BUILD_TARGET: ${{ matrix.target }}
+          OCHUB_BUILD_TARGET: ${{ matrix.target }}
         run: ./scripts/release/package-linux.sh dist
 
       - name: Show sccache statistics
