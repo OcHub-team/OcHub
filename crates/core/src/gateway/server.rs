@@ -170,6 +170,19 @@ fn websocket_unavailable() -> Response {
         .into_response()
 }
 
+/// Attach the upstream's relayed headers to a response the gateway is about to
+/// send, without letting them displace the ones this hop just set.
+fn with_relayed_headers(mut response: Response, relayed: HeaderMap) -> Response {
+    let headers = response.headers_mut();
+    for (name, value) in relayed.iter() {
+        if headers.contains_key(name) {
+            continue;
+        }
+        headers.append(name.clone(), value.clone());
+    }
+    response
+}
+
 async fn run_http(
     state: GatewayState,
     inlet: Dialect,
@@ -181,12 +194,21 @@ async fn run_http(
         Err(resp) => return resp,
     };
     match pipeline::run(state, inlet, body, key, headers).await {
-        PipelineOutcome::Json { status, body } => (
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            axum::Json(body),
-        )
-            .into_response(),
-        PipelineOutcome::Stream { rx } => sse_response(rx, inlet),
+        PipelineOutcome::Json {
+            status,
+            body,
+            headers,
+        } => with_relayed_headers(
+            (
+                StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                axum::Json(body),
+            )
+                .into_response(),
+            headers,
+        ),
+        PipelineOutcome::Stream { rx, headers } => {
+            with_relayed_headers(sse_response(rx, inlet), headers)
+        }
     }
 }
 
@@ -725,11 +747,18 @@ async fn handle_count_tokens(
         Err(resp) => return resp,
     };
     match pipeline::count_tokens(state, body, key, headers).await {
-        PipelineOutcome::Json { status, body } => (
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            axum::Json(body),
-        )
-            .into_response(),
+        PipelineOutcome::Json {
+            status,
+            body,
+            headers,
+        } => with_relayed_headers(
+            (
+                StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                axum::Json(body),
+            )
+                .into_response(),
+            headers,
+        ),
         PipelineOutcome::Stream { .. } => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }

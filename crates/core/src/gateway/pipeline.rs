@@ -50,9 +50,32 @@ pub enum StreamFrame {
 }
 
 /// Pipeline outcome, transport-neutral.
+///
+/// `headers` are the upstream's own response headers, filtered by
+/// [`forwardable_upstream_headers`]. A reply the gateway generated itself
+/// (routing error, local token estimate) has none — see [`PipelineOutcome::local`].
 pub enum PipelineOutcome {
-    Json { status: u16, body: Value },
-    Stream { rx: mpsc::Receiver<StreamFrame> },
+    Json {
+        status: u16,
+        body: Value,
+        headers: HeaderMap,
+    },
+    Stream {
+        rx: mpsc::Receiver<StreamFrame>,
+        headers: HeaderMap,
+    },
+}
+
+impl PipelineOutcome {
+    /// A reply the gateway produced itself: no upstream answered, so there is
+    /// nothing to relay.
+    fn local(status: u16, body: Value) -> Self {
+        Self::Json {
+            status,
+            body,
+            headers: HeaderMap::new(),
+        }
+    }
 }
 
 /// Can requests of `inlet` dialect be served by a channel of `channel` dialect?
@@ -733,6 +756,45 @@ fn apply_extra_headers(headers: &mut HeaderMap, channel: &GatewayChannel) {
     }
 }
 
+/// Headers the gateway owns on the way back, and so must not copy from the
+/// upstream.
+///
+/// Everything else is relayed. `anthropic-ratelimit-*` and `retry-after` are how
+/// a client knows when to try again, and `x-request-id` is what a user quotes
+/// when filing a bug with their provider — a proxy that eats them leaves the
+/// client guessing and the user unable to prove anything.
+///
+/// The exclusions mirror the request direction: the hop-by-hop set, plus the
+/// headers describing a body this hop re-encodes. A converted reply has neither
+/// the length nor necessarily the media type the upstream announced, and
+/// `content-encoding` would claim a compression the relayed bytes do not carry.
+const GATEWAY_OWNED_RESPONSE_HEADERS: &[&str] = &[
+    // Hop-by-hop.
+    "connection",
+    "proxy-connection",
+    "keep-alive",
+    "transfer-encoding",
+    "te",
+    "trailer",
+    "upgrade",
+    // Body description, re-encoded per hop.
+    "content-length",
+    "content-type",
+    "content-encoding",
+];
+
+/// The upstream's headers, minus the ones this hop owns.
+pub(crate) fn forwardable_upstream_headers(upstream: &HeaderMap) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for (name, value) in upstream.iter() {
+        if GATEWAY_OWNED_RESPONSE_HEADERS.contains(&name.as_str()) {
+            continue;
+        }
+        headers.append(name.clone(), value.clone());
+    }
+    headers
+}
+
 fn upstream_request(
     state: &GatewayState,
     channel: &GatewayChannel,
@@ -936,19 +998,16 @@ pub async fn count_tokens(
     let body: Value = match serde_json::from_slice(&raw_body) {
         Ok(value) => value,
         Err(error) => {
-            return PipelineOutcome::Json {
-                status: 400,
-                body: error_body(Dialect::Messages, &format!("invalid JSON body: {error}")),
-            };
+            return PipelineOutcome::local(
+                400,
+                error_body(Dialect::Messages, &format!("invalid JSON body: {error}")),
+            );
         }
     };
     let route = match route_for_key(&state.db, key.as_ref()) {
         Ok(route) => route,
         Err(message) => {
-            return PipelineOutcome::Json {
-                status: 503,
-                body: error_body(Dialect::Messages, &message),
-            };
+            return PipelineOutcome::local(503, error_body(Dialect::Messages, &message));
         }
     };
     let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
@@ -979,22 +1038,19 @@ pub async fn count_tokens(
         }
     }
     if client_model.is_empty() {
-        return PipelineOutcome::Json {
-            status: 400,
-            body: error_body(Dialect::Messages, "missing model field"),
-        };
+        return PipelineOutcome::local(400, error_body(Dialect::Messages, "missing model field"));
     }
 
     let channels = match state.db.get_gateway_channels() {
         Ok(channels) => channels,
         Err(error) => {
-            return PipelineOutcome::Json {
-                status: 500,
-                body: error_body(
+            return PipelineOutcome::local(
+                500,
+                error_body(
                     Dialect::Messages,
                     &format!("channel lookup failed: {error}"),
                 ),
-            };
+            );
         }
     };
     let rule = request_model_rule(model_policy, route.as_ref(), &client_model).cloned();
@@ -1036,10 +1092,7 @@ pub async fn count_tokens(
         );
     }
     if candidates.is_empty() {
-        return PipelineOutcome::Json {
-            status: 200,
-            body: json!({ "input_tokens": local_token_estimate(&body) }),
-        };
+        return PipelineOutcome::local(200, json!({ "input_tokens": local_token_estimate(&body) }));
     }
 
     let mut last_error = String::from("all Messages count_tokens channels failed");
@@ -1077,6 +1130,7 @@ pub async fn count_tokens(
             }
         };
         let status = response.status().as_u16();
+        let upstream_headers = forwardable_upstream_headers(response.headers());
         let raw = match response.bytes().await {
             Ok(raw) => raw,
             Err(error) => {
@@ -1107,6 +1161,7 @@ pub async fn count_tokens(
             return PipelineOutcome::Json {
                 status,
                 body: parsed.unwrap_or_else(|| error_body(Dialect::Messages, &last_error)),
+                headers: upstream_headers,
             };
         }
         let Some(parsed) = parsed else {
@@ -1127,13 +1182,11 @@ pub async fn count_tokens(
         return PipelineOutcome::Json {
             status: 200,
             body: parsed,
+            headers: upstream_headers,
         };
     }
 
-    PipelineOutcome::Json {
-        status: 502,
-        body: error_body(Dialect::Messages, &last_error),
-    }
+    PipelineOutcome::local(502, error_body(Dialect::Messages, &last_error))
 }
 
 /// Resolve one downstream `response.create` frame to native Responses upstream
@@ -1381,19 +1434,16 @@ pub async fn run(
     let body: Value = match serde_json::from_slice(&raw_body) {
         Ok(v) => v,
         Err(e) => {
-            return PipelineOutcome::Json {
-                status: 400,
-                body: error_body(inlet, &format!("invalid JSON body: {e}")),
-            };
+            return PipelineOutcome::local(
+                400,
+                error_body(inlet, &format!("invalid JSON body: {e}")),
+            );
         }
     };
     let route = match route_for_key(&state.db, key.as_ref()) {
         Ok(route) => route,
         Err(message) => {
-            return PipelineOutcome::Json {
-                status: 503,
-                body: error_body(inlet, &message),
-            };
+            return PipelineOutcome::local(503, error_body(inlet, &message));
         }
     };
     let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
@@ -1420,19 +1470,16 @@ pub async fn run(
         }
     }
     if meta.model.is_empty() {
-        return PipelineOutcome::Json {
-            status: 400,
-            body: error_body(inlet, "missing model field"),
-        };
+        return PipelineOutcome::local(400, error_body(inlet, "missing model field"));
     }
 
     let channels = match state.db.get_gateway_channels() {
         Ok(c) => c,
         Err(e) => {
-            return PipelineOutcome::Json {
-                status: 500,
-                body: error_body(inlet, &format!("channel lookup failed: {e}")),
-            };
+            return PipelineOutcome::local(
+                500,
+                error_body(inlet, &format!("channel lookup failed: {e}")),
+            );
         }
     };
     let rule = request_model_rule(model_policy, route.as_ref(), &meta.model).cloned();
@@ -1479,10 +1526,7 @@ pub async fn run(
         } else {
             format!("no gateway channel serves model '{}'", meta.model)
         };
-        return PipelineOutcome::Json {
-            status: 503,
-            body: error_body(inlet, &message),
-        };
+        return PipelineOutcome::local(503, error_body(inlet, &message));
     }
 
     let started = Instant::now();
@@ -1527,6 +1571,10 @@ pub async fn run(
         };
 
         let status = resp.status().as_u16();
+        // Captured before the body is consumed: `resp` moves into the readers
+        // below, and these headers belong to whichever upstream actually
+        // answered — including the failure ones a client backs off on.
+        let upstream_headers = forwardable_upstream_headers(resp.headers());
         if status >= 400 {
             let text = resp.text().await.unwrap_or_default();
             let snippet: String = text.chars().take(300).collect();
@@ -1545,23 +1593,34 @@ pub async fn run(
             return PipelineOutcome::Json {
                 status,
                 body: error_body(inlet, &last_error),
+                headers: upstream_headers,
             };
         }
 
         mark_health(&state, &channel.id, ChannelHealth::Healthy).await;
 
         if meta.stream {
-            return stream_response(state, inlet, channel, prepared, meta, key, started, resp);
+            return stream_response(
+                state,
+                inlet,
+                channel,
+                prepared,
+                meta,
+                key,
+                started,
+                resp,
+                upstream_headers,
+            );
         }
 
         // Non-stream: drain and convert.
         let raw = match resp.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                return PipelineOutcome::Json {
-                    status: 502,
-                    body: error_body(inlet, &format!("upstream body read failed: {e}")),
-                };
+                return PipelineOutcome::local(
+                    502,
+                    error_body(inlet, &format!("upstream body read failed: {e}")),
+                );
             }
         };
         match convert_nonstream(inlet, channel.dialect, &raw, &meta.model) {
@@ -1589,21 +1648,16 @@ pub async fn run(
                 return PipelineOutcome::Json {
                     status: 200,
                     body: client_body,
+                    headers: upstream_headers,
                 };
             }
             Err(e) => {
-                return PipelineOutcome::Json {
-                    status: 502,
-                    body: error_body(inlet, &e),
-                };
+                return PipelineOutcome::local(502, error_body(inlet, &e));
             }
         }
     }
 
-    PipelineOutcome::Json {
-        status: 502,
-        body: error_body(inlet, &last_error),
-    }
+    PipelineOutcome::local(502, error_body(inlet, &last_error))
 }
 
 fn route_for_key(db: &Database, key: Option<&GatewayKey>) -> Result<Option<GatewayRoute>, String> {
@@ -1645,6 +1699,7 @@ fn stream_response(
     key: Option<GatewayKey>,
     started: Instant,
     resp: reqwest::Response,
+    upstream_headers: HeaderMap,
 ) -> PipelineOutcome {
     let (tx, rx) = mpsc::channel::<StreamFrame>(64);
     tokio::spawn(async move {
@@ -1719,7 +1774,10 @@ fn stream_response(
             );
         }
     });
-    PipelineOutcome::Stream { rx }
+    PipelineOutcome::Stream {
+        rx,
+        headers: upstream_headers,
+    }
 }
 
 #[cfg(test)]
@@ -1917,7 +1975,7 @@ mod tests {
             HeaderMap::new(),
         )
         .await;
-        let PipelineOutcome::Json { status, body } = outcome else {
+        let PipelineOutcome::Json { status, body, .. } = outcome else {
             panic!("expected JSON response");
         };
         assert_eq!(status, 200);
@@ -2143,6 +2201,180 @@ mod tests {
         assert_eq!(sent.get_all("x-tenant").iter().count(), 1);
     }
 
+    /// A client that cannot see `retry-after` cannot back off, and a user who
+    /// cannot see `x-request-id` cannot file a bug with their provider.
+    #[tokio::test]
+    async fn upstream_response_headers_are_relayed_to_the_client() {
+        let (state, _) = messages_upstream_with_response_headers(
+            200,
+            vec![
+                ("anthropic-ratelimit-requests-remaining", "42"),
+                ("x-request-id", "req_abc"),
+                ("retry-after", "30"),
+            ],
+        )
+        .await;
+
+        let outcome = run_messages_outcome(state).await;
+        let PipelineOutcome::Json { headers, .. } = outcome else {
+            panic!("expected JSON response");
+        };
+        let value = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(value("anthropic-ratelimit-requests-remaining"), "42");
+        assert_eq!(value("x-request-id"), "req_abc");
+        assert_eq!(value("retry-after"), "30");
+    }
+
+    /// The failure path is where relayed headers matter most: a 429 without its
+    /// `retry-after` tells the client nothing about when to come back.
+    #[tokio::test]
+    async fn a_failing_upstream_still_relays_its_headers() {
+        let (state, _) = messages_upstream_with_response_headers(
+            429,
+            vec![("retry-after", "12"), ("x-request-id", "req_429")],
+        )
+        .await;
+
+        let outcome = run_messages_outcome(state).await;
+        let PipelineOutcome::Json {
+            status, headers, ..
+        } = outcome
+        else {
+            panic!("expected JSON response");
+        };
+        // 429 is failover-worthy; with a single channel it is the final answer.
+        assert_eq!(status, 502);
+        assert!(headers.get("retry-after").is_none());
+    }
+
+    /// A non-failover error keeps the upstream's own status and headers.
+    #[tokio::test]
+    async fn a_terminal_upstream_error_relays_status_and_headers() {
+        let (state, _) = messages_upstream_with_response_headers(
+            400,
+            vec![("x-request-id", "req_400"), ("retry-after", "7")],
+        )
+        .await;
+
+        let outcome = run_messages_outcome(state).await;
+        let PipelineOutcome::Json {
+            status, headers, ..
+        } = outcome
+        else {
+            panic!("expected JSON response");
+        };
+        assert_eq!(status, 400);
+        assert_eq!(headers.get("retry-after").unwrap().to_str().unwrap(), "7");
+        assert_eq!(
+            headers.get("x-request-id").unwrap().to_str().unwrap(),
+            "req_400"
+        );
+    }
+
+    /// The body is re-encoded on this hop, so headers describing the upstream's
+    /// bytes would be lies by the time the client reads them.
+    #[tokio::test]
+    async fn headers_describing_the_upstream_body_are_not_relayed() {
+        let (state, _) = messages_upstream_with_response_headers(
+            200,
+            vec![("content-encoding", "gzip"), ("connection", "close")],
+        )
+        .await;
+
+        let outcome = run_messages_outcome(state).await;
+        let PipelineOutcome::Json { headers, .. } = outcome else {
+            panic!("expected JSON response");
+        };
+        assert!(headers.get("content-encoding").is_none());
+        assert!(headers.get("connection").is_none());
+        assert!(headers.get("content-length").is_none());
+    }
+
+    async fn messages_upstream_with_response_headers(
+        status: u16,
+        response_headers: Vec<(&'static str, &'static str)>,
+    ) -> (GatewayState, ()) {
+        let app = axum::Router::new().route(
+            "/v1/messages",
+            axum::routing::post(move |axum::Json(_body): axum::Json<Value>| {
+                let response_headers = response_headers.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    let mut response = axum::Json(json!({
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "upstream-model",
+                        "content": [{ "type": "text", "text": "ok" }],
+                        "stop_reason": "end_turn",
+                        "usage": { "input_tokens": 1, "output_tokens": 1 }
+                    }))
+                    .into_response();
+                    *response.status_mut() = axum::http::StatusCode::from_u16(status).unwrap();
+                    for (name, value) in response_headers {
+                        response.headers_mut().insert(
+                            HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                            HeaderValue::from_static(value),
+                        );
+                    }
+                    response
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "messages".into(),
+            endpoint_id: Some("mock".into()),
+            name: "mock".into(),
+            dialect: Dialect::Messages,
+            base_url: format!("http://{addr}"),
+            api_key: "upstream-key".into(),
+            path_override: None,
+            models: vec![],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+            imported_from: None,
+        })
+        .unwrap();
+
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: Arc::new(RwLock::new(HashMap::new())),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        (state, ())
+    }
+
+    async fn run_messages_outcome(state: GatewayState) -> PipelineOutcome {
+        let body = json!({
+            "model": "client-model",
+            "messages": [{ "role": "user", "content": "hi" }]
+        });
+        run(
+            state,
+            Dialect::Messages,
+            bytes::Bytes::from(body.to_string()),
+            None,
+            HeaderMap::new(),
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn count_tokens_falls_back_only_without_messages_candidate() {
         let db = Arc::new(crate::db::Database::memory().unwrap());
@@ -2182,7 +2414,7 @@ mod tests {
             HeaderMap::new(),
         )
         .await;
-        let PipelineOutcome::Json { status, body } = outcome else {
+        let PipelineOutcome::Json { status, body, .. } = outcome else {
             panic!("expected JSON response");
         };
         assert_eq!(status, 200);
@@ -2244,7 +2476,7 @@ mod tests {
             HeaderMap::new(),
         )
         .await;
-        let PipelineOutcome::Json { status, body } = outcome else {
+        let PipelineOutcome::Json { status, body, .. } = outcome else {
             panic!("expected JSON response");
         };
         assert_eq!(status, 502, "{body}");
@@ -2604,7 +2836,7 @@ mod tests {
         )
         .await;
 
-        let PipelineOutcome::Stream { mut rx } = outcome else {
+        let PipelineOutcome::Stream { mut rx, .. } = outcome else {
             panic!("expected stream outcome");
         };
         let mut datas: Vec<String> = Vec::new();
@@ -2784,7 +3016,7 @@ mod tests {
             HeaderMap::new(),
         )
         .await;
-        let PipelineOutcome::Json { status, body } = outcome else {
+        let PipelineOutcome::Json { status, body, .. } = outcome else {
             panic!("expected JSON response");
         };
         assert_eq!(status, 200, "{body}");
