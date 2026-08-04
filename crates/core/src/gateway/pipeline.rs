@@ -1096,6 +1096,7 @@ pub async fn count_tokens(
     }
 
     let mut last_error = String::from("all Messages count_tokens channels failed");
+    let mut last_upstream_headers: Option<HeaderMap> = None;
     for channel in candidates {
         let upstream_model = route_model_override
             .map(str::to_string)
@@ -1145,6 +1146,7 @@ pub async fn count_tokens(
         if status >= 400 {
             let snippet: String = String::from_utf8_lossy(&raw).chars().take(300).collect();
             last_error = format!("channel '{}' returned {status}: {snippet}", channel.name);
+            last_upstream_headers = Some(upstream_headers.clone());
             if status >= 500 {
                 mark_health(
                     &state,
@@ -1186,7 +1188,11 @@ pub async fn count_tokens(
         };
     }
 
-    PipelineOutcome::local(502, error_body(Dialect::Messages, &last_error))
+    PipelineOutcome::Json {
+        status: 502,
+        body: error_body(Dialect::Messages, &last_error),
+        headers: last_upstream_headers.unwrap_or_default(),
+    }
 }
 
 /// Resolve one downstream `response.create` frame to native Responses upstream
@@ -1531,6 +1537,10 @@ pub async fn run(
 
     let started = Instant::now();
     let mut last_error = String::from("all channels failed");
+    // Kept alongside `last_error`: when every candidate fails over, the reply is
+    // synthesized here, and dropping the last upstream's headers would throw
+    // away the `retry-after` a rate-limited client needs most.
+    let mut last_upstream_headers: Option<HeaderMap> = None;
 
     for channel in candidates {
         let prepared = match prepare_request(
@@ -1579,6 +1589,7 @@ pub async fn run(
             let text = resp.text().await.unwrap_or_default();
             let snippet: String = text.chars().take(300).collect();
             last_error = format!("channel '{}' returned {status}: {snippet}", channel.name);
+            last_upstream_headers = Some(upstream_headers.clone());
             if status >= 500 {
                 mark_health(
                     &state,
@@ -1657,7 +1668,11 @@ pub async fn run(
         }
     }
 
-    PipelineOutcome::local(502, error_body(inlet, &last_error))
+    PipelineOutcome::Json {
+        status: 502,
+        body: error_body(inlet, &last_error),
+        headers: last_upstream_headers.unwrap_or_default(),
+    }
 }
 
 fn route_for_key(db: &Database, key: Option<&GatewayKey>) -> Result<Option<GatewayRoute>, String> {
@@ -2231,10 +2246,11 @@ mod tests {
         assert_eq!(value("retry-after"), "30");
     }
 
-    /// The failure path is where relayed headers matter most: a 429 without its
-    /// `retry-after` tells the client nothing about when to come back.
+    /// The failure path is where relayed headers matter most, and a 429 that
+    /// exhausts every candidate is still a 429: the synthesized 502 has to carry
+    /// the last upstream's `retry-after` or the client has nothing to back off on.
     #[tokio::test]
-    async fn a_failing_upstream_still_relays_its_headers() {
+    async fn a_rate_limit_that_exhausts_every_channel_still_relays_retry_after() {
         let (state, _) = messages_upstream_with_response_headers(
             429,
             vec![("retry-after", "12"), ("x-request-id", "req_429")],
@@ -2248,9 +2264,14 @@ mod tests {
         else {
             panic!("expected JSON response");
         };
-        // 429 is failover-worthy; with a single channel it is the final answer.
+        // 429 is failover-worthy, so with one channel the pipeline runs out of
+        // candidates and answers 502 itself — carrying what it last heard.
         assert_eq!(status, 502);
-        assert!(headers.get("retry-after").is_none());
+        assert_eq!(headers.get("retry-after").unwrap().to_str().unwrap(), "12");
+        assert_eq!(
+            headers.get("x-request-id").unwrap().to_str().unwrap(),
+            "req_429"
+        );
     }
 
     /// A non-failover error keeps the upstream's own status and headers.
