@@ -47,7 +47,7 @@ fn protected_paths(app_type: &AppType) -> &'static [&'static str] {
 /// collides with any byte we write, and the collision is unresolvable because
 /// there is no smaller unit to keep or drop. Parsing them turns that one useless
 /// conflict into the handful of keys that actually disagree.
-fn toml_text_paths(app_type: &AppType) -> &'static [&'static str] {
+pub(crate) fn toml_text_paths(app_type: &AppType) -> &'static [&'static str] {
     match app_type {
         AppType::Codex | AppType::GrokBuild => &["config"],
         _ => &[],

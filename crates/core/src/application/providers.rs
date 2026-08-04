@@ -523,7 +523,7 @@ fn validate_provider_with_plugin(
     }
 }
 
-fn is_secret_key(key: &str) -> bool {
+pub(crate) fn is_secret_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
     normalized.contains("password")
         || normalized.contains("secret")

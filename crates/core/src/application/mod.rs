@@ -39,6 +39,9 @@ pub use dto::{
 };
 pub use error::{ApplicationError, ApplicationResult};
 pub use gateway::GatewayStation;
+/// The predicate behind [`redact_json`], shared so the save path can recognize
+/// the fields it produced placeholders for.
+pub(crate) use providers::is_secret_key;
 pub use providers::{ProviderSwitchPolicy, redact_json};
 pub use skills::{parse_skill_repo_spec, parse_skill_source};
 

@@ -6,6 +6,7 @@
 pub mod drift;
 mod endpoints;
 pub(crate) mod live;
+mod secrets;
 mod usage;
 
 use indexmap::IndexMap;
@@ -305,6 +306,19 @@ impl ProviderService {
         let existing_provider = state
             .db
             .get_provider_by_id(&original_id, app_type.as_str())?;
+        // A caller may be holding a redacted read of this provider (the list
+        // backend hands one out on purpose). Saving it back would write `******`
+        // over the credential, so any masked field is taken from the record
+        // being replaced instead.
+        if let Some(existing) = existing_provider.as_ref()
+            && secrets::restore_masked_secrets(&app_type, &mut provider, existing)
+        {
+            log::warn!(
+                "Restored redacted secret placeholders while saving {} provider '{}'",
+                app_type.as_str(),
+                provider.id
+            );
+        }
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
         Self::validate_provider_settings(&app_type, &provider)?;
