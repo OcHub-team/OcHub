@@ -180,7 +180,7 @@ async fn run_http(
         Ok(k) => k,
         Err(resp) => return resp,
     };
-    match pipeline::run(state, inlet, body, key).await {
+    match pipeline::run(state, inlet, body, key, headers).await {
         PipelineOutcome::Json { status, body } => (
             StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             axum::Json(body),
@@ -488,26 +488,22 @@ async fn connect_ws_upstream(
         .as_str()
         .into_client_request()
         .map_err(|error| error.to_string())?;
+    // Same rule as the HTTP hop: forward what the client sent, minus the
+    // headers this hop owns. The previous allowlist here named eight Codex
+    // headers, which meant any other beta flag or tracing header the client
+    // added was dropped without a trace.
+    //
+    // Iterate borrowed: the owned iterator reports a repeated key as `None`,
+    // which would silently drop the second value of a multi-value header.
+    let forwarded = pipeline::forwardable_client_headers(downstream_headers);
+    for (name, value) in forwarded.iter() {
+        request.headers_mut().append(name.clone(), value.clone());
+    }
     request.headers_mut().insert(
         axum::http::header::AUTHORIZATION,
         axum::http::HeaderValue::from_str(&format!("Bearer {}", channel.api_key))
             .map_err(|error| error.to_string())?,
     );
-
-    for name in [
-        "openai-beta",
-        "x-codex-beta-features",
-        "x-openai-internal-codex-responses-lite",
-        "x-client-request-id",
-        "session-id",
-        "thread-id",
-        "originator",
-        "user-agent",
-    ] {
-        if let Some(value) = downstream_headers.get(name) {
-            request.headers_mut().insert(name, value.clone());
-        }
-    }
     for (name, value) in &channel.extra_headers {
         let name = axum::http::HeaderName::from_bytes(name.as_bytes())
             .map_err(|error| error.to_string())?;
@@ -728,7 +724,7 @@ async fn handle_count_tokens(
         Ok(key) => key,
         Err(resp) => return resp,
     };
-    match pipeline::count_tokens(state, body, key).await {
+    match pipeline::count_tokens(state, body, key, headers).await {
         PipelineOutcome::Json { status, body } => (
             StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             axum::Json(body),

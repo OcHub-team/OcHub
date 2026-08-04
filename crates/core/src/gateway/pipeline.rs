@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use ochub_convert::aggregate;
 use ochub_convert::usage as conv_usage;
 use ochub_convert::{
@@ -630,50 +631,163 @@ fn request_meta(inlet: Dialect, body: &Value) -> RequestMeta {
     }
 }
 
+/// Headers the gateway owns, and so must not copy from the client.
+///
+/// Everything else a client sends is forwarded: `anthropic-beta`,
+/// `user-agent`, `x-stainless-*`, and whatever tracing headers a tool adds are
+/// all things the upstream may act on, and dropping them silently changes the
+/// request the user thinks they are making.
+///
+/// The exclusions are the headers that describe *this* hop rather than the
+/// request:
+///
+/// - **Credentials.** The gateway authenticates to the upstream with the
+///   channel's own key. The client's key authenticates it to the gateway and
+///   means nothing beyond it; forwarding would send two and let the upstream
+///   choose.
+/// - **Hop-by-hop.** Scoped to a single connection by RFC 9110 §7.6.1, so they
+///   are meaningless — or actively wrong — to the next hop.
+/// - **Body description.** The gateway rebuilds the body, and a converted
+///   request rarely has the length the client announced.
+/// - **`accept-encoding`.** This crate's reqwest has no decompression feature
+///   enabled, so forwarding `gzip` would return bytes nothing here can read.
+/// - **`sec-websocket-*`.** Generated per connection by the WebSocket client
+///   request builder on the upstream hop.
+const GATEWAY_OWNED_HEADERS: &[&str] = &[
+    // Credentials.
+    "authorization",
+    "proxy-authorization",
+    "x-api-key",
+    "api-key",
+    // Hop-by-hop.
+    "connection",
+    "proxy-connection",
+    "keep-alive",
+    "transfer-encoding",
+    "te",
+    "trailer",
+    "upgrade",
+    "host",
+    // Body description, rebuilt per hop.
+    "content-length",
+    "content-type",
+    "accept-encoding",
+    // Per-connection WebSocket handshake.
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-extensions",
+    "sec-websocket-accept",
+    "sec-websocket-protocol",
+];
+
+fn is_gateway_owned_header(name: &HeaderName) -> bool {
+    GATEWAY_OWNED_HEADERS.contains(&name.as_str())
+}
+
+/// The client's headers, minus the ones this hop owns.
+pub(crate) fn forwardable_client_headers(client_headers: &HeaderMap) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for (name, value) in client_headers {
+        if is_gateway_owned_header(name) {
+            continue;
+        }
+        headers.append(name.clone(), value.clone());
+    }
+    headers
+}
+
+/// Authenticate to the upstream as the channel, replacing whatever the client
+/// used to authenticate to the gateway.
+///
+/// `anthropic-version` is only defaulted, not forced: a Messages client that
+/// pinned a version knows which response shape it parses, and the gateway has
+/// no reason to overrule it.
+fn apply_channel_auth(headers: &mut HeaderMap, channel: &GatewayChannel) {
+    match channel.dialect {
+        Dialect::Messages => {
+            if let Ok(value) = HeaderValue::from_str(&channel.api_key) {
+                headers.insert("x-api-key", value);
+            }
+            if !headers.contains_key("anthropic-version") {
+                headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+            }
+        }
+        _ => {
+            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", channel.api_key)) {
+                headers.insert(header::AUTHORIZATION, value);
+            }
+        }
+    }
+}
+
+/// Channel-configured headers win over anything forwarded: they are the
+/// operator's explicit statement about this upstream.
+fn apply_extra_headers(headers: &mut HeaderMap, channel: &GatewayChannel) {
+    for (name, value) in &channel.extra_headers {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            headers.insert(name, value);
+        }
+    }
+}
+
 fn upstream_request(
     state: &GatewayState,
     channel: &GatewayChannel,
     body: &Value,
     stream: bool,
+    client_headers: &HeaderMap,
 ) -> reqwest::RequestBuilder {
-    let mut req = state
+    let mut headers = forwardable_client_headers(client_headers);
+
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        header::ACCEPT,
+        HeaderValue::from_static(if stream {
+            "text/event-stream"
+        } else {
+            "application/json"
+        }),
+    );
+    apply_channel_auth(&mut headers, channel);
+    apply_extra_headers(&mut headers, channel);
+
+    state
         .http_client
         .post(channel.endpoint_url())
-        .header("content-type", "application/json");
-    req = match channel.dialect {
-        Dialect::Messages => req
-            .header("x-api-key", &channel.api_key)
-            .header("anthropic-version", "2023-06-01"),
-        _ => req.header("authorization", format!("Bearer {}", channel.api_key)),
-    };
-    if stream {
-        req = req.header("accept", "text/event-stream");
-    }
-    for (name, value) in &channel.extra_headers {
-        req = req.header(name.as_str(), value.as_str());
-    }
-    req.body(body.to_string())
+        .headers(headers)
+        .body(body.to_string())
 }
 
 fn count_tokens_request(
     state: &GatewayState,
     channel: &GatewayChannel,
     body: &Value,
+    client_headers: &HeaderMap,
 ) -> reqwest::RequestBuilder {
     let url = format!(
         "{}/count_tokens",
         channel.endpoint_url().trim_end_matches('/')
     );
-    let mut req = state
+    let mut headers = forwardable_client_headers(client_headers);
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+    apply_channel_auth(&mut headers, channel);
+    apply_extra_headers(&mut headers, channel);
+
+    state
         .http_client
         .post(url)
-        .header("content-type", "application/json")
-        .header("x-api-key", &channel.api_key)
-        .header("anthropic-version", "2023-06-01");
-    for (name, value) in &channel.extra_headers {
-        req = req.header(name.as_str(), value.as_str());
-    }
-    req.body(body.to_string())
+        .headers(headers)
+        .body(body.to_string())
 }
 
 fn local_token_estimate(body: &Value) -> u64 {
@@ -817,6 +931,7 @@ pub async fn count_tokens(
     state: GatewayState,
     raw_body: bytes::Bytes,
     key: Option<GatewayKey>,
+    client_headers: HeaderMap,
 ) -> PipelineOutcome {
     let body: Value = match serde_json::from_slice(&raw_body) {
         Ok(value) => value,
@@ -945,7 +1060,7 @@ pub async fn count_tokens(
         }
         ochub_convert::signature::restore_thinking_blocks(&mut upstream_body, &*state.signatures);
 
-        let response = match count_tokens_request(&state, &channel, &upstream_body)
+        let response = match count_tokens_request(&state, &channel, &upstream_body, &client_headers)
             .send()
             .await
         {
@@ -1261,6 +1376,7 @@ pub async fn run(
     inlet: Dialect,
     raw_body: bytes::Bytes,
     key: Option<GatewayKey>,
+    client_headers: HeaderMap,
 ) -> PipelineOutcome {
     let body: Value = match serde_json::from_slice(&raw_body) {
         Ok(v) => v,
@@ -1392,9 +1508,15 @@ pub async fn run(
             }
         };
 
-        let resp = match upstream_request(&state, &channel, &prepared.body, meta.stream)
-            .send()
-            .await
+        let resp = match upstream_request(
+            &state,
+            &channel,
+            &prepared.body,
+            meta.stream,
+            &client_headers,
+        )
+        .send()
+        .await
         {
             Ok(r) => r,
             Err(e) => {
@@ -1788,7 +1910,13 @@ mod tests {
             "messages": [{ "role": "user", "content": "hello" }]
         });
 
-        let outcome = count_tokens(state, bytes::Bytes::from(request.to_string()), None).await;
+        let outcome = count_tokens(
+            state,
+            bytes::Bytes::from(request.to_string()),
+            None,
+            HeaderMap::new(),
+        )
+        .await;
         let PipelineOutcome::Json { status, body } = outcome else {
             panic!("expected JSON response");
         };
@@ -1800,6 +1928,219 @@ mod tests {
         assert!(upstream_body.get("stream").is_none());
         assert_eq!(api_key, "upstream-key");
         assert_eq!(extra_header, "present");
+    }
+
+    /// Spin up a Messages upstream that records every header it was sent.
+    async fn messages_upstream_recording_headers(
+        extra_headers: Vec<(String, String)>,
+    ) -> (GatewayState, Arc<std::sync::Mutex<Option<HeaderMap>>>) {
+        let received = Arc::new(std::sync::Mutex::new(None::<HeaderMap>));
+        let received_for_handler = received.clone();
+        let app = axum::Router::new().route(
+            "/v1/messages",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap, axum::Json(_body): axum::Json<Value>| {
+                    let received = received_for_handler.clone();
+                    async move {
+                        *received.lock().unwrap() = Some(headers);
+                        axum::Json(json!({
+                            "id": "msg_1",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "upstream-model",
+                            "content": [{ "type": "text", "text": "ok" }],
+                            "stop_reason": "end_turn",
+                            "usage": { "input_tokens": 1, "output_tokens": 1 }
+                        }))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "messages".into(),
+            endpoint_id: Some("mock".into()),
+            name: "mock".into(),
+            dialect: Dialect::Messages,
+            base_url: format!("http://{addr}"),
+            api_key: "upstream-key".into(),
+            path_override: None,
+            models: vec![],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers,
+            imported_from: None,
+        })
+        .unwrap();
+
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: Arc::new(RwLock::new(HashMap::new())),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        (state, received)
+    }
+
+    fn client_headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(
+                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        headers
+    }
+
+    async fn run_messages_turn(state: GatewayState, headers: HeaderMap) {
+        let body = json!({
+            "model": "client-model",
+            "messages": [{ "role": "user", "content": "hi" }]
+        });
+        let outcome = run(
+            state,
+            Dialect::Messages,
+            bytes::Bytes::from(body.to_string()),
+            None,
+            headers,
+        )
+        .await;
+        let PipelineOutcome::Json { status, .. } = outcome else {
+            panic!("expected JSON response");
+        };
+        assert_eq!(status, 200);
+    }
+
+    /// The gateway is a proxy, not a rewriter: a header the client set is part
+    /// of the request it is making, and the upstream may act on it.
+    #[tokio::test]
+    async fn client_headers_reach_the_upstream() {
+        let (state, received) = messages_upstream_recording_headers(vec![]).await;
+        run_messages_turn(
+            state,
+            client_headers(&[
+                ("anthropic-beta", "context-1m-2025-08-07"),
+                ("user-agent", "claude-cli/2.0.1"),
+                ("x-stainless-lang", "js"),
+                ("x-trace-id", "abc123"),
+            ]),
+        )
+        .await;
+
+        let sent = received.lock().unwrap().clone().unwrap();
+        let value = |name: &str| {
+            sent.get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(value("anthropic-beta"), "context-1m-2025-08-07");
+        assert_eq!(value("user-agent"), "claude-cli/2.0.1");
+        assert_eq!(value("x-stainless-lang"), "js");
+        assert_eq!(value("x-trace-id"), "abc123");
+    }
+
+    /// The client's key authenticates it to the gateway and means nothing past
+    /// it. Forwarding it would send two credentials and let the upstream pick.
+    #[tokio::test]
+    async fn the_clients_credential_is_replaced_rather_than_forwarded() {
+        let (state, received) = messages_upstream_recording_headers(vec![]).await;
+        run_messages_turn(
+            state,
+            client_headers(&[
+                ("x-api-key", "gateway-key-the-client-holds"),
+                ("authorization", "Bearer gateway-key-the-client-holds"),
+            ]),
+        )
+        .await;
+
+        let sent = received.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            sent.get("x-api-key").unwrap().to_str().unwrap(),
+            "upstream-key"
+        );
+        assert_eq!(sent.get_all("x-api-key").iter().count(), 1);
+        assert!(sent.get("authorization").is_none());
+    }
+
+    /// Hop-scoped headers describe the client→gateway connection, and a body the
+    /// gateway rebuilds. `accept-encoding` would ask for bytes this client has
+    /// no feature enabled to decompress.
+    #[tokio::test]
+    async fn headers_describing_this_hop_do_not_travel_to_the_next_one() {
+        let (state, received) = messages_upstream_recording_headers(vec![]).await;
+        run_messages_turn(
+            state,
+            client_headers(&[
+                ("host", "127.0.0.1:1"),
+                ("content-length", "999999"),
+                ("accept-encoding", "gzip, br"),
+                ("connection", "keep-alive"),
+            ]),
+        )
+        .await;
+
+        let sent = received.lock().unwrap().clone().unwrap();
+        assert!(sent.get("accept-encoding").is_none());
+        assert_ne!(sent.get("host").unwrap().to_str().unwrap(), "127.0.0.1:1");
+        assert_ne!(
+            sent.get("content-length").map(|v| v.to_str().unwrap()),
+            Some("999999")
+        );
+    }
+
+    /// A client that pinned a version knows which response shape it parses.
+    #[tokio::test]
+    async fn a_client_pinned_anthropic_version_is_not_overruled() {
+        let (state, received) = messages_upstream_recording_headers(vec![]).await;
+        run_messages_turn(
+            state,
+            client_headers(&[("anthropic-version", "2026-01-01")]),
+        )
+        .await;
+
+        let sent = received.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            sent.get("anthropic-version").unwrap().to_str().unwrap(),
+            "2026-01-01"
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_version_is_defaulted_when_the_client_sends_none() {
+        let (state, received) = messages_upstream_recording_headers(vec![]).await;
+        run_messages_turn(state, HeaderMap::new()).await;
+
+        let sent = received.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            sent.get("anthropic-version").unwrap().to_str().unwrap(),
+            "2023-06-01"
+        );
+    }
+
+    /// A channel header is the operator's explicit statement about this
+    /// upstream, so it outranks whatever the client happened to send.
+    #[tokio::test]
+    async fn a_channel_header_outranks_the_forwarded_one() {
+        let (state, received) =
+            messages_upstream_recording_headers(vec![("x-tenant".into(), "from-channel".into())])
+                .await;
+        run_messages_turn(state, client_headers(&[("x-tenant", "from-client")])).await;
+
+        let sent = received.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            sent.get("x-tenant").unwrap().to_str().unwrap(),
+            "from-channel"
+        );
+        assert_eq!(sent.get_all("x-tenant").iter().count(), 1);
     }
 
     #[tokio::test]
@@ -1834,7 +2175,13 @@ mod tests {
             "messages": [{ "role": "user", "content": "abcdefgh" }]
         });
 
-        let outcome = count_tokens(state, bytes::Bytes::from(request.to_string()), None).await;
+        let outcome = count_tokens(
+            state,
+            bytes::Bytes::from(request.to_string()),
+            None,
+            HeaderMap::new(),
+        )
+        .await;
         let PipelineOutcome::Json { status, body } = outcome else {
             panic!("expected JSON response");
         };
@@ -1890,7 +2237,13 @@ mod tests {
             "messages": [{ "role": "user", "content": "abcdefgh" }]
         });
 
-        let outcome = count_tokens(state, bytes::Bytes::from(request.to_string()), None).await;
+        let outcome = count_tokens(
+            state,
+            bytes::Bytes::from(request.to_string()),
+            None,
+            HeaderMap::new(),
+        )
+        .await;
         let PipelineOutcome::Json { status, body } = outcome else {
             panic!("expected JSON response");
         };
@@ -2247,6 +2600,7 @@ mod tests {
             Dialect::Chat,
             bytes::Bytes::from(body.to_string()),
             None,
+            HeaderMap::new(),
         )
         .await;
 
@@ -2427,6 +2781,7 @@ mod tests {
             Dialect::Chat,
             bytes::Bytes::from(request.to_string()),
             Some(key),
+            HeaderMap::new(),
         )
         .await;
         let PipelineOutcome::Json { status, body } = outcome else {
