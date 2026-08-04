@@ -22,6 +22,12 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_BASEDIRS: ${{ github.workspace }}
+  SCCACHE_CLIENT_SIDE: "1"
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   # Compiled into the binary as the only key the in-app updater will accept.
   # A repository variable rather than a secret: it is a public key, and having
@@ -80,6 +86,8 @@ jobs:
             artifact: release-linux-x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    env:
+      SCCACHE_GHA_VERSION: ochub-release-${{ matrix.target }}-v1
     steps:
       - name: Check out release tag
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -90,19 +98,24 @@ jobs:
         if: matrix.kind == 'linux'
         run: ./scripts/ci/install-linux-deps.sh
 
-      # Restore-only. A tag push writes its cache into that tag's own scope,
-      # which no later tag can read -- so saving here produced ~1.1GB per
-      # platform that was never restored once, spent 2min of the critical path
-      # uploading it, and evicted the main-branch CI caches that *are* read.
-      # Restoring stays on so a cache published on the default branch under
-      # this key would be picked up.
-      - name: Cache Rust build
+      # Keep Cargo's registry, Git checkouts, and installed tools warm. Rust
+      # compilation outputs are cached by sccache instead of duplicating the
+      # entire target directory (~1.1GB per platform in prior releases).
+      - name: Cache Cargo inputs and tools
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: release-${{ matrix.target }}
           cache-bin: true
-          cache-targets: true
+          cache-targets: false
           save-if: false
+
+      # Release tags read artifacts warmed by the default-branch CI. Keeping
+      # this backend read-only avoids one-off tag-scoped caches that no later
+      # release can restore.
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
 
       # Prebuilt rather than `cargo install`, which compiled the packager from
       # source on every runner (~5min on the slowest). Upstream ships no
@@ -176,6 +189,10 @@ jobs:
         env:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
         run: ./scripts/release/package-linux.sh dist
+
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats
 
       # Signs the payloads the in-app updater downloads. The public half is
       # compiled into the binary (OCHUB_UPDATER_PUBKEY), so an unsigned or

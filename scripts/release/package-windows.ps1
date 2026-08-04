@@ -23,8 +23,21 @@ if ($LASTEXITCODE -ne 0) {
 }
 $Version = ($Metadata.packages | Where-Object name -eq "ochub-app").version
 
+$BuildTimer = [Diagnostics.Stopwatch]::StartNew()
 cargo build --release --locked --target $Target -p ochub-app -p ochcli
-if ($LASTEXITCODE -ne 0) {
+$BuildExitCode = $LASTEXITCODE
+$BuildTimer.Stop()
+Write-Host ("release cargo build duration: {0:N1}s" -f $BuildTimer.Elapsed.TotalSeconds)
+
+$SccacheCommand = Get-Command sccache -ErrorAction SilentlyContinue
+if ($env:RUSTC_WRAPPER -match "sccache" -and $null -ne $SccacheCommand) {
+    & $SccacheCommand.Source --show-stats
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "sccache statistics were unavailable"
+    }
+}
+
+if ($BuildExitCode -ne 0) {
     throw "cargo build failed"
 }
 

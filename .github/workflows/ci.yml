@@ -18,12 +18,20 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_BASEDIRS: ${{ github.workspace }}
+  SCCACHE_CLIENT_SIDE: "1"
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
   quality:
     name: Format, lint, and test
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+    env:
+      SCCACHE_GHA_VERSION: ochub-ci-quality-v1
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -36,13 +44,18 @@ jobs:
           rustc --version --verbose
           cargo --version --verbose
 
-      - name: Cache Rust build
+      - name: Cache Cargo inputs and tools
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: ci-quality
           cache-bin: true
-          cache-targets: true
+          cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -52,6 +65,10 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats
 
   platform-check:
     name: Check ${{ matrix.name }}
@@ -67,6 +84,8 @@ jobs:
             cache: windows-x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    env:
+      SCCACHE_GHA_VERSION: ochub-ci-${{ matrix.cache }}-v1
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -76,13 +95,78 @@ jobs:
           rustc --version --verbose
           cargo --version --verbose
 
-      - name: Cache Rust build
+      - name: Cache Cargo inputs and tools
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: ci-${{ matrix.cache }}
           cache-bin: true
-          cache-targets: true
+          cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
 
       - name: Check workspace
         run: cargo check --workspace --all-targets --locked
+
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats
+
+  release-cache:
+    name: Warm release cache (${{ matrix.name }})
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-26
+            target: aarch64-apple-darwin
+          - name: macOS Intel
+            os: macos-26-intel
+            target: x86_64-apple-darwin
+          - name: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: Linux x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      SCCACHE_GHA_VERSION: ochub-release-${{ matrix.target }}-v1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: ./scripts/ci/install-linux-deps.sh
+
+      - name: Show toolchain
+        run: |
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Cache Cargo inputs and tools
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: release-${{ matrix.target }}
+          cache-bin: true
+          cache-targets: false
+          save-if: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Warm optimized Rust artifacts
+        run: cargo build --release --locked --target "${{ matrix.target }}" -p ochub-app -p ochcli
+
+      - name: Show sccache statistics
+        if: always()
+        run: sccache --show-stats

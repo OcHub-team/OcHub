@@ -15,7 +15,16 @@ version="$(
         jq -r '.packages[] | select(.name == "ochub-app") | .version'
 )"
 
-cargo build --release --locked --target "${target}" -p ochub-app -p ochcli
+build_started="${SECONDS}"
+build_status=0
+cargo build --release --locked --target "${target}" -p ochub-app -p ochcli || build_status=$?
+printf 'release cargo build duration: %ss\n' "$((SECONDS - build_started))"
+if [[ "$(basename "${RUSTC_WRAPPER:-}")" == sccache ]] && command -v sccache >/dev/null; then
+    sccache --show-stats || true
+fi
+if ((build_status != 0)); then
+    exit "${build_status}"
+fi
 "target/${target}/release/ochub" --version
 "target/${target}/release/ochcli" version
 
