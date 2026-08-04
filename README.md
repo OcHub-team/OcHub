@@ -127,13 +127,9 @@ Homebrew automatically selects the correct Apple Silicon or Intel build:
 brew install --cask ochub-team/tap/ochub
 ```
 
-OcHub is not yet notarized by Apple. If macOS blocks the first launch, open
-**System Settings → Privacy & Security** and choose **Open Anyway**, or install
-without the quarantine flag:
-
-```sh
-brew install --cask --no-quarantine ochub-team/tap/ochub
-```
+OcHub is signed with an Apple Developer ID. Notarization is not enabled yet, so
+if macOS blocks the first launch, open **System Settings → Privacy & Security**
+and choose **Open Anyway**.
 
 ### Direct download
 

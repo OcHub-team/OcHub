@@ -72,12 +72,9 @@ provider-import, switching, and one-click update instructions.
 
 ## macOS: approving the app on first launch
 
-OcHub is signed with a self-signed certificate and is not notarized by Apple.
-Gatekeeper trusts only certificates that chain back to Apple's own root, and a
-self-signed one does not, so macOS asks you to approve OcHub once. This is
-expected for OcHub and does not mean the download is broken.
-
-### Approve it in System Settings
+OcHub is signed with an Apple Developer ID, but notarization is not enabled
+yet, so macOS asks you to approve OcHub once on first launch. This is expected
+for OcHub and does not mean the download is broken.
 
 <Steps>
 
@@ -89,60 +86,8 @@ expected for OcHub and does not mean the download is broken.
 </Steps>
 
 Control-clicking the app no longer works for this on macOS 15 and later — the
-System Settings route is the only one.
-
-### Or clear the quarantine flag in Terminal
-
-Use this when **Open Anyway** never appears, when macOS calls OcHub *damaged*,
-or when you would rather not deal with the prompt at all.
-
-macOS attaches a `com.apple.quarantine` attribute to everything a browser
-downloads, and Gatekeeper only inspects apps carrying it. Removing that
-attribute lets OcHub open normally.
-
-<Steps>
-
-1. Open the downloaded `.dmg` and drag **OcHub** into your **Applications**
-   folder. The command below expects it there.
-
-2. Open Terminal: press <kbd>⌘</kbd> <kbd>Space</kbd>, type `Terminal`, and
-   press <kbd>Return</kbd>.
-
-3. Paste this line exactly as written and press <kbd>Return</kbd>:
-
-   ```sh
-   sudo xattr -rd com.apple.quarantine /Applications/OcHub.app
-   ```
-
-4. Type your Mac login password and press <kbd>Return</kbd>. Nothing appears
-   on screen while you type the password — that is how Terminal always behaves,
-   not a stuck prompt.
-
-5. Open OcHub. It launches without any warning.
-
-</Steps>
-
-`sudo` is needed because the attribute lives on the installed app rather than
-on your own copy of it, and `-r` applies the change to everything inside the
-bundle. No output means it worked.
-
-<Aside type="caution" title="Only run this on an app you downloaded yourself">
-
-Clearing the quarantine flag switches off a real macOS safety check for that
-app. Run it only for OcHub, only with the exact path above, and only when you
-downloaded the DMG from OcHub's own release page. Never paste an `xattr`
-command someone else hands you for software you did not go and fetch yourself.
-
-</Aside>
-
-If you installed with Homebrew, you can skip the flag at install time instead:
-
-```sh
-brew install --cask --no-quarantine ochub-team/tap/ochub
-```
-
-Updates installed from inside OcHub are never quarantined, so either route is a
-one-time step rather than something you repeat on every release.
+System Settings route is the only one. It is a one-time step: updates installed
+from inside OcHub do not ask again.
 
 Windows SmartScreen may warn for the same reason.
 

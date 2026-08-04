@@ -116,13 +116,8 @@ Homebrew 会自动选择正确的 Apple Silicon 或 Intel 版本：
 brew install --cask ochub-team/tap/ochub
 ```
 
-OcHub 尚未通过 Apple 公证。如果 macOS 阻止首次启动，请打开
-**系统设置 → 隐私与安全性**，选择**仍要打开**；也可以使用以下命令安装，
-跳过隔离标记：
-
-```sh
-brew install --cask --no-quarantine ochub-team/tap/ochub
-```
+OcHub 使用 Apple Developer ID 签名，但尚未启用公证。如果 macOS 阻止首次启动，
+请打开**系统设置 → 隐私与安全性**，选择**仍要打开**。
 
 ### 直接下载
 
