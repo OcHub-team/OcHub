@@ -1,19 +1,19 @@
 ---
 title: 赞助商
-description: 赞助 OcHub 的 API 中转服务商、它们的接口地址，以及如何连接。
+description: 了解支持 OcHub 开发的 API 中转服务商。
 audience: human
 sidebar:
   order: 12
 ---
 
-OcHub 的开发由下列 API 中转服务商赞助支持。它们是独立的第三方服务：OcHub 只替你
-把接口地址填好，注册、付费和 API Key 的管理都在对方那边完成。
+OcHub 的开发由下列 API 中转服务商赞助支持。它们是独立的第三方服务，注册、付费和
+API Key 的管理都在对方平台完成。
 
 <table>
   <tbody>
     <tr>
       <td align="center">
-        <a href="https://www.krill-ai.net"><img src="/sponsor-krill-horizontal.png" alt="Krill" width="180" style="background:#fff;border-radius:8px;padding:6px" /></a>
+        <a href="https://www.krill-ai.net"><img src="/sponsor-krill-horizontal.png" alt="Krill" height="56" style="height:56px;width:auto;background:#fff;border-radius:8px;padding:6px;object-fit:contain" /></a>
       </td>
       <td>
         <a href="https://www.krill-ai.net"><strong>Krill</strong></a> 提供 GPT / Claude / Gemini / 多款国产模型的官方稳定极速 API 中转服务，支持企业级定制、报销开票、7×16h 专属技术支持，更有独家适配的 WebSocket 连接方式，畅享极速首字速度。<a href="https://www.krill-ai.net/register?invite=708GTIKQHZ">注册链接</a>
@@ -21,7 +21,7 @@ OcHub 的开发由下列 API 中转服务商赞助支持。它们是独立的第
     </tr>
     <tr>
       <td align="center">
-        <a href="https://hezubus.cc"><img src="/sponsor-hezubus-horizontal.png" alt="合租巴士" width="180" style="background:#fff;border-radius:8px;padding:6px" /></a>
+        <a href="https://hezubus.cc"><img src="/sponsor-hezubus-horizontal.png" alt="合租巴士" height="56" style="height:56px;width:auto;background:#fff;border-radius:8px;padding:6px;object-fit:contain" /></a>
       </td>
       <td>
         <a href="https://hezubus.cc"><strong>合租巴士</strong></a> 是一家可靠高效的 AI 中转服务平台，主要提供 Codex、Claude Code 等主流模型的高稳定中转能力，充值比例透明（1:1），Codex 纯 Pro 号池倍率低至 0.16x。<a href="https://hezu.ink/sign-up?aff=2un2">官网进群送 5 刀体验金</a>
@@ -30,53 +30,10 @@ OcHub 的开发由下列 API 中转服务商赞助支持。它们是独立的第
   </tbody>
 </table>
 
-## 线路与地址
-
-### Krill
-
-三条线路等价，可以任选一条，也可以在模型供应商里同时填上做故障转移。
-
-| 线路 | Claude Code / Claude Desktop | Codex |
-| --- | --- | --- |
-| 主线路 | `https://api.krill-ai.net` | `https://api.krill-ai.net/v1` |
-| CDN 线路 | `https://api.cdn-krill-ai.com` | `https://api.cdn-krill-ai.com/v1` |
-| 负载均衡 | `https://api-slb.krill-ai.net` | `https://api-slb.krill-ai.net/v1` |
-
-### 合租巴士
-
-API 域名与官网同域，因此只有一条线路。
-
-| 线路 | Claude Code / Claude Desktop | Codex |
-| --- | --- | --- |
-| 主线路 | `https://hezubus.cc` | `https://hezubus.cc/v1` |
-
-## 连接赞助商线路
-
-两家都在同一个地址上同时提供 Anthropic Messages 接口和 OpenAI 兼容接口。
-Anthropic 方言的客户端拿裸地址、自己拼 `/v1/messages`；OpenAI 方言的客户端则要
-在地址后面加 `/v1`。上面的表格两种都列了，而 OcHub 会自动替你选对。
-
-<Steps>
-
-1. 打开 OcHub，选择你要配置的工具，新建一条连接。
-
-2. 在**赞助商线路**里点击一张卡片，接口地址就填好了；Krill 还可以直接切换线路，
-   不用重新输入任何东西。
-
-3. 粘贴你在对方官网获取的 API Key，测试后保存。
-
-</Steps>
-
-也可以走**模型供应商**：在那里点击赞助商，会一次填好名称、官网与它的全部线路
-——Krill 的三条线路会直接成为一组故障转移地址。
-
-
-
 <Aside type="note" title="赞助意味着什么、不意味着什么">
 
-它们是付费的第三方服务，不属于 OcHub。OcHub 只负责预填接口地址：你的账号、
-账单和 API Key 都在对方那里，请求也是从你的机器直接发给它们的。OcHub 不做代理、
-不做转售，也看不到这些流量。你完全可以照旧使用任何其他供应商。
+它们是付费的第三方服务，不属于 OcHub。你的账号、账单和 API Key 都由对方管理。
+OcHub 不做代理或转售，也不参与双方的交易。你仍然可以自由使用任何其他供应商。
 
 </Aside>
 

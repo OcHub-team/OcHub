@@ -198,7 +198,7 @@ with each of them, and your requests go straight from your machine to theirs.
   <tbody>
     <tr>
       <td width="230" align="center">
-        <a href="https://www.krill-ai.net"><img src="docs/assets/sponsor-krill-horizontal.png" alt="Krill" width="180"></a>
+        <a href="https://www.krill-ai.net"><img src="docs/assets/sponsor-krill-horizontal.png" alt="Krill" height="56"></a>
       </td>
       <td>
         <a href="https://www.krill-ai.net"><strong>Krill</strong></a> serves fast, stable relay access to the official GPT, Claude, Gemini and several Chinese models. It offers enterprise customization, invoices for expense claims, and dedicated 7×16h support, plus a purpose-built WebSocket transport for a quick first token. <a href="https://www.krill-ai.net/register?invite=708GTIKQHZ">Sign up</a>
@@ -206,7 +206,7 @@ with each of them, and your requests go straight from your machine to theirs.
     </tr>
     <tr>
       <td width="230" align="center">
-        <a href="https://hezubus.cc"><img src="docs/assets/sponsor-hezubus-horizontal.png" alt="合租巴士 (Hezu Bus)" width="180"></a>
+        <a href="https://hezubus.cc"><img src="docs/assets/sponsor-hezubus-horizontal.png" alt="合租巴士 (Hezu Bus)" height="56"></a>
       </td>
       <td>
         <a href="https://hezubus.cc"><strong>合租巴士 (Hezu Bus)</strong></a> is a reliable, efficient AI relay platform, focused on high-stability relays for Codex, Claude Code and other mainstream models. Top-ups are transparent at a 1:1 ratio, and its Codex Pro-only account pool bills as low as 0.16×. <a href="https://hezu.ink/sign-up?aff=2un2">Join their group for $5 in trial credit</a>
@@ -215,7 +215,7 @@ with each of them, and your requests go straight from your machine to theirs.
   </tbody>
 </table>
 
-[Endpoints and setup →](https://docs.ochub.org/sponsors)
+[Learn more about our sponsors →](https://docs.ochub.org/sponsors)
 
 ## License
 

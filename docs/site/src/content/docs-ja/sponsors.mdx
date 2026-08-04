@@ -1,20 +1,19 @@
 ---
 title: スポンサー
-description: OcHub を支援する API 中継プロバイダー、そのエンドポイントと接続方法。
+description: OcHub の開発を支援する API 中継プロバイダーを紹介します。
 audience: human
 sidebar:
   order: 12
 ---
 
 OcHub の開発は以下の API 中継プロバイダーの支援を受けています。いずれも独立した
-第三者サービスです。OcHub はエンドポイントを入力するだけで、登録・支払い・API
-キーの管理はプロバイダー側で行います。
+第三者サービスで、登録・支払い・API キーの管理はプロバイダー側で行います。
 
 <table>
   <tbody>
     <tr>
       <td align="center">
-        <a href="https://www.krill-ai.net"><img src="/sponsor-krill-horizontal.png" alt="Krill" width="180" style="background:#fff;border-radius:8px;padding:6px" /></a>
+        <a href="https://www.krill-ai.net"><img src="/sponsor-krill-horizontal.png" alt="Krill" height="56" style="height:56px;width:auto;background:#fff;border-radius:8px;padding:6px;object-fit:contain" /></a>
       </td>
       <td>
         <a href="https://www.krill-ai.net"><strong>Krill</strong></a> は GPT / Claude / Gemini および複数の中国製モデルの公式 API を、高速かつ安定して中継します。法人向けカスタマイズ、経費精算用の請求書発行、7×16 時間の専任サポートに対応し、独自対応の WebSocket 接続で最初のトークンまでの待ち時間を抑えられます。<a href="https://www.krill-ai.net/register?invite=708GTIKQHZ">登録リンク</a>
@@ -22,7 +21,7 @@ OcHub の開発は以下の API 中継プロバイダーの支援を受けてい
     </tr>
     <tr>
       <td align="center">
-        <a href="https://hezubus.cc"><img src="/sponsor-hezubus-horizontal.png" alt="合租巴士 (Hezu Bus)" width="180" style="background:#fff;border-radius:8px;padding:6px" /></a>
+        <a href="https://hezubus.cc"><img src="/sponsor-hezubus-horizontal.png" alt="合租巴士 (Hezu Bus)" height="56" style="height:56px;width:auto;background:#fff;border-radius:8px;padding:6px;object-fit:contain" /></a>
       </td>
       <td>
         <a href="https://hezubus.cc"><strong>合租巴士 (Hezu Bus)</strong></a> は信頼性が高く効率的な AI 中継プラットフォームです。Codex や Claude Code など主要モデルを安定して中継し、チャージ比率は 1:1 と透明。Codex の Pro 専用アカウントプールは 0.16 倍まで下がります。<a href="https://hezu.ink/sign-up?aff=2un2">公式サイトからグループに参加すると 5 ドル分の体験クレジット</a>
@@ -31,57 +30,11 @@ OcHub の開発は以下の API 中継プロバイダーの支援を受けてい
   </tbody>
 </table>
 
-## 回線とエンドポイント
-
-### Krill
-
-3 本の回線は等価です。1 本だけ使っても、モデルプロバイダーにまとめて登録して
-フェイルオーバーの組にしても構いません。
-
-| 回線 | Claude Code / Claude Desktop | Codex |
-| --- | --- | --- |
-| メイン回線 | `https://api.krill-ai.net` | `https://api.krill-ai.net/v1` |
-| CDN 回線 | `https://api.cdn-krill-ai.com` | `https://api.cdn-krill-ai.com/v1` |
-| ロードバランス | `https://api-slb.krill-ai.net` | `https://api-slb.krill-ai.net/v1` |
-
-### 合租巴士 (Hezu Bus)
-
-API ドメインが公式サイトと同一のため、回線は 1 本のみです。
-
-| 回線 | Claude Code / Claude Desktop | Codex |
-| --- | --- | --- |
-| メイン回線 | `https://hezubus.cc` | `https://hezubus.cc/v1` |
-
-## スポンサー回線に接続する
-
-どちらも同じオリジンで Anthropic Messages API と OpenAI 互換 API の両方を提供して
-います。Anthropic 方言のクライアントはオリジンをそのまま受け取り `/v1/messages`
-を自分で付けます。OpenAI 方言のクライアントはオリジンに `/v1` を付けたものを
-使います。上の表には両方の形式を載せてあり、OcHub が適切な方を選びます。
-
-<Steps>
-
-1. OcHub を開き、設定したいツールを選んで接続を追加します。
-
-2. **スポンサー回線**でカードをクリックすると、エンドポイントが入力されます。
-   Krill では入力し直すことなく回線を切り替えられます。
-
-3. プロバイダーの公式サイトで取得した API キーを貼り付け、テストして保存します。
-
-</Steps>
-
-**モデルプロバイダー**でも同様です。スポンサーをクリックすると名称・公式サイトと
-提供中のすべての回線が一度に入力され、Krill の 3 本はそのままフェイルオーバーの
-組になります。
-
-
 <Aside type="note" title="スポンサーシップが意味すること・しないこと">
 
-これらは有料の第三者サービスであり、OcHub の一部ではありません。OcHub が行うのは
-エンドポイントの事前入力だけです。アカウント、請求、API キーはプロバイダー側に
-あり、リクエストはあなたのマシンから直接そこへ送られます。OcHub が中継したり、
-再販したり、その通信を見たりすることはありません。これまでどおり他のプロバイダー
-も自由に使えます。
+これらは有料の第三者サービスであり、OcHub の一部ではありません。アカウント、請求、
+API キーはプロバイダー側が管理します。OcHub がサービスを中継・再販したり、取引に
+関与したりすることはありません。これまでどおり他のプロバイダーも自由に使えます。
 
 </Aside>
 

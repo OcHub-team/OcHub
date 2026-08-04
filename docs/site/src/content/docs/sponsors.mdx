@@ -1,20 +1,20 @@
 ---
 title: Sponsors
-description: The API relay providers that sponsor OcHub, their endpoints, and how to connect one.
+description: Meet the API relay providers that support OcHub's development.
 audience: human
 sidebar:
   order: 12
 ---
 
 OcHub's development is supported by the API relay providers below. They are
-independent third-party services: OcHub pre-fills their endpoint for you, and
-you register, pay and manage your API key with the provider directly.
+independent third-party services; registration, payment, and API key management
+all take place on the provider's platform.
 
 <table>
   <tbody>
     <tr>
       <td align="center">
-        <a href="https://www.krill-ai.net"><img src="/sponsor-krill-horizontal.png" alt="Krill" width="180" style="background:#fff;border-radius:8px;padding:6px" /></a>
+        <a href="https://www.krill-ai.net"><img src="/sponsor-krill-horizontal.png" alt="Krill" height="56" style="height:56px;width:auto;background:#fff;border-radius:8px;padding:6px;object-fit:contain" /></a>
       </td>
       <td>
         <a href="https://www.krill-ai.net"><strong>Krill</strong></a> serves fast, stable relay access to the official GPT, Claude, Gemini and several Chinese models. It offers enterprise customization, invoices for expense claims, and dedicated 7×16h support, plus a purpose-built WebSocket transport for a quick first token. <a href="https://www.krill-ai.net/register?invite=708GTIKQHZ">Sign up</a>
@@ -22,7 +22,7 @@ you register, pay and manage your API key with the provider directly.
     </tr>
     <tr>
       <td align="center">
-        <a href="https://hezubus.cc"><img src="/sponsor-hezubus-horizontal.png" alt="合租巴士 (Hezu Bus)" width="180" style="background:#fff;border-radius:8px;padding:6px" /></a>
+        <a href="https://hezubus.cc"><img src="/sponsor-hezubus-horizontal.png" alt="合租巴士 (Hezu Bus)" height="56" style="height:56px;width:auto;background:#fff;border-radius:8px;padding:6px;object-fit:contain" /></a>
       </td>
       <td>
         <a href="https://hezubus.cc"><strong>合租巴士 (Hezu Bus)</strong></a> is a reliable, efficient AI relay platform, focused on high-stability relays for Codex, Claude Code and other mainstream models. Top-ups are transparent at a 1:1 ratio, and its Codex Pro-only account pool bills as low as 0.16×. <a href="https://hezu.ink/sign-up?aff=2un2">Join their group for $5 in trial credit</a>
@@ -31,58 +31,12 @@ you register, pay and manage your API key with the provider directly.
   </tbody>
 </table>
 
-## Routes and endpoints
-
-### Krill
-
-The three routes are equivalent: pick one, or fill in all of them as a failover
-set on a model provider.
-
-| Route | Claude Code / Claude Desktop | Codex |
-| --- | --- | --- |
-| Primary | `https://api.krill-ai.net` | `https://api.krill-ai.net/v1` |
-| CDN | `https://api.cdn-krill-ai.com` | `https://api.cdn-krill-ai.com/v1` |
-| Load balanced | `https://api-slb.krill-ai.net` | `https://api-slb.krill-ai.net/v1` |
-
-### 合租巴士 (Hezu Bus)
-
-Its API domain is the same as its site domain, so there is a single route.
-
-| Route | Claude Code / Claude Desktop | Codex |
-| --- | --- | --- |
-| Primary | `https://hezubus.cc` | `https://hezubus.cc/v1` |
-
-## Connect a sponsor endpoint
-
-Both providers serve the Anthropic Messages API and an OpenAI-compatible API on
-the same origin. Anthropic-dialect clients take the bare origin and append
-`/v1/messages` themselves; OpenAI-dialect clients take the origin plus `/v1`.
-The tables above already show both forms, and OcHub picks the right one for
-you.
-
-<Steps>
-
-1. Open OcHub, pick your tool, and add a connection.
-
-2. Under **Sponsor endpoints**, click a card. The endpoint is filled in, and
-   for Krill you can switch route without retyping anything.
-
-3. Paste the API key you obtained from the sponsor's own site, then test and
-   save.
-
-</Steps>
-
-**Model providers** work the same way: clicking a sponsor there fills in the
-name, website and every route it serves — Krill's three routes go in together
-as a failover set.
-
-
 <Aside type="note" title="What sponsorship does and does not mean">
 
-These are paid third-party services, not part of OcHub. OcHub only pre-fills
-the endpoint: your account, billing and API key live with the provider, and
-your requests go straight from your machine to them. OcHub does not proxy,
-resell, or see that traffic. You can use any other provider exactly as before.
+These are paid third-party services, not part of OcHub. The provider manages
+your account, billing, and API key. OcHub does not proxy or resell their service
+and is not involved in the transaction. You can use any other provider exactly
+as before.
 
 </Aside>
 
