@@ -447,7 +447,7 @@ impl AppConfig for CodexConfig {
     }
 
     fn presets(&self) -> Vec<super::Preset> {
-        vec![
+        let mut presets = vec![
             codex_preset(
                 "OpenAI 官方",
                 "openai-account",
@@ -484,7 +484,9 @@ impl AppConfig for CodexConfig {
                 "gpt-5.5",
                 "high",
             ),
-        ]
+        ];
+        presets.extend(super::sponsors::presets_for(AppType::Codex));
+        presets
     }
 }
 
@@ -508,10 +510,7 @@ fn codex_preset(
     set_str(&mut v, "model", model);
     set_str(&mut v, "reasoning_effort", effort);
     set_str(&mut v, "wire_api", "responses");
-    super::Preset {
-        name: label.to_string(),
-        values: v,
-    }
+    super::Preset::new(label, v)
 }
 
 /// Smart `/v1` handling: trim trailing slashes; append `/v1` only when the URL

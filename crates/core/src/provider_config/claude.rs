@@ -32,7 +32,7 @@ use super::{
 use crate::AppType;
 use crate::model::ProviderMeta;
 
-const AUTH_TOKEN_KEY: &str = "ANTHROPIC_AUTH_TOKEN";
+pub(super) const AUTH_TOKEN_KEY: &str = "ANTHROPIC_AUTH_TOKEN";
 const AUTH_API_KEY: &str = "ANTHROPIC_API_KEY";
 const BASE_URL_KEY: &str = "ANTHROPIC_BASE_URL";
 const MODEL_KEY: &str = "ANTHROPIC_MODEL";
@@ -417,6 +417,10 @@ impl AppConfig for ClaudeConfig {
             });
         }
         issues
+    }
+
+    fn presets(&self) -> Vec<super::Preset> {
+        super::sponsors::presets_for(AppType::Claude)
     }
 }
 

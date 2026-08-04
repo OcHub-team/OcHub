@@ -379,10 +379,7 @@ fn preset(preset_name: &str, name: &str, base_url: &str, model: &str, env_key: &
         "context_window",
         DEFAULT_CONTEXT_WINDOW.to_string(),
     );
-    Preset {
-        name: preset_name.into(),
-        values,
-    }
+    Preset::new(preset_name, values)
 }
 
 #[cfg(test)]

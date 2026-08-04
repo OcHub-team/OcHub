@@ -15,7 +15,7 @@ use super::{
 use crate::AppType;
 use crate::model::{ClaudeDesktopModelRoute, ProviderMeta};
 
-const AUTH_TOKEN: &str = "token";
+pub(super) const AUTH_TOKEN: &str = "token";
 const AUTH_API_KEY: &str = "api_key";
 const ENV_BASE_URL: &str = "ANTHROPIC_BASE_URL";
 const ENV_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
@@ -260,6 +260,10 @@ impl AppConfig for ClaudeDesktopConfig {
             });
         }
         issues
+    }
+
+    fn presets(&self) -> Vec<super::Preset> {
+        super::sponsors::presets_for(AppType::ClaudeDesktop)
     }
 }
 

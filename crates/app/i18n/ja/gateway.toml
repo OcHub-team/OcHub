@@ -48,6 +48,8 @@
 "gateway.deeplink.title" = "モデルプロバイダーをインポート"
 "gateway.editor.advanced.description" = "思考パラメーターの変換は通常、変更する必要がありません。"
 "gateway.editor.advanced.title" = "詳細設定"
+"gateway.editor.sponsors.help" = "クリックすると名称・公式サイト・すべての API アドレスが入力されます。API キーは各サイトで取得してください。"
+"gateway.editor.sponsors.label" = "スポンサー回線"
 "gateway.editor.websocket.description" = "上流が Responses WebSocket をネイティブ対応している場合のみ有効にします。利用できない場合、OcHub は 426 を返し、Codex が HTTP/SSE で再試行できるようにします。"
 "gateway.editor.websocket.title" = "Responses WebSocket"
 "gateway.editor.api_key.placeholder" = "モデルプロバイダーの API キー"

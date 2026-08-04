@@ -28,6 +28,7 @@ mod hermes;
 mod kimi_code;
 mod openclaw;
 mod opencode;
+pub mod sponsors;
 
 pub use cherry_studio::CherryStudioConfig;
 pub use claude::ClaudeConfig;
@@ -38,6 +39,7 @@ pub use hermes::HermesConfig;
 pub use kimi_code::KimiCodeConfig;
 pub use openclaw::OpenClawConfig;
 pub use opencode::OpenCodeConfig;
+pub use sponsors::{RouteKind, Sponsor, SponsorId, SponsorRoute};
 
 /// Field id -> current value. Text/secret/select live as `Value::String`,
 /// toggles as `Value::Bool`, key/value maps as `Value::Object`, model grids as
@@ -274,10 +276,25 @@ pub struct EncodeResult {
 }
 
 /// A named one-click configuration that pre-fills the form values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Preset {
     pub name: String,
     pub values: FormValues,
+    /// Set when this preset came from the sponsor catalogue. The editor renders
+    /// those as logo cards instead of entries in the plain segmented control.
+    pub sponsor: Option<&'static Sponsor>,
+    /// Index into `sponsor.routes`; always 0 for non-sponsor presets.
+    pub route: usize,
+}
+
+impl Preset {
+    pub fn new(name: impl Into<String>, values: FormValues) -> Self {
+        Self {
+            name: name.into(),
+            values,
+            ..Default::default()
+        }
+    }
 }
 
 /// A per-app structured config codec backing the provider editor.
@@ -480,6 +497,21 @@ pub fn clamp_station_fields(values: &mut FormValues, app: AppType, caps: Station
     }
 }
 
+/// The `base_url` a given app's config expects for a relay `origin`.
+///
+/// Anthropic-dialect clients take the bare origin and append `/v1/messages`
+/// themselves; OpenAI-dialect clients take `origin/v1`. This is the single
+/// place that difference is encoded — both station injection
+/// ([`inject_station_endpoint`]) and the sponsor catalogue
+/// ([`sponsors`]) go through here.
+pub fn dialect_base_url(app: AppType, origin: &str) -> String {
+    let origin = origin.trim().trim_end_matches('/');
+    match app {
+        AppType::Claude | AppType::ClaudeDesktop => origin.to_string(),
+        _ => format!("{origin}/v1"),
+    }
+}
+
 /// Overwrite the station-managed fields of `values` so the codec encodes a
 /// config that points at the local gateway. `base_url` is the running gateway
 /// origin (no path); `key` is the gateway-issued client key. Codex provider
@@ -494,10 +526,9 @@ pub fn inject_station_endpoint(
     caps: StationCapabilities,
 ) {
     clamp_station_fields(values, app, caps);
-    let origin = base_url.trim().trim_end_matches('/');
     match app {
         AppType::Claude => {
-            set_str(values, "base_url", origin);
+            set_str(values, "base_url", dialect_base_url(app, base_url));
             set_str(values, "auth_field", "ANTHROPIC_AUTH_TOKEN");
             set_str(values, "api_key", key);
             // Station channels always speak native Anthropic Messages to the
@@ -507,7 +538,7 @@ pub fn inject_station_endpoint(
             set_bool(values, "is_full_url", false);
         }
         AppType::Codex => {
-            set_str(values, "base_url", format!("{origin}/v1"));
+            set_str(values, "base_url", dialect_base_url(app, base_url));
             set_str(values, "api_key", key);
             set_str(values, "wire_api", "responses");
             set_bool(values, "supports_websockets", caps.websockets);
@@ -518,5 +549,43 @@ pub fn inject_station_endpoint(
             values.insert("http_headers".into(), Value::Object(Default::default()));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Station injection and the sponsor catalogue must keep agreeing about
+    /// which apps want `/v1` appended — [`dialect_base_url`] is the shared
+    /// source of truth, and this pins the behaviour it replaced.
+    #[test]
+    fn station_injection_uses_dialect_base_url() {
+        let caps = StationCapabilities {
+            websockets: false,
+            remote_compaction: false,
+        };
+        let origin = "http://127.0.0.1:8080";
+
+        let mut claude = FormValues::new();
+        inject_station_endpoint(&mut claude, AppType::Claude, origin, "k", caps);
+        assert_eq!(str_val(&claude, "base_url"), "http://127.0.0.1:8080");
+
+        let mut codex = FormValues::new();
+        inject_station_endpoint(&mut codex, AppType::Codex, origin, "k", caps);
+        assert_eq!(str_val(&codex, "base_url"), "http://127.0.0.1:8080/v1");
+    }
+
+    /// A trailing slash on the origin must not produce `//v1`.
+    #[test]
+    fn dialect_base_url_trims_trailing_slashes() {
+        assert_eq!(
+            dialect_base_url(AppType::Codex, "https://example.test/"),
+            "https://example.test/v1"
+        );
+        assert_eq!(
+            dialect_base_url(AppType::Claude, "https://example.test/"),
+            "https://example.test"
+        );
     }
 }

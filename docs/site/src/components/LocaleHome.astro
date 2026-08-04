@@ -47,6 +47,15 @@ const cards = [
     ),
   },
 ];
+
+// The horizontal marks already carry the brand name, so the row shows no text
+// beside them. They sit on a constant white tile: one is a transparent PNG
+// whose ink is dark, the other is opaque white, so neither survives a themed
+// background in both palettes. Same treatment as the sponsors page.
+const sponsors = [
+  { name: "Krill", logo: "/sponsor-krill-horizontal.png" },
+  { name: "合租巴士", logo: "/sponsor-hezubus-horizontal.png" },
+];
 ---
 
 <BaseLayout
@@ -78,6 +87,30 @@ const cards = [
             <div class="mt-0.5 text-sm text-muted-foreground">{card.blurb}</div>
           </a>
         ))}
+      </div>
+
+      <div class="mt-12 border-t border-border pt-6">
+        <div
+          class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+        >
+          {t(locale, "sponsorsTitle")}
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
+          {sponsors.map((sponsor) => (
+            <a
+              href={localePath(locale, "sponsors")}
+              class="no-underline opacity-90 transition-opacity hover:opacity-100"
+            >
+              <img
+                src={sponsor.logo}
+                alt={sponsor.name}
+                height="28"
+                class="h-7 w-auto"
+                style="background:#fff;border-radius:6px;padding:4px"
+              />
+            </a>
+          ))}
+        </div>
       </div>
     </main>
   </div>

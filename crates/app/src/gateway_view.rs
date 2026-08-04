@@ -19,6 +19,7 @@ use ochub_core::gateway::types::{
     Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayEndpointTestResult, GatewayModelRule,
     GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
 };
+use ochub_core::provider_config::{Sponsor, sponsors};
 use ochub_core::services::provider::ProviderService;
 use ochub_core::{
     AppState, AppType, ModelProviderImportManifest, UsageResult, prepare_model_provider_import,
@@ -1030,6 +1031,68 @@ impl GatewayView {
             HashMap::new(),
             cx,
         ));
+        cx.notify();
+    }
+
+    /// Fill the editor from a sponsor's catalogue entry: name, website, the
+    /// interfaces it serves, and one endpoint row per route.
+    ///
+    /// Every route of a sponsor is an equivalent address of the same account,
+    /// which is exactly what the endpoint list models, so all of them go in and
+    /// become a failover set. The name is only filled when the field is empty —
+    /// clicking a sponsor while editing must not rename a station the user
+    /// named — and the API Key is never touched: it is theirs to obtain.
+    fn apply_sponsor(&mut self, sponsor: &'static Sponsor, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        if editor.name.read(cx).content().trim().is_empty() {
+            editor
+                .name
+                .update(cx, |input, cx| input.set_content(sponsor.brand, cx));
+        }
+        editor
+            .website_url
+            .update(cx, |input, cx| input.set_content(sponsor.website, cx));
+        editor.enabled_dialects = sponsor.dialects.iter().copied().collect();
+
+        // Reuse the row that already points at a given route rather than
+        // rebuilding it: `existing_channels` is what keeps a saved channel's id
+        // (and with it its imported/priority state) across a re-save.
+        let mut previous = std::mem::take(&mut editor.endpoints);
+        let mut endpoints = Vec::with_capacity(sponsor.routes.len());
+        for route in sponsor.routes {
+            let matched = previous.iter().position(|endpoint| {
+                sponsors::route_of_url(&input_value(&endpoint.base_url, cx)).is_some_and(
+                    |(matched, index)| {
+                        matched.id == sponsor.id && sponsor.routes[index].origin == route.origin
+                    },
+                )
+            });
+            match matched {
+                Some(index) => {
+                    let mut endpoint = previous.remove(index);
+                    endpoint
+                        .base_url
+                        .update(cx, |input, cx| input.set_content(route.origin, cx));
+                    endpoint.probe = ProbeState::Idle;
+                    endpoint.model_fetch = ModelFetchState::Idle;
+                    endpoint.test = EndpointTestState::Idle;
+                    endpoints.push(endpoint);
+                }
+                None => endpoints.push(endpoint_editor(
+                    uuid::Uuid::new_v4().to_string(),
+                    route.origin.to_string(),
+                    HashMap::new(),
+                    cx,
+                )),
+            }
+        }
+        editor.endpoints = endpoints;
+        editor.name_error = None;
+        editor.dialects_error = None;
+        // The endpoint count drives the editor item's height.
+        self.list_state.remeasure();
         cx.notify();
     }
 
@@ -2352,7 +2415,17 @@ impl GatewayView {
                                     .flex_wrap()
                                     .items_center()
                                     .gap_2()
-                                    .child(icon(IconName::Layers, theme::accent(), 16.))
+                                    // A sponsor is recognised from the address,
+                                    // so a station configured before the
+                                    // catalogue existed still wears its brand.
+                                    .child(match sponsors::sponsor_for_url(&base_url) {
+                                        Some(sponsor) => {
+                                            components::sponsor_logo(sponsor.logo, 20.)
+                                                .into_any_element()
+                                        }
+                                        None => icon(IconName::Layers, theme::accent(), 16.)
+                                            .into_any_element(),
+                                    })
                                     .child(
                                         div()
                                             .text_color(theme::text())
@@ -2967,6 +3040,79 @@ impl GatewayView {
             .into_any_element()
     }
 
+    /// Sponsor chips for the connection section: one click fills the station's
+    /// identity and every route that sponsor serves.
+    ///
+    /// Which chip reads as selected is derived from the endpoint addresses
+    /// rather than stored. A station typed in by hand — or saved long before
+    /// this catalogue existed — lights up on its own, and editing an address
+    /// away from a sponsor drops the highlight with no state to keep in sync.
+    fn render_sponsor_picker(
+        &self,
+        editor: &StationEditor,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let current = editor
+            .endpoints
+            .iter()
+            .find_map(|endpoint| sponsors::sponsor_for_url(&input_value(&endpoint.base_url, cx)))
+            .map(|sponsor| sponsor.id);
+        let chips: Vec<gpui::AnyElement> = sponsors::SPONSORS
+            .iter()
+            .map(|sponsor| {
+                let selected = current == Some(sponsor.id);
+                let chip = div()
+                    .id(SharedString::from(format!(
+                        "station-sponsor-{}",
+                        sponsor.id.as_str()
+                    )))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(sponsor.brand))
+                    .aria_selected(selected)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .border_1()
+                    .cursor_pointer()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(components::sponsor_logo(sponsor.logo, 22.))
+                    .child(sponsor.brand)
+                    .hover(|style| style.border_color(theme::accent().alpha(0.5)));
+                let chip = if selected {
+                    chip.bg(theme::accent_soft())
+                        .border_color(theme::accent().alpha(0.35))
+                        .text_color(theme::accent())
+                } else {
+                    chip.bg(theme::surface())
+                        .border_color(theme::border())
+                        .text_color(theme::text())
+                };
+                chip.on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.apply_sponsor(sponsor, cx);
+                }))
+                .into_any_element()
+            })
+            .collect();
+        components::field(
+            t(k::GATEWAY_EDITOR_SPONSORS_LABEL),
+            false,
+            Some(t(k::GATEWAY_EDITOR_SPONSORS_HELP)),
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .children(chips),
+        )
+        .into_any_element()
+    }
+
     fn render_editor(&self, editor: &StationEditor, cx: &mut Context<Self>) -> gpui::AnyElement {
         let reasoning_index = match editor.reasoning_mode {
             GatewayReasoningMode::Passthrough => 0,
@@ -3222,6 +3368,11 @@ impl GatewayView {
                 t(k::GATEWAY_EDITOR_CONNECTION_TITLE),
                 t(k::GATEWAY_EDITOR_CONNECTION_DESCRIPTION),
             ))
+            // A Deep Link import is a review of what the link carries; offering
+            // to overwrite it with something else there would only confuse.
+            .when(!editor.is_deeplink_import, |panel| {
+                panel.child(self.render_sponsor_picker(editor, cx))
+            })
             .child(
                 div()
                     .flex()

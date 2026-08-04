@@ -198,6 +198,13 @@ pub struct ProviderEditor {
     /// Index of the last applied preset (drives the preset segmented control's
     /// selection highlight only; applying a preset behaves exactly as before).
     selected_preset: Option<usize>,
+    /// Codec presets, resolved once. Sponsor presets run a full `decode` per
+    /// entry, and `render_form_intro` runs every frame — this must not be
+    /// recomputed there.
+    presets: Arc<Vec<provider_config::Preset>>,
+    /// Selected route per sponsor id, so switching between cards remembers
+    /// each one's choice instead of snapping back to the primary route.
+    sponsor_route: HashMap<&'static str, usize>,
     /// Field id of the one schema select whose dropdown is currently open.
     open_select_field: Option<String>,
     show_preview: bool,
@@ -388,6 +395,7 @@ impl ProviderEditor {
             .map(|p| p.settings_config.clone())
             .unwrap_or(Value::Null);
         let common_config_supported = common_config_supported(app_type);
+        let presets = Arc::new(codec.presets());
         let common_config_enabled = original_provider
             .as_ref()
             .and_then(|provider| provider.meta.as_ref())
@@ -426,6 +434,8 @@ impl ProviderEditor {
             grid_rows: HashMap::new(),
             next_row_id: 0,
             selected_preset: None,
+            presets,
+            sponsor_route: HashMap::new(),
             open_select_field: None,
             show_preview: true,
             preview_expanded: false,
@@ -940,18 +950,67 @@ impl ProviderEditor {
         );
     }
 
+    /// Replace the working values and rebuild every input widget from them.
+    ///
+    /// Shared by the plain preset control and the sponsor cards. The list
+    /// remeasure matters for the latter: the intro item's height changes when
+    /// a card grows a route selector.
+    fn apply_values(&mut self, values: FormValues, cx: &mut Context<Self>) {
+        self.values = values;
+        self.text_inputs.clear();
+        self.kv_rows.clear();
+        self.grid_rows.clear();
+        self.build_inputs(cx);
+        self.open_select_field = None;
+        self.invalidate_preview(cx);
+        self.form_list_state.remeasure();
+    }
+
     /// Apply a built-in preset: replace values and rebuild inputs.
     fn apply_preset(&mut self, index: usize, cx: &mut Context<Self>) {
-        let presets = self.codec.presets();
-        if let Some(preset) = presets.into_iter().nth(index) {
-            self.values = preset.values;
-            self.text_inputs.clear();
-            self.kv_rows.clear();
-            self.grid_rows.clear();
-            self.build_inputs(cx);
-            self.selected_preset = Some(index);
-            self.open_select_field = None;
-            self.invalidate_preview(cx);
+        let Some(preset) = self.presets.get(index) else {
+            return;
+        };
+        let values = preset.values.clone();
+        let sponsor = preset.sponsor;
+        self.apply_values(values, cx);
+        self.selected_preset = Some(index);
+        if let Some(sponsor) = sponsor {
+            self.adopt_sponsor_identity(sponsor, cx);
+        }
+    }
+
+    /// Apply a sponsor card, on the given route. Re-derives the preset because
+    /// the cached one only carries the sponsor's first route.
+    fn apply_sponsor(&mut self, index: usize, route: usize, cx: &mut Context<Self>) {
+        let Some(sponsor) = self.presets.get(index).and_then(|preset| preset.sponsor) else {
+            return;
+        };
+        let Some(preset) = provider_config::sponsors::preset_for(sponsor, self.app_type, route)
+        else {
+            return;
+        };
+        self.sponsor_route.insert(sponsor.id.as_str(), route);
+        self.apply_values(preset.values, cx);
+        self.selected_preset = Some(index);
+        self.adopt_sponsor_identity(sponsor, cx);
+    }
+
+    /// Fill the identity fields a sponsor knows about. Those live in their own
+    /// `TextInput`s rather than in `FormValues`, so `apply_values` cannot reach
+    /// them. The name is only filled when the user has not typed one and this
+    /// is a new provider — never clobber a name they chose.
+    fn adopt_sponsor_identity(
+        &mut self,
+        sponsor: &'static provider_config::Sponsor,
+        cx: &mut Context<Self>,
+    ) {
+        self.website_url
+            .update(cx, |input, cx| input.set_content(sponsor.website, cx));
+        let name_is_empty = self.name.read(cx).content().trim().is_empty();
+        if name_is_empty && self.original_provider.is_none() {
+            self.name
+                .update(cx, |input, cx| input.set_content(sponsor.brand, cx));
         }
     }
 
@@ -3611,26 +3670,158 @@ impl ProviderEditor {
     }
 
     fn render_form_intro(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let presets = self.codec.presets();
         let mut intro = div().flex().flex_col().gap_5().w_full().min_w_0();
-        if !presets.is_empty() && self.source == ProviderSource::Direct {
-            let names: Vec<&str> = presets.iter().map(|preset| preset.name.as_str()).collect();
-            let on_select = cx.listener(|this, index: &usize, _window, cx| {
-                this.apply_preset(*index, cx);
+        // Station mode owns the endpoint, so neither picker applies there.
+        if self.source == ProviderSource::Direct {
+            // Partition by original index so `apply_preset` stays index-based.
+            let sponsors: Vec<usize> = (0..self.presets.len())
+                .filter(|index| self.presets[*index].sponsor.is_some())
+                .collect();
+            let plain: Vec<usize> = (0..self.presets.len())
+                .filter(|index| self.presets[*index].sponsor.is_none())
+                .collect();
+
+            if !sponsors.is_empty() {
+                intro = intro.child(components::field(
+                    t(k::PROVIDER_EDITOR_SPONSORS_LABEL),
+                    false,
+                    Some(t(k::PROVIDER_EDITOR_SPONSORS_HELP)),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_3()
+                        .w_full()
+                        .children(
+                            sponsors
+                                .into_iter()
+                                .map(|index| self.render_sponsor_card(index, cx)),
+                        ),
+                ));
+            }
+
+            if !plain.is_empty() {
+                let names: Vec<&str> = plain
+                    .iter()
+                    .map(|index| self.presets[*index].name.as_str())
+                    .collect();
+                let selected = self
+                    .selected_preset
+                    .and_then(|selected| plain.iter().position(|index| *index == selected))
+                    .unwrap_or(usize::MAX);
+                let on_select = cx.listener(move |this, position: &usize, _window, cx| {
+                    if let Some(index) = plain.get(*position).copied() {
+                        this.apply_preset(index, cx);
+                    }
+                });
+                intro = intro.child(components::field(
+                    t(k::PROVIDER_EDITOR_FORM_PRESETS_LABEL),
+                    false,
+                    None,
+                    components::segmented(
+                        "editor-presets",
+                        &names,
+                        selected,
+                        move |position, window, cx| on_select(&position, window, cx),
+                    ),
+                ));
+            }
+        }
+        intro.child(self.render_identity(cx)).into_any_element()
+    }
+
+    /// One sponsor card: logo, brand, badge, blurb, and — when the sponsor has
+    /// more than one — a route selector.
+    fn render_sponsor_card(&self, index: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(sponsor) = self.presets[index].sponsor else {
+            return div().into_any_element();
+        };
+        let selected = self.selected_preset == Some(index);
+        let route = self
+            .sponsor_route
+            .get(sponsor.id.as_str())
+            .copied()
+            .unwrap_or(0);
+
+        let mut card = div()
+            .id(SharedString::from(format!(
+                "sponsor-card-{}",
+                sponsor.id.as_str()
+            )))
+            .w(px(240.))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .bg(theme::surface())
+            .cursor_pointer()
+            .text_sm()
+            .text_color(theme::text())
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.apply_sponsor(index, route, cx);
+            }));
+        card = if selected {
+            card.border_color(theme::accent()).bg(theme::accent_soft())
+        } else {
+            card.border_color(theme::border())
+                .hover(|style| style.border_color(theme::accent()).bg(theme::panel()))
+        };
+
+        card = card
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(components::sponsor_logo(sponsor.logo, 38.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().font_weight(FontWeight::MEDIUM).child(sponsor.brand))
+                            .child(components::badge(
+                                BadgeTone::Neutral,
+                                t(k::PROVIDER_EDITOR_SPONSORS_BADGE),
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(t(sponsor_desc_key(sponsor.id))),
+            );
+
+        if sponsor.routes.len() > 1 {
+            let labels: Vec<SharedString> = sponsor
+                .routes
+                .iter()
+                .map(|route| route_label(route.kind))
+                .collect();
+            let labels: Vec<&str> = labels.iter().map(SharedString::as_ref).collect();
+            let on_select = cx.listener(move |this, picked: &usize, _window, cx| {
+                this.apply_sponsor(index, *picked, cx);
             });
-            intro = intro.child(components::field(
-                t(k::PROVIDER_EDITOR_FORM_PRESETS_LABEL),
+            card = card.child(components::field(
+                t(k::PROVIDER_EDITOR_SPONSORS_ROUTE_LABEL),
                 false,
                 None,
                 components::segmented(
-                    "editor-presets",
-                    &names,
-                    self.selected_preset.unwrap_or(usize::MAX),
-                    move |index, window, cx| on_select(&index, window, cx),
+                    SharedString::from(format!("sponsor-route-{}", sponsor.id.as_str())),
+                    &labels,
+                    route,
+                    move |picked, window, cx| on_select(&picked, window, cx),
                 ),
             ));
         }
-        intro.child(self.render_identity(cx)).into_any_element()
+
+        card.into_any_element()
     }
 
     fn render_form_section(
@@ -3970,6 +4161,24 @@ fn nonempty(value: String) -> Option<String> {
 
 fn common_config_supported(app: AppType) -> bool {
     matches!(app, AppType::Claude | AppType::Codex)
+}
+
+/// Sponsor blurb. Exhaustive on purpose: adding a sponsor to the core catalogue
+/// is a compile error here until its copy exists in all three locales.
+fn sponsor_desc_key(id: provider_config::SponsorId) -> crate::i18n::Key {
+    match id {
+        provider_config::SponsorId::Krill => k::PROVIDER_EDITOR_SPONSORS_KRILL_DESC,
+        provider_config::SponsorId::HezuBus => k::PROVIDER_EDITOR_SPONSORS_HEZUBUS_DESC,
+    }
+}
+
+/// Route label, exhaustive for the same reason as [`sponsor_desc_key`].
+fn route_label(kind: provider_config::RouteKind) -> SharedString {
+    match kind {
+        provider_config::RouteKind::Primary => t(k::PROVIDER_EDITOR_SPONSORS_ROUTE_PRIMARY),
+        provider_config::RouteKind::Cdn => t(k::PROVIDER_EDITOR_SPONSORS_ROUTE_CDN),
+        provider_config::RouteKind::LoadBalanced => t(k::PROVIDER_EDITOR_SPONSORS_ROUTE_SLB),
+    }
 }
 
 fn build_preview_cache(

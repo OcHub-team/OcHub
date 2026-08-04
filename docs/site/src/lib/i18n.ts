@@ -175,6 +175,8 @@ const EN_STRINGS = {
   updated: "Updated",
   previous: "Previous",
   next: "Next",
+  sponsorsTitle: "Sponsors",
+  sponsorsBlurb: "Relay providers that support OcHub",
 } as const;
 
 export const UI_STRINGS = {
@@ -211,6 +213,8 @@ export const UI_STRINGS = {
     updated: "更新日",
     previous: "前へ",
     next: "次へ",
+    sponsorsTitle: "スポンサー",
+    sponsorsBlurb: "OcHub を支援する中継プロバイダー",
   },
   zh: {
     skipToContent: "跳到正文",
@@ -244,6 +248,8 @@ export const UI_STRINGS = {
     updated: "更新于",
     previous: "上一页",
     next: "下一页",
+    sponsorsTitle: "赞助商",
+    sponsorsBlurb: "支持 OcHub 的中转服务商",
   },
 } as const satisfies Record<Locale["key"], Record<keyof typeof EN_STRINGS, string>>;
 

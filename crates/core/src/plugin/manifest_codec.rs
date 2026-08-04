@@ -337,10 +337,7 @@ impl AppConfig for ManifestCodec {
                     };
                     values.insert(k.clone(), value);
                 }
-                Preset {
-                    name: p.name.clone(),
-                    values,
-                }
+                Preset::new(p.name.clone(), values)
             })
             .collect()
     }

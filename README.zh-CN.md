@@ -26,6 +26,8 @@
   <a href="#安装">安装</a>
   ·
   <a href="#从源码构建">从源码构建</a>
+  ·
+  <a href="#赞助商">赞助商</a>
 </p>
 
 <p align="center">
@@ -170,6 +172,34 @@ just qa-app       # macOS：构建用于验收测试的 /tmp/OCHUB-QA.app
 | `ochub-convert` | 在受支持的 API 协议之间转换请求与响应 |
 | `ochub-app` | 原生 GPUI 桌面应用 |
 | `ochcli` | 无界面的命令行工具 |
+
+## 赞助商
+
+OcHub 的开发由下列 API 中转服务商赞助支持。它们是独立的第三方服务——你需要在各自
+官网自行注册并管理 API Key，请求也是从你的机器直接发给它们的。
+
+<table>
+  <tbody>
+    <tr>
+      <td width="230" align="center">
+        <a href="https://www.krill-ai.net"><img src="docs/assets/sponsor-krill-horizontal.png" alt="Krill" width="180"></a>
+      </td>
+      <td>
+        <a href="https://www.krill-ai.net"><strong>Krill</strong></a> 提供 GPT / Claude / Gemini / 多款国产模型的官方稳定极速 API 中转服务，支持企业级定制、报销开票、7×16h 专属技术支持，更有独家适配的 WebSocket 连接方式，畅享极速首字速度。<a href="https://www.krill-ai.net/register?invite=708GTIKQHZ">注册链接</a>
+      </td>
+    </tr>
+    <tr>
+      <td width="230" align="center">
+        <a href="https://hezubus.cc"><img src="docs/assets/sponsor-hezubus-horizontal.png" alt="合租巴士" width="180"></a>
+      </td>
+      <td>
+        <a href="https://hezubus.cc"><strong>合租巴士</strong></a> 是一家可靠高效的 AI 中转服务平台，主要提供 Codex、Claude Code 等主流模型的高稳定中转能力，充值比例透明（1:1），Codex 纯 Pro 号池倍率低至 0.16x。<a href="https://hezu.ink/sign-up?aff=2un2">官网进群送 5 刀体验金</a>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+[线路与配置说明 →](https://docs.ochub.org/zh/sponsors)
 
 ## 许可证
 

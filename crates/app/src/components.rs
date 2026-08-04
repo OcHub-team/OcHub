@@ -870,6 +870,34 @@ pub fn status_dot_sized(color: Rgba, diameter: f32) -> gpui::Div {
         .bg(color)
 }
 
+// ── Sponsor marks ───────────────────────────────────────────────────────────
+
+/// A sponsor's mark, on a fixed light tile of `tile` px.
+///
+/// Unlike the OcHub wordmark — solid ink, so [`crate::about_view`] can swap two
+/// files by palette polarity — these are full-colour third-party marks we must
+/// not recolour, and their transparent backgrounds contain both near-black and
+/// near-white pixels: on a themed surface the black vanishes in dark mode and
+/// the white vanishes in light mode. A constant near-white tile, the same
+/// treatment an OS gives an app icon, keeps one file per sponsor correct in
+/// both palettes.
+///
+/// `asset` is a path under `crates/app/assets/`, as carried by
+/// `provider_config::Sponsor::logo`.
+pub fn sponsor_logo(asset: &'static str, tile: f32) -> gpui::Div {
+    div()
+        .size(px(tile))
+        .flex_none()
+        .rounded_md()
+        .bg(theme::c(0xFFFFFF))
+        .border_1()
+        .border_color(theme::border())
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(gpui::img(asset).size(px((tile * 0.74).round())))
+}
+
 // ── Cards ───────────────────────────────────────────────────────────────────
 
 /// The one card: white surface, hairline border, 8px radius, 16px padding.
