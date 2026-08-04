@@ -6,6 +6,7 @@
 //! the GPUI UI.
 
 mod about_view;
+mod anim;
 mod app_meta;
 mod app_settings_view;
 mod app_ui;

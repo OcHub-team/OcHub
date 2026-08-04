@@ -1996,7 +1996,7 @@ impl RemoteView {
             )
             .on_click(move |_event, window, cx| close_done(&(), window, cx))
             .into_any_element(),
-            _ => components::disabled_button(
+            _ => components::busy_button(
                 "remote-bootstrap-working",
                 phase_label,
                 ButtonTone::Primary,
@@ -2718,13 +2718,22 @@ impl RemoteView {
                                 )
                                 .on_click(move |_event, window, cx| cancel(&(), window, cx)),
                             )
-                            .child(if self.busy || !selected_available {
+                            .child(if self.busy {
+                                components::busy_button(
+                                    "remote-config-add-disabled",
+                                    t(k::REMOTE_ACTION_ADD),
+                                    ButtonTone::Primary,
+                                    ButtonSize::Md,
+                                    true,
+                                )
+                                .into_any_element()
+                            } else if !selected_available {
                                 components::disabled_button(
                                     "remote-config-add-disabled",
                                     t(k::REMOTE_ACTION_ADD),
                                     ButtonTone::Primary,
                                     ButtonSize::Md,
-                                    self.busy,
+                                    false,
                                 )
                                 .into_any_element()
                             } else {
@@ -2828,7 +2837,7 @@ impl RemoteView {
                         .on_click(move |_event, window, cx| back(&(), window, cx)),
                     )
                     .child(if self.busy {
-                        components::disabled_button(
+                        components::busy_button(
                             "remote-scan-disabled",
                             t(k::REMOTE_ACTION_SCAN),
                             ButtonTone::Primary,
@@ -3176,7 +3185,7 @@ impl RemoteView {
                     ))),
                 )
                 .child(if self.probing {
-                    components::disabled_button(
+                    components::busy_button(
                         "remote-probe-disabled",
                         t(k::REMOTE_CONNECTION_CHECKING),
                         ButtonTone::Ghost,

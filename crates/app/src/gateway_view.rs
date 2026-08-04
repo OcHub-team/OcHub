@@ -2214,13 +2214,25 @@ impl GatewayView {
             .gap_3()
             .child(section_title(t(k::GATEWAY_CONNECTION_TITLE)));
         let panel = match self.connection_info.clone() {
-            None => panel.child(div().text_color(theme::muted()).text_sm().child(
-                if self.connection_loading {
-                    t(k::GATEWAY_CONNECTION_LOADING)
-                } else {
-                    t(k::GATEWAY_CONNECTION_UNAVAILABLE)
-                },
-            )),
+            None => panel.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .text_color(theme::muted())
+                    .text_sm()
+                    // Fetching the connection details can take a moment; without
+                    // a turning mark the panel reads as simply empty.
+                    .when(self.connection_loading, |row| {
+                        row.child(components::spinner(theme::muted(), 13.))
+                    })
+                    .child(if self.connection_loading {
+                        t(k::GATEWAY_CONNECTION_LOADING)
+                    } else {
+                        t(k::GATEWAY_CONNECTION_UNAVAILABLE)
+                    }),
+            ),
             Some(info) => {
                 let url = info.base_url.clone();
                 let url_for_copy = url.clone();

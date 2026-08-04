@@ -10,9 +10,8 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Element, ElementId, Entity, FontWeight, GlobalElementId,
-    InspectorElementId, LayoutId, ListAlignment, ListState, MouseButton, Pixels, ScrollHandle,
-    SharedString, Window, WindowAppearance, div, point, prelude::*, px,
+    App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton, ScrollHandle,
+    SharedString, Window, WindowAppearance, div, prelude::*, px,
 };
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
@@ -21,6 +20,7 @@ use ochub_core::services::provider::{DriftConflict, DriftResolution, LiveDrift, 
 use ochub_core::{AppState, AppType, Provider, UsageResult};
 
 use crate::about_view::AboutView;
+use crate::anim::{PaintOffsetY, ease_out_quint, linear_progress};
 use crate::app_settings_view::{AppSettingsEvent, AppSettingsView, app_has_settings};
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::diff_view;
@@ -428,19 +428,16 @@ impl ProviderDragState {
     }
 
     fn animation_progress(&self, now: Instant, reduce_motion: bool) -> f32 {
-        if reduce_motion {
-            return 1.;
-        }
-        (now.saturating_duration_since(self.transition_started)
-            .as_secs_f32()
-            / PROVIDER_REORDER_ANIMATION.as_secs_f32())
-        .clamp(0., 1.)
+        linear_progress(
+            self.transition_started,
+            PROVIDER_REORDER_ANIMATION,
+            now,
+            reduce_motion,
+        )
     }
 
     fn offset_for(&self, position: usize, now: Instant, reduce_motion: bool) -> f32 {
-        let progress = self.animation_progress(now, reduce_motion);
-        // Quintic ease-out: quick acknowledgement, then a quiet deceleration.
-        let eased = 1. - (1. - progress).powi(5);
+        let eased = ease_out_quint(self.animation_progress(now, reduce_motion));
         let from = self.from_offsets.get(position).copied().unwrap_or(0.);
         let to = self.to_offsets.get(position).copied().unwrap_or(0.);
         from + (to - from) * eased
@@ -504,81 +501,6 @@ fn reorder_slot_offsets(
         }
     }
     offsets
-}
-
-/// Moves a subtree during prepaint, after layout has completed. Unlike
-/// `relative().top(...)`, this does not make Taffy recompute card layout on
-/// every animation frame, while hitboxes and clipping still follow the card.
-struct PaintOffsetY {
-    offset: Pixels,
-    child: AnyElement,
-}
-
-impl PaintOffsetY {
-    fn new(offset: Pixels, child: impl IntoElement) -> Self {
-        Self {
-            offset,
-            child: child.into_any_element(),
-        }
-    }
-}
-
-impl IntoElement for PaintOffsetY {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl Element for PaintOffsetY {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        (self.child.request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        window.with_element_offset(point(px(0.), self.offset), |window| {
-            self.child.prepaint(window, cx);
-        });
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        _prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.child.paint(window, cx);
-    }
 }
 
 struct ProviderDragPreview {
@@ -3334,7 +3256,7 @@ impl AppRoot {
 
         if self.ccswitch_importing {
             return vec![
-                components::disabled_button(
+                components::busy_button(
                     "first-run-import-busy",
                     t(k::SHELL_FIRST_RUN_IMPORT_BUSY),
                     ButtonTone::Primary,
@@ -4364,7 +4286,7 @@ impl AppRoot {
                 app == AppType::Codex && self.active_remote_scope.is_none(),
                 |s| {
                     if self.codex_launch_in_flight {
-                        s.child(components::disabled_button(
+                        s.child(components::busy_button(
                             "launch-codex-app",
                             t(k::SHELL_CODEX_LAUNCHING),
                             ButtonTone::Neutral,

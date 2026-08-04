@@ -3981,7 +3981,7 @@ impl Render for ProviderEditor {
             ));
         }
         let save_button = if self.saving {
-            components::disabled_button(
+            components::busy_button(
                 "editor-save",
                 t(k::PROVIDER_EDITOR_ACTION_SAVE),
                 ButtonTone::Primary,

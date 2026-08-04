@@ -3460,7 +3460,7 @@ impl UsageView {
             })
             .unwrap_or_else(|| raw(k::USAGE_PRICING_CATALOG_UNAVAILABLE).to_string());
         let sync_button = if self.catalog_sync_in_flight {
-            components::disabled_button(
+            components::busy_button(
                 "usage-sync-pricing-catalog",
                 t(k::USAGE_PRICING_CATALOG_SYNCING),
                 ButtonTone::Neutral,

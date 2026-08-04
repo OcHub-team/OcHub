@@ -5,14 +5,18 @@
 //! disclosure, stat tiles, tables, pagination, status footer. Views compose
 //! these instead of hand-rolling styling so every page stays consistent.
 
+use std::f32::consts::{FRAC_PI_2, TAU};
 use std::rc::Rc;
+use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
 use gpui::{
-    Anchor, AnyElement, App, ElementId, Entity, FontWeight, MouseButton, Rgba, ScrollHandle,
-    SharedString, Window, WindowAppearance, anchored, deferred, div, point, prelude::*, px,
+    Anchor, Animation, AnimationExt, AnyElement, App, ElementId, Entity, FontWeight, MouseButton,
+    Rgba, ScrollHandle, SharedString, Transformation, Window, WindowAppearance, anchored, deferred,
+    div, point, prelude::*, px, radians,
 };
 
+use crate::anim::RotateTo;
 use crate::i18n::{Key, k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::scrollbar::VerticalScrollbar;
@@ -99,6 +103,55 @@ pub fn disabled_button(
     } else {
         button
     }
+}
+
+/// [`disabled_button`] for work already under way, with a turning mark ahead of
+/// the label.
+///
+/// A plain [`disabled_button`] is the right shape for "not available yet", but
+/// it was also standing in for "running": the control simply dimmed and held
+/// its old label, leaving nothing on screen to say the app was still working.
+/// Reach for this whenever the button's own action is in flight.
+pub fn busy_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    tone: ButtonTone,
+    size: ButtonSize,
+    muted: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    let (_, _, fg) = tone.colors();
+    let button = button_base(id, label.clone(), tone, size, false)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.))
+        .child(spinner(fg, 13.))
+        .child(label);
+    if muted {
+        button.opacity(DISABLED_OPACITY)
+    } else {
+        button
+    }
+}
+
+/// Indeterminate progress mark, for work whose extent cannot be measured.
+///
+/// Built on `with_animation` rather than a hand-driven frame loop because it
+/// runs unattended for as long as the work lasts: the helper parks the mark at
+/// its start angle when the user has asked for reduced motion, and stops
+/// requesting frames once the element leaves the tree.
+///
+/// Rotation is the one transform GPUI offers, and only on sprites — hence an
+/// `svg` here rather than a styled `div`.
+pub fn spinner(color: Rgba, size: f32) -> impl IntoElement {
+    // `Animation::new` already eases linearly, which is what a constant-rate
+    // turn needs; any other curve would make the mark visibly surge and stall.
+    icon(IconName::Spinner, color, size).with_animation(
+        "spinner",
+        Animation::new(SPINNER_PERIOD).repeat(),
+        |mark, delta| mark.with_transformation(Transformation::rotate(radians(delta * TAU))),
+    )
 }
 
 /// Button with a leading icon.
@@ -918,6 +971,21 @@ pub fn card() -> gpui::Div {
 /// constant so the disabled look stays uniform across pages.
 pub const DISABLED_OPACITY: f32 = 0.6;
 
+/// One turn of the [`spinner`]. Slow enough to read as steady work rather than
+/// urgency, quick enough that a stalled frame is obvious.
+const SPINNER_PERIOD: StdDuration = StdDuration::from_millis(900);
+
+/// How long a modal takes to arrive. Short enough not to delay the reader,
+/// long enough that the scrim reads as darkening rather than as a flash.
+const MODAL_ENTRY: StdDuration = StdDuration::from_millis(140);
+/// How far the card travels up as it fades in. A hint of arrival — far enough
+/// to notice, near enough that the text is never in motion long.
+const MODAL_RISE: f32 = 8.;
+
+/// A disclosure chevron's quarter turn. Brisk: the body it reveals lands
+/// instantly, so a slower mark would trail behind its own section.
+const DISCLOSURE_TURN: StdDuration = StdDuration::from_millis(130);
+
 /// Legacy thin panel (kept for the provider list hero/card; new code: `card`).
 pub fn panel() -> gpui::Div {
     div()
@@ -967,16 +1035,34 @@ pub fn empty_state(
 
 /// Dimmed full-window overlay centering its child. Attach dismissal on the
 /// overlay; the child card is `.occlude()`d so clicks don't pass through.
+///
+/// The scrim and the card fade in over [`MODAL_ENTRY`] instead of landing whole
+/// — at these alphas an instant scrim darkens the entire window in one frame,
+/// which reads as a flash rather than as a dialog opening.
+///
+/// Note the scrim is a *child* rather than this element's own background: style
+/// values land whole, so only an element with an animation of its own can ramp
+/// one. Keeping the overlay itself a plain `Div` is what lets call sites go on
+/// attaching their dismissal handlers to the result.
 pub fn modal_overlay(child: impl IntoElement) -> gpui::Div {
+    let scrim = theme::scrim().alpha(if theme::is_dark() { 0.68 } else { 0.45 });
     div()
         .absolute()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
-        .bg(theme::scrim().alpha(if theme::is_dark() { 0.68 } else { 0.45 }))
         .occlude()
-        .child(child)
+        .child(div().absolute().inset_0().bg(scrim).with_animation(
+            "modal-scrim",
+            Animation::new(MODAL_ENTRY),
+            |scrim, delta| scrim.opacity(delta),
+        ))
+        .child(div().relative().child(child).with_animation(
+            "modal-card",
+            Animation::new(MODAL_ENTRY).with_easing(crate::anim::ease_out_quint),
+            |card, delta| card.opacity(delta).top(px((1. - delta) * MODAL_RISE)),
+        ))
 }
 
 /// The centered dialog card. Pair with [`modal_overlay`].
@@ -1055,14 +1141,14 @@ pub fn disclosure(
         .gap_2()
         .w_full()
         .cursor_pointer()
-        .child(icon(
-            if expanded {
-                IconName::ChevronDown
-            } else {
-                IconName::ChevronRight
-            },
-            theme::muted(),
-            14.,
+        // One chevron turned a quarter turn, rather than two icons swapped:
+        // the mark stays the same object through the toggle, which is what
+        // makes the section read as opening instead of being replaced.
+        .child(RotateTo::new(
+            SharedString::from(format!("{id}-chevron")),
+            if expanded { FRAC_PI_2 } else { 0. },
+            DISCLOSURE_TURN,
+            icon(IconName::ChevronRight, theme::muted(), 14.),
         ))
         .child(
             div()

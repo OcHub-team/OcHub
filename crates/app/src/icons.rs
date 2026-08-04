@@ -42,6 +42,7 @@ pub enum IconName {
     Refresh,
     Search,
     Settings,
+    Spinner,
     Terminal,
     Tools,
     Trash,
@@ -88,6 +89,7 @@ impl IconName {
             IconName::Refresh => "icons/refresh.svg",
             IconName::Search => "icons/search.svg",
             IconName::Settings => "icons/settings.svg",
+            IconName::Spinner => "icons/spinner.svg",
             IconName::Terminal => "icons/terminal.svg",
             IconName::Tools => "icons/tools.svg",
             IconName::Trash => "icons/trash.svg",
@@ -96,7 +98,10 @@ impl IconName {
     }
 }
 
-pub fn icon(name: IconName, color: Rgba, size: f32) -> impl IntoElement {
+/// Returns the concrete `Svg` rather than `impl IntoElement` so callers can
+/// still reach element-specific builders — notably `with_transformation`, the
+/// only route to rotation in GPUI, which applies to sprites and not to `Div`.
+pub fn icon(name: IconName, color: Rgba, size: f32) -> gpui::Svg {
     svg()
         .path(name.path())
         .w(px(size))

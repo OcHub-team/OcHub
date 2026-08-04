@@ -3,14 +3,17 @@
 //! This is intentionally UI-owned: core services return success/warnings/errors,
 //! while the shell decides whether a result should be silent, inline, or global.
 
-use std::collections::VecDeque;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, FontWeight, IntoElement, RenderOnce, Rgba, SharedString,
-    Window, canvas, div, fill, point, prelude::*, px, size,
+    Animation, AnimationExt, App, Bounds, ClipboardItem, Context, FontWeight, IntoElement,
+    RenderOnce, Rgba, SharedString, Window, canvas, div, fill, point, prelude::*, px, size,
 };
 
+use crate::anim::Transition;
 use crate::icons::{IconName, icon};
 use crate::theme;
 
@@ -20,10 +23,17 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 const ERROR_TIMEOUT: Duration = Duration::from_secs(5);
 const STACK_LAYER_OFFSET: f32 = 6.;
 const STACK_LAYER_INSET: f32 = 5.;
-/// Toast countdowns are supplementary feedback, not motion that needs display
-/// refresh cadence. Ten updates per second keeps the rail readable without
-/// forcing the whole window through 60 redraws per second for every toast.
-const PROGRESS_TICK: Duration = Duration::from_millis(100);
+const TOAST_WIDTH: f32 = 380.;
+/// Vertical breathing room between toasts once the stack stands open.
+const TOAST_GAP: f32 = 8.;
+const STACK_TRANSITION: Duration = Duration::from_millis(220);
+const TOAST_ENTRY: Duration = Duration::from_millis(240);
+/// How far a new toast travels in from its anchored right edge.
+const TOAST_ENTRY_SLIDE: f32 = 24.;
+/// Height a toast is assumed to want for the single frame between joining a
+/// stack and being measured. Roughly a title-only card, which is the shortest a
+/// toast gets — erring low keeps the deck from visibly settling downward.
+const ASSUMED_TOAST_HEIGHT: f32 = 56.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotificationLevel {
@@ -80,9 +90,38 @@ pub struct Notification {
     source: Option<SharedString>,
     auto_dismiss_after: Option<Duration>,
     remaining: Option<Duration>,
+    /// `None` means the countdown is held: either the host is hovered, or the
+    /// toast has not been given a start instant yet. `remaining` then stands on
+    /// its own as the amount of time still owed.
     countdown_started_at: Option<Instant>,
     timer_epoch: u64,
-    hovered: bool,
+}
+
+impl Notification {
+    /// Invalidates any in-flight dismiss timer for this toast, so a pause that
+    /// races with an about-to-fire dismissal still wins.
+    fn invalidate_timer(&mut self) -> u64 {
+        self.timer_epoch = self.timer_epoch.wrapping_add(1);
+        self.timer_epoch
+    }
+
+    /// Freezes the countdown, folding time already served into `remaining`.
+    /// Idempotent: holding an already-held toast leaves it untouched.
+    fn hold(&mut self, now: Instant) {
+        if let (Some(remaining), Some(started_at)) =
+            (self.remaining.as_mut(), self.countdown_started_at.take())
+        {
+            *remaining = remaining.saturating_sub(now.saturating_duration_since(started_at));
+        }
+    }
+
+    /// Restarts the countdown, returning the duration still owed. `None` means
+    /// the toast has nothing left to serve and is due for dismissal.
+    fn resume(&mut self, now: Instant) -> Option<Duration> {
+        let remaining = self.remaining.filter(|remaining| !remaining.is_zero())?;
+        self.countdown_started_at = Some(now);
+        Some(remaining)
+    }
 }
 
 pub struct NotificationRequest {
@@ -134,12 +173,30 @@ pub struct NotificationHost {
     next_id: u64,
     visible: VecDeque<Notification>,
     history: VecDeque<Notification>,
-    stack_expanded: bool,
-    progress_task_running: bool,
+    /// Pointer presence over the host. Drives both the countdown hold and, for
+    /// a multi-toast stack, whether it stands expanded.
+    hovered: bool,
+    /// `0` is the collapsed deck, `1` the open stack. Reversible mid-flight, so
+    /// a pointer that leaves halfway retreats from where it was rather than
+    /// finishing the trip first.
+    stack: Transition,
+    /// Natural height of each toast, keyed by id, captured the first time it is
+    /// laid out. A toast always debuts at the front of the stack where nothing
+    /// constrains its height, so this records the real content height even
+    /// though later frames may squeeze it into the deck.
+    ///
+    /// Shared with the measuring canvas, which runs during prepaint — after
+    /// `render` has already handed back its element tree.
+    heights: Rc<RefCell<HashMap<u64, f32>>>,
 }
 
 /// A fixed-size canvas keeps the countdown animation out of layout. The wider,
 /// translucent layer is the glow; the one-pixel layer is the crisp progress line.
+///
+/// The rail redraws itself once per display frame while the countdown is
+/// running. Driving it from a background timer instead would sample the
+/// countdown at a rate unrelated to the refresh cadence, so each repaint would
+/// advance the line by an uneven distance and the motion would read as stutter.
 #[derive(IntoElement)]
 struct ToastProgress {
     accent: Rgba,
@@ -177,11 +234,20 @@ impl RenderOnce for ToastProgress {
                 let x = f32::from(bounds.origin.x);
                 let y = f32::from(bounds.origin.y);
                 let width = f32::from(bounds.size.width).max(0.);
-                let progress = if cx.reduce_motion() {
+                let reduce_motion = cx.reduce_motion();
+                let progress = if reduce_motion {
                     1.
                 } else {
                     remaining_duration_fraction(duration, remaining, started_at)
                 };
+
+                // `started_at` is cleared while the toast is hovered, which holds the
+                // rail at its paused width; there is nothing to animate until the
+                // pointer leaves and the host re-renders us with a fresh instant.
+                let is_running = !reduce_motion && started_at.is_some() && progress > 0.;
+                if is_running {
+                    window.request_animation_frame();
+                }
 
                 // A faint full-width rail remains visible when reduced motion is enabled.
                 window.paint_quad(fill(
@@ -235,6 +301,59 @@ fn remaining_duration_fraction(
     )
 }
 
+/// Where one toast sits at a given point in the collapse/expand transition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ToastSlot {
+    top: f32,
+    /// Horizontal inset on both sides. Deeper cards sit narrower so the deck
+    /// reads as depth rather than as a misaligned column.
+    inset: f32,
+    height: f32,
+    /// Fade for the card's contents. The card chrome stays put so a collapsed
+    /// neighbour still reads as a card edge rather than vanishing.
+    content_opacity: f32,
+}
+
+/// Interpolates the stack layout between the collapsed deck (`progress` 0) and
+/// the open column (`progress` 1).
+///
+/// `heights` are natural content heights, front of the stack first. Collapsed,
+/// every card is squeezed to the front card's height so the deck's lower edge
+/// is even; open, each card takes its own height and they queue up with
+/// [`TOAST_GAP`] between them.
+fn stack_layout(heights: &[f32], progress: f32) -> Vec<ToastSlot> {
+    let Some(&front_height) = heights.first() else {
+        return Vec::new();
+    };
+    let progress = progress.clamp(0., 1.);
+
+    let mut open_top = 0.;
+    heights
+        .iter()
+        .enumerate()
+        .map(|(depth, &height)| {
+            let deck_top = depth as f32 * STACK_LAYER_OFFSET;
+            let slot = ToastSlot {
+                top: deck_top + (open_top - deck_top) * progress,
+                inset: depth as f32 * STACK_LAYER_INSET * (1. - progress),
+                height: front_height + (height - front_height) * progress,
+                content_opacity: if depth == 0 { 1. } else { progress },
+            };
+            open_top += height + TOAST_GAP;
+            slot
+        })
+        .collect()
+}
+
+/// Overall height the host reserves, so its hover target tracks what is drawn
+/// instead of always claiming the fully expanded span.
+fn stack_height(heights: &[f32], progress: f32) -> f32 {
+    stack_layout(heights, progress)
+        .iter()
+        .map(|slot| slot.top + slot.height)
+        .fold(0., f32::max)
+}
+
 fn auto_dismiss_timeout(
     level: NotificationLevel,
     persistent: bool,
@@ -249,8 +368,9 @@ impl NotificationHost {
             next_id: 1,
             visible: VecDeque::new(),
             history: VecDeque::new(),
-            stack_expanded: false,
-            progress_task_running: false,
+            hovered: false,
+            stack: Transition::settled(0., STACK_TRANSITION),
+            heights: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -313,7 +433,10 @@ impl NotificationHost {
         self.next_id += 1;
 
         let timeout = auto_dismiss_timeout(request.level, request.persistent, request.timeout);
-        let countdown_started_at = timeout.map(|_| Instant::now());
+        // A toast that lands while the user is already reading the stack starts
+        // held, exactly as if it had been paused on arrival. Starting its clock
+        // here would let it expire under a pointer that never left.
+        let countdown_started_at = timeout.filter(|_| !self.hovered).map(|_| Instant::now());
         let notification = Notification {
             id,
             level: request.level,
@@ -324,7 +447,6 @@ impl NotificationHost {
             remaining: timeout,
             countdown_started_at,
             timer_epoch: 0,
-            hovered: false,
         };
 
         self.visible.push_front(notification.clone());
@@ -335,58 +457,25 @@ impl NotificationHost {
         while self.history.len() > MAX_HISTORY {
             self.history.pop_back();
         }
+        self.prune_heights();
 
-        if let Some(timeout) = timeout {
+        if let Some(timeout) = timeout
+            && !self.hovered
+        {
             Self::schedule_dismiss(id, timeout, 0, cx);
-            self.ensure_progress_ticks(cx);
         }
 
         id
-    }
-
-    fn ensure_progress_ticks(&mut self, cx: &mut Context<Self>) {
-        let has_running_countdown = self
-            .visible
-            .iter()
-            .any(|notification| notification.countdown_started_at.is_some());
-        if self.progress_task_running || !has_running_countdown {
-            return;
-        }
-        self.progress_task_running = true;
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(PROGRESS_TICK).await;
-                let keep_running = this
-                    .update(cx, |this, cx| {
-                        let keep_running = this
-                            .visible
-                            .iter()
-                            .any(|notification| notification.countdown_started_at.is_some());
-                        if keep_running {
-                            cx.notify();
-                        } else {
-                            this.progress_task_running = false;
-                        }
-                        keep_running
-                    })
-                    .unwrap_or(false);
-                if !keep_running {
-                    break;
-                }
-            }
-        })
-        .detach();
     }
 
     fn schedule_dismiss(id: u64, timeout: Duration, timer_epoch: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(timeout).await;
             this.update(cx, |this, cx| {
-                let should_dismiss = this.visible.iter().any(|notification| {
-                    notification.id == id
-                        && notification.timer_epoch == timer_epoch
-                        && !notification.hovered
-                });
+                let should_dismiss = !this.hovered
+                    && this.visible.iter().any(|notification| {
+                        notification.id == id && notification.timer_epoch == timer_epoch
+                    });
                 if should_dismiss {
                     this.dismiss(id);
                     cx.notify();
@@ -397,53 +486,64 @@ impl NotificationHost {
         .detach();
     }
 
-    fn set_hovered(&mut self, id: u64, hovered: bool, cx: &mut Context<Self>) {
-        let mut resume = None;
-        let mut dismiss_now = false;
-        if let Some(notification) = self.visible.iter_mut().find(|item| item.id == id) {
-            if notification.hovered == hovered {
-                return;
+    /// Pointer presence over the host holds *every* visible countdown, not just
+    /// the toast under the cursor.
+    ///
+    /// Pausing only the hovered toast let its neighbours keep expiring while the
+    /// user was reading them, and the stack collapsed out from under the pointer
+    /// as soon as it dropped to a single toast. Whether the stack is collapsed,
+    /// expanded, or a lone toast, the host is one hover target and one clock.
+    fn set_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.hovered == hovered {
+            return;
+        }
+        self.hovered = hovered;
+
+        let now = Instant::now();
+        let mut resume = Vec::new();
+        let mut expired = Vec::new();
+        for notification in &mut self.visible {
+            if notification.auto_dismiss_after.is_none() {
+                continue;
             }
 
-            notification.hovered = hovered;
-            notification.timer_epoch = notification.timer_epoch.wrapping_add(1);
+            let timer_epoch = notification.invalidate_timer();
             if hovered {
-                if let (Some(remaining), Some(started_at)) = (
-                    notification.remaining.as_mut(),
-                    notification.countdown_started_at.take(),
-                ) {
-                    *remaining = remaining.saturating_sub(started_at.elapsed());
-                }
-            } else if let Some(remaining) = notification.remaining {
-                if remaining.is_zero() {
-                    dismiss_now = true;
-                } else {
-                    notification.countdown_started_at = Some(Instant::now());
-                    resume = Some((remaining, notification.timer_epoch));
+                notification.hold(now);
+            } else {
+                match notification.resume(now) {
+                    Some(remaining) => resume.push((notification.id, remaining, timer_epoch)),
+                    None => expired.push(notification.id),
                 }
             }
         }
 
-        if dismiss_now {
+        for id in expired {
             self.dismiss(id);
-        } else if let Some((remaining, timer_epoch)) = resume {
+        }
+        for (id, remaining, timer_epoch) in resume {
             Self::schedule_dismiss(id, remaining, timer_epoch, cx);
         }
-        self.ensure_progress_ticks(cx);
         cx.notify();
     }
 
     pub fn dismiss(&mut self, id: u64) {
         self.visible.retain(|item| item.id != id);
-        if self.visible.len() <= 1 {
-            self.stack_expanded = false;
-        }
+        self.prune_heights();
     }
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.visible.clear();
-        self.stack_expanded = false;
+        self.prune_heights();
+    }
+
+    /// Measurements only matter for toasts still on screen; history keeps no
+    /// layout of its own.
+    fn prune_heights(&mut self) {
+        self.heights
+            .borrow_mut()
+            .retain(|id, _| self.visible.iter().any(|item| item.id == *id));
     }
 
     #[allow(dead_code)]
@@ -451,9 +551,36 @@ impl NotificationHost {
         self.history.iter()
     }
 
+    /// Records the natural height of a toast the first time it is laid out.
+    ///
+    /// The measurement runs in a canvas's prepaint, which is why it writes
+    /// through a shared cell rather than through the entity: `render` has
+    /// already returned by then, and the value is read on the next frame.
+    fn measure_height(&self, id: u64) -> impl IntoElement + use<> {
+        let heights = self.heights.clone();
+        div().absolute().inset_0().child(
+            canvas(
+                move |bounds, _window, _cx| {
+                    let height = f32::from(bounds.size.height);
+                    if height > 0. {
+                        heights.borrow_mut().entry(id).or_insert(height);
+                    }
+                },
+                |_bounds, _prepaint, _window, _cx| (),
+            )
+            .size_full(),
+        )
+    }
+
+    /// `fill_slot` stretches the card to its positioned wrapper, which is how
+    /// the deck keeps an even lower edge. It must stay `false` until the toast
+    /// has been measured, or [`measure_height`](Self::measure_height) would
+    /// record the imposed height instead of the natural one.
     fn render_notification(
         &self,
         notification: Notification,
+        content_opacity: f32,
+        fill_slot: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let id = notification.id;
@@ -472,21 +599,26 @@ impl NotificationHost {
         .collect::<Vec<_>>()
         .join("\n");
 
+        // A toast arrives rather than appears: it slides the last few pixels in
+        // from the right edge it is anchored to while fading up. One-shot, so
+        // `with_animation` is the right tool — and it parks the card in place
+        // under reduced motion for free.
+        let entry = Animation::new(TOAST_ENTRY).with_easing(crate::anim::ease_out_quint);
+
         div()
             .id(element_id)
             .relative()
             .flex()
             .flex_col()
-            .w(px(380.))
+            .w_full()
+            .when(fill_slot, |card| card.h_full())
             .rounded_lg()
             .overflow_hidden()
             .border_1()
             .border_color(accent.alpha(0.32))
             .bg(bg.alpha(0.96))
             .shadow(theme::shadow_popover())
-            .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
-                this.set_hovered(id, *hovered, cx);
-            }))
+            .child(self.measure_height(id))
             .child(
                 div()
                     .flex()
@@ -495,6 +627,7 @@ impl NotificationHost {
                     .gap_3()
                     .px_3()
                     .py_3()
+                    .opacity(content_opacity)
                     .child(
                         div()
                             .mt_0p5()
@@ -606,48 +739,10 @@ impl NotificationHost {
                         )),
                 )
             })
-    }
-
-    fn render_stack_backplate(
-        &self,
-        notification: &Notification,
-        layer: usize,
-        layer_count: usize,
-    ) -> impl IntoElement + use<> {
-        let (bg, accent, _, _) = notification.level.colors();
-        let inset = (layer_count - layer) as f32 * STACK_LAYER_INSET;
-        let top = layer as f32 * STACK_LAYER_OFFSET;
-
-        div()
-            .absolute()
-            .top(px(top))
-            .left(px(inset))
-            .right(px(inset))
-            .h(px(24.))
-            .rounded_lg()
-            .border_1()
-            .border_color(accent.alpha(0.24))
-            .bg(bg.alpha(0.98))
-    }
-
-    fn render_collapsed_stack(
-        &self,
-        notifications: Vec<Notification>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let layer_count = notifications.len().saturating_sub(1);
-        let mut stack = div()
-            .id("notification-stack-collapsed")
-            .relative()
-            .w(px(380.))
-            .pt(px(layer_count as f32 * STACK_LAYER_OFFSET));
-
-        // Paint oldest to newest so each successive layer naturally covers the one behind it.
-        for (layer, notification) in notifications.iter().skip(1).rev().enumerate() {
-            stack = stack.child(self.render_stack_backplate(notification, layer, layer_count));
-        }
-
-        stack.child(self.render_notification(notifications[0].clone(), cx))
+            .with_animation(("notification-entry", id), entry, |card, delta| {
+                card.opacity(delta)
+                    .left(px((1. - delta) * TOAST_ENTRY_SLIDE))
+            })
     }
 }
 
@@ -680,48 +775,276 @@ macro_rules! impl_status_toasts_leveled {
 pub(crate) use impl_status_toasts_leveled;
 
 impl Render for NotificationHost {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let notifications = self.visible.iter().cloned().collect::<Vec<_>>();
         let is_stack = notifications.len() > 1;
-        let is_expanded = is_stack && self.stack_expanded;
+        let reduce_motion = cx.reduce_motion();
+        let now = Instant::now();
+
+        self.stack.retarget(
+            if is_stack && self.hovered { 1. } else { 0. },
+            now,
+            reduce_motion,
+        );
+        if self.stack.is_animating(now, reduce_motion) {
+            window.request_animation_frame();
+        }
+        let progress = self.stack.value(now, reduce_motion);
 
         let host = div()
             .id("notification-host")
             .absolute()
             .top(px(56.))
             .right_4()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .when(is_stack, |host| {
-                host.on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
-                    if this.stack_expanded != *hovered {
-                        this.stack_expanded = *hovered;
-                        cx.notify();
-                    }
-                }))
-            });
+            .w(px(TOAST_WIDTH))
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                this.set_hovered(*hovered, cx);
+            }));
 
-        if is_expanded || !is_stack {
-            host.children(
+        // A lone toast never needs positioning arithmetic, and plain flow is
+        // also what gives a brand new toast the unconstrained layout its
+        // measurement depends on.
+        if !is_stack {
+            return host.flex().flex_col().gap(px(TOAST_GAP)).children(
                 notifications
                     .into_iter()
-                    .map(|notification| self.render_notification(notification, cx)),
-            )
-        } else {
-            host.child(self.render_collapsed_stack(notifications, cx))
+                    .map(|notification| self.render_notification(notification, 1., false, cx)),
+            );
         }
+
+        // A toast joining an existing stack has not been measured yet. It is
+        // laid out at its natural height for this one frame — its slot still
+        // reserves an estimate, so the deck around it holds its shape instead
+        // of springing open and snapping back while the newcomer is sized.
+        let measured = self.heights.borrow().clone();
+        let heights = notifications
+            .iter()
+            .map(|notification| {
+                measured
+                    .get(&notification.id)
+                    .copied()
+                    .unwrap_or(ASSUMED_TOAST_HEIGHT)
+            })
+            .collect::<Vec<f32>>();
+
+        // Keep the host itself absolute. Calling `relative()` on `host` here
+        // overrides that positioning mode in GPUI, which makes a multi-toast
+        // stack participate in AppRoot's column layout and steal an equally
+        // tall strip from the bottom of the window. The inner canvas owns the
+        // relative coordinate space needed by the absolutely positioned cards.
+        let mut stack = div()
+            .relative()
+            .w_full()
+            .h(px(stack_height(&heights, progress)));
+        let slots = stack_layout(&heights, progress);
+        // Back to front: the newest toast is painted last so it fronts the deck.
+        for (notification, slot) in notifications.into_iter().zip(slots).rev() {
+            // Stretching an unmeasured toast to its slot would have the canvas
+            // record the height the deck imposed rather than the one its
+            // content wants, and the estimate would then be self-fulfilling.
+            let fill_slot = measured.contains_key(&notification.id);
+            stack = stack.child(
+                div()
+                    .absolute()
+                    .top(px(slot.top))
+                    .left(px(slot.inset))
+                    .right(px(slot.inset))
+                    .h(px(slot.height))
+                    .child(self.render_notification(
+                        notification,
+                        slot.content_opacity,
+                        fill_slot,
+                        cx,
+                    )),
+            );
+        }
+        host.child(stack)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::{
-        DEFAULT_TIMEOUT, ERROR_TIMEOUT, MAX_VISIBLE, NotificationLevel, auto_dismiss_timeout,
-        remaining_fraction,
+        DEFAULT_TIMEOUT, ERROR_TIMEOUT, MAX_VISIBLE, Notification, NotificationLevel,
+        STACK_LAYER_INSET, STACK_LAYER_OFFSET, TOAST_GAP, auto_dismiss_timeout, remaining_fraction,
+        stack_height, stack_layout,
     };
+
+    fn running_toast(timeout: Duration, started_at: Instant) -> Notification {
+        Notification {
+            id: 1,
+            level: NotificationLevel::Info,
+            title: "t".into(),
+            message: None,
+            source: None,
+            auto_dismiss_after: Some(timeout),
+            remaining: Some(timeout),
+            countdown_started_at: Some(started_at),
+            timer_epoch: 0,
+        }
+    }
+
+    #[test]
+    fn holding_folds_served_time_into_the_remaining_debt() {
+        let start = Instant::now();
+        let mut toast = running_toast(Duration::from_secs(3), start);
+
+        toast.hold(start + Duration::from_secs(1));
+
+        assert_eq!(toast.remaining, Some(Duration::from_secs(2)));
+        assert_eq!(
+            toast.countdown_started_at, None,
+            "a held toast has no clock"
+        );
+    }
+
+    #[test]
+    fn holding_twice_does_not_double_charge_the_countdown() {
+        let start = Instant::now();
+        let mut toast = running_toast(Duration::from_secs(3), start);
+
+        toast.hold(start + Duration::from_secs(1));
+        toast.hold(start + Duration::from_secs(9));
+
+        assert_eq!(toast.remaining, Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn resuming_restarts_the_clock_and_owes_only_what_is_left() {
+        let start = Instant::now();
+        let mut toast = running_toast(Duration::from_secs(3), start);
+        toast.hold(start + Duration::from_secs(1));
+
+        let resumed_at = start + Duration::from_secs(60);
+        let owed = toast.resume(resumed_at);
+
+        assert_eq!(owed, Some(Duration::from_secs(2)));
+        assert_eq!(
+            toast.countdown_started_at,
+            Some(resumed_at),
+            "the hovered stretch must not count against the toast"
+        );
+    }
+
+    #[test]
+    fn a_toast_held_past_its_timeout_is_due_immediately_on_resume() {
+        let start = Instant::now();
+        let mut toast = running_toast(Duration::from_secs(3), start);
+
+        toast.hold(start + Duration::from_secs(5));
+
+        assert_eq!(toast.remaining, Some(Duration::ZERO));
+        assert_eq!(
+            toast.resume(start + Duration::from_secs(6)),
+            None,
+            "nothing left to serve means dismiss rather than restart"
+        );
+    }
+
+    #[test]
+    fn a_collapsed_deck_fans_cards_by_a_fixed_step() {
+        let slots = stack_layout(&[100., 60., 140.], 0.);
+
+        for (depth, slot) in slots.iter().enumerate() {
+            assert_eq!(slot.top, depth as f32 * STACK_LAYER_OFFSET);
+            assert_eq!(slot.inset, depth as f32 * STACK_LAYER_INSET);
+            assert_eq!(
+                slot.height, 100.,
+                "the deck squeezes every card to the front card so its lower edge stays even"
+            );
+        }
+        assert_eq!(slots[0].content_opacity, 1.);
+        assert_eq!(
+            (slots[1].content_opacity, slots[2].content_opacity),
+            (0., 0.),
+            "cards behind the front one read as bare plates"
+        );
+    }
+
+    #[test]
+    fn an_open_stack_queues_cards_at_their_own_height() {
+        let slots = stack_layout(&[100., 60., 140.], 1.);
+
+        assert_eq!(slots[0].top, 0.);
+        assert_eq!(slots[1].top, 100. + TOAST_GAP);
+        assert_eq!(slots[2].top, 100. + TOAST_GAP + 60. + TOAST_GAP);
+        assert_eq!(
+            slots.iter().map(|slot| slot.height).collect::<Vec<_>>(),
+            vec![100., 60., 140.]
+        );
+        for slot in &slots {
+            assert_eq!(slot.inset, 0., "an open stack is a flush column");
+            assert_eq!(slot.content_opacity, 1.);
+        }
+    }
+
+    #[test]
+    fn the_transition_stays_between_its_two_end_states() {
+        let heights = [100., 60., 140.];
+        let collapsed = stack_layout(&heights, 0.);
+        let open = stack_layout(&heights, 1.);
+        let midway = stack_layout(&heights, 0.5);
+
+        for depth in 0..heights.len() {
+            let (from, to, at) = (collapsed[depth], open[depth], midway[depth]);
+            assert!(
+                at.top >= from.top && at.top <= to.top,
+                "card {depth} left the span between its two resting places"
+            );
+            assert!(at.inset <= from.inset && at.inset >= to.inset);
+        }
+    }
+
+    #[test]
+    fn the_host_reserves_only_what_it_draws() {
+        let heights = [100., 60., 140.];
+
+        assert_eq!(
+            stack_height(&heights, 0.),
+            100. + 2. * STACK_LAYER_OFFSET,
+            "collapsed, the deck is the front card plus the fanned edges"
+        );
+        assert_eq!(
+            stack_height(&heights, 1.),
+            100. + TOAST_GAP + 60. + TOAST_GAP + 140.
+        );
+        assert!(
+            stack_height(&heights, 0.) < stack_height(&heights, 1.),
+            "a collapsed deck must not claim the open stack's hover area"
+        );
+    }
+
+    #[test]
+    fn a_lone_toast_needs_no_deck_arithmetic() {
+        let slots = stack_layout(&[120.], 0.);
+
+        assert_eq!(slots.len(), 1);
+        assert_eq!((slots[0].top, slots[0].inset), (0., 0.));
+        assert_eq!(slots[0].height, 120.);
+        assert_eq!(stack_height(&[120.], 0.), 120.);
+    }
+
+    #[test]
+    fn an_empty_stack_has_no_layout() {
+        assert!(stack_layout(&[], 0.).is_empty());
+        assert_eq!(stack_height(&[], 0.), 0.);
+    }
+
+    #[test]
+    fn invalidating_the_timer_orphans_the_in_flight_dismissal() {
+        let start = Instant::now();
+        let mut toast = running_toast(Duration::from_secs(3), start);
+        let scheduled_epoch = toast.timer_epoch;
+
+        let live_epoch = toast.invalidate_timer();
+
+        assert_ne!(
+            scheduled_epoch, live_epoch,
+            "the epoch a pending dismiss captured must no longer match"
+        );
+    }
 
     #[test]
     fn resolves_auto_dismiss_duration_for_progress_bar() {

@@ -271,7 +271,16 @@ impl AppSettingsView {
 
     fn render_config_dir(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let input = self.config_dir.as_ref()?;
-        let save_button = if self.saving || !self.workspace_available {
+        let save_button = if self.saving {
+            components::busy_button(
+                "app-settings-save-dir",
+                t(k::APP_SETTINGS_CONFIG_DIR_SAVE),
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+                true,
+            )
+            .into_any_element()
+        } else if !self.workspace_available {
             components::disabled_button(
                 "app-settings-save-dir",
                 t(k::APP_SETTINGS_CONFIG_DIR_SAVE),

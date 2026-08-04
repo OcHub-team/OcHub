@@ -1,6 +1,6 @@
 //! Shared always-visible vertical scrollbar for tracked GPUI scroll containers.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, BorderStyle, Bounds, Context, Corners, Edges, ElementId, Hsla, IntoElement, ListState,
@@ -8,6 +8,7 @@ use gpui::{
     ScrollHandle, ScrollWheelEvent, Task, Window, canvas, div, point, prelude::*, px, quad, size,
 };
 
+use crate::anim::Transition;
 use crate::theme;
 
 const TRACK_WIDTH: Pixels = px(10.);
@@ -16,6 +17,9 @@ const IDLE_THUMB_WIDTH: Pixels = px(2.);
 const TRACK_INSET: Pixels = px(4.);
 const MIN_THUMB_HEIGHT: Pixels = px(28.);
 const SCROLL_ACTIVE_DURATION: Duration = Duration::from_millis(650);
+/// How long the bar takes to wake or settle between its idle hairline and its
+/// full width.
+const ACTIVITY_TRANSITION: Duration = Duration::from_millis(160);
 
 pub trait ScrollableHandle: Clone + 'static {
     fn max_offset(&self) -> Point<Pixels>;
@@ -170,6 +174,9 @@ struct VerticalScrollbarState<T: ScrollableHandle> {
     last_offset: Pixels,
     scrolling: bool,
     idle_task: Option<Task<()>>,
+    /// `0` idle, `1` active. Reversible, because the bar can go quiet and be
+    /// woken again before it has finished settling.
+    activity: Transition,
 }
 
 impl<T: ScrollableHandle> VerticalScrollbarState<T> {
@@ -182,6 +189,7 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
             last_offset,
             scrolling: false,
             idle_task: None,
+            activity: Transition::settled(0., ACTIVITY_TRANSITION),
         }
     }
 
@@ -269,7 +277,7 @@ impl<T: ScrollableHandle> VerticalScrollbarState<T> {
 }
 
 impl<T: ScrollableHandle> Render for VerticalScrollbarState<T> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let offset = self.handle.offset().y;
         if offset != self.last_offset {
             self.last_offset = offset;
@@ -286,6 +294,16 @@ impl<T: ScrollableHandle> Render for VerticalScrollbarState<T> {
 
         let handle = self.handle.clone();
         let active = self.hovered || self.drag_offset.is_some() || self.scrolling;
+        // The bar used to snap between its two shapes, which made a quiet
+        // scroll ending feel like something had blinked out of the page.
+        let now = Instant::now();
+        let reduce_motion = cx.reduce_motion();
+        self.activity
+            .retarget(if active { 1. } else { 0. }, now, reduce_motion);
+        if self.activity.is_animating(now, reduce_motion) {
+            window.request_animation_frame();
+        }
+        let activity = self.activity.value(now, reduce_motion);
         div()
             .id(("vertical-scrollbar", cx.entity_id().as_u64()))
             .absolute()
@@ -315,36 +333,31 @@ impl<T: ScrollableHandle> Render for VerticalScrollbarState<T> {
                         ) else {
                             return;
                         };
-                        if active {
+                        if activity > 0. {
                             window.paint_quad(quad(
                                 scrollbar.track_bounds,
                                 Corners::all(px(5.)),
-                                theme::border().alpha(0.18),
+                                theme::border().alpha(0.18 * activity),
                                 Edges::default(),
                                 Hsla::transparent_black(),
                                 BorderStyle::Solid,
                             ));
                         }
-                        let thumb_bounds = if active {
-                            scrollbar.thumb_bounds
-                        } else {
-                            Bounds::new(
-                                point(
-                                    scrollbar.thumb_bounds.left()
-                                        + (THUMB_WIDTH - IDLE_THUMB_WIDTH) / 2.,
-                                    scrollbar.thumb_bounds.top(),
-                                ),
-                                size(IDLE_THUMB_WIDTH, scrollbar.thumb_bounds.size.height),
-                            )
-                        };
+
+                        // The thumb widens about its own centre line, so it
+                        // grows in place rather than drifting toward the edge.
+                        let width = IDLE_THUMB_WIDTH + (THUMB_WIDTH - IDLE_THUMB_WIDTH) * activity;
+                        let thumb_bounds = Bounds::new(
+                            point(
+                                scrollbar.thumb_bounds.left() + (THUMB_WIDTH - width) / 2.,
+                                scrollbar.thumb_bounds.top(),
+                            ),
+                            size(width, scrollbar.thumb_bounds.size.height),
+                        );
                         window.paint_quad(quad(
                             thumb_bounds,
                             Corners::all(px(3.)),
-                            if active {
-                                theme::muted().alpha(0.72)
-                            } else {
-                                theme::muted().alpha(0.46)
-                            },
+                            theme::muted().alpha(0.46 + 0.26 * activity),
                             Edges::default(),
                             Hsla::transparent_black(),
                             BorderStyle::Solid,
