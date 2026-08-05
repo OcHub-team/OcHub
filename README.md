@@ -225,3 +225,5 @@ OcHub is licensed under the
 OcHub draws inspiration from
 [`cc-switch`](https://github.com/farion1231/cc-switch) and
 [`new-api`](https://github.com/QuantumNous/new-api).
+
+Special thanks to [LINUX DO](https://linux.do/) for providing a friendly, professional, and open community for AI developers.

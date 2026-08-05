@@ -208,3 +208,5 @@ OcHub 采用 [GNU 通用公共许可证 v3.0 或更高版本](LICENSE)。
 OcHub 的灵感来源包括
 [`cc-switch`](https://github.com/farion1231/cc-switch) 和
 [`new-api`](https://github.com/QuantumNous/new-api)。
+
+特别感谢 [LINUX DO](https://linux.do/) 为 AI 开发者提供友善、专业、开放的交流社区与支持。
