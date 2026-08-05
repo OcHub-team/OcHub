@@ -166,8 +166,7 @@ impl NetworkView {
         let backend = self.backend.clone();
         let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .proxy_settings()
+            let result = crate::core_async::run(async move { backend.proxy_settings().await })
                 .await
                 .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
@@ -308,10 +307,10 @@ impl NetworkView {
         let backend = self.backend.clone();
         let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .set_proxy_settings(&candidate)
-                .await
-                .map_err(|error| error.to_string());
+            let result =
+                crate::core_async::run(async move { backend.set_proxy_settings(&candidate).await })
+                    .await
+                    .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
                 if generation != this.workspace_generation {
                     return;
@@ -357,8 +356,15 @@ impl NetworkView {
         let backend = self.backend.clone();
         let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let outcome = backend
-                .test_proxy_settings(&candidate)
+            // The probe builds a reqwest client and awaits a request, both of
+            // which need a tokio reactor. Awaiting it straight on gpui's
+            // executor panics with "there is no reactor running", and that
+            // panic unwinds out of the platform event loop and kills the
+            // process instead of surfacing a failed test.
+            let outcome =
+                crate::core_async::run(
+                    async move { backend.test_proxy_settings(&candidate).await },
+                )
                 .await
                 .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
