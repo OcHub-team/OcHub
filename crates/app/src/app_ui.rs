@@ -11,7 +11,7 @@ use std::{
 
 use gpui::{
     App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton, ScrollHandle,
-    SharedString, Window, WindowAppearance, div, prelude::*, px,
+    SharedString, Window, WindowAppearance, WindowControlArea, div, prelude::*, px,
 };
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
@@ -45,6 +45,7 @@ use crate::theme;
 use crate::theme_view::ThemeView;
 use crate::tools_view::ToolsView;
 use crate::usage_view::UsageView;
+use crate::window_chrome;
 
 pub(crate) fn notify_open_roots(
     cx: &mut App,
@@ -3589,12 +3590,21 @@ impl AppRoot {
 
     /// Empty chrome keeps the native traffic lights embedded in the sidebar
     /// while preserving a reliable drag target above the scrolling navigation.
-    fn render_sidebar_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    ///
+    /// The reserved height exists for those traffic lights, so wherever
+    /// [`window_chrome`] draws a strip above the whole shell instead, this keeps
+    /// only enough of it to breathe.
+    fn render_sidebar_drag_region(
+        &self,
+        has_title_bar: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         div()
             .id("sidebar-window-drag-region")
             .w_full()
-            .h(px(44.))
+            .h(px(if has_title_bar { 8. } else { 44. }))
             .flex_shrink_0()
+            .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _event, window, _cx| window.start_window_move()),
@@ -3611,6 +3621,7 @@ impl AppRoot {
             .left(px(252.))
             .right_0()
             .h(px(10.))
+            .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _event, window, _cx| window.start_window_move()),
@@ -3620,6 +3631,7 @@ impl AppRoot {
     fn render_sidebar(
         &self,
         appearance: WindowAppearance,
+        has_title_bar: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let navigation = div()
@@ -3784,7 +3796,7 @@ impl AppRoot {
             .border_r_1()
             .border_color(theme::border())
             .shadow_xs()
-            .child(self.render_sidebar_drag_region(cx))
+            .child(self.render_sidebar_drag_region(has_title_bar, cx))
             .child(navigation)
     }
 
@@ -4440,6 +4452,11 @@ impl Render for AppRoot {
         }
 
         let appearance = window.appearance();
+        let title_bar = window_chrome::title_bar(window, cx);
+        let has_title_bar = title_bar.is_some();
+        // The strip already spans the top edge where a title bar exists, so the
+        // absolutely-positioned fallback would only sit on top of it.
+        let content_drag_region = (!has_title_bar).then(|| self.render_content_drag_region(cx));
         let main_content = div()
             .flex()
             .flex_col()
@@ -4461,16 +4478,17 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::cancel_active))
             .on_drag_move::<DraggedProvider>(cx.listener(Self::handle_provider_drag_move))
             .on_drop(cx.listener(Self::drop_provider_drag))
+            .children(title_bar)
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(self.render_sidebar(appearance, cx))
+                    .child(self.render_sidebar(appearance, has_title_bar, cx))
                     .child(main_content),
             )
-            .child(self.render_content_drag_region(cx))
+            .children(content_drag_region)
             .child(self.notifications.clone())
             .when_some(self.confirm_delete.clone(), |root, provider| {
                 let delete_id = provider.id.clone();

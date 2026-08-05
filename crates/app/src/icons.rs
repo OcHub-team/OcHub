@@ -46,6 +46,9 @@ pub enum IconName {
     Terminal,
     Tools,
     Trash,
+    WindowMaximize,
+    WindowMinimize,
+    WindowRestore,
     Wrench,
 }
 
@@ -93,6 +96,9 @@ impl IconName {
             IconName::Terminal => "icons/terminal.svg",
             IconName::Tools => "icons/tools.svg",
             IconName::Trash => "icons/trash.svg",
+            IconName::WindowMaximize => "icons/window-maximize.svg",
+            IconName::WindowMinimize => "icons/window-minimize.svg",
+            IconName::WindowRestore => "icons/window-restore.svg",
             IconName::Wrench => "icons/wrench.svg",
         }
     }

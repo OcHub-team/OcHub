@@ -42,6 +42,7 @@ mod theme;
 mod theme_view;
 mod tools_view;
 mod usage_view;
+mod window_chrome;
 
 use std::borrow::Cow;
 use std::fs;
@@ -486,9 +487,15 @@ fn main() {
                 window_min_size: Some(size(px(960.), px(640.))),
                 window_background: theme::window_background_appearance(),
                 titlebar: Some(TitlebarOptions {
-                    title: None,
+                    // Never drawn: macOS hides the title text whenever the
+                    // titlebar is transparent, and Windows has no titlebar to
+                    // draw it in. It is the window *name* that matters — the
+                    // label Windows shows in the taskbar and Alt-Tab, which
+                    // was blank without it.
+                    title: Some(SharedString::new_static("OcHub")),
                     // Content extends behind the native titlebar. Only the macOS
-                    // traffic lights remain, embedded directly in the sidebar.
+                    // traffic lights remain, embedded directly in the sidebar;
+                    // `window_chrome` draws the Windows caption buttons.
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(18.), px(18.))),
                 }),
