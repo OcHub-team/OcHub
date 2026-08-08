@@ -418,7 +418,6 @@ impl AppConfig for ClaudeConfig {
         }
         issues
     }
-
 }
 
 // ---- helpers ----------------------------------------------------------------

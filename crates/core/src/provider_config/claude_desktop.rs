@@ -261,7 +261,6 @@ impl AppConfig for ClaudeDesktopConfig {
         }
         issues
     }
-
 }
 
 fn set_or_remove(map: &mut Map<String, Value>, key: &str, value: &str) {
