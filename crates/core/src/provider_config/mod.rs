@@ -280,11 +280,6 @@ pub struct EncodeResult {
 pub struct Preset {
     pub name: String,
     pub values: FormValues,
-    /// Set when this preset came from the sponsor catalogue. The editor renders
-    /// those as logo cards instead of entries in the plain segmented control.
-    pub sponsor: Option<&'static Sponsor>,
-    /// Index into `sponsor.routes`; always 0 for non-sponsor presets.
-    pub route: usize,
 }
 
 impl Preset {
@@ -292,7 +287,6 @@ impl Preset {
         Self {
             name: name.into(),
             values,
-            ..Default::default()
         }
     }
 }

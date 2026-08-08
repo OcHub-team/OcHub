@@ -447,7 +447,7 @@ impl AppConfig for CodexConfig {
     }
 
     fn presets(&self) -> Vec<super::Preset> {
-        let mut presets = vec![
+        vec![
             codex_preset(
                 "OpenAI 官方",
                 "openai-account",
@@ -484,9 +484,7 @@ impl AppConfig for CodexConfig {
                 "gpt-5.5",
                 "high",
             ),
-        ];
-        presets.extend(super::sponsors::presets_for(AppType::Codex));
-        presets
+        ]
     }
 }
 

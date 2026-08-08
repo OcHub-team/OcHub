@@ -419,9 +419,6 @@ impl AppConfig for ClaudeConfig {
         issues
     }
 
-    fn presets(&self) -> Vec<super::Preset> {
-        super::sponsors::presets_for(AppType::Claude)
-    }
 }
 
 // ---- helpers ----------------------------------------------------------------

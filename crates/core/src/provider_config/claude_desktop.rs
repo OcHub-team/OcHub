@@ -262,9 +262,6 @@ impl AppConfig for ClaudeDesktopConfig {
         issues
     }
 
-    fn presets(&self) -> Vec<super::Preset> {
-        super::sponsors::presets_for(AppType::ClaudeDesktop)
-    }
 }
 
 fn set_or_remove(map: &mut Map<String, Value>, key: &str, value: &str) {
