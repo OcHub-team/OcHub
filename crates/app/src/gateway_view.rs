@@ -2354,12 +2354,17 @@ impl GatewayView {
                                     .child(SharedString::from(shown_key)),
                             )
                             .child(
-                                components::button(
+                                components::icon_only_button_tone(
                                     "connection-reveal-key",
                                     if self.reveal_connection_key {
                                         t(k::GATEWAY_ACTION_HIDE)
                                     } else {
                                         t(k::GATEWAY_ACTION_SHOW)
+                                    },
+                                    if self.reveal_connection_key {
+                                        IconName::EyeOff
+                                    } else {
+                                        IconName::Eye
                                     },
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,
@@ -3240,12 +3245,17 @@ impl GatewayView {
                     .items_center()
                     .gap_1()
                     .child(
-                        components::button(
+                        components::icon_only_button_tone(
                             SharedString::from(format!("station-backup-key-reveal-{}", key.id)),
                             if key.reveal {
                                 t(k::GATEWAY_ACTION_HIDE)
                             } else {
                                 t(k::GATEWAY_ACTION_SHOW)
+                            },
+                            if key.reveal {
+                                IconName::EyeOff
+                            } else {
+                                IconName::Eye
                             },
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
@@ -3292,12 +3302,17 @@ impl GatewayView {
                     .gap_2()
                     .child(div().flex_1().min_w(px(220.)).child(editor.api_key.clone()))
                     .child(
-                        components::button(
+                        components::icon_only_button_tone(
                             "station-key-reveal",
                             if editor.reveal_key {
                                 t(k::GATEWAY_ACTION_HIDE)
                             } else {
                                 t(k::GATEWAY_ACTION_SHOW)
+                            },
+                            if editor.reveal_key {
+                                IconName::EyeOff
+                            } else {
+                                IconName::Eye
                             },
                             ButtonTone::Ghost,
                             ButtonSize::Sm,
@@ -3410,12 +3425,17 @@ impl GatewayView {
                             )
                             .child(div().flex_1().min_w(px(220.)).child(editor.api_key.clone()))
                             .child(
-                                components::button(
+                                components::icon_only_button_tone(
                                     "station-key-reveal",
                                     if editor.reveal_key {
                                         t(k::GATEWAY_ACTION_HIDE)
                                     } else {
                                         t(k::GATEWAY_ACTION_SHOW)
+                                    },
+                                    if editor.reveal_key {
+                                        IconName::EyeOff
+                                    } else {
+                                        IconName::Eye
                                     },
                                     ButtonTone::Ghost,
                                     ButtonSize::Sm,

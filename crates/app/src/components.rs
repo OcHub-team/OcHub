@@ -207,6 +207,31 @@ fn button_base(
     }
 }
 
+/// Compact square icon action. The visible control stays quiet in dense rows,
+/// while `label` remains available to accessibility clients.
+pub fn icon_only_button_tone(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    name: IconName,
+    tone: ButtonTone,
+    size: ButtonSize,
+) -> gpui::Stateful<gpui::Div> {
+    let (_, _, fg) = tone.colors();
+    let label = label.into();
+    let (button_size, icon_size) = match size {
+        ButtonSize::Sm => (28., 14.),
+        ButtonSize::Md => (32., 16.),
+    };
+    button_base(id, label, tone, size, true)
+        .p_0()
+        .size(px(button_size))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon(name, fg, icon_size))
+}
+
 // Back-compat shims (existing call sites) — new code should use `button` /
 // `icon_button_tone` with an explicit tone+size.
 pub fn action_button(
