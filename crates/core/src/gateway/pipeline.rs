@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use ochub_convert::aggregate;
@@ -429,16 +429,27 @@ impl StreamConverter {
                 merged_usage,
             } => {
                 passthrough_usage_tap(*inlet, ev, merged_usage);
+                let name = event_name(ev);
                 let done = match inlet {
                     Dialect::Chat => ev.data.trim() == "[DONE]",
-                    Dialect::Messages => event_name(ev) == Some("message_stop".into()),
+                    Dialect::Messages => name.as_deref() == Some("message_stop"),
                     Dialect::Responses => {
                         matches!(
-                            event_name(ev).as_deref(),
+                            name.as_deref(),
                             Some("response.completed") | Some("response.failed")
                         )
                     }
                 };
+                out.errored = matches!(name.as_deref(), Some("error") | Some("response.failed"))
+                    || serde_json::from_str::<Value>(&ev.data)
+                        .ok()
+                        .is_some_and(|value| {
+                            value.get("error").is_some_and(|error| !error.is_null())
+                                || matches!(
+                                    value.get("type").and_then(Value::as_str),
+                                    Some("error") | Some("response.failed")
+                                )
+                        });
                 // Forward everything verbatim except the chat [DONE] marker,
                 // which the transport encoder re-emits from `Done`.
                 if !(matches!(inlet, Dialect::Chat) && done) {
@@ -627,6 +638,7 @@ fn convert_nonstream(
 // Pipeline entry
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct RequestMeta {
     model: String,
     stream: bool,
@@ -1608,21 +1620,31 @@ pub async fn run(
             };
         }
 
-        mark_health(&state, &channel.id, ChannelHealth::Healthy).await;
-
         if meta.stream {
-            return stream_response(
-                state,
+            let failed_stream_headers = upstream_headers.clone();
+            match start_stream_response(
+                &state,
                 inlet,
                 channel,
                 prepared,
-                meta,
-                key,
+                meta.clone(),
+                key.clone(),
                 started,
                 resp,
                 upstream_headers,
-            );
+            )
+            .await
+            {
+                Ok(outcome) => return outcome,
+                Err(error) => {
+                    last_error = error;
+                    last_upstream_headers = Some(failed_stream_headers);
+                    continue;
+                }
+            }
         }
+
+        mark_health(&state, &channel.id, ChannelHealth::Healthy).await;
 
         // Non-stream: drain and convert.
         let raw = match resp.bytes().await {
@@ -1703,10 +1725,140 @@ async fn mark_health(state: &GatewayState, channel_id: &str, health: ChannelHeal
         .insert(channel_id.to_string(), health);
 }
 
-/// Spawn the upstream-reading task and hand the caller a frame receiver.
+const STREAM_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(60);
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+struct ActiveHttpStream {
+    response: reqwest::Response,
+    converter: StreamConverter,
+    parser: SseParser,
+    last_usage: Option<Value>,
+    first_token_ms: Option<u64>,
+    capture: Option<SignatureCapture>,
+}
+
+#[derive(Debug)]
+struct StreamBatch {
+    frames: Vec<StreamFrame>,
+    error: Option<String>,
+}
+
+/// Read until the converter has something client-visible to emit, the
+/// upstream reports an error, or the deadline expires. A deadline covers the
+/// whole wait for a useful event, so comment/keepalive chunks cannot keep a
+/// dead inference alive forever.
+async fn next_stream_batch(
+    stream: &mut ActiveHttpStream,
+    timeout: Duration,
+    started: Instant,
+) -> Result<StreamBatch, String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let (events, ended) = match tokio::time::timeout_at(deadline, stream.response.chunk()).await
+        {
+            Err(_) => {
+                return Err(format!(
+                    "upstream stream timed out after {}s",
+                    timeout.as_secs()
+                ));
+            }
+            Ok(Err(error)) => return Err(format!("upstream stream read failed: {error}")),
+            Ok(Ok(Some(bytes))) => (stream.parser.feed(&bytes), false),
+            Ok(Ok(None)) => (stream.parser.finish(), true),
+        };
+
+        let mut frames = Vec::new();
+        let mut errored = false;
+        for event in &events {
+            let converted = stream.converter.push(event);
+            if stream.first_token_ms.is_none() && !converted.frames.is_empty() {
+                stream.first_token_ms = Some(started.elapsed().as_millis() as u64);
+            }
+            if let Some(usage) = converted.usage {
+                stream.last_usage = Some(usage);
+            }
+            if let Some(capture) = converted.capture {
+                stream.capture = Some(capture);
+            }
+            errored |= converted.errored;
+            frames.extend(converted.frames);
+        }
+
+        if errored {
+            return Ok(StreamBatch {
+                frames,
+                error: Some("upstream returned a streaming error".to_string()),
+            });
+        }
+        if !frames.is_empty() {
+            return Ok(StreamBatch {
+                frames,
+                error: None,
+            });
+        }
+        if ended {
+            return Err("upstream stream closed before a terminal response".to_string());
+        }
+    }
+}
+
+fn stream_error_frame(inlet: Dialect, message: &str) -> StreamFrame {
+    StreamFrame::Event(match inlet {
+        Dialect::Chat => WireEvent::data_only(error_body(inlet, message).to_string()),
+        Dialect::Messages => WireEvent::new("error", error_body(inlet, message).to_string()),
+        Dialect::Responses => WireEvent::new(
+            "error",
+            json!({
+                "type": "error",
+                "error": { "type": "server_error", "message": message }
+            })
+            .to_string(),
+        ),
+    })
+}
+
+fn batch_has_error_event(frames: &[StreamFrame]) -> bool {
+    frames.iter().any(|frame| {
+        let StreamFrame::Event(event) = frame else {
+            return false;
+        };
+        matches!(
+            event.event.as_deref(),
+            Some("error") | Some("response.failed")
+        ) || serde_json::from_str::<Value>(&event.data)
+            .ok()
+            .is_some_and(|value| {
+                value.get("error").is_some_and(|error| !error.is_null())
+                    || matches!(
+                        value.get("type").and_then(Value::as_str),
+                        Some("error") | Some("response.failed")
+                    )
+            })
+    })
+}
+
+async fn send_stream_frames(
+    tx: &mpsc::Sender<StreamFrame>,
+    frames: Vec<StreamFrame>,
+) -> Result<bool, ()> {
+    for frame in frames {
+        let done = matches!(frame, StreamFrame::Done);
+        tx.send(frame).await.map_err(|_| ())?;
+        if done {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Buffer the first client-visible event before returning an HTTP stream. If
+/// the upstream returned 2xx but disconnects, times out, or reports a stream
+/// error before that event, return to the candidate loop so it can fail over.
+/// Once an event is committed, the background pump never replays the request;
+/// later failures become explicit protocol-shaped error events instead.
 #[allow(clippy::too_many_arguments)]
-fn stream_response(
-    state: GatewayState,
+async fn start_stream_response(
+    state: &GatewayState,
     inlet: Dialect,
     channel: GatewayChannel,
     prepared: PreparedRequest,
@@ -1715,84 +1867,124 @@ fn stream_response(
     started: Instant,
     resp: reqwest::Response,
     upstream_headers: HeaderMap,
-) -> PipelineOutcome {
+) -> Result<PipelineOutcome, String> {
+    let converter = StreamConverter::new(inlet, channel.dialect, &meta.model, meta.include_usage)
+        .ok_or_else(|| "stream conversion is unavailable".to_string())?;
+    let mut active = ActiveHttpStream {
+        response: resp,
+        converter,
+        parser: SseParser::new(),
+        last_usage: None,
+        first_token_ms: None,
+        capture: None,
+    };
+    let initial = match next_stream_batch(&mut active, STREAM_FIRST_EVENT_TIMEOUT, started).await {
+        Ok(batch)
+            if batch.error.is_none()
+                && batch
+                    .frames
+                    .iter()
+                    .any(|frame| matches!(frame, StreamFrame::Event(_))) =>
+        {
+            batch
+        }
+        Ok(batch) => {
+            let error = batch
+                .error
+                .unwrap_or_else(|| "upstream stream ended before its first event".to_string());
+            mark_health(state, &channel.id, ChannelHealth::Unhealthy(error.clone())).await;
+            return Err(format!(
+                "channel '{}' failed before streaming: {error}",
+                channel.name
+            ));
+        }
+        Err(error) => {
+            mark_health(state, &channel.id, ChannelHealth::Unhealthy(error.clone())).await;
+            return Err(format!(
+                "channel '{}' failed before streaming: {error}",
+                channel.name
+            ));
+        }
+    };
+
+    mark_health(state, &channel.id, ChannelHealth::Healthy).await;
+
     let (tx, rx) = mpsc::channel::<StreamFrame>(64);
+    let state = state.clone();
     tokio::spawn(async move {
-        let mut converter =
-            match StreamConverter::new(inlet, channel.dialect, &meta.model, meta.include_usage) {
-                Some(c) => c,
-                None => return,
-            };
-        let mut parser = SseParser::new();
-        let mut last_usage: Option<Value> = None;
-        let mut first_token_ms: Option<u64> = None;
-        let mut capture: Option<SignatureCapture> = None;
-        let mut done_sent = false;
+        let mut failed = false;
+        let mut downstream_closed = false;
+        let mut done_sent = match send_stream_frames(&tx, initial.frames).await {
+            Ok(done) => done,
+            Err(()) => {
+                downstream_closed = true;
+                false
+            }
+        };
 
-        let mut body = resp.bytes_stream();
-        use futures::StreamExt;
-        'outer: loop {
-            let chunk = body.next().await;
-            let (events, ended) = match chunk {
-                Some(Ok(bytes)) => (parser.feed(&bytes), false),
-                Some(Err(e)) => {
-                    log::warn!("[gateway] upstream stream error: {e}");
-                    (parser.finish(), true)
-                }
-                None => (parser.finish(), true),
-            };
-            for ev in &events {
-                if first_token_ms.is_none() {
-                    first_token_ms = Some(started.elapsed().as_millis() as u64);
-                }
-                let converted = converter.push(ev);
-                if let Some(u) = converted.usage {
-                    last_usage = Some(u);
-                }
-                if let Some(c) = converted.capture {
-                    capture = Some(c);
-                }
-                for frame in converted.frames {
-                    let is_done = matches!(frame, StreamFrame::Done);
-                    if tx.send(frame).await.is_err() {
-                        break 'outer; // client hung up
+        while !done_sent && !downstream_closed {
+            match next_stream_batch(&mut active, STREAM_IDLE_TIMEOUT, started).await {
+                Ok(batch) => {
+                    let already_has_error = batch_has_error_event(&batch.frames);
+                    done_sent = match send_stream_frames(&tx, batch.frames).await {
+                        Ok(done) => done,
+                        Err(()) => {
+                            downstream_closed = true;
+                            false
+                        }
+                    };
+                    if let Some(error) = batch.error {
+                        failed = true;
+                        mark_health(&state, &channel.id, ChannelHealth::Unhealthy(error.clone()))
+                            .await;
+                        if !downstream_closed && !already_has_error {
+                            let _ = tx.send(stream_error_frame(inlet, &error)).await;
+                        }
+                        if !downstream_closed && !done_sent {
+                            let _ = tx.send(StreamFrame::Done).await;
+                            done_sent = true;
+                        }
                     }
-                    if is_done {
+                }
+                Err(error) => {
+                    failed = true;
+                    log::warn!(
+                        "[gateway] channel '{}' stream failed: {error}",
+                        channel.name
+                    );
+                    mark_health(&state, &channel.id, ChannelHealth::Unhealthy(error.clone())).await;
+                    if tx.send(stream_error_frame(inlet, &error)).await.is_err() {
+                        downstream_closed = true;
+                    } else {
+                        let _ = tx.send(StreamFrame::Done).await;
                         done_sent = true;
-                        break 'outer;
                     }
                 }
             }
-            if ended {
-                break;
-            }
         }
 
-        if !done_sent {
-            let _ = tx.send(StreamFrame::Done).await;
+        if let Some(capture) = &active.capture {
+            ochub_convert::signature::store_capture(&*state.signatures, capture);
         }
-        if let Some(c) = &capture {
-            ochub_convert::signature::store_capture(&*state.signatures, c);
-        }
-        if let Some(u) = &last_usage {
+        if let Some(usage) = &active.last_usage {
             log_usage(
                 &state.db,
                 &channel.id,
                 key.as_ref(),
                 &meta.model,
                 &prepared.upstream_model,
-                token_usage_from_messages(u, Some(prepared.upstream_model.clone())),
+                token_usage_from_messages(usage, Some(prepared.upstream_model.clone())),
                 started.elapsed().as_millis() as u64,
-                first_token_ms,
-                200,
+                active.first_token_ms,
+                if failed { 502 } else { 200 },
                 true,
             );
         }
     });
-    PipelineOutcome::Stream {
+    Ok(PipelineOutcome::Stream {
         rx,
         headers: upstream_headers,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -2909,6 +3101,282 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert_eq!(logged, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stream_that_closes_before_first_event_fails_over() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const BACKUP_SSE: &str = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"backup\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"from backup\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        let primary_hits = Arc::new(AtomicUsize::new(0));
+        let primary_hits_for_handler = primary_hits.clone();
+        let backup_hits = Arc::new(AtomicUsize::new(0));
+        let backup_hits_for_handler = backup_hits.clone();
+        let app = axum::Router::new()
+            .route(
+                "/primary",
+                axum::routing::post(move || {
+                    let hits = primary_hits_for_handler.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        axum::response::Response::builder()
+                            .header("content-type", "text/event-stream")
+                            .body(axum::body::Body::empty())
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/backup",
+                axum::routing::post(move || {
+                    let hits = backup_hits_for_handler.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        axum::response::Response::builder()
+                            .header("content-type", "text/event-stream")
+                            .body(axum::body::Body::from(BACKUP_SSE))
+                            .unwrap()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        for (id, path, priority) in [("primary", "/primary", 0), ("backup", "/backup", 10)] {
+            db.upsert_gateway_channel(&GatewayChannel {
+                id: id.into(),
+                endpoint_id: Some(id.into()),
+                name: id.into(),
+                dialect: Dialect::Messages,
+                base_url: format!("http://{addr}"),
+                api_key: "k".into(),
+                path_override: Some(path.into()),
+                models: vec![],
+                model_override: None,
+                priority,
+                weight: 1,
+                enabled: true,
+                extra_headers: vec![],
+                imported_from: None,
+            })
+            .unwrap();
+        }
+        let health = Arc::new(RwLock::new(HashMap::new()));
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: health.clone(),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        let outcome = run(
+            state,
+            Dialect::Messages,
+            bytes::Bytes::from(
+                json!({
+                    "model": "test-model",
+                    "stream": true,
+                    "messages": [{ "role": "user", "content": "hi" }]
+                })
+                .to_string(),
+            ),
+            None,
+            HeaderMap::new(),
+        )
+        .await;
+
+        let PipelineOutcome::Stream { mut rx, .. } = outcome else {
+            panic!("expected backup stream outcome");
+        };
+        let mut data = Vec::new();
+        while let Some(frame) = rx.recv().await {
+            match frame {
+                StreamFrame::Event(event) => data.push(event.data),
+                StreamFrame::Done => break,
+            }
+        }
+        assert!(data.iter().any(|event| event.contains("from backup")));
+        assert_eq!(primary_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(backup_hits.load(Ordering::SeqCst), 1);
+        let health = health.read().await;
+        assert!(matches!(
+            health.get("primary"),
+            Some(ChannelHealth::Unhealthy(_))
+        ));
+        assert_eq!(health.get("backup"), Some(&ChannelHealth::Healthy));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stream_wait_for_first_event_has_a_hard_timeout() {
+        let app = axum::Router::new().route(
+            "/stream",
+            axum::routing::post(|| async {
+                let pending =
+                    futures::stream::pending::<Result<bytes::Bytes, std::convert::Infallible>>();
+                axum::response::Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(axum::body::Body::from_stream(pending))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/stream"))
+            .send()
+            .await
+            .unwrap();
+        let mut active = ActiveHttpStream {
+            response,
+            converter: StreamConverter::new(Dialect::Messages, Dialect::Messages, "m", true)
+                .unwrap(),
+            parser: SseParser::new(),
+            last_usage: None,
+            first_token_ms: None,
+            capture: None,
+        };
+        let error = next_stream_batch(&mut active, Duration::from_millis(20), Instant::now())
+            .await
+            .unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn committed_stream_failure_is_reported_without_replaying_backup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let primary_hits = Arc::new(AtomicUsize::new(0));
+        let primary_hits_for_handler = primary_hits.clone();
+        let backup_hits = Arc::new(AtomicUsize::new(0));
+        let backup_hits_for_handler = backup_hits.clone();
+        let app = axum::Router::new()
+            .route(
+                "/primary",
+                axum::routing::post(move || {
+                    let hits = primary_hits_for_handler.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        let stream = futures::stream::unfold(0, |step| async move {
+                            match step {
+                                0 => Some((
+                                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                        b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"primary\"}}\n\n",
+                                    )),
+                                    1,
+                                )),
+                                1 => {
+                                    tokio::time::sleep(Duration::from_millis(20)).await;
+                                    Some((
+                                        Err(std::io::Error::new(
+                                            std::io::ErrorKind::ConnectionReset,
+                                            "mock disconnect",
+                                        )),
+                                        2,
+                                    ))
+                                }
+                                _ => None,
+                            }
+                        });
+                        axum::response::Response::builder()
+                            .header("content-type", "text/event-stream")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/backup",
+                axum::routing::post(move || {
+                    let hits = backup_hits_for_handler.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        axum::response::Response::builder()
+                            .header("content-type", "text/event-stream")
+                            .body(axum::body::Body::from(
+                                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+                            ))
+                            .unwrap()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = Arc::new(crate::db::Database::memory().unwrap());
+        for (id, path, priority) in [("primary", "/primary", 0), ("backup", "/backup", 10)] {
+            db.upsert_gateway_channel(&GatewayChannel {
+                id: id.into(),
+                endpoint_id: Some(id.into()),
+                name: id.into(),
+                dialect: Dialect::Messages,
+                base_url: format!("http://{addr}"),
+                api_key: "k".into(),
+                path_override: Some(path.into()),
+                models: vec![],
+                model_override: None,
+                priority,
+                weight: 1,
+                enabled: true,
+                extra_headers: vec![],
+                imported_from: None,
+            })
+            .unwrap();
+        }
+        let health = Arc::new(RwLock::new(HashMap::new()));
+        let state = GatewayState {
+            db,
+            http_client: reqwest::Client::new(),
+            config: Arc::new(RwLock::new(GatewayConfig::default())),
+            health: health.clone(),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        let outcome = run(
+            state,
+            Dialect::Messages,
+            bytes::Bytes::from(
+                json!({
+                    "model": "test-model",
+                    "stream": true,
+                    "messages": [{ "role": "user", "content": "hi" }]
+                })
+                .to_string(),
+            ),
+            None,
+            HeaderMap::new(),
+        )
+        .await;
+
+        let PipelineOutcome::Stream { mut rx, .. } = outcome else {
+            panic!("expected committed primary stream");
+        };
+        let mut names = Vec::new();
+        while let Some(frame) = rx.recv().await {
+            match frame {
+                StreamFrame::Event(event) => names.push(event.event.unwrap_or_default()),
+                StreamFrame::Done => break,
+            }
+        }
+        assert_eq!(names.first().map(String::as_str), Some("message_start"));
+        assert!(names.iter().any(|name| name == "error"));
+        assert_eq!(primary_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(backup_hits.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            health.read().await.get("primary"),
+            Some(ChannelHealth::Unhealthy(_))
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread")]
