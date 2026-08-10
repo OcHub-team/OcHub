@@ -381,6 +381,12 @@ struct EndpointEditor {
     test: EndpointTestState,
 }
 
+struct BackupKeyEditor {
+    id: String,
+    api_key: Entity<TextInput>,
+    reveal: bool,
+}
+
 /// Provider capabilities shared by every equivalent failover endpoint.
 struct StationModelsEditor {
     selected: Vec<String>,
@@ -400,6 +406,7 @@ struct StationEditor {
     name: Entity<TextInput>,
     website_url: Entity<TextInput>,
     api_key: Entity<TextInput>,
+    backup_keys: Vec<BackupKeyEditor>,
     enabled_dialects: HashSet<Dialect>,
     models: StationModelsEditor,
     fetched_models: Vec<String>,
@@ -514,6 +521,12 @@ impl GatewayView {
                 placeholders.push((
                     rule.station_model.clone(),
                     t(k::GATEWAY_EDITOR_RULE_STATION_MODEL_PLACEHOLDER),
+                ));
+            }
+            for key in &editor.backup_keys {
+                placeholders.push((
+                    key.api_key.clone(),
+                    t(k::GATEWAY_EDITOR_API_KEY_PLACEHOLDER),
                 ));
             }
             placeholders.push((
@@ -961,6 +974,7 @@ impl GatewayView {
             api_key: cx.new(|cx| {
                 text_input(cx, t(k::GATEWAY_EDITOR_API_KEY_PLACEHOLDER), &api_key).masked(true)
             }),
+            backup_keys: Vec::new(),
             enabled_dialects: if enabled_dialects.is_empty() {
                 HashSet::from([Dialect::Messages])
             } else {
@@ -2110,6 +2124,44 @@ impl GatewayView {
         }
     }
 
+    fn add_backup_key(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        editor.backup_keys.push(BackupKeyEditor {
+            id: uuid::Uuid::new_v4().to_string(),
+            api_key: cx.new(|cx| {
+                TextInput::new(cx, t(k::GATEWAY_EDITOR_API_KEY_PLACEHOLDER)).masked(true)
+            }),
+            reveal: false,
+        });
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
+    fn remove_backup_key(&mut self, key_id: &str, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        editor.backup_keys.retain(|key| key.id != key_id);
+        self.list_state.remeasure();
+        cx.notify();
+    }
+
+    fn toggle_reveal_backup_key(&mut self, key_id: &str, cx: &mut Context<Self>) {
+        let Some(key) = self
+            .editor
+            .as_mut()
+            .and_then(|editor| editor.backup_keys.iter_mut().find(|key| key.id == key_id))
+        else {
+            return;
+        };
+        key.reveal = !key.reveal;
+        key.api_key
+            .update(cx, |input, cx| input.set_masked(!key.reveal, cx));
+        cx.notify();
+    }
+
     fn saved_editor_station_id(&self) -> Option<String> {
         let route_id = &self.editor.as_ref()?.route_id;
         self.stations
@@ -3139,6 +3191,247 @@ impl GatewayView {
         .into_any_element()
     }
 
+    fn render_backup_key_row(
+        &self,
+        key: &BackupKeyEditor,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let key_id_for_reveal = key.id.clone();
+        let key_id_for_remove = key.id.clone();
+        div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_3()
+            .w_full()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(theme::border())
+            .child(
+                div()
+                    .w(px(112.))
+                    .flex_none()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .text_color(theme::text())
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(icon(IconName::Key, theme::muted(), 14.))
+                    .child(SharedString::from(tf!(
+                        k::GATEWAY_EDITOR_KEYS_BACKUP,
+                        number = index + 1
+                    ))),
+            )
+            .child(div().flex_1().min_w(px(220.)).child(key.api_key.clone()))
+            .child(components::badge(
+                BadgeTone::Neutral,
+                t(k::GATEWAY_EDITOR_KEYS_UNTESTED),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        components::button(
+                            SharedString::from(format!("station-backup-key-reveal-{}", key.id)),
+                            if key.reveal {
+                                t(k::GATEWAY_ACTION_HIDE)
+                            } else {
+                                t(k::GATEWAY_ACTION_SHOW)
+                            },
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.toggle_reveal_backup_key(&key_id_for_reveal, cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        components::icon_button_tone(
+                            SharedString::from(format!("station-backup-key-remove-{}", key.id)),
+                            t(k::GATEWAY_EDITOR_KEYS_REMOVE),
+                            IconName::Trash,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.remove_backup_key(&key_id_for_remove, cx);
+                            },
+                        )),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_key_editor(
+        &self,
+        editor: &StationEditor,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if editor.backup_keys.is_empty() {
+            return components::field(
+                t(k::GATEWAY_EDITOR_KEYS_LABEL),
+                false,
+                None,
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w(px(220.)).child(editor.api_key.clone()))
+                    .child(
+                        components::button(
+                            "station-key-reveal",
+                            if editor.reveal_key {
+                                t(k::GATEWAY_ACTION_HIDE)
+                            } else {
+                                t(k::GATEWAY_ACTION_SHOW)
+                            },
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.toggle_reveal_key(cx);
+                            },
+                        )),
+                    )
+                    .child(
+                        components::button(
+                            "station-backup-key-add-single",
+                            t(k::GATEWAY_EDITOR_KEYS_ADD),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.add_backup_key(cx);
+                            },
+                        )),
+                    ),
+            )
+            .into_any_element();
+        }
+
+        let backup_rows: Vec<gpui::AnyElement> = editor
+            .backup_keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| self.render_backup_key_row(key, index, cx))
+            .collect();
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .w_full()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_end()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme::subtext())
+                                    .child(t(k::GATEWAY_EDITOR_KEYS_LABEL)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .child(t(k::GATEWAY_EDITOR_KEYS_HELP)),
+                            ),
+                    )
+                    .child(
+                        components::button(
+                            "station-backup-key-add",
+                            t(k::GATEWAY_EDITOR_KEYS_ADD),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.add_backup_key(cx);
+                            },
+                        )),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme::border())
+                    .bg(theme::surface())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_3()
+                            .w_full()
+                            .px_3()
+                            .py_2()
+                            .child(
+                                div()
+                                    .w(px(112.))
+                                    .flex_none()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_color(theme::text())
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(icon(IconName::Key, theme::accent(), 14.))
+                                    .child(t(k::GATEWAY_EDITOR_KEYS_PRIMARY)),
+                            )
+                            .child(div().flex_1().min_w(px(220.)).child(editor.api_key.clone()))
+                            .child(
+                                components::button(
+                                    "station-key-reveal",
+                                    if editor.reveal_key {
+                                        t(k::GATEWAY_ACTION_HIDE)
+                                    } else {
+                                        t(k::GATEWAY_ACTION_SHOW)
+                                    },
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.toggle_reveal_key(cx);
+                                    },
+                                )),
+                            ),
+                    )
+                    .children(backup_rows),
+            )
+            .into_any_element()
+    }
+
     fn render_editor(&self, editor: &StationEditor, cx: &mut Context<Self>) -> gpui::AnyElement {
         let reasoning_index = match editor.reasoning_mode {
             GatewayReasoningMode::Passthrough => 0,
@@ -3435,38 +3728,9 @@ impl GatewayView {
                         false,
                         None,
                         editor.website_url.clone(),
-                    )))
-                    .child(
-                        div().flex_1().min_w(px(220.)).child(components::field(
-                            "API Key",
-                            false,
-                            None,
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap_2()
-                                .child(div().flex_1().min_w_0().child(editor.api_key.clone()))
-                                .child(
-                                    components::button(
-                                        "station-key-reveal",
-                                        if editor.reveal_key {
-                                            t(k::GATEWAY_ACTION_HIDE)
-                                        } else {
-                                            t(k::GATEWAY_ACTION_SHOW)
-                                        },
-                                        ButtonTone::Ghost,
-                                        ButtonSize::Sm,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _event, _window, cx| {
-                                            this.toggle_reveal_key(cx);
-                                        },
-                                    )),
-                                ),
-                        )),
-                    ),
+                    ))),
             )
+            .child(self.render_key_editor(editor, cx))
             .child(section_title(t(k::GATEWAY_EDITOR_CAPABILITIES_TITLE)))
             .child(components::field(
                 t(k::GATEWAY_EDITOR_DIALECT_LABEL),
