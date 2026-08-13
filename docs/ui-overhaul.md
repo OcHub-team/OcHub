@@ -3,6 +3,11 @@
 > 状态：**已完成**（Phase 1-5 全部落地于 `ui-overhaul` 分支）。
 > 方向：**保持 Zed 风做精做细 · 视觉与信息架构一起改 · Theme 运行时化（只实装浅色，预留深色）**。
 > 验收：`cargo check --workspace` 零警告；全部 14 个视图 + 外壳完成迁移并逐页截图核验。
+>
+> **组件库归属（2026-08-13）**：设计令牌、通用组件、布局、输入框、代码编辑器、
+> 图表、通知、滚动条、动画、图标、窗口装饰与组件画廊已迁至独立仓库
+> [`OcHub-team/ochub-ui`](https://github.com/OcHub-team/ochub-ui)。OcHub 仅保留业务视图与
+> 宿主适配，不再维护这些模块的源码副本。
 
 ## 1. 目标与非目标
 
@@ -110,7 +115,7 @@ pub fn bg() -> Rgba; pub fn text() -> Rgba; …           // 访问函数,内部
 | C11 | `disclosure(title, detail, expanded)` | 3 份折叠 | 卡式头 + chevron |
 | C12 | `stat_tile(icon?, label, value, detail?)` | 4 个变体 | 用于工具/用量/网关状态 |
 | C13 | `pagination()` | 2 套分页 | footer 式，统一会话与用量 |
-| C14 | 组件画廊 `gallery_view.rs` | — | dev-only（`MS_GALLERY=1` 时侧边栏出现入口），渲染全部组件全部状态 |
+| C14 | 组件画廊 `ochub_ui::gallery` | — | 可由独立库 example 启动；`MS_GALLERY=1` 时也在 OcHub 侧边栏出现，渲染全部组件全部状态 |
 
 ## 7. 信息架构决策
 

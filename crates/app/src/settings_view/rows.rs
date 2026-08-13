@@ -9,7 +9,8 @@
 //! never drawn — it stays in [`search::RowEntry`] purely so search keeps
 //! matching against the wording a user would think to type.
 
-use gpui::{AnyElement, Context, SharedString, Window, div, prelude::*};
+use gpui::{AnyElement, Context, IntoElement, SharedString, Window};
+use ochub_ui::screens::settings as settings_screen;
 
 use crate::components::ButtonTone;
 use crate::i18n::t;
@@ -133,13 +134,5 @@ pub(super) fn act(
 /// One section as a virtualized list item: header above a grouped card, with
 /// its own bottom spacing (the list draws no inter-item gap).
 pub(super) fn group_block(title: impl Into<SharedString>, rows: Vec<AnyElement>) -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_3()
-        .pb_3()
-        .w_full()
-        .child(layout::section_header(title, None))
-        .child(layout::group(rows))
-        .into_any_element()
+    settings_screen::group_block(title, rows)
 }

@@ -10,6 +10,7 @@ use gpui::{AnyElement, Context, PathPromptOptions, SharedString, Window, div, pr
 use ochub_core::app_store;
 use ochub_core::i18n::Locale;
 use ochub_core::settings;
+use ochub_ui::screens::common as common_screen;
 
 use crate::components::{self, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -26,24 +27,21 @@ use super::{Confirm, Page, SettingsEvent, SettingsView};
 
 impl SettingsView {
     pub(super) fn render_root(&mut self, cx: &mut Context<Self>) -> gpui::Div {
-        layout::page()
-            .relative()
-            .child(
-                layout::page_header(t(k::SETTINGS_PAGE_TITLE), None).child(
-                    div()
-                        .flex_none()
-                        .w(gpui::px(220.))
-                        .child(self.search.clone()),
-                ),
-            )
-            .child(layout::virtual_body(
+        common_screen::page(
+            t(k::SETTINGS_PAGE_TITLE),
+            div()
+                .flex_none()
+                .w(gpui::px(220.))
+                .child(self.search.clone()),
+            layout::virtual_body(
                 "settings-body",
                 gpui::list(
                     self.root_list.clone(),
                     cx.processor(|this, ix, window, cx| this.render_root_block(ix, window, cx)),
                 ),
                 &self.root_list,
-            ))
+            ),
+        )
     }
 
     fn render_root_block(
@@ -462,9 +460,7 @@ impl SettingsView {
             |this, cx| {
                 // Apply, then repaint: `refresh_windows` is what defeats gpui's
                 // element-state reuse and re-runs `render` across the whole tree.
-                ochub_core::i18n::install(ochub_core::i18n::resolve(
-                    this.settings.language.as_deref(),
-                ));
+                crate::install_locale(ochub_core::i18n::resolve(this.settings.language.as_deref()));
                 cx.emit(SettingsEvent::LocaleChanged);
                 cx.refresh_windows();
             },

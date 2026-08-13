@@ -5,11 +5,12 @@ use std::future::Future;
 use std::sync::Arc;
 
 use gpui::{
-    Context, Entity, FontWeight, ListAlignment, ListState, ScrollHandle, SharedString, Window, div,
-    prelude::*, px,
+    Context, Entity, ListAlignment, ListState, ScrollHandle, SharedString, Window, div, prelude::*,
+    px,
 };
 use ochub_core::db::legacy_json::{McpApps, McpServer};
 use ochub_core::{AppState, AppType};
+use ochub_ui::screens::tools as tool_screens;
 
 use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -579,88 +580,41 @@ impl McpView {
         let name = server.name.clone();
         let desc = server.description.clone();
 
-        components::card()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .justify_between()
-                    .gap_4()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(SharedString::from(name)),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .child(SharedString::from(endpoint)),
-                            )
-                            .when_some(desc, |s, d| {
-                                s.child(
-                                    div()
-                                        .text_color(theme::subtext())
-                                        .text_xs()
-                                        .child(SharedString::from(d)),
-                                )
-                            })
-                            .child(div().text_color(theme::teal()).text_xs().child(
-                                SharedString::from(tf!(k::MCP_CARD_APPS_LABEL, apps = apps)),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_2()
-                            .child(
-                                components::button(
-                                    format!("mcp-edit-{}", server.id),
-                                    t(k::MCP_CARD_EDIT),
-                                    ButtonTone::Neutral,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        this.start_edit_by_id(&edit_id, cx);
-                                    },
-                                )),
-                            )
-                            .child(
-                                components::button(
-                                    format!("mcp-delete-{}", server.id),
-                                    t(k::MCP_CARD_DELETE),
-                                    ButtonTone::Danger,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        this.confirm_delete =
-                                            Some((delete_id.clone(), delete_name.clone()));
-                                        cx.notify();
-                                    },
-                                )),
-                            ),
-                    ),
-            )
-            .child(
-                div().flex().flex_row().flex_wrap().gap_3().children(
-                    self.enabled_apps
-                        .iter()
-                        .copied()
-                        .map(|app| self.render_app_toggle(server, app, cx)),
-                ),
-            )
+        tool_screens::mcp_card(tool_screens::McpCard {
+            name: SharedString::from(name),
+            endpoint: SharedString::from(endpoint),
+            description: desc.map(SharedString::from),
+            apps_label: SharedString::from(tf!(k::MCP_CARD_APPS_LABEL, apps = apps)),
+            actions: vec![
+                components::button(
+                    format!("mcp-edit-{}", server.id),
+                    t(k::MCP_CARD_EDIT),
+                    ButtonTone::Neutral,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.start_edit_by_id(&edit_id, cx);
+                }))
+                .into_any_element(),
+                components::button(
+                    format!("mcp-delete-{}", server.id),
+                    t(k::MCP_CARD_DELETE),
+                    ButtonTone::Danger,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.confirm_delete = Some((delete_id.clone(), delete_name.clone()));
+                    cx.notify();
+                }))
+                .into_any_element(),
+            ],
+            app_toggles: self
+                .enabled_apps
+                .iter()
+                .copied()
+                .map(|app| self.render_app_toggle(server, app, cx).into_any_element())
+                .collect(),
+        })
     }
 
     fn render_form_app_toggle(

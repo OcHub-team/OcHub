@@ -24,6 +24,7 @@ use ochub_core::services::provider::ProviderService;
 use ochub_core::{
     AppState, AppType, ModelProviderImportManifest, UsageResult, prepare_model_provider_import,
 };
+use ochub_ui::screens::gateway as gateway_screen;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -2434,7 +2435,7 @@ impl GatewayView {
             k::GATEWAY_CARD_MODELS,
             count = apply::station_models(&station.route, &station.channels).len(),
         );
-        let dialect_badges: Vec<gpui::AnyElement> = Dialect::ALL
+        let mut dialect_badges: Vec<gpui::AnyElement> = Dialect::ALL
             .into_iter()
             .filter(|dialect| {
                 station
@@ -2469,187 +2470,105 @@ impl GatewayView {
         };
         let route_id_for_detail = route_id.clone();
         let station_name_for_detail = station_name.clone();
-        components::card()
-            .gap_3()
-            .when(editing, |panel| panel.opacity(components::DISABLED_OPACITY))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_start()
-                    .justify_between()
-                    .gap_4()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w(px(260.))
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap_2()
-                                    // A sponsor is recognised from the address,
-                                    // so a station configured before the
-                                    // catalogue existed still wears its brand.
-                                    .child(match sponsors::sponsor_for_url(&base_url) {
-                                        Some(sponsor) => {
-                                            components::sponsor_logo(sponsor.logo, 20.)
-                                                .into_any_element()
-                                        }
-                                        None => icon(IconName::Layers, theme::accent(), 16.)
-                                            .into_any_element(),
-                                    })
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .text_base()
-                                            .font_weight(FontWeight::BOLD)
-                                            .child(SharedString::from(station_name.clone())),
-                                    )
-                                    .children(dialect_badges)
-                                    .when(imported, |row| {
-                                        row.child(components::badge(
-                                            BadgeTone::Neutral,
-                                            t(k::GATEWAY_CARD_BADGE_IMPORTED),
-                                        ))
-                                    })
-                                    .when(editing, |row| {
-                                        row.child(components::badge(
-                                            BadgeTone::Accent,
-                                            t(k::GATEWAY_CARD_BADGE_EDITING),
-                                        ))
-                                    })
-                                    .when(!enabled, |row| {
-                                        row.child(components::badge(
-                                            BadgeTone::Warning,
-                                            t(k::GATEWAY_CARD_BADGE_DISABLED),
-                                        ))
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .truncate()
-                                    .child(SharedString::from(base_url)),
-                            )
-                            .when(endpoint_count > 1, |column| {
-                                column.child(div().text_color(theme::muted()).text_xs().child(
-                                    SharedString::from(tf!(
-                                        k::GATEWAY_CARD_ENDPOINTS,
-                                        count = endpoint_count
-                                    )),
-                                ))
-                            })
-                            .when_some(station.route.website_url.clone(), |column, website| {
-                                column.child(
-                                    div()
-                                        .text_color(theme::muted())
-                                        .text_xs()
-                                        .truncate()
-                                        .child(SharedString::from(website)),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .text_color(theme::subtext())
-                                    .text_xs()
-                                    .child(SharedString::from(model_summary)),
-                            )
-                            // No quota console declared, no quota line: the
-                            // action only ever led to "not recognized" there.
-                            .when(station.route.quota_api.is_some(), |column| {
-                                column.child(quota::line(
-                                    &format!("station-quota-{}", station.route.id),
-                                    &station_name,
-                                    quota_state,
-                                    cx.listener(move |this, _event, _window, cx| {
-                                        this.query_station_quota(route_id_for_quota.clone(), cx);
-                                    }),
-                                    cx.listener(move |this, _event, _window, cx| {
-                                        this.quota_detail = Some((
-                                            route_id_for_detail.clone(),
-                                            station_name_for_detail.clone(),
-                                        ));
-                                        cx.notify();
-                                    }),
-                                ))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .items_center()
-                            .justify_end()
-                            .gap_2()
-                            .child(
-                                layout::toggle(enabled)
-                                    .id(SharedString::from(format!(
-                                        "station-toggle-{}",
-                                        station.route.id
-                                    )))
-                                    .role(gpui::Role::Switch)
-                                    .aria_label(SharedString::from(tf!(
-                                        k::GATEWAY_CARD_TOGGLE_ARIA,
-                                        name = station_name
-                                    )))
-                                    .aria_toggled(if enabled {
-                                        gpui::Toggled::True
-                                    } else {
-                                        gpui::Toggled::False
-                                    })
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.toggle_station(route_id_for_toggle.clone(), cx);
-                                    })),
-                            )
-                            .child(
-                                components::button(
-                                    SharedString::from(format!(
-                                        "station-edit-{}",
-                                        station.route.id
-                                    )),
-                                    t(k::GATEWAY_ACTION_EDIT),
-                                    ButtonTone::Neutral,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        this.open_editor_by_route_id(&route_id_for_edit, cx);
-                                    },
-                                )),
-                            )
-                            .child(
-                                components::button(
-                                    SharedString::from(format!(
-                                        "station-delete-{}",
-                                        station.route.id
-                                    )),
-                                    t(k::GATEWAY_ACTION_DELETE),
-                                    ButtonTone::Danger,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        this.request_delete(
-                                            route_id_for_delete.clone(),
-                                            station_name_for_delete.clone(),
-                                            cx,
-                                        );
-                                    },
-                                )),
-                            ),
-                    ),
+        if imported {
+            dialect_badges.push(
+                components::badge(BadgeTone::Neutral, t(k::GATEWAY_CARD_BADGE_IMPORTED))
+                    .into_any_element(),
+            );
+        }
+        if editing {
+            dialect_badges.push(
+                components::badge(BadgeTone::Accent, t(k::GATEWAY_CARD_BADGE_EDITING))
+                    .into_any_element(),
+            );
+        }
+        if !enabled {
+            dialect_badges.push(
+                components::badge(BadgeTone::Warning, t(k::GATEWAY_CARD_BADGE_DISABLED))
+                    .into_any_element(),
+            );
+        }
+        let identity_icon = match sponsors::sponsor_for_url(&base_url) {
+            Some(sponsor) => components::sponsor_logo(sponsor.logo, 20.).into_any_element(),
+            None => icon(IconName::Layers, theme::accent(), 16.).into_any_element(),
+        };
+        let quota_line = station.route.quota_api.is_some().then(|| {
+            quota::line(
+                &format!("station-quota-{}", station.route.id),
+                &station_name,
+                quota_state,
+                cx.listener(move |this, _event, _window, cx| {
+                    this.query_station_quota(route_id_for_quota.clone(), cx);
+                }),
+                cx.listener(move |this, _event, _window, cx| {
+                    this.quota_detail =
+                        Some((route_id_for_detail.clone(), station_name_for_detail.clone()));
+                    cx.notify();
+                }),
             )
             .into_any_element()
+        });
+        let controls = vec![
+            layout::toggle(enabled)
+                .id(SharedString::from(format!(
+                    "station-toggle-{}",
+                    station.route.id
+                )))
+                .role(gpui::Role::Switch)
+                .aria_label(SharedString::from(tf!(
+                    k::GATEWAY_CARD_TOGGLE_ARIA,
+                    name = station_name
+                )))
+                .aria_toggled(if enabled {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.toggle_station(route_id_for_toggle.clone(), cx);
+                }))
+                .into_any_element(),
+            components::button(
+                SharedString::from(format!("station-edit-{}", station.route.id)),
+                t(k::GATEWAY_ACTION_EDIT),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.open_editor_by_route_id(&route_id_for_edit, cx);
+            }))
+            .into_any_element(),
+            components::button(
+                SharedString::from(format!("station-delete-{}", station.route.id)),
+                t(k::GATEWAY_ACTION_DELETE),
+                ButtonTone::Danger,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.request_delete(
+                    route_id_for_delete.clone(),
+                    station_name_for_delete.clone(),
+                    cx,
+                );
+            }))
+            .into_any_element(),
+        ];
+        gateway_screen::station_card(gateway_screen::StationCard {
+            editing,
+            identity_icon,
+            name: SharedString::from(station_name),
+            badges: dialect_badges,
+            base_url: SharedString::from(base_url),
+            endpoint_summary: (endpoint_count > 1).then(|| {
+                SharedString::from(tf!(k::GATEWAY_CARD_ENDPOINTS, count = endpoint_count))
+            }),
+            website: station.route.website_url.clone().map(SharedString::from),
+            model_summary: SharedString::from(model_summary),
+            quota: quota_line,
+            controls,
+        })
+        .into_any_element()
     }
 
     fn render_station_model_picker(

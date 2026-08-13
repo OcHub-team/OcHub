@@ -7,11 +7,13 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use gpui::{
-    App, Background, Bounds, ColorSpace, Context, Entity, FontWeight, ListAlignment, ListState,
-    PathBuilder, PathPromptOptions, Pixels, Point, Rgba, SharedString, Window, canvas, div,
-    linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    App, Background, Bounds, ColorSpace, Context, Entity, ListAlignment, ListState, PathBuilder,
+    PathPromptOptions, Pixels, Point, Rgba, SharedString, Window, canvas, div, linear_color_stop,
+    linear_gradient, point, prelude::*, px, size,
 };
 use ochub_core::settings::{self, ThemeMode};
+use ochub_ui::screens::common as common_screen;
+use ochub_ui::screens::themes as theme_screen;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
@@ -327,7 +329,7 @@ impl ThemeView {
 
         self.selected_family = family_id;
         self.mode = mode;
-        theme::install_family(&family, mode, window.appearance());
+        theme::install_family(&family, crate::ui_theme_mode(mode), window.appearance());
         theme::apply_window_background(window);
         cx.refresh_windows();
         self.persist_selection(
@@ -346,7 +348,7 @@ impl ThemeView {
         let settings = settings::get_settings();
         theme::install_selected(
             &settings.theme_family,
-            settings.theme_mode,
+            crate::ui_theme_mode(settings.theme_mode),
             window.appearance(),
         );
         theme::apply_window_background(window);
@@ -534,7 +536,7 @@ impl ThemeView {
                             tf!(
                                 k::THEME_ERROR_FIELD_QUALIFIED,
                                 variant = label,
-                                field = raw(descriptor.label),
+                                field = ochub_ui::i18n::raw(descriptor.label),
                             )
                         })
                         .map(|color| (descriptor.token, color))
@@ -654,7 +656,7 @@ impl ThemeView {
                         this.reset_manager_list();
                         this.editor = None;
                         this.selected_family = family_id;
-                        theme::install_family(&family, mode, appearance);
+                        theme::install_family(&family, crate::ui_theme_mode(mode), appearance);
                         apply_theme_windows(cx);
                         this.set_status(
                             NotificationLevel::Success,
@@ -870,7 +872,11 @@ impl ThemeView {
                         this.reset_manager_list();
                         if was_selected {
                             this.selected_family = theme::DEFAULT_THEME_FAMILY.to_string();
-                            theme::install_selected(&this.selected_family, mode, appearance);
+                            theme::install_selected(
+                                &this.selected_family,
+                                crate::ui_theme_mode(mode),
+                                appearance,
+                            );
                             apply_theme_windows(cx);
                         }
                         this.set_status(
@@ -1517,67 +1523,22 @@ impl ThemeView {
             })),
         );
 
-        div()
-            .flex()
-            .flex_col()
-            .min_w_0()
-            .overflow_hidden()
-            .rounded_lg()
-            .border_1()
-            .border_color(if selected {
-                theme::accent()
-            } else {
-                theme::border()
-            })
-            .bg(theme::surface())
-            .when(selected, |card| card.shadow(theme::shadow_hover()))
-            .child(Self::pair_preview(&family))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .p_4()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_start()
-                            .justify_between()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .min_w_0()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(SharedString::from(family.name.clone())),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme::muted())
-                                            .child(SharedString::from(family.description.clone())),
-                                    ),
-                            )
-                            .child(if selected {
-                                components::badge(BadgeTone::Accent, t(k::THEME_CARD_BADGE_ACTIVE))
-                            } else if built_in {
-                                components::badge(
-                                    BadgeTone::Neutral,
-                                    t(k::THEME_CARD_BADGE_BUILT_IN),
-                                )
-                            } else {
-                                components::badge(BadgeTone::Teal, t(k::THEME_CARD_BADGE_USER))
-                            }),
-                    )
-                    .child(actions),
-            )
-            .into_any_element()
+        let badge = if selected {
+            components::badge(BadgeTone::Accent, t(k::THEME_CARD_BADGE_ACTIVE))
+        } else if built_in {
+            components::badge(BadgeTone::Neutral, t(k::THEME_CARD_BADGE_BUILT_IN))
+        } else {
+            components::badge(BadgeTone::Teal, t(k::THEME_CARD_BADGE_USER))
+        };
+        theme_screen::theme_card(theme_screen::ThemeCard {
+            preview: Self::pair_preview(&family).into_any_element(),
+            selected,
+            name: SharedString::from(family.name.clone()),
+            description: SharedString::from(family.description.clone()),
+            badge: badge.into_any_element(),
+            actions: actions.into_any_element(),
+        })
+        .into_any_element()
     }
 
     fn render_manager_item(&self, index: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -1600,50 +1561,27 @@ impl ThemeView {
                 Self::mode_index(self.mode),
                 move |index, window, cx| mode_listener(&index, window, cx),
             );
-            return div()
-                .flex()
-                .flex_col()
-                .gap_5()
-                .w_full()
-                .pb_3()
-                .child(layout::section_header(t(k::THEME_MODE_SECTION_TITLE), None))
-                .child(
-                    components::card()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_4()
-                        .child(layout::row_label(t(k::THEME_MODE_ROW_LABEL), None))
-                        .child(mode_control),
-                )
-                .child(layout::section_header(
-                    t(k::THEME_LIBRARY_SECTION_TITLE),
-                    None,
-                ))
-                .into_any_element();
+            return theme_screen::mode_block(
+                t(k::THEME_MODE_SECTION_TITLE),
+                t(k::THEME_MODE_ROW_LABEL),
+                mode_control,
+                t(k::THEME_LIBRARY_SECTION_TITLE),
+            )
+            .into_any_element();
         }
 
         let first = (index - 1) * 2;
-        let mut row = div()
-            .flex()
-            .flex_row()
-            .items_start()
-            .gap_3()
-            .w_full()
-            .pb_3();
+        let mut cards = Vec::new();
         for record in self.registry.themes.iter().skip(first).take(2) {
-            row = row.child(
+            cards.push(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(self.render_theme_card(record, cx)),
+                    .child(self.render_theme_card(record, cx))
+                    .into_any_element(),
             );
         }
-        if first + 1 >= self.registry.themes.len() {
-            row = row.child(div().flex_1().min_w_0());
-        }
-        row.into_any_element()
+        theme_screen::card_row(cards, first + 1 >= self.registry.themes.len()).into_any_element()
     }
 
     fn render_manager(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -1652,74 +1590,68 @@ impl ThemeView {
             cx.processor(|this, index: usize, _window, cx| this.render_manager_item(index, cx)),
         );
 
-        layout::page()
-            .relative()
-            .child(
-                layout::page_header(t(k::THEME_PAGE_TITLE), None).child(
-                    components::icon_button_tone(
-                        "theme-import",
-                        t(k::THEME_IMPORT_BUTTON),
-                        IconName::Archive,
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.import_theme(cx);
-                    })),
-                ),
+        common_screen::page(
+            t(k::THEME_PAGE_TITLE),
+            components::icon_button_tone(
+                "theme-import",
+                t(k::THEME_IMPORT_BUTTON),
+                IconName::Archive,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
             )
-            .child(layout::wide_virtual_body(
-                "theme-manager-body",
-                list,
-                &self.manager_list_state,
-            ))
-            .when_some(self.confirm_delete.clone(), |root, family_id| {
-                let family_name = self
-                    .registry
-                    .themes
-                    .iter()
-                    .find(|record| record.family.id == family_id)
-                    .map(|record| record.family.name.clone())
-                    .unwrap_or_else(|| family_id.clone());
-                root.child(components::modal_overlay(
-                    components::modal_card()
-                        .child(components::modal_header(t(k::THEME_DELETE_MODAL_TITLE)))
-                        .child(
-                            components::modal_body().child(
-                                div().text_sm().text_color(theme::subtext()).child(
-                                    SharedString::from(tf!(
-                                        k::THEME_DELETE_MODAL_BODY,
-                                        name = family_name
-                                    )),
-                                ),
-                            ),
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.import_theme(cx);
+            })),
+            layout::wide_virtual_body("theme-manager-body", list, &self.manager_list_state),
+        )
+        .when_some(self.confirm_delete.clone(), |root, family_id| {
+            let family_name = self
+                .registry
+                .themes
+                .iter()
+                .find(|record| record.family.id == family_id)
+                .map(|record| record.family.name.clone())
+                .unwrap_or_else(|| family_id.clone());
+            root.child(components::modal_overlay(
+                components::modal_card()
+                    .child(components::modal_header(t(k::THEME_DELETE_MODAL_TITLE)))
+                    .child(
+                        components::modal_body().child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::subtext())
+                                .child(SharedString::from(tf!(
+                                    k::THEME_DELETE_MODAL_BODY,
+                                    name = family_name
+                                ))),
+                        ),
+                    )
+                    .child(components::modal_footer(vec![
+                        components::button(
+                            "theme-delete-cancel",
+                            t(k::THEME_DELETE_MODAL_CANCEL),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
                         )
-                        .child(components::modal_footer(vec![
-                            components::button(
-                                "theme-delete-cancel",
-                                t(k::THEME_DELETE_MODAL_CANCEL),
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.confirm_delete = None;
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                            components::button(
-                                "theme-delete-confirm",
-                                t(k::THEME_DELETE_MODAL_CONFIRM),
-                                ButtonTone::Danger,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(|this, _event, window, cx| {
-                                this.delete_confirmed(window, cx);
-                            }))
-                            .into_any_element(),
-                        ])),
-                ))
-            })
-            .into_any_element()
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.confirm_delete = None;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                        components::button(
+                            "theme-delete-confirm",
+                            t(k::THEME_DELETE_MODAL_CONFIRM),
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _event, window, cx| {
+                            this.delete_confirmed(window, cx);
+                        }))
+                        .into_any_element(),
+                    ])),
+            ))
+        })
+        .into_any_element()
     }
 
     fn render_color_row(
@@ -1747,7 +1679,7 @@ impl ThemeView {
                         div()
                             .text_sm()
                             .text_color(theme::text())
-                            .child(t(descriptor.label)),
+                            .child(ochub_ui::i18n::t(descriptor.label)),
                     )
                     .child(
                         div()

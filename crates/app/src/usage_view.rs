@@ -24,6 +24,8 @@ use ochub_core::services::{
     PricingCatalogRefreshKind, PricingCatalogRefreshOutcome, PricingCatalogStatus,
 };
 use ochub_core::{AppState, UsageSummary};
+use ochub_ui::screens::common as common_screen;
+use ochub_ui::screens::usage as usage_screen;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone, format_local_timestamp};
 use crate::i18n::{k, raw, t};
@@ -2291,11 +2293,8 @@ impl UsageView {
     fn render_summary(&self) -> impl IntoElement + use<> {
         let cards = self.summary.clone().map(|summary| {
             let cache_hit_rate = summary.cache_hit_rate * 100.0;
-            div()
-                .grid()
-                .grid_cols(2)
-                .gap_3()
-                .child(components::stat_tile(
+            usage_screen::summary_grid(vec![
+                components::stat_tile(
                     Some(IconName::Message),
                     theme::green(),
                     t(k::USAGE_SUMMARY_REQUESTS_LABEL),
@@ -2304,8 +2303,9 @@ impl UsageView {
                         k::USAGE_SUMMARY_REQUESTS_DETAIL,
                         rate = format!("{:.1}", summary.success_rate)
                     ),
-                ))
-                .child(components::stat_tile(
+                )
+                .into_any_element(),
+                components::stat_tile(
                     Some(IconName::Diamond),
                     theme::peach(),
                     t(k::USAGE_SUMMARY_COST_LABEL),
@@ -2315,8 +2315,9 @@ impl UsageView {
                         input = summary.total_input_tokens,
                         output = summary.total_output_tokens
                     ),
-                ))
-                .child(components::stat_tile(
+                )
+                .into_any_element(),
+                components::stat_tile(
                     Some(IconName::Layers),
                     theme::accent(),
                     t(k::USAGE_SUMMARY_TOKENS_LABEL),
@@ -2326,14 +2327,17 @@ impl UsageView {
                         created = summary.total_cache_creation_tokens,
                         read = summary.total_cache_read_tokens
                     ),
-                ))
-                .child(components::stat_tile(
+                )
+                .into_any_element(),
+                components::stat_tile(
                     Some(IconName::Cloud),
                     theme::teal(),
                     t(k::USAGE_SUMMARY_CACHE_LABEL),
                     format!("{cache_hit_rate:.1}%"),
                     t(k::USAGE_SUMMARY_CACHE_DETAIL),
-                ))
+                )
+                .into_any_element(),
+            ])
         });
 
         div()
@@ -3740,70 +3744,68 @@ impl UsageView {
 
 impl Render for UsageView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        layout::page()
-            .relative()
-            .child(
-                layout::page_header(t(k::USAGE_HEADER_TITLE), None).child(
-                    components::icon_button_tone(
-                        "usage-refresh",
-                        t(k::USAGE_HEADER_REFRESH),
-                        IconName::Refresh,
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.reload(cx);
-                    })),
-                ),
+        common_screen::page(
+            t(k::USAGE_HEADER_TITLE),
+            components::icon_button_tone(
+                "usage-refresh",
+                t(k::USAGE_HEADER_REFRESH),
+                IconName::Refresh,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
             )
-            .child(layout::wide_virtual_body(
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.reload(cx);
+            })),
+            layout::wide_virtual_body(
                 "usage-body",
                 gpui::list(
                     self.list_state.clone(),
                     cx.processor(|this, ix, window, cx| this.render_block(ix, window, cx)),
                 ),
                 &self.list_state,
-            ))
-            .when_some(self.confirm_delete_pricing.clone(), |root, model_id| {
-                root.child(components::modal_overlay(
-                    components::modal_card()
-                        .child(components::modal_header(t(k::USAGE_CONFIRM_DELETE_TITLE)))
-                        .child(
-                            components::modal_body().child(
-                                div().text_color(theme::subtext()).text_sm().child(
-                                    SharedString::from(tf!(
-                                        k::USAGE_CONFIRM_DELETE_MESSAGE,
-                                        name = model_id
-                                    )),
-                                ),
-                            ),
+            ),
+        )
+        .when_some(self.confirm_delete_pricing.clone(), |root, model_id| {
+            root.child(components::modal_overlay(
+                components::modal_card()
+                    .child(components::modal_header(t(k::USAGE_CONFIRM_DELETE_TITLE)))
+                    .child(
+                        components::modal_body().child(
+                            div()
+                                .text_color(theme::subtext())
+                                .text_sm()
+                                .child(SharedString::from(tf!(
+                                    k::USAGE_CONFIRM_DELETE_MESSAGE,
+                                    name = model_id
+                                ))),
+                        ),
+                    )
+                    .child(components::modal_footer(vec![
+                        components::button(
+                            "usage-confirm-delete-cancel",
+                            t(k::USAGE_CONFIRM_DELETE_CANCEL),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
                         )
-                        .child(components::modal_footer(vec![
-                            components::button(
-                                "usage-confirm-delete-cancel",
-                                t(k::USAGE_CONFIRM_DELETE_CANCEL),
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.confirm_delete_pricing = None;
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                            components::button(
-                                "usage-confirm-delete-ok",
-                                t(k::USAGE_CONFIRM_DELETE_CONFIRM),
-                                ButtonTone::Danger,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.confirm_delete_pricing = None;
-                                this.delete_pricing(model_id.clone(), cx);
-                            }))
-                            .into_any_element(),
-                        ])),
-                ))
-            })
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.confirm_delete_pricing = None;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                        components::button(
+                            "usage-confirm-delete-ok",
+                            t(k::USAGE_CONFIRM_DELETE_CONFIRM),
+                            ButtonTone::Danger,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.confirm_delete_pricing = None;
+                            this.delete_pricing(model_id.clone(), cx);
+                        }))
+                        .into_any_element(),
+                    ])),
+            ))
+        })
     }
 }
 

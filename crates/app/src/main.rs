@@ -6,43 +6,28 @@
 //! the GPUI UI.
 
 mod about_view;
-mod anim;
 mod app_meta;
 mod app_settings_view;
 mod app_ui;
-mod chart;
-mod code_editor;
-mod components;
 mod core_async;
 mod diagnostics;
-mod diff_view;
-mod fold;
-mod gallery_view;
 mod gateway_view;
-mod highlight;
 mod i18n;
-mod icons;
-mod layout;
 mod mcp_view;
 mod network_view;
-mod notifications;
 mod provider_editor;
 mod quota;
 mod remote;
 mod remote_view;
-mod scrollbar;
 mod sessions_view;
 mod settings_view;
 mod shell_menu;
 mod shell_support;
 mod shortcuts;
 mod skills_view;
-mod text_input;
-mod theme;
 mod theme_view;
 mod tools_view;
 mod usage_view;
-mod window_chrome;
 
 use std::borrow::Cow;
 use std::fs;
@@ -57,6 +42,10 @@ use gpui::{
 use gpui_platform::application;
 use ochub_core::AppState;
 use ochub_core::db::Database;
+use ochub_ui::{
+    anim, chart, code_editor, components, diff_view, fold, gallery as gallery_view, highlight,
+    icons, layout, notifications, scrollbar, text_input, theme, window_chrome,
+};
 
 use app_ui::AppRoot;
 use i18n::{k, raw};
@@ -67,24 +56,46 @@ struct Assets {
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(asset) = ochub_ui::assets::load(path) {
+            return Ok(Some(asset));
+        }
         fs::read(self.base.join(path))
             .map(|data| Some(Cow::Owned(data)))
             .map_err(Into::into)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        fs::read_dir(self.base.join(path))
-            .map(|entries| {
-                entries
-                    .filter_map(|entry| {
-                        entry
-                            .ok()
-                            .and_then(|entry| entry.file_name().into_string().ok())
-                            .map(SharedString::from)
-                    })
-                    .collect()
-            })
-            .map_err(Into::into)
+        let mut names = ochub_ui::assets::list(path);
+        match fs::read_dir(self.base.join(path)) {
+            Ok(entries) => names.extend(entries.filter_map(|entry| {
+                entry
+                    .ok()
+                    .and_then(|entry| entry.file_name().into_string().ok())
+                    .map(SharedString::from)
+            })),
+            Err(error) if names.is_empty() => return Err(error.into()),
+            Err(_) => {}
+        }
+        names.sort_unstable_by(|left, right| left.as_ref().cmp(right.as_ref()));
+        names.dedup_by(|left, right| left.as_ref() == right.as_ref());
+        Ok(names)
+    }
+}
+
+fn install_locale(locale: ochub_core::i18n::Locale) {
+    ochub_core::i18n::install(locale);
+    let installed = ochub_ui::i18n::install_tag(locale.tag());
+    debug_assert!(
+        installed,
+        "OcHub and ochub-ui locale sets must stay aligned"
+    );
+}
+
+fn ui_theme_mode(mode: ochub_core::settings::ThemeMode) -> theme::ThemeMode {
+    match mode {
+        ochub_core::settings::ThemeMode::System => theme::ThemeMode::System,
+        ochub_core::settings::ThemeMode::Light => theme::ThemeMode::Light,
+        ochub_core::settings::ThemeMode::Dark => theme::ThemeMode::Dark,
     }
 }
 
@@ -348,9 +359,10 @@ fn main() {
     // reports the running instance and exits right here. Resolve the locale from
     // the persisted setting first so those lines are in the user's language;
     // the UI re-resolves nothing, it simply reads the same installed locale.
-    ochub_core::i18n::install(ochub_core::i18n::resolve(
+    install_locale(ochub_core::i18n::resolve(
         ochub_core::settings::get_settings().language.as_deref(),
     ));
+    theme::set_themes_dir(ochub_core::paths::get_app_config_dir().join("themes"));
 
     // Every crossing from the UI into ochub-core's async surface needs this,
     // so it must exist before any of them can be reached.
@@ -447,10 +459,8 @@ fn main() {
         }
     });
     desktop_application.run(move |cx: &mut App| {
-        text_input::bind_keys(cx);
-        code_editor::bind_keys(cx);
+        ochub_ui::install(cx);
         shortcuts::bind_keys(cx);
-        layout::bind_keys(cx);
         shell_menu::install(app_state.clone(), cx);
         apply_quit_mode(cx);
         // The locale is already installed (see the top of `main`); this only
@@ -462,7 +472,7 @@ fn main() {
             && appearance_settings.silent_startup;
         theme::install_selected(
             &appearance_settings.theme_family,
-            appearance_settings.theme_mode,
+            ui_theme_mode(appearance_settings.theme_mode),
             cx.window_appearance(),
         );
         // Pin to the primary display (avoids landing on a secondary monitor)
@@ -512,7 +522,7 @@ fn main() {
                             {
                                 theme::install_selected(
                                     &settings.theme_family,
-                                    settings.theme_mode,
+                                    ui_theme_mode(settings.theme_mode),
                                     window.appearance(),
                                 );
                                 theme::apply_window_background(window);

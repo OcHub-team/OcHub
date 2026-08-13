@@ -25,6 +25,9 @@ use ochub_core::provider_config::{
 use ochub_core::services::ConfigService;
 use ochub_core::services::provider::ProviderService;
 use ochub_core::{AppState, AppType, Provider, ProviderMeta, UsageResult};
+use ochub_ui::screens::provider_editor::{
+    self as editor_screen, PREVIEW_SPLIT_FRACTION, PREVIEW_SPLIT_MAX_WIDTH, PREVIEW_SPLIT_MIN_WIDTH,
+};
 use serde_json::{Map, Value, json};
 
 use crate::code_editor::CodeEditor;
@@ -111,17 +114,6 @@ struct PreviewBuild {
 
 const PREVIEW_REFRESH_DELAY: Duration = Duration::from_millis(140);
 const PREVIEW_FOLD_BACKGROUND_LINE_THRESHOLD: usize = 4_096;
-const EDITOR_MAX_WIDTH: f32 = 1320.;
-/// Side-by-side form + preview. 1500 left almost every real window in the
-/// cramped stacked mode; a 13" laptop should get the split.
-const EDITOR_SPLIT_MIN_WINDOW_WIDTH: f32 = 1200.;
-const EDITOR_STACK_GRID_MAX_WINDOW_WIDTH: f32 = 1050.;
-/// Preview pane share of the split row, bounded so it neither starves the
-/// form on narrow windows nor balloons on wide ones.
-const PREVIEW_SPLIT_FRACTION: f32 = 0.38;
-const PREVIEW_SPLIT_MIN_WIDTH: f32 = 400.;
-const PREVIEW_SPLIT_MAX_WIDTH: f32 = 560.;
-
 enum ProviderSaveFailure {
     CommonConfig(String),
     Provider(String),
@@ -3129,65 +3121,26 @@ impl ProviderEditor {
                     .join(raw(k::PROVIDER_EDITOR_PREVIEW_FILE_JOIN)),
             )
         };
-        components::card()
-            .p_0()
-            .flex_none()
-            .overflow_hidden()
-            .child(
-                div()
-                    .id("preview-summary-expand")
-                    .role(gpui::Role::Button)
-                    .aria_label(t(k::PROVIDER_EDITOR_PREVIEW_EXPAND_ARIA))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px_4()
-                    .py_3()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.preview_expanded = true;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child("▸"),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t(k::PROVIDER_EDITOR_PREVIEW_TITLE)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .font_family("Menlo")
-                            .child(files),
-                    )
-                    .when(errors > 0, |row| {
-                        row.child(components::badge(
-                            BadgeTone::Danger,
-                            tf!(k::PROVIDER_EDITOR_ISSUE_ERROR_COUNT, count = errors),
-                        ))
-                    })
-                    .when(warnings > 0, |row| {
-                        row.child(components::badge(
-                            BadgeTone::Warning,
-                            tf!(k::PROVIDER_EDITOR_ISSUE_WARNING_COUNT, count = warnings),
-                        ))
-                    }),
-            )
+        editor_screen::preview_summary_card(
+            editor_screen::preview_summary(editor_screen::PreviewSummary {
+                title: t(k::PROVIDER_EDITOR_PREVIEW_TITLE),
+                files,
+                errors: (errors > 0).then(|| {
+                    SharedString::from(tf!(k::PROVIDER_EDITOR_ISSUE_ERROR_COUNT, count = errors))
+                }),
+                warnings: (warnings > 0).then(|| {
+                    SharedString::from(tf!(
+                        k::PROVIDER_EDITOR_ISSUE_WARNING_COUNT,
+                        count = warnings
+                    ))
+                }),
+            })
+            .aria_label(t(k::PROVIDER_EDITOR_PREVIEW_EXPAND_ARIA))
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.preview_expanded = true;
+                cx.notify();
+            })),
+        )
     }
 
     fn preview_issue_counts(&self) -> (usize, usize) {
@@ -3743,8 +3696,8 @@ impl ProviderEditor {
 impl Render for ProviderEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let window_width = window.viewport_size().width;
-        let compact_layout = window_width < px(EDITOR_SPLIT_MIN_WINDOW_WIDTH);
-        let stack_grid = window_width < px(EDITOR_STACK_GRID_MAX_WINDOW_WIDTH);
+        let compact_layout = editor_screen::is_compact(window_width.into());
+        let stack_grid = editor_screen::stacks_field_grid(window_width.into());
         let official_login = self.uses_official_login(cx);
         if self.form_stack_grid != stack_grid || self.form_official_login != official_login {
             self.form_stack_grid = stack_grid;
@@ -3883,49 +3836,27 @@ impl Render for ProviderEditor {
                     .child(form_list),
             );
 
-        let body = div()
-            .flex()
-            .items_stretch()
-            .flex_1()
-            .min_h_0()
-            .gap_4()
-            .w_full()
-            .when(compact_layout, |body| body.flex_col())
-            .when(!compact_layout, |body| body.flex_row())
-            .child(form_scroll)
-            .when_some(preview, |s, preview| s.child(preview));
-
-        let editor_body = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .items_center()
-            .when(stack_grid, |editor| editor.p_4())
-            .when(!stack_grid, |editor| editor.p_6())
-            .child(
-                layout::wide_column()
-                    .max_w(px(EDITOR_MAX_WIDTH))
-                    .h_full()
-                    .min_h_0()
-                    .child(body),
-            )
+        editor_screen::provider_editor_page(editor_screen::ProviderEditorPage {
+            title,
+            subtitle,
+            actions: actions.into_any_element(),
+            form_scroll: form_scroll.into_any_element(),
+            preview,
             // The form is the editor page's primary scroll context. Its rail
             // belongs to the full-width page chrome rather than the split
             // boundary between the form and the independent file preview.
-            .child(crate::scrollbar::VerticalScrollbar::new(
-                "editor-form-scrollbar",
-                self.form_list_state.clone(),
-            ));
-
-        layout::page()
-            .relative()
-            .child(layout::page_header(title, Some(subtitle)).child(actions))
-            .child(editor_body)
-            .when_some(modal, |s, modal| s.child(modal))
-            .when_some(convert_modal, |s, modal| s.child(modal))
+            form_scrollbar: Some(
+                crate::scrollbar::VerticalScrollbar::new(
+                    "editor-form-scrollbar",
+                    self.form_list_state.clone(),
+                )
+                .into_any_element(),
+            ),
+            modal,
+            convert_modal,
+            compact_layout,
+            stack_grid,
+        })
     }
 }
 
@@ -3978,7 +3909,12 @@ fn build_preview_cache(
         .into_iter()
         .enumerate()
         .map(|(file_index, file)| {
-            let lang = Lang::from_core(file.language);
+            let lang = match file.language {
+                ochub_core::provider_config::Language::Json => Lang::Json,
+                ochub_core::provider_config::Language::Toml => Lang::Toml,
+                ochub_core::provider_config::Language::Yaml => Lang::Yaml,
+                ochub_core::provider_config::Language::Env => Lang::Env,
+            };
             let language_label = match file.language {
                 Language::Toml => "TOML",
                 Language::Json => "JSON",

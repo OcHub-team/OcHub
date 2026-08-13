@@ -15,9 +15,9 @@ path = "src/main.rs"
 [dependencies]
 ochub-core = { workspace = true }
 ochub-protocol.workspace = true
+ochub-ui.workspace = true
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
-zed-text = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
@@ -28,7 +28,6 @@ log.workspace = true
 regex.workspace = true
 uuid.workspace = true
 unicode-segmentation.workspace = true
-similar.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
 fs2.workspace = true

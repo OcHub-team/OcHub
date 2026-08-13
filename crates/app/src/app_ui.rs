@@ -18,6 +18,7 @@ use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
 use ochub_core::services::provider::{DriftConflict, DriftResolution, LiveDrift, ProviderService};
 use ochub_core::{AppState, AppType, Provider, UsageResult};
+use ochub_ui::screens::{providers as provider_screens, shell as shell_screen};
 
 use crate::about_view::AboutView;
 use crate::anim::{PaintOffsetY, ease_out_quint, linear_progress};
@@ -3400,54 +3401,22 @@ impl AppRoot {
     ) -> impl IntoElement + use<> {
         let selected = self.selected_app == app && self.section == Section::Providers;
         let accent = Self::app_accent(app);
-        div()
-            .id(SharedString::from(format!("app-{}", app.as_str())))
-            .role(gpui::Role::Button)
-            .aria_label(SharedString::from(tf!(
-                k::SHELL_SIDEBAR_OPEN_ARIA,
-                name = Self::app_label(app)
-            )))
-            .aria_selected(selected)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .pl_2()
-            .pr_2()
-            .py_1()
-            .rounded_lg()
-            .cursor_pointer()
-            .text_color(if selected {
-                theme::sidebar_text()
-            } else {
-                theme::sidebar_glass_muted(appearance)
-            })
-            .when(selected, |s| {
-                s.bg(theme::accent_soft()).font_weight(FontWeight::MEDIUM)
-            })
-            .when(!selected, |s| {
-                s.hover(|h| {
-                    h.bg(theme::surface_hover())
-                        .text_color(theme::sidebar_text())
-                })
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w(px(24.))
-                    .h(px(24.))
-                    .rounded_md()
-                    .bg(theme::c(accent))
-                    .shadow_xs()
-                    .child(icon(Self::app_icon(app), theme::accent_text(), 15.)),
-            )
-            .child(div().text_sm().child(Self::app_label(app)))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.select_app(app, cx);
-            }))
+        shell_screen::app_item(
+            SharedString::from(format!("app-{}", app.as_str())),
+            Self::app_label(app),
+            Self::app_icon(app),
+            accent,
+            selected,
+            appearance,
+        )
+        .aria_label(SharedString::from(tf!(
+            k::SHELL_SIDEBAR_OPEN_ARIA,
+            name = Self::app_label(app)
+        )))
+        .aria_selected(selected)
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.select_app(app, cx);
+        }))
     }
 
     fn render_nav_item(
@@ -3459,20 +3428,13 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let selected = self.section == section;
-        let fg = if selected {
-            theme::accent()
-        } else {
-            theme::sidebar_glass_muted(appearance)
-        };
         // An available update is marked on 关于 rather than announced in its own
         // row: that row is already the destination, so the dot needs no second
         // affordance and the sidebar's resting layout is untouched.
         let pending_update = (section == Section::About)
             .then(|| self.available_update.clone())
             .flatten();
-        div()
-            .id(id)
-            .role(gpui::Role::Button)
+        shell_screen::nav_item(id, label, Self::section_icon(section), selected, appearance)
             .aria_label(match &pending_update {
                 Some(version) => SharedString::from(tf!(
                     k::SHELL_SIDEBAR_UPDATE_BADGE_ARIA,
@@ -3482,39 +3444,6 @@ impl AppRoot {
                 None => SharedString::from(tf!(k::SHELL_SIDEBAR_OPEN_ARIA, name = label)),
             })
             .aria_selected(selected)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .pl_2()
-            .pr_2()
-            .py_1p5()
-            .rounded_lg()
-            .cursor_pointer()
-            .text_sm()
-            .text_color(fg)
-            .when(selected, |s| {
-                s.bg(theme::accent_soft()).font_weight(FontWeight::MEDIUM)
-            })
-            .when(!selected, |s| {
-                s.hover(|h| {
-                    h.bg(theme::surface_hover())
-                        .text_color(theme::sidebar_text())
-                })
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w(px(20.))
-                    .h(px(20.))
-                    .child(icon(Self::section_icon(section), fg, 15.)),
-            )
-            // Wrapped so the dot keeps its place when a translated label is
-            // long enough to need truncating.
-            .child(div().flex_1().min_w_0().truncate().child(label))
             .when_some(pending_update, |row, _version| {
                 row.child(
                     div()
@@ -3578,14 +3507,7 @@ impl AppRoot {
     }
 
     fn render_sidebar_group(label: &'static str, appearance: WindowAppearance) -> impl IntoElement {
-        div()
-            .mt_4()
-            .mb_1()
-            .px_3()
-            .text_color(theme::sidebar_glass_muted(appearance))
-            .text_xs()
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(label)
+        shell_screen::group_label(label, appearance)
     }
 
     /// Empty chrome keeps the native traffic lights embedded in the sidebar
@@ -3783,21 +3705,11 @@ impl AppRoot {
                     }),
             );
 
-        div()
-            .id("sidebar")
-            .relative()
-            .flex()
-            .flex_col()
-            .h_full()
-            .w(px(252.))
-            .flex_shrink_0()
-            .bg(theme::sidebar_background())
-            .text_color(theme::sidebar_glass_text(appearance))
-            .border_r_1()
-            .border_color(theme::border())
-            .shadow_xs()
-            .child(self.render_sidebar_drag_region(has_title_bar, cx))
-            .child(navigation)
+        shell_screen::sidebar(
+            appearance,
+            self.render_sidebar_drag_region(has_title_bar, cx),
+            navigation,
+        )
     }
 
     fn render_provider_card(
@@ -3917,169 +3829,78 @@ impl AppRoot {
                 })
         });
 
-        let card = components::panel()
-            .id(SharedString::from(format!("provider-card-{}", provider.id)))
-            .relative()
-            .opacity(if is_drag_source { 0. } else { 1. })
-            .flex()
-            .flex_row()
-            .items_stretch()
-            .w_full()
-            .overflow_hidden()
-            .border_color(if is_current {
-                theme::accent()
-            } else {
-                theme::border()
-            })
-            .hover(|s| {
-                s.border_color(theme::border_strong())
-                    .shadow(theme::shadow_hover())
-            })
-            .when_some(
-                if is_sortable { drag_handle } else { None },
-                |card, handle| card.child(handle),
+        let actions = vec![
+            components::action_button(
+                SharedString::from(format!("edit-{}", provider.id)),
+                t(edit_label_key),
+                false,
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_3()
-                    .px_4()
-                    .py_3()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(30.))
-                            .h(px(30.))
-                            .rounded_md()
-                            .bg(if is_current {
-                                theme::sidebar_selected()
-                            } else {
-                                theme::surface_hover()
-                            })
-                            .child(icon(
-                                if is_current {
-                                    IconName::Check
-                                } else {
-                                    Self::app_icon(self.selected_app)
-                                },
-                                if is_current {
-                                    theme::accent()
-                                } else {
-                                    theme::subtext()
-                                },
-                                16.,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_color(theme::text())
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(provider_name.clone()),
-                                    )
-                                    .when(is_current, |s| {
-                                        s.child(components::badge(
-                                            BadgeTone::Accent,
-                                            t(k::SHELL_BADGE_CURRENT),
-                                        ))
-                                    }),
-                            )
-                            .child(div().text_color(theme::muted()).text_xs().child(base_url))
-                            .children(quota_line),
-                    ),
+            .aria_label(SharedString::from(tf!(edit_aria_key, name = provider_name)))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.open_edit_editor_by_id(&edit_id, cx);
+            }))
+            .into_any_element(),
+            components::action_button(
+                SharedString::from(format!("duplicate-{}", provider.id)),
+                t(k::SHELL_ACTION_DUPLICATE),
+                false,
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .flex_none()
-                    .gap_2()
-                    .py_3()
-                    .pr_4()
-                    .child(
-                        components::action_button(
-                            SharedString::from(format!("edit-{}", provider.id)),
-                            t(edit_label_key),
-                            false,
-                        )
-                        .aria_label(SharedString::from(tf!(edit_aria_key, name = provider_name)))
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.open_edit_editor_by_id(&edit_id, cx);
-                            },
-                        )),
-                    )
-                    .child(
-                        components::action_button(
-                            SharedString::from(format!("duplicate-{}", provider.id)),
-                            t(k::SHELL_ACTION_DUPLICATE),
-                            false,
-                        )
-                        .aria_label(SharedString::from(tf!(
-                            k::SHELL_ACTION_DUPLICATE_ARIA,
-                            name = provider_name
-                        )))
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.do_duplicate(duplicate_id.clone(), cx);
-                            },
-                        )),
-                    )
-                    .child(
-                        components::action_button_tone(
-                            SharedString::from(format!("delete-{}", provider.id)),
-                            t(k::SHELL_ACTION_DELETE),
-                            ButtonTone::Danger,
-                        )
-                        .aria_label(SharedString::from(tf!(
-                            k::SHELL_ACTION_DELETE_ARIA,
-                            name = provider_name
-                        )))
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.confirm_delete = Some(delete_target.clone());
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .child(
-                        components::action_button(
-                            SharedString::from(format!("switch-{}", provider.id)),
-                            t(main_label_key),
-                            is_import || !(is_current || (is_additive && is_in_live)),
-                        )
-                        .aria_label(SharedString::from(tf!(main_aria_key, name = provider_name)))
-                        .aria_selected(!is_import && (is_current || (is_additive && is_in_live)))
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                if gateway_needs_setup {
-                                    this.open_edit_editor_by_id(&setup_edit_id, cx);
-                                } else if is_additive && is_in_live {
-                                    this.do_remove_from_live(live_id.clone(), cx);
-                                } else {
-                                    this.do_switch(id.clone(), cx);
-                                }
-                            },
-                        )),
-                    ),
-            );
+            .aria_label(SharedString::from(tf!(
+                k::SHELL_ACTION_DUPLICATE_ARIA,
+                name = provider_name
+            )))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.do_duplicate(duplicate_id.clone(), cx);
+            }))
+            .into_any_element(),
+            components::action_button_tone(
+                SharedString::from(format!("delete-{}", provider.id)),
+                t(k::SHELL_ACTION_DELETE),
+                ButtonTone::Danger,
+            )
+            .aria_label(SharedString::from(tf!(
+                k::SHELL_ACTION_DELETE_ARIA,
+                name = provider_name
+            )))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.confirm_delete = Some(delete_target.clone());
+                cx.notify();
+            }))
+            .into_any_element(),
+            components::action_button(
+                SharedString::from(format!("switch-{}", provider.id)),
+                t(main_label_key),
+                is_import || !(is_current || (is_additive && is_in_live)),
+            )
+            .aria_label(SharedString::from(tf!(main_aria_key, name = provider_name)))
+            .aria_selected(!is_import && (is_current || (is_additive && is_in_live)))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                if gateway_needs_setup {
+                    this.open_edit_editor_by_id(&setup_edit_id, cx);
+                } else if is_additive && is_in_live {
+                    this.do_remove_from_live(live_id.clone(), cx);
+                } else {
+                    this.do_switch(id.clone(), cx);
+                }
+            }))
+            .into_any_element(),
+        ];
+
+        let card = provider_screens::provider_card(provider_screens::ProviderCard {
+            id: SharedString::from(format!("provider-card-{}", provider.id)),
+            name: provider_name,
+            endpoint: base_url,
+            icon: Self::app_icon(self.selected_app),
+            is_current,
+            is_drag_source,
+            drag_handle: is_sortable
+                .then_some(drag_handle)
+                .flatten()
+                .map(IntoElement::into_any_element),
+            quota: quota_line,
+            current_label: t(k::SHELL_BADGE_CURRENT),
+            actions,
+        });
 
         PaintOffsetY::new(px(drag_offset), card)
     }
@@ -4100,7 +3921,6 @@ impl AppRoot {
         let app = self.selected_app;
         let accent = Self::app_accent(app);
         let current = self.providers.iter().find(|p| p.id == self.current);
-        let has_current = current.is_some();
         let is_gateway = current.is_some_and(Provider::is_local_gateway);
         let hero_quota_line = current
             .filter(|provider| Self::is_official_quota_provider(app, provider))
@@ -4109,167 +3929,57 @@ impl AppRoot {
                 self.render_quota_line("hero", &provider.id, &name, cx)
             });
 
-        let icon_tile = div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .flex_shrink_0()
-            .w(px(46.))
-            .h(px(46.))
-            .rounded_lg()
-            .bg(if has_current {
-                theme::c(accent)
-            } else {
-                theme::surface_hover()
-            })
-            .when(has_current, |s| s.shadow_xs())
-            .child(icon(
-                if is_gateway {
-                    IconName::Layers
-                } else {
-                    Self::app_icon(app)
-                },
-                if has_current {
-                    theme::accent_text()
-                } else {
-                    theme::muted()
-                },
-                23.,
-            ));
-
-        let info = match current {
-            Some(provider) => {
-                let base_url = self.provider_base_url(provider);
-                let provider_name = self.provider_name(provider);
+        let (name, endpoint) = current
+            .map(|provider| {
                 let endpoint = if is_gateway {
                     SharedString::from(self.gateway_via_station_line(provider))
                 } else {
-                    base_url
+                    self.provider_base_url(provider)
                 };
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_color(theme::accent())
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t(k::SHELL_HERO_CURRENT)),
-                            )
-                            .child(components::badge(
-                                BadgeTone::Success,
-                                t(k::SHELL_BADGE_DIRECT),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_lg()
-                            .font_weight(FontWeight::BOLD)
-                            .truncate()
-                            .child(provider_name),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1()
-                            .child(icon(
-                                if is_gateway {
-                                    IconName::Layers
-                                } else {
-                                    IconName::Cloud
-                                },
-                                theme::muted(),
-                                12.,
-                            ))
-                            .child(
-                                div()
-                                    .text_color(theme::muted())
-                                    .text_xs()
-                                    .truncate()
-                                    .child(endpoint),
-                            ),
-                    )
-                    .children(hero_quota_line)
-            }
-            None => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .text_color(theme::muted())
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(t(k::SHELL_HERO_CURRENT)),
-                )
-                .child(
-                    div()
-                        .text_color(theme::text())
-                        .text_lg()
-                        .font_weight(FontWeight::BOLD)
-                        .child(t(k::SHELL_HERO_EMPTY_TITLE)),
-                )
-                .child(
-                    div()
-                        .text_color(theme::muted())
-                        .text_xs()
-                        .child(t(k::SHELL_HERO_EMPTY_HINT)),
-                ),
-        };
+                (self.provider_name(provider), endpoint)
+            })
+            .map_or((None, None), |(name, endpoint)| {
+                (Some(name), Some(endpoint))
+            });
 
-        let actions = current.map(|provider| {
+        let actions = current.into_iter().map(|provider| {
             let edit_id = provider.id.clone();
             let provider_name = self.provider_name(provider);
-            div().flex().flex_row().items_center().gap_2().child(
-                components::action_button(
-                    SharedString::from(format!("hero-edit-{}", provider.id)),
-                    t(k::SHELL_ACTION_EDIT),
-                    false,
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    components::action_button(
+                        SharedString::from(format!("hero-edit-{}", provider.id)),
+                        t(k::SHELL_ACTION_EDIT),
+                        false,
+                    )
+                    .aria_label(SharedString::from(tf!(
+                        k::SHELL_ACTION_EDIT_ARIA,
+                        name = provider_name
+                    )))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_edit_editor_by_id(&edit_id, cx);
+                    })),
                 )
-                .aria_label(SharedString::from(tf!(
-                    k::SHELL_ACTION_EDIT_ARIA,
-                    name = provider_name
-                )))
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.open_edit_editor_by_id(&edit_id, cx);
-                })),
-            )
+                .into_any_element()
         });
 
-        let mut card = components::panel()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_4()
-            .w_full()
-            .px_5()
-            .py_4()
-            .border_color(if has_current {
-                theme::accent()
-            } else {
-                theme::border()
-            })
-            .when(has_current, |s| s.shadow(theme::shadow_panel()))
-            .child(icon_tile)
-            .child(info);
-        if let Some(actions) = actions {
-            card = card.child(actions);
-        }
-        card
+        provider_screens::active_provider_hero(provider_screens::ActiveProviderHero {
+            icon: Self::app_icon(app),
+            accent,
+            is_gateway,
+            current_label: t(k::SHELL_HERO_CURRENT),
+            direct_label: t(k::SHELL_BADGE_DIRECT),
+            name,
+            endpoint,
+            quota: hero_quota_line,
+            empty_title: t(k::SHELL_HERO_EMPTY_TITLE),
+            empty_hint: t(k::SHELL_HERO_EMPTY_HINT),
+            actions: actions.collect(),
+        })
     }
 
     fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -4402,13 +4112,12 @@ impl AppRoot {
             }),
         );
 
-        layout::page()
-            .child(layout::page_header(Self::app_label(app), Some(subtitle)).child(actions))
-            .child(layout::wide_virtual_body(
-                "provider-list-body",
-                list,
-                &self.provider_list_state,
-            ))
+        provider_screens::provider_list_page(
+            Self::app_label(app),
+            subtitle,
+            actions,
+            layout::wide_virtual_body("provider-list-body", list, &self.provider_list_state),
+        )
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -4452,42 +4161,24 @@ impl Render for AppRoot {
         }
 
         let appearance = window.appearance();
-        let title_bar = window_chrome::title_bar(window, cx);
+        let title_bar =
+            window_chrome::title_bar(window, cx, std::rc::Rc::new(crate::close_main_window));
         let has_title_bar = title_bar.is_some();
         // The strip already spans the top edge where a title bar exists, so the
         // absolutely-positioned fallback would only sit on top of it.
         let content_drag_region = (!has_title_bar).then(|| self.render_content_drag_region(cx));
-        let main_content = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h(px(0.))
-            .child(self.render_content(cx));
-        div()
-            .id("app-root")
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(theme::window_base_background())
-            .text_color(theme::text())
-            .font_family("Helvetica Neue")
-            .relative()
+        let app_body = shell_screen::app_body(
+            self.render_sidebar(appearance, has_title_bar, cx),
+            self.render_content(cx),
+        );
+        shell_screen::app_root()
             .key_context("App")
             .on_action(cx.listener(Self::save_active))
             .on_action(cx.listener(Self::cancel_active))
             .on_drag_move::<DraggedProvider>(cx.listener(Self::handle_provider_drag_move))
             .on_drop(cx.listener(Self::drop_provider_drag))
             .children(title_bar)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(self.render_sidebar(appearance, has_title_bar, cx))
-                    .child(main_content),
-            )
+            .child(app_body)
             .children(content_drag_region)
             .child(self.notifications.clone())
             .when_some(self.confirm_delete.clone(), |root, provider| {
