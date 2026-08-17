@@ -956,6 +956,24 @@ impl ProviderEditor {
             return;
         };
         let values = preset.values.clone();
+        if let Some(category) = preset.category.clone() {
+            self.category
+                .update(cx, |input, cx| input.set_content(category, cx));
+        }
+        if let Some(display_name) = preset.display_name.clone() {
+            let current = self.name.read(cx).content().trim().to_string();
+            if current.is_empty() {
+                self.name
+                    .update(cx, |input, cx| input.set_content(display_name, cx));
+            }
+        }
+        if let Some(website_url) = preset.website_url.clone() {
+            let current = self.website_url.read(cx).content().trim().to_string();
+            if current.is_empty() {
+                self.website_url
+                    .update(cx, |input, cx| input.set_content(website_url, cx));
+            }
+        }
         self.apply_values(values, cx);
         self.selected_preset = Some(index);
     }
@@ -1253,6 +1271,9 @@ impl ProviderEditor {
         }
         self.pull_values(cx);
         let category = nonempty(self.category.read(cx).content().trim().to_string());
+        if self.app_type == AppType::KimiCode && category.as_deref() == Some("official") {
+            provider_config::apply_official_defaults(&mut self.values);
+        }
 
         let issues = self
             .codec
@@ -3600,6 +3621,9 @@ impl ProviderEditor {
                 || (self.app_type == AppType::KimiCode && section_index == 0))
         {
             return self.render_official_auth_section();
+        }
+        if official_login && self.app_type == AppType::KimiCode && section_index > 0 {
+            return gpui::Empty.into_any_element();
         }
 
         // In station mode the station supplies endpoint/credentials, so the

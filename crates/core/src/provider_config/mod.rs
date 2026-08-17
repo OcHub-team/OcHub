@@ -36,7 +36,7 @@ pub use claude_desktop::ClaudeDesktopConfig;
 pub use codex::CodexConfig;
 pub use grokbuild::GrokBuildConfig;
 pub use hermes::HermesConfig;
-pub use kimi_code::KimiCodeConfig;
+pub use kimi_code::{KimiCodeConfig, apply_official_defaults};
 pub use openclaw::OpenClawConfig;
 pub use opencode::OpenCodeConfig;
 pub use sponsors::{RouteKind, Sponsor, SponsorId, SponsorRoute};
@@ -280,6 +280,9 @@ pub struct EncodeResult {
 pub struct Preset {
     pub name: String,
     pub values: FormValues,
+    pub category: Option<String>,
+    pub display_name: Option<String>,
+    pub website_url: Option<String>,
 }
 
 impl Preset {
@@ -287,7 +290,22 @@ impl Preset {
         Self {
             name: name.into(),
             values,
+            category: None,
+            display_name: None,
+            website_url: None,
         }
+    }
+
+    pub fn with_identity(
+        mut self,
+        category: impl Into<String>,
+        display_name: impl Into<String>,
+        website_url: impl Into<String>,
+    ) -> Self {
+        self.category = Some(category.into());
+        self.display_name = Some(display_name.into());
+        self.website_url = Some(website_url.into());
+        self
     }
 }
 

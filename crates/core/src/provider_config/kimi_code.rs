@@ -4,12 +4,15 @@ use serde_json::{Map, Value, json};
 
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
-    GridColumn, Language, PreviewFile, SelectOption, set_str, str_val,
+    GridColumn, Language, Preset, PreviewFile, SelectOption, set_str, str_val,
 };
 use crate::AppType;
 use crate::model::ProviderMeta;
 
 const DEFAULT_PROVIDER_TYPE: &str = "openai";
+const OFFICIAL_PROVIDER_ID: &str = "managed:kimi-code";
+const OFFICIAL_MODEL_ALIAS: &str = "kimi-code/k3";
+const OFFICIAL_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 
 pub struct KimiCodeConfig;
 
@@ -204,6 +207,12 @@ impl AppConfig for KimiCodeConfig {
         set_or_remove(&mut provider, "type", str_val(values, "provider_type"));
         set_or_remove(&mut provider, "base_url", str_val(values, "base_url"));
         set_or_remove(&mut provider, "api_key", str_val(values, "api_key"));
+        if provider_id == OFFICIAL_PROVIDER_ID && !provider.contains_key("oauth") {
+            provider.insert(
+                "oauth".into(),
+                json!({"storage": "file", "key": "oauth/kimi-code"}),
+            );
+        }
         set_map_or_remove(
             &mut provider,
             "custom_headers",
@@ -316,6 +325,70 @@ impl AppConfig for KimiCodeConfig {
             );
         }
         issues
+    }
+
+    fn validate_for_category(
+        &self,
+        values: &FormValues,
+        category: Option<&str>,
+    ) -> Vec<ConfigIssue> {
+        if category == Some("official") {
+            return Vec::new();
+        }
+        self.validate(values)
+    }
+
+    fn presets(&self) -> Vec<Preset> {
+        vec![
+            Preset::new("Kimi 官方订阅", official_form_values()).with_identity(
+                "official",
+                "Kimi Code Official",
+                "https://www.kimi.com/code/",
+            ),
+        ]
+    }
+}
+
+pub fn official_settings() -> Value {
+    json!({
+        "default_provider": OFFICIAL_PROVIDER_ID,
+        "default_model": OFFICIAL_MODEL_ALIAS,
+        "providers": {
+            OFFICIAL_PROVIDER_ID: {
+                "type": "kimi",
+                "api_key": "",
+                "base_url": OFFICIAL_BASE_URL,
+                "oauth": {"storage": "file", "key": "oauth/kimi-code"}
+            }
+        },
+        "models": {
+            OFFICIAL_MODEL_ALIAS: {
+                "provider": OFFICIAL_PROVIDER_ID,
+                "model": "k3",
+                "max_context_size": 1048576,
+                "capabilities": ["thinking", "always_thinking", "image_in", "video_in", "tool_use"],
+                "display_name": "K3"
+            }
+        }
+    })
+}
+
+pub fn official_form_values() -> FormValues {
+    KimiCodeConfig.decode(&official_settings(), None)
+}
+
+pub fn apply_official_defaults(values: &mut FormValues) {
+    let defaults = official_form_values();
+    for (key, value) in defaults {
+        let empty = match values.get(&key) {
+            Some(Value::String(text)) => text.trim().is_empty(),
+            Some(Value::Array(items)) => items.is_empty(),
+            Some(Value::Null) | None => true,
+            _ => false,
+        };
+        if empty {
+            values.insert(key, value);
+        }
     }
 }
 
@@ -474,5 +547,27 @@ mod tests {
         assert_eq!(encoded["models"]["claude"]["provider"], "openrouter");
         assert_eq!(encoded["models"]["claude"]["max_context_size"], 200000);
         assert!(codec.validate(&values).is_empty());
+    }
+
+    #[test]
+    fn official_preset_encodes_managed_kimi_oauth() {
+        let codec = KimiCodeConfig;
+        let preset = codec.presets().into_iter().next().unwrap();
+        assert_eq!(preset.name, "Kimi 官方订阅");
+        assert_eq!(preset.category.as_deref(), Some("official"));
+        assert!(
+            codec
+                .validate_for_category(&preset.values, Some("official"))
+                .is_empty()
+        );
+        let encoded = codec
+            .encode(&preset.values, &Value::Null, None)
+            .settings_config;
+        assert_eq!(encoded["default_provider"], "managed:kimi-code");
+        assert_eq!(
+            encoded["providers"]["managed:kimi-code"]["oauth"]["key"],
+            "oauth/kimi-code"
+        );
+        assert_eq!(encoded["models"]["kimi-code/k3"]["model"], "k3");
     }
 }
