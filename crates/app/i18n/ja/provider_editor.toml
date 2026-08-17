@@ -59,6 +59,7 @@
 "provider_editor.models.none" = "モデルは返されませんでした"
 "provider_editor.official.section_title" = "ログインと認証"
 "provider_editor.official.title" = "{app} の公式ログインを使用"
+"provider_editor.official.cli_hint" = "ターミナルで {command} を実行してください。切り替え時にこのカードの資格情報を保存・復元します。"
 "provider_editor.page.subtitle" = "対象アプリ: {app}"
 "provider_editor.page.title_add" = "接続を追加"
 "provider_editor.page.title_edit" = "接続を編集"

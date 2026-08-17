@@ -61,6 +61,7 @@
 "provider_editor.models.none" = "没有返回模型"
 "provider_editor.official.section_title" = "登录与鉴权"
 "provider_editor.official.title" = "使用 {app} 官方登录"
+"provider_editor.official.cli_hint" = "请在终端运行 {command}。OcHub 会在切换时保存并写回这张卡的密钥。"
 "provider_editor.page.subtitle" = "目标应用：{app}"
 "provider_editor.page.title_add" = "新增连接"
 "provider_editor.page.title_edit" = "编辑连接"

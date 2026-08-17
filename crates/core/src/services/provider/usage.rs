@@ -227,6 +227,41 @@ fn subscription_quota_to_usage_result(
     }
 }
 
+async fn query_official_card_usage(
+    state: &AppState,
+    tool: crate::official_auth::OfficialTool,
+    provider_id: &str,
+) -> Result<UsageResult, AppError> {
+    let current = crate::settings::get_effective_current_provider(&state.db, &tool.app_type())?;
+    let blob = if current.as_deref() == Some(provider_id) {
+        crate::official_auth::read_live(tool)?
+            .or(crate::official_auth::read_catalog(tool, provider_id)?)
+    } else {
+        crate::official_auth::read_catalog(tool, provider_id)?
+    };
+    let Some(blob) = blob else {
+        return Ok(UsageResult {
+            success: false,
+            data: None,
+            error: Some("请先在终端登录该官方账号后再查询额度".to_string()),
+        });
+    };
+    let Some(token) = crate::official_auth::access_token(&blob, tool) else {
+        return Ok(UsageResult {
+            success: false,
+            data: None,
+            error: Some("该官方卡没有可用的 access token".to_string()),
+        });
+    };
+    let quota = crate::services::subscription::get_subscription_quota_with_token(
+        tool.app_type().as_str(),
+        &token,
+    )
+    .await
+    .map_err(|e| AppError::Message(format!("Failed to query subscription quota: {e}")))?;
+    Ok(subscription_quota_to_usage_result(quota, false))
+}
+
 /// Query provider usage (using saved script configuration)
 pub async fn query_usage(
     state: &AppState,
@@ -256,6 +291,9 @@ pub async fn query_usage(
             AppType::Claude | AppType::Codex | AppType::KimiCode | AppType::GrokBuild
         )
     {
+        if let Some(tool) = crate::official_auth::OfficialTool::from_app(app_type) {
+            return query_official_card_usage(state, tool, provider_id).await;
+        }
         let quota = crate::services::subscription::get_subscription_quota(app_type.as_str())
             .await
             .map_err(|e| AppError::Message(format!("Failed to query subscription quota: {e}")))?;

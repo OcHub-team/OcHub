@@ -1184,6 +1184,10 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         return Ok(false);
     }
 
+    if crate::official_auth::live_looks_like_official_oauth(app_type, &settings_config) {
+        return Ok(false);
+    }
+
     let mut provider = Provider::with_id(
         "default".to_string(),
         "default".to_string(),

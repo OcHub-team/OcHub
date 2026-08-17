@@ -101,6 +101,23 @@ impl AppState {
             Err(e) => log::warn!("failed to seed official quota providers: {e}"),
         }
 
+        for tool in [
+            crate::official_auth::OfficialTool::Claude,
+            crate::official_auth::OfficialTool::Kimi,
+        ] {
+            match crate::official_auth::adopt_live_onto_seed_if_unbound(tool) {
+                Ok(true) => log::info!(
+                    "adopted live official credentials onto {}",
+                    tool.seed_provider_id()
+                ),
+                Ok(false) => {}
+                Err(error) => log::warn!(
+                    "failed to adopt live official credentials for {}: {error}",
+                    tool.as_str()
+                ),
+            }
+        }
+
         match self.db.backfill_missing_usage_costs() {
             Ok(count) if count > 0 => {
                 log::info!("backfilled historical usage costs for {count} row(s)")

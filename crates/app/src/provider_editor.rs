@@ -2033,6 +2033,32 @@ impl ProviderEditor {
 
     fn render_official_auth_section(&self) -> gpui::AnyElement {
         let app_label = crate::app_meta::label(self.app_type);
+        let cli_hint = match self.app_type {
+            AppType::Claude => Some("`claude /login`"),
+            AppType::KimiCode => Some("`kimi login`"),
+            _ => None,
+        };
+        let mut card = components::card()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_4()
+            .py_3()
+            .child(
+                div()
+                    .text_color(theme::text())
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(SharedString::from(tf!(
+                        k::PROVIDER_EDITOR_OFFICIAL_TITLE,
+                        app = app_label
+                    ))),
+            );
+        if let Some(command) = cli_hint {
+            card = card.child(div().text_color(theme::muted()).text_sm().child(
+                SharedString::from(tf!(k::PROVIDER_EDITOR_OFFICIAL_CLI_HINT, command = command)),
+            ));
+        }
         div()
             .flex()
             .flex_col()
@@ -2042,24 +2068,7 @@ impl ProviderEditor {
                 t(k::PROVIDER_EDITOR_OFFICIAL_SECTION_TITLE),
                 None,
             ))
-            .child(
-                components::card()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_4()
-                    .py_3()
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(tf!(
-                                k::PROVIDER_EDITOR_OFFICIAL_TITLE,
-                                app = app_label
-                            ))),
-                    ),
-            )
+            .child(card)
             .into_any_element()
     }
 

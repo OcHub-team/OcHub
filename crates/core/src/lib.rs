@@ -25,6 +25,7 @@ pub mod managed_auth;
 pub mod mcp;
 pub mod model;
 pub mod node_identity;
+pub mod official_auth;
 pub mod paths;
 pub mod plugin;
 pub mod provider_config;

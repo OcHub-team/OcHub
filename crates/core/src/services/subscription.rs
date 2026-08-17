@@ -1271,6 +1271,19 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
     }
 }
 
+/// Query Claude / Kimi official quota with an already-resolved access token
+/// (live slot or a per-card catalog).
+pub async fn get_subscription_quota_with_token(
+    tool: &str,
+    access_token: &str,
+) -> Result<SubscriptionQuota, String> {
+    match tool {
+        "claude" => Ok(query_claude_quota(access_token).await),
+        "kimi" | "kimi-code" => Ok(query_kimi_quota(access_token).await),
+        _ => Ok(SubscriptionQuota::not_found(tool)),
+    }
+}
+
 // ── 辅助函数 ──────────────────────────────────────────────
 
 fn now_millis() -> i64 {

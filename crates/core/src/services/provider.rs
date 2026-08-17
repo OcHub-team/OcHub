@@ -524,7 +524,11 @@ impl ProviderService {
             ));
         }
 
-        state.db.delete_provider(app_type.as_str(), id)
+        state.db.delete_provider(app_type.as_str(), id)?;
+        if let Some(tool) = crate::official_auth::OfficialTool::from_app(app_type) {
+            crate::official_auth::delete_card_catalog(tool, id)?;
+        }
+        Ok(())
     }
 
     /// Remove provider from live config only (for additive mode apps like OpenCode, OpenClaw)
@@ -675,6 +679,21 @@ impl ProviderService {
         // not of that provider, and `write_live_preserving_user_edits` carries
         // it forward instead. Account state is the exception: it belongs to the
         // account that was active and cannot follow the switch.
+        if let Some(tool) = crate::official_auth::OfficialTool::from_app(app_type) {
+            let outgoing_official =
+                outgoing.filter(|provider| crate::official_auth::is_official_card(provider));
+            if current_id.as_deref() != Some(id) {
+                if let Some(outgoing) = outgoing_official {
+                    crate::official_auth::capture_live_to_card(tool, &outgoing.id)?;
+                }
+                if crate::official_auth::is_official_card(provider) {
+                    crate::official_auth::materialize_card_if_present(tool, &provider.id)?;
+                }
+            } else if crate::official_auth::is_official_card(provider) {
+                crate::official_auth::capture_live_to_card(tool, &provider.id)?;
+            }
+        }
+
         if let (Some(current_id), Some(outgoing)) = (current_id.as_deref(), outgoing)
             && current_id != id
             && !app_type.is_additive_mode()

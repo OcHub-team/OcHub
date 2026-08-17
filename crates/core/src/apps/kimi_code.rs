@@ -15,6 +15,11 @@ use crate::error::AppError;
 use crate::model::Provider;
 
 pub fn get_kimi_code_config_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("KIMI_CODE_HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home);
+    }
     crate::settings::get_settings()
         .kimi_code_config_dir
         .map(PathBuf::from)
