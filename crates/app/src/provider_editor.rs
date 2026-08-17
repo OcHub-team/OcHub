@@ -1641,9 +1641,12 @@ impl ProviderEditor {
         );
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = ochub_core::services::model_fetch::fetch_models(
-                &base_url, &api_key, false, None, None,
-            )
+            let result = crate::core_async::run(async move {
+                ochub_core::services::model_fetch::fetch_models(
+                    &base_url, &api_key, false, None, None,
+                )
+                .await
+            })
             .await;
             this.update(cx, |this, cx| {
                 this.finish_models(result.map_err(|error| error.to_string()));
@@ -1736,9 +1739,11 @@ impl ProviderEditor {
         );
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result =
+            let result = crate::core_async::run(async move {
                 ochub_core::services::SpeedtestService::test_endpoints(vec![base_url], Some(8))
-                    .await;
+                    .await
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.finish_speedtest(result.map_err(|error| error.to_string()));
                 cx.notify();
@@ -1843,7 +1848,10 @@ impl ProviderEditor {
         );
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = ochub_core::services::balance::get_balance(&base_url, &api_key).await;
+            let result = crate::core_async::run(async move {
+                ochub_core::services::balance::get_balance(&base_url, &api_key).await
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.finish_balance(result);
                 cx.notify();

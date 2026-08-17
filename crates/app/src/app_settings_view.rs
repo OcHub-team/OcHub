@@ -116,14 +116,12 @@ impl AppSettingsView {
         let backend = self.backend.clone();
         let generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .settings()
-                .await
-                .and_then(|settings| {
-                    serde_json::from_value::<AppSettings>(settings)
-                        .map_err(WorkspaceBackendError::from)
-                })
-                .map_err(|error| error.to_string());
+            let result = crate::core_async::run(async move {
+                let settings = backend.settings().await?;
+                serde_json::from_value::<AppSettings>(settings).map_err(WorkspaceBackendError::from)
+            })
+            .await
+            .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
                 if generation != this.workspace_generation {
                     return;

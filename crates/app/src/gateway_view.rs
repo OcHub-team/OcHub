@@ -636,7 +636,10 @@ impl GatewayView {
             return;
         }
         cx.spawn(async move |this, cx| {
-            let data = GatewayPageLoad::load_workspace(app, backend).await;
+            let data = crate::core_async::run(async move {
+                GatewayPageLoad::load_workspace(app, backend).await
+            })
+            .await;
             this.update(cx, |this, cx| {
                 if generation != this.reload_generation {
                     return;
@@ -1455,58 +1458,61 @@ impl GatewayView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let saved = if is_existing {
-                match serde_json::to_value(&station) {
-                    Ok(patch) => backend
-                        .update_station(&station_id, patch)
-                        .await
-                        .map_err(|error| error.to_string()),
-                    Err(error) => Err(error.to_string()),
-                }
-            } else {
-                backend
-                    .create_station(&station)
-                    .await
-                    .map_err(|error| error.to_string())
-            }
-            .map(|station| station.name);
-            let result = match saved {
-                Err(error) => Err(error),
-                Ok(name) if apply_targets.is_empty() => Ok((name, Vec::new(), Vec::new())),
-                Ok(name) => match backend.set_gateway_running(true).await {
-                    Ok(_) => {
-                        let mut successes = Vec::new();
-                        let mut failures = Vec::new();
-                        for (app_type, preferred_model) in apply_targets {
-                            let mut policy = default_policy.clone();
-                            policy.preferred_model = preferred_model;
-                            let app_id = match ochub_core::AppId::parse(app_type.as_str()) {
-                                Ok(app_id) => app_id,
-                                Err(error) => {
-                                    failures.push((
-                                        app_type,
-                                        format!("invalid application id: {error}"),
-                                    ));
-                                    continue;
-                                }
-                            };
-                            match backend.apply_station(&station_id, &app_id, policy).await {
-                                Ok(_) => successes.push(app_type),
-                                Err(error) => failures.push((app_type, error.to_string())),
-                            }
-                        }
-                        Ok((name, successes, failures))
+            let result = crate::core_async::run(async move {
+                let saved = if is_existing {
+                    match serde_json::to_value(&station) {
+                        Ok(patch) => backend
+                            .update_station(&station_id, patch)
+                            .await
+                            .map_err(|error| error.to_string()),
+                        Err(error) => Err(error.to_string()),
                     }
-                    Err(error) => Ok((
-                        name,
-                        Vec::new(),
-                        apply_targets
-                            .into_iter()
-                            .map(|(app, _)| (app, error.to_string()))
-                            .collect(),
-                    )),
-                },
-            };
+                } else {
+                    backend
+                        .create_station(&station)
+                        .await
+                        .map_err(|error| error.to_string())
+                }
+                .map(|station| station.name);
+                match saved {
+                    Err(error) => Err(error),
+                    Ok(name) if apply_targets.is_empty() => Ok((name, Vec::new(), Vec::new())),
+                    Ok(name) => match backend.set_gateway_running(true).await {
+                        Ok(_) => {
+                            let mut successes = Vec::new();
+                            let mut failures = Vec::new();
+                            for (app_type, preferred_model) in apply_targets {
+                                let mut policy = default_policy.clone();
+                                policy.preferred_model = preferred_model;
+                                let app_id = match ochub_core::AppId::parse(app_type.as_str()) {
+                                    Ok(app_id) => app_id,
+                                    Err(error) => {
+                                        failures.push((
+                                            app_type,
+                                            format!("invalid application id: {error}"),
+                                        ));
+                                        continue;
+                                    }
+                                };
+                                match backend.apply_station(&station_id, &app_id, policy).await {
+                                    Ok(_) => successes.push(app_type),
+                                    Err(error) => failures.push((app_type, error.to_string())),
+                                }
+                            }
+                            Ok((name, successes, failures))
+                        }
+                        Err(error) => Ok((
+                            name,
+                            Vec::new(),
+                            apply_targets
+                                .into_iter()
+                                .map(|(app, _)| (app, error.to_string()))
+                                .collect(),
+                        )),
+                    },
+                }
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
@@ -1595,11 +1601,14 @@ impl GatewayView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .set_station_enabled(&station_id, enabled)
-                .await
-                .map(|_| name)
-                .map_err(|error| error.to_string());
+            let result = crate::core_async::run(async move {
+                backend
+                    .set_station_enabled(&station_id, enabled)
+                    .await
+                    .map(|_| name)
+            })
+            .await
+            .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
@@ -1783,11 +1792,11 @@ impl GatewayView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .delete_station(&station_id)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string());
+            let result = crate::core_async::run(async move {
+                backend.delete_station(&station_id).await.map(|_| ())
+            })
+            .await
+            .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
@@ -1820,14 +1829,17 @@ impl GatewayView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let result = match ochub_core::AppId::parse(app_type.as_str()) {
-                Ok(app_id) => backend
-                    .import_provider_as_station(&app_id, &provider_id)
-                    .await
-                    .map(|channel| channel.name)
-                    .map_err(|error| error.to_string()),
-                Err(error) => Err(error.to_string()),
-            };
+            let result = crate::core_async::run(async move {
+                match ochub_core::AppId::parse(app_type.as_str()) {
+                    Ok(app_id) => backend
+                        .import_provider_as_station(&app_id, &provider_id)
+                        .await
+                        .map(|channel| channel.name)
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error.to_string()),
+                }
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.mutation_in_flight = false;
                 match result {
@@ -1881,7 +1893,7 @@ impl GatewayView {
         };
         let generation = self.reload_generation;
         cx.spawn(async move |this, cx| {
-            let result = async {
+            let result = crate::core_async::run(async move {
                 backend
                     .set_gateway_running(true)
                     .await
@@ -1890,7 +1902,7 @@ impl GatewayView {
                     .gateway_connection_info()
                     .await
                     .map_err(|error| error.to_string())
-            }
+            })
             .await;
             this.update(cx, |this, cx| {
                 if generation != this.reload_generation {
@@ -1954,9 +1966,12 @@ impl GatewayView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let detected = backend
-                .detect_station_dialects(&base_url, &api_key, station_id.as_deref())
-                .await;
+            let detected = crate::core_async::run(async move {
+                backend
+                    .detect_station_dialects(&base_url, &api_key, station_id.as_deref())
+                    .await
+            })
+            .await;
             this.update(cx, |this, cx| {
                 if let Some(editor) = &mut this.editor
                     && let Some(endpoint) = editor
@@ -2019,9 +2034,12 @@ impl GatewayView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .fetch_station_models(&base_url, &api_key, station_id.as_deref())
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .fetch_station_models(&base_url, &api_key, station_id.as_deref())
+                    .await
+            })
+            .await;
             this.update(cx, |this, cx| {
                 let Some(editor) = &mut this.editor else {
                     return;
@@ -2091,9 +2109,12 @@ impl GatewayView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .test_station_endpoint(&base_url, &api_key, station_id.as_deref())
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .test_station_endpoint(&base_url, &api_key, station_id.as_deref())
+                    .await
+            })
+            .await;
             this.update(cx, |this, cx| {
                 let Some(endpoint) = this.editor.as_mut().and_then(|editor| {
                     editor
