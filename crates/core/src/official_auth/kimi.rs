@@ -26,6 +26,16 @@ pub fn write_live(blob: &Value) -> Result<(), AppError> {
     })
 }
 
+pub fn clear_live() -> Result<(), AppError> {
+    with_live_lock(|| {
+        let path = live_path();
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| AppError::io(&path, error))?;
+        }
+        Ok(())
+    })
+}
+
 fn read_live_unlocked() -> Result<Option<Value>, AppError> {
     let path = live_path();
     if !path.exists() {

@@ -687,7 +687,7 @@ impl ProviderService {
                     crate::official_auth::capture_live_to_card(tool, &outgoing.id)?;
                 }
                 if crate::official_auth::is_official_card(provider) {
-                    crate::official_auth::materialize_card_if_present(tool, &provider.id)?;
+                    crate::official_auth::apply_card_to_live(tool, &provider.id)?;
                 }
             } else if crate::official_auth::is_official_card(provider) {
                 crate::official_auth::capture_live_to_card(tool, &provider.id)?;

@@ -65,12 +65,28 @@ pub fn capture_live_to_card(tool: OfficialTool, provider_id: &str) -> Result<(),
     store::write_catalog(tool, provider_id, &blob)
 }
 
+/// Restore this official card into the CLI live slot.
+///
+/// A saved catalog is written back. A new official card with no catalog
+/// **clears** the live slot so the CLI is logged out and the user can
+/// `kimi login` / `claude /login` as a different account.
+pub fn apply_card_to_live(tool: OfficialTool, provider_id: &str) -> Result<(), AppError> {
+    match store::read_catalog(tool, provider_id)? {
+        Some(blob) => write_live(tool, &blob),
+        None => clear_live(tool),
+    }
+}
+
 /// Restore `provider_id`'s catalog into the CLI live slot. Missing catalog is a no-op.
 pub fn materialize_card_if_present(tool: OfficialTool, provider_id: &str) -> Result<(), AppError> {
-    let Some(blob) = store::read_catalog(tool, provider_id)? else {
-        return Ok(());
-    };
-    write_live(tool, &blob)
+    apply_card_to_live(tool, provider_id)
+}
+
+fn clear_live(tool: OfficialTool) -> Result<(), AppError> {
+    match tool {
+        OfficialTool::Claude => claude::clear_live(),
+        OfficialTool::Kimi => kimi::clear_live(),
+    }
 }
 
 pub fn delete_card_catalog(tool: OfficialTool, provider_id: &str) -> Result<(), AppError> {
@@ -198,13 +214,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_catalog_does_not_wipe_live() {
+    fn missing_catalog_clears_live() {
         let (_home, _guard) = isolated_home();
         let blob = json!({ "access_token": "keep-me", "refresh_token": "r" });
         write_live(OfficialTool::Kimi, &blob).unwrap();
-        materialize_card_if_present(OfficialTool::Kimi, "empty-card").unwrap();
-        let live = read_live(OfficialTool::Kimi).unwrap().unwrap();
-        assert_eq!(live["access_token"], "keep-me");
+        apply_card_to_live(OfficialTool::Kimi, "empty-card").unwrap();
+        assert!(read_live(OfficialTool::Kimi).unwrap().is_none());
         cleanup();
     }
 
@@ -309,9 +324,9 @@ mod tests {
             .unwrap();
 
         ProviderService::switch(&state, AppType::KimiCode, "kimi-official-b").unwrap();
-        assert_eq!(
-            read_live(OfficialTool::Kimi).unwrap().unwrap()["access_token"],
-            "token-a"
+        assert!(
+            read_live(OfficialTool::Kimi).unwrap().is_none(),
+            "a new official card must log the CLI out until the user logs in again"
         );
         assert_eq!(
             read_catalog(OfficialTool::Kimi, "kimi-code-official")

@@ -30,6 +30,22 @@ pub fn write_live(blob: &Value) -> Result<(), AppError> {
     write_secret_json(&live_path(), blob)
 }
 
+pub fn clear_live() -> Result<(), AppError> {
+    if use_keychain() {
+        let mut command = Command::new("security");
+        command.args(["delete-generic-password", "-s", KEYCHAIN_SERVICE]);
+        if let Some(account) = existing_keychain_account() {
+            command.args(["-a", &account]);
+        }
+        let _ = command.output();
+    }
+    let path = live_path();
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| AppError::io(&path, error))?;
+    }
+    Ok(())
+}
+
 fn read_file() -> Result<Option<Value>, AppError> {
     let path = live_path();
     if !path.exists() {
