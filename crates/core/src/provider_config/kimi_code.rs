@@ -340,7 +340,8 @@ impl AppConfig for KimiCodeConfig {
 
     fn presets(&self) -> Vec<Preset> {
         vec![
-            Preset::new("Kimi 官方订阅", official_form_values()).with_identity(
+            Preset::new("自定义", KimiCodeConfig.decode(&Value::Null, None)).with_category(""),
+            Preset::new("官方订阅", official_form_values()).with_identity(
                 "official",
                 "Kimi Code Official",
                 "https://www.kimi.com/code/",
@@ -552,8 +553,19 @@ mod tests {
     #[test]
     fn official_preset_encodes_managed_kimi_oauth() {
         let codec = KimiCodeConfig;
-        let preset = codec.presets().into_iter().next().unwrap();
-        assert_eq!(preset.name, "Kimi 官方订阅");
+        let presets = codec.presets();
+        assert_eq!(
+            presets
+                .iter()
+                .map(|preset| preset.name.as_str())
+                .collect::<Vec<_>>(),
+            ["自定义", "官方订阅"]
+        );
+        let preset = presets
+            .into_iter()
+            .find(|preset| preset.name == "官方订阅")
+            .unwrap();
+        assert_eq!(preset.name, "官方订阅");
         assert_eq!(preset.category.as_deref(), Some("official"));
         assert!(
             codec

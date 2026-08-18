@@ -307,6 +307,11 @@ impl Preset {
         self.website_url = Some(website_url.into());
         self
     }
+
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
+        self
+    }
 }
 
 /// A per-app structured config codec backing the provider editor.

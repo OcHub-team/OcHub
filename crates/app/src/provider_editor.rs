@@ -385,6 +385,24 @@ impl ProviderEditor {
             .unwrap_or(Value::Null);
         let common_config_supported = common_config_supported(app_type);
         let presets = Arc::new(codec.presets());
+        let selected_preset = if original_provider
+            .as_ref()
+            .and_then(|provider| provider.category.as_deref())
+            == Some("official")
+        {
+            presets
+                .iter()
+                .position(|preset| preset.category.as_deref() == Some("official"))
+        } else if original_provider.is_none() && !presets.is_empty() {
+            Some(0)
+        } else {
+            presets.iter().position(|preset| {
+                preset
+                    .category
+                    .as_deref()
+                    .is_none_or(|category| category != "official")
+            })
+        };
         let common_config_enabled = original_provider
             .as_ref()
             .and_then(|provider| provider.meta.as_ref())
@@ -422,7 +440,7 @@ impl ProviderEditor {
             kv_rows: HashMap::new(),
             grid_rows: HashMap::new(),
             next_row_id: 0,
-            selected_preset: None,
+            selected_preset,
             presets,
             open_select_field: None,
             show_preview: true,
@@ -962,20 +980,23 @@ impl ProviderEditor {
         }
         if let Some(display_name) = preset.display_name.clone() {
             let current = self.name.read(cx).content().trim().to_string();
-            if current.is_empty() {
+            if current.is_empty() && !display_name.is_empty() {
                 self.name
                     .update(cx, |input, cx| input.set_content(display_name, cx));
             }
         }
         if let Some(website_url) = preset.website_url.clone() {
             let current = self.website_url.read(cx).content().trim().to_string();
-            if current.is_empty() {
+            if current.is_empty() && !website_url.is_empty() {
                 self.website_url
                     .update(cx, |input, cx| input.set_content(website_url, cx));
             }
         }
         self.apply_values(values, cx);
         self.selected_preset = Some(index);
+        self.form_official_login = self.uses_official_login(cx);
+        self.form_list_state.remeasure();
+        cx.notify();
     }
 
     /// Open the modal code editor for preview file `index`.
