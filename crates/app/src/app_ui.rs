@@ -18,7 +18,6 @@ use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
 use ochub_core::services::provider::{DriftConflict, DriftResolution, LiveDrift, ProviderService};
 use ochub_core::{AppState, AppType, Provider, UsageResult};
-use ochub_ui::screens::{providers as provider_screens, shell as shell_screen};
 
 use crate::about_view::AboutView;
 use crate::anim::{PaintOffsetY, ease_out_quint, linear_progress};
@@ -33,6 +32,7 @@ use crate::layout;
 use crate::mcp_view::McpView;
 use crate::network_view::NetworkView;
 use crate::notifications::{NotificationHost, NotificationLevel, ToastSource};
+use crate::product_ui::{providers as provider_screens, shell as shell_screen};
 use crate::provider_editor::{EditorEvent, ProviderEditor};
 use crate::remote::{ProviderSwitchHandle, WorkspaceBackend};
 use crate::remote_view::{RemoteEvent, RemoteView};

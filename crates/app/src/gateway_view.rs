@@ -24,13 +24,13 @@ use ochub_core::services::provider::ProviderService;
 use ochub_core::{
     AppState, AppType, ModelProviderImportManifest, UsageResult, prepare_model_provider_import,
 };
-use ochub_ui::screens::gateway as gateway_screen;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::product_ui::gateway as gateway_screen;
 use crate::quota;
 use crate::remote::WorkspaceBackend;
 use crate::text_input::TextInput;

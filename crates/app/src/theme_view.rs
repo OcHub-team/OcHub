@@ -12,14 +12,13 @@ use gpui::{
     linear_gradient, point, prelude::*, px, size,
 };
 use ochub_core::settings::{self, ThemeMode};
-use ochub_ui::screens::common as common_screen;
-use ochub_ui::screens::themes as theme_screen;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::product_ui::{common as common_screen, themes as theme_screen};
 use crate::text_input::TextInput;
 use crate::tf;
 use crate::theme::{

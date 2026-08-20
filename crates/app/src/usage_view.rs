@@ -24,14 +24,13 @@ use ochub_core::services::{
     PricingCatalogRefreshKind, PricingCatalogRefreshOutcome, PricingCatalogStatus,
 };
 use ochub_core::{AppState, UsageSummary};
-use ochub_ui::screens::common as common_screen;
-use ochub_ui::screens::usage as usage_screen;
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone, format_local_timestamp};
 use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::product_ui::{common as common_screen, usage as usage_screen};
 use crate::remote::WorkspaceBackend;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::tf;

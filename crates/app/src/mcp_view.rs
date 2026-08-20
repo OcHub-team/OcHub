@@ -10,13 +10,13 @@ use gpui::{
 };
 use ochub_core::db::legacy_json::{McpApps, McpServer};
 use ochub_core::{AppState, AppType};
-use ochub_ui::screens::tools as tool_screens;
 
 use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
 use crate::icons::IconName;
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::product_ui::tools as tool_screens;
 use crate::remote::WorkspaceBackend;
 use crate::text_input::TextInput;
 use crate::tf;

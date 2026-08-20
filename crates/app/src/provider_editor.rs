@@ -12,6 +12,9 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::product_ui::provider_editor::{
+    self as editor_screen, PREVIEW_SPLIT_FRACTION, PREVIEW_SPLIT_MAX_WIDTH, PREVIEW_SPLIT_MIN_WIDTH,
+};
 use gpui::{
     Anchor, Context, Entity, FontWeight, HighlightStyle, ListAlignment, ListState, MouseButton,
     Pixels, SharedString, StyledText, Task, Window, anchored, deferred, div, point, prelude::*, px,
@@ -25,9 +28,6 @@ use ochub_core::provider_config::{
 use ochub_core::services::ConfigService;
 use ochub_core::services::provider::ProviderService;
 use ochub_core::{AppState, AppType, Provider, ProviderMeta, UsageResult};
-use ochub_ui::screens::provider_editor::{
-    self as editor_screen, PREVIEW_SPLIT_FRACTION, PREVIEW_SPLIT_MAX_WIDTH, PREVIEW_SPLIT_MIN_WIDTH,
-};
 use serde_json::{Map, Value, json};
 
 use crate::code_editor::CodeEditor;

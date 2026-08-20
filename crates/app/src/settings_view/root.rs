@@ -10,12 +10,12 @@ use gpui::{AnyElement, Context, PathPromptOptions, SharedString, Window, div, pr
 use ochub_core::app_store;
 use ochub_core::i18n::Locale;
 use ochub_core::settings;
-use ochub_ui::screens::common as common_screen;
 
 use crate::components::{self, ButtonTone};
 use crate::i18n::{k, raw, t};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::product_ui::common as common_screen;
 use crate::shell_menu;
 use crate::tf;
 

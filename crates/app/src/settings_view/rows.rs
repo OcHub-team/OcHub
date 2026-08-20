@@ -10,11 +10,11 @@
 //! matching against the wording a user would think to type.
 
 use gpui::{AnyElement, Context, IntoElement, SharedString, Window};
-use ochub_ui::screens::settings as settings_screen;
 
 use crate::components::ButtonTone;
 use crate::i18n::t;
 use crate::layout;
+use crate::product_ui::settings as settings_screen;
 
 use super::SettingsView;
 use super::search::{RowId, entry};

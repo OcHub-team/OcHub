@@ -15,6 +15,7 @@ mod gateway_view;
 mod i18n;
 mod mcp_view;
 mod network_view;
+mod product_ui;
 mod provider_editor;
 mod quota;
 mod remote;
