@@ -183,6 +183,13 @@ pub fn station_route_id(channel_id: &str) -> String {
     format!("{STATION_ROUTE_PREFIX}{channel_id}")
 }
 
+/// Strip the `station:` prefix used in route ids. Already-bare ids pass through.
+pub fn station_id_from_route(route_id: &str) -> &str {
+    route_id
+        .strip_prefix(STATION_ROUTE_PREFIX)
+        .unwrap_or(route_id)
+}
+
 /// Ensure the hidden local route backing one imported or legacy relay station.
 /// The editor may later add more API-interface channels to the same route.
 pub fn ensure_station_route(
@@ -690,6 +697,61 @@ pub fn station_capabilities_for_route(
     ))
 }
 
+/// One station the editor can offer, or `None` when it cannot serve `app_type`.
+pub fn station_channel_option(
+    route: &GatewayRoute,
+    channels: &[GatewayChannel],
+    app_type: AppType,
+) -> Option<StationChannelOption> {
+    if !route.enabled || !route.id.starts_with(STATION_ROUTE_PREFIX) {
+        return None;
+    }
+    let enabled_channels: Vec<&GatewayChannel> = channels
+        .iter()
+        .filter(|channel| channel.enabled && route.allows_channel(&channel.id))
+        .collect();
+    if enabled_channels.is_empty()
+        || !enabled_channels
+            .iter()
+            .any(|channel| dialect_compatible(channel.dialect, app_type))
+    {
+        return None;
+    }
+    Some(StationChannelOption {
+        route_id: route.id.clone(),
+        name: route.name.clone(),
+        models: station_models(route, channels),
+        capabilities: station_capabilities(route, channels),
+    })
+}
+
+/// Same filter as [`station_channel_option`], from a user-facing station record
+/// that is not yet a stored [`GatewayRoute`]. Used by remote workspaces.
+pub fn station_channel_option_from_station(
+    station_id: &str,
+    name: &str,
+    enabled: bool,
+    websocket_enabled: bool,
+    channels: &[GatewayChannel],
+    app_type: AppType,
+) -> Option<StationChannelOption> {
+    let route = GatewayRoute {
+        id: station_route_id(station_id),
+        name: name.to_string(),
+        website_url: None,
+        app_type: None,
+        channel_ids: channels.iter().map(|channel| channel.id.clone()).collect(),
+        default_model: None,
+        model_rules: Vec::new(),
+        reasoning: GatewayReasoningConfig::default(),
+        websocket_enabled,
+        quota_api: None,
+        enabled,
+        created_at: 0,
+    };
+    station_channel_option(&route, channels, app_type)
+}
+
 /// Relay stations able to serve `app_type`, for the channel editor's station
 /// picker. Disabled, empty, or dialect-incompatible stations are skipped —
 /// they would fail at save time anyway, so offering them is just noise.
@@ -700,26 +762,9 @@ pub fn station_channel_options(
     let channels = state.db.get_gateway_channels()?;
     let mut options = Vec::new();
     for route in state.db.get_gateway_routes()? {
-        if !route.enabled || !route.id.starts_with(STATION_ROUTE_PREFIX) {
-            continue;
+        if let Some(option) = station_channel_option(&route, &channels, app_type) {
+            options.push(option);
         }
-        let enabled_channels: Vec<&GatewayChannel> = channels
-            .iter()
-            .filter(|channel| channel.enabled && route.channel_ids.contains(&channel.id))
-            .collect();
-        if enabled_channels.is_empty()
-            || !enabled_channels
-                .iter()
-                .any(|channel| dialect_compatible(channel.dialect, app_type))
-        {
-            continue;
-        }
-        options.push(StationChannelOption {
-            route_id: route.id.clone(),
-            name: route.name.clone(),
-            models: station_models(&route, &channels),
-            capabilities: station_capabilities(&route, &channels),
-        });
     }
     options.sort_by(|a, b| {
         a.name
@@ -762,17 +807,42 @@ pub fn build_station_channel(
         &gateway_key_label(app_type, &route.id),
         Some(&route.id),
     )?;
+    let channels = state.db.get_gateway_channels()?;
+    build_station_channel_with_endpoint(
+        app_type,
+        &route.id,
+        values,
+        identity,
+        base_url,
+        &key.key,
+        station_capabilities(&route, &channels),
+        &station_models(&route, &channels),
+        prior,
+        prior_meta,
+    )
+}
+
+/// Build a station-sourced provider when the gateway origin, client key, and
+/// station capabilities are already known (remote workspaces, or a caller that
+/// resolved them out of band).
+#[allow(clippy::too_many_arguments)]
+pub fn build_station_channel_with_endpoint(
+    app_type: AppType,
+    station_route_id: &str,
+    values: &FormValues,
+    identity: StationChannelIdentity,
+    base_url: &str,
+    key: &str,
+    caps: StationCapabilities,
+    catalog_models: &[String],
+    prior: &serde_json::Value,
+    prior_meta: Option<&ProviderMeta>,
+) -> Result<Provider, AppError> {
     let codec = provider_config::config_for(app_type).ok_or_else(|| {
         AppError::InvalidInput(format!("{} 暂不支持模型供应商渠道", app_label(app_type)))
     })?;
     let mut merged = values.clone();
-    provider_config::inject_station_endpoint(
-        &mut merged,
-        app_type,
-        base_url,
-        &key.key,
-        station_capabilities_for_route(state, &route)?,
-    );
+    provider_config::inject_station_endpoint(&mut merged, app_type, base_url, key, caps);
     validate_station_channel_models(app_type, &merged)?;
     if let Some(issue) = codec
         .validate_for_category(&merged, identity.category.as_deref())
@@ -784,15 +854,14 @@ pub fn build_station_channel(
     let encoded = codec.encode(&merged, prior, prior_meta);
     let mut settings = encoded.settings_config;
     if app_type == AppType::Codex {
-        inject_codex_model_catalog(
-            state,
-            &route,
+        apply_codex_model_catalog(
             &mut settings,
+            catalog_models,
             provider_config::str_val(&merged, "model"),
-        )?;
+        );
     }
     let mut meta = encoded.meta.unwrap_or_default();
-    meta.gateway_route_id = Some(route.id.clone());
+    meta.gateway_route_id = Some(station_route_id.to_string());
     Ok(Provider {
         id: identity.id,
         name: identity.name,
@@ -905,13 +974,22 @@ fn inject_codex_model_catalog(
     picked_model: &str,
 ) -> Result<(), AppError> {
     let channels = state.db.get_gateway_channels()?;
-    let mut catalog = station_models(route, &channels);
+    apply_codex_model_catalog(settings, &station_models(route, &channels), picked_model);
+    Ok(())
+}
+
+fn apply_codex_model_catalog(
+    settings: &mut serde_json::Value,
+    catalog: &[String],
+    picked_model: &str,
+) {
+    let mut catalog = catalog.to_vec();
     let picked = picked_model.trim();
     if !picked.is_empty() && !catalog.iter().any(|model| model == picked) {
         catalog.push(picked.to_string());
     }
     if catalog.is_empty() {
-        return Ok(());
+        return;
     }
     catalog.sort();
     catalog.dedup();
@@ -921,7 +999,6 @@ fn inject_codex_model_catalog(
             "displayName": model,
         })).collect::<Vec<_>>()
     });
-    Ok(())
 }
 
 fn apply_route_to_app(
@@ -1635,6 +1712,40 @@ mod tests {
             station_channel_options(&state, AppType::Claude)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn station_channel_option_from_station_matches_stored_routes() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Messages);
+        let channels = state.db.get_gateway_channels().unwrap();
+        let from_store = station_channel_options(&state, AppType::Claude).unwrap();
+        let from_record = station_channel_option_from_station(
+            station_id_from_route(&route.id),
+            &route.name,
+            route.enabled,
+            route.websocket_enabled,
+            &channels,
+            AppType::Claude,
+        )
+        .unwrap();
+
+        assert_eq!(from_store.len(), 1);
+        assert_eq!(from_store[0].route_id, from_record.route_id);
+        assert_eq!(from_store[0].name, from_record.name);
+        assert_eq!(from_store[0].models, from_record.models);
+        assert_eq!(from_store[0].capabilities, from_record.capabilities);
+        assert!(
+            station_channel_option_from_station(
+                station_id_from_route(&route.id),
+                &route.name,
+                false,
+                route.websocket_enabled,
+                &channels,
+                AppType::Claude,
+            )
+            .is_none()
         );
     }
 

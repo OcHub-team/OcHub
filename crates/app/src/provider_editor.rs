@@ -184,6 +184,7 @@ pub struct ProviderEditor {
     category: Entity<TextInput>,
     notes: Entity<TextInput>,
     text_inputs: HashMap<String, Entity<TextInput>>,
+    revealed_secrets: HashSet<String>,
     kv_rows: HashMap<String, Vec<KvRow>>,
     grid_rows: HashMap<String, Vec<GridRow>>,
     next_row_id: usize,
@@ -335,15 +336,11 @@ impl ProviderEditor {
             .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
         let schema = codec.schema();
         let values = codec.decode(&provider.settings_config, provider.meta.as_ref());
-        let station_route = (!backend.is_remote())
-            .then(|| {
-                provider
-                    .meta
-                    .as_ref()
-                    .and_then(|meta| meta.gateway_route_id.clone())
-                    .filter(|_| provider_config::station_source_supported(app_type))
-            })
-            .flatten();
+        let station_route = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.gateway_route_id.clone())
+            .filter(|_| provider_config::station_source_supported(app_type));
         let mut this = Self::base(
             app,
             backend,
@@ -437,6 +434,7 @@ impl ProviderEditor {
                 TextInput::new(cx, t(k::PROVIDER_EDITOR_IDENTITY_NOTES_PLACEHOLDER)).multiline(true)
             }),
             text_inputs: HashMap::new(),
+            revealed_secrets: HashSet::new(),
             kv_rows: HashMap::new(),
             grid_rows: HashMap::new(),
             next_row_id: 0,
@@ -537,15 +535,17 @@ impl ProviderEditor {
     /// Load the stations this app could draw from. Only runs for apps whose
     /// codec supports the station source; everyone else never sees the toggle.
     fn load_station_options(&mut self, cx: &mut Context<Self>) {
-        if self.backend.is_remote() || !provider_config::station_source_supported(self.app_type) {
+        if !provider_config::station_source_supported(self.app_type) {
             self.station_options_loaded = true;
             return;
         }
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let app_type = self.app_type;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { apply::station_channel_options(&app, app_type) })
+            let result =
+                crate::core_async::run(
+                    async move { backend.station_channel_options(app_type).await },
+                )
                 .await;
             this.update(cx, |this, cx| {
                 match result {
@@ -583,21 +583,16 @@ impl ProviderEditor {
         {
             return;
         }
-        let app = self.app.clone();
+        let backend = self.backend.clone();
         let app_type = self.app_type;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let config = app.db.get_gateway_config()?;
-                    let origin = format!("http://127.0.0.1:{}", config.port);
-                    let key = apply::ensure_key_for_route(
-                        &app,
-                        &apply::gateway_key_label(app_type, &route_id),
-                        Some(&route_id),
-                    )?;
-                    Ok::<_, ochub_core::error::AppError>((route_id, origin, key.key))
-                })
-                .await;
+            let result = crate::core_async::run(async move {
+                backend
+                    .station_gateway_preview(&route_id, app_type)
+                    .await
+                    .map(|(origin, key)| (route_id, origin, key))
+            })
+            .await;
             this.update(cx, |this, cx| {
                 let Ok((route_id, origin, key)) = result else {
                     return;
@@ -762,7 +757,8 @@ impl ProviderEditor {
         for field in fields {
             match &field.kind {
                 FieldKind::Text { placeholder } | FieldKind::Secret { placeholder } => {
-                    let masked = matches!(field.kind, FieldKind::Secret { .. });
+                    let masked = matches!(field.kind, FieldKind::Secret { .. })
+                        && !self.revealed_secrets.contains(&field.id);
                     let content = str_val(&self.values, &field.id).to_string();
                     let placeholder = placeholder.clone();
                     let input = cx.new(|cx| {
@@ -1160,6 +1156,20 @@ impl ProviderEditor {
         self.invalidate_preview(cx);
     }
 
+    fn toggle_secret_reveal(&mut self, field_id: &str, cx: &mut Context<Self>) {
+        let revealed = if self.revealed_secrets.contains(field_id) {
+            self.revealed_secrets.remove(field_id);
+            false
+        } else {
+            self.revealed_secrets.insert(field_id.to_string());
+            true
+        };
+        if let Some(input) = self.text_inputs.get(field_id).cloned() {
+            input.update(cx, |input, cx| input.set_masked(!revealed, cx));
+        }
+        cx.notify();
+    }
+
     fn toggle_bool(&mut self, field_id: String, cx: &mut Context<Self>) {
         let cur = bool_val(&self.values, &field_id);
         self.values.insert(field_id, Value::Bool(!cur));
@@ -1468,6 +1478,27 @@ impl ProviderEditor {
         let working_base = self.working_base.clone();
         let original_provider = self.original_provider.clone();
         let prior_meta = original_provider.as_ref().and_then(|p| p.meta.clone());
+        let caps = self.station_capabilities();
+        let catalog_models = self.station_models().to_vec();
+
+        if self.backend.is_remote() {
+            self.do_save_station_remote(
+                identity,
+                route_id,
+                values,
+                original_id,
+                original_provider,
+                prior_meta,
+                working_base,
+                snippet_update,
+                common_config_supported,
+                common_config_enabled,
+                caps,
+                catalog_models,
+                cx,
+            );
+            return;
+        }
 
         self.saving = true;
         self.error = None;
@@ -1593,6 +1624,136 @@ impl ProviderEditor {
                     }
                 })
                 .await;
+            this.update(cx, |this, cx| {
+                this.saving = false;
+                if let Some(snippet) = outcome.saved_snippet {
+                    this.original_snippet = snippet;
+                }
+                match outcome.result {
+                    Ok(()) => cx.emit(EditorEvent::Saved),
+                    Err(ProviderSaveFailure::CommonConfig(error)) => {
+                        this.set_error(tf!(
+                            k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
+                            error = error
+                        ));
+                        cx.notify();
+                    }
+                    Err(ProviderSaveFailure::Provider(error)) => {
+                        this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
+                        cx.notify();
+                    }
+                    Err(ProviderSaveFailure::HistoryMigration(error)) => {
+                        this.set_error(tf!(
+                            k::PROVIDER_EDITOR_HISTORY_MIGRATION_FAILED,
+                            error = error
+                        ));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Remote save path: start the node's gateway, resolve origin + key on the
+    /// node, then write the provider through the same create/update methods a
+    /// direct connection uses.
+    #[allow(clippy::too_many_arguments)]
+    fn do_save_station_remote(
+        &mut self,
+        identity: apply::StationChannelIdentity,
+        route_id: String,
+        values: FormValues,
+        original_id: Option<String>,
+        original_provider: Option<Provider>,
+        prior_meta: Option<ProviderMeta>,
+        working_base: Value,
+        snippet_update: Option<String>,
+        common_config_supported: bool,
+        common_config_enabled: bool,
+        caps: StationCapabilities,
+        catalog_models: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.saving = true;
+        self.error = None;
+        let backend = self.backend.clone();
+        let app_type = self.app_type;
+        cx.spawn(async move |this, cx| {
+            let outcome = crate::core_async::run(async move {
+                let app_id = app_type.app_id();
+                let mut saved_snippet = None;
+                if let Some(snippet) = snippet_update {
+                    if let Err(error) = backend.set_common_config(&app_id, snippet.clone()).await {
+                        return ProviderSaveOutcome {
+                            saved_snippet,
+                            result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
+                        };
+                    }
+                    saved_snippet = Some(snippet);
+                }
+
+                let result = async {
+                    if let Err(error) = backend.set_gateway_running(true).await {
+                        return Err(ProviderSaveFailure::Provider(error.to_string()));
+                    }
+                    let (origin, key) = backend
+                        .station_gateway_preview(&route_id, app_type)
+                        .await
+                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
+                    let mut provider = apply::build_station_channel_with_endpoint(
+                        app_type,
+                        &route_id,
+                        &values,
+                        identity,
+                        &origin,
+                        &key,
+                        caps,
+                        &catalog_models,
+                        &working_base,
+                        prior_meta.as_ref(),
+                    )
+                    .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
+                    if let Some(original) = original_provider.as_ref() {
+                        provider.created_at = original.created_at;
+                        provider.sort_index = original.sort_index;
+                        provider.icon.clone_from(&original.icon);
+                        provider.icon_color.clone_from(&original.icon_color);
+                    }
+                    if common_config_supported {
+                        if common_config_enabled {
+                            provider
+                                .meta
+                                .get_or_insert_with(ProviderMeta::default)
+                                .common_config_enabled = Some(true);
+                        } else if let Some(meta) = provider.meta.as_mut() {
+                            meta.common_config_enabled = None;
+                        }
+                    }
+                    match original_id {
+                        Some(original_id) => match serde_json::to_value(&provider) {
+                            Ok(patch) => backend
+                                .update_provider(&app_id, &original_id, patch)
+                                .await
+                                .map(|_| ()),
+                            Err(error) => Err(error.into()),
+                        },
+                        None => backend
+                            .create_provider(&app_id, provider, true)
+                            .await
+                            .map(|_| ()),
+                    }
+                    .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))
+                }
+                .await;
+                ProviderSaveOutcome {
+                    saved_snippet,
+                    result,
+                }
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.saving = false;
                 if let Some(snippet) = outcome.saved_snippet {
@@ -2129,7 +2290,7 @@ impl ProviderEditor {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let body = match &field.kind {
-            FieldKind::Text { .. } | FieldKind::Secret { .. } => {
+            FieldKind::Text { .. } => {
                 let input = self
                     .text_inputs
                     .get(&field.id)
@@ -2146,6 +2307,46 @@ impl ProviderEditor {
                 } else {
                     input
                 }
+            }
+            FieldKind::Secret { .. } => {
+                let revealed = self.revealed_secrets.contains(&field.id);
+                let input = self
+                    .text_inputs
+                    .get(&field.id)
+                    .map(|i| i.clone().into_any_element())
+                    .unwrap_or_else(|| div().into_any_element());
+                let field_id = field.id.clone();
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(div().flex_1().min_w(px(220.)).child(input))
+                    .child(
+                        components::icon_only_button_tone(
+                            SharedString::from(format!("secret-reveal-{}", field.id)),
+                            if revealed {
+                                t(k::GATEWAY_ACTION_HIDE)
+                            } else {
+                                t(k::GATEWAY_ACTION_SHOW)
+                            },
+                            if revealed {
+                                IconName::EyeOff
+                            } else {
+                                IconName::Eye
+                            },
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.toggle_secret_reveal(&field_id, cx);
+                            },
+                        )),
+                    )
+                    .into_any_element()
             }
             FieldKind::Select { options } => {
                 // A station channel reaches the gateway with the gateway's own
@@ -3432,8 +3633,7 @@ impl ProviderEditor {
             .gap_4()
             .w_full()
             .when(
-                !self.backend.is_remote()
-                    && provider_config::station_source_supported(self.app_type),
+                provider_config::station_source_supported(self.app_type),
                 |column| {
                     column.child(components::field(
                         t(k::PROVIDER_EDITOR_SOURCE_LABEL),

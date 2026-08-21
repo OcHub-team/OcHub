@@ -378,8 +378,10 @@ allowBackupRestore = true
 allowUpdateInstall = true
 ```
 
-Untouched masked placeholders preserve the remote value instead of writing
-`******` back. Policy changes apply to the next SSH control session.
+The desktop editor reads live secrets over the encrypted SSH session, matching
+the local workspace. Untouched masked placeholders still preserve the remote
+value instead of writing `******` back. Policy changes apply to the next SSH
+control session.
 
 ## Troubleshooting and current limits
 

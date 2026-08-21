@@ -333,8 +333,9 @@ allowBackupRestore = true
 allowUpdateInstall = true
 ```
 
-変更していない mask placeholder は remote の元値を保持し、`******` を書き戻しません。
-policy の変更は次の SSH control session から有効です。
+desktop editor は暗号化 SSH session 経由で live secret を読み、local workspace と同じ
+編集体験になります。変更していない mask placeholder は remote の元値を保持し、
+`******` を書き戻しません。policy の変更は次の SSH control session から有効です。
 
 ## トラブルシューティングと現在の制限
 

@@ -428,13 +428,12 @@ SSH 断线不等于 mutation 失败。重连后桌面端必须通过 operation I
 
 ### 9.1 Secret
 
-- 响应默认脱敏。
-- 远端已有 Provider Key 不返回明文。
+- 桌面远程会话与本机一致：编辑器使用的成功读取响应返回明文密钥（SSH 已加密）。
 - Provider drift 仅返回字段路径；`live` / `incoming` 值在 SSH 出站前统一掩码，
   真实值只用于远端 revision 计算和 apply 前复核。
 - 新 Secret 通过加密 SSH 会话中的协议参数传输。
-- Secret 不进入 argv、日志、error details、operation journal 或桌面缓存。
-- `showSecrets` 远程能力首版禁用。
+- Secret 不进入 argv、日志、error details 或 operation journal。
+- error details 与 drift plan 仍脱敏。
 - Secret 字段在内存中应尽快释放，后续可以引入 secrecy/zeroize。
 
 ### 9.2 路径

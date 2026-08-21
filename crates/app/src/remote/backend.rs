@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ochub_core::AppId;
+use ochub_core::AppType;
 use ochub_core::Provider;
 use ochub_core::application::{
     AppSummary, Application, ApplicationError, ConfigSchemaDto, DoctorReport, GatewayStation,
@@ -10,7 +11,7 @@ use ochub_core::application::{
 use ochub_core::db::import_ccswitch::{DetectedSource, ImportReport};
 use ochub_core::db::{BackupEntry, InstalledSkill, McpServer, SkillRepo};
 use ochub_core::gateway::GatewayStatus;
-use ochub_core::gateway::apply::ApplyResult;
+use ochub_core::gateway::apply::{self, ApplyResult, StationChannelOption};
 use ochub_core::gateway::types::{Dialect, GatewayAppModelPolicy, GatewayEndpointTestResult};
 use ochub_core::runtime::journal::OperationRecord;
 use ochub_core::services::session_usage::{DataSourceSummary, SessionSyncResult};
@@ -3005,6 +3006,92 @@ impl WorkspaceBackend {
                     json!({ "stationId": station_id, "app": app.as_str() }),
                 )
                 .await
+            }
+        }
+    }
+
+    pub(crate) async fn station_channel_options(
+        &self,
+        app: AppType,
+    ) -> Result<Vec<StationChannelOption>, WorkspaceBackendError> {
+        match self {
+            Self::Local(application) => {
+                Ok(apply::station_channel_options(application.state(), app)
+                    .map_err(ApplicationError::from)?)
+            }
+            Self::Remote(_) => {
+                let mut options = self
+                    .list_stations()
+                    .await?
+                    .into_iter()
+                    .filter_map(|station| {
+                        apply::station_channel_option_from_station(
+                            &station.id,
+                            &station.name,
+                            station.enabled,
+                            station.websocket_enabled,
+                            &station.channels,
+                            app,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                options.sort_by(|left, right| {
+                    left.name
+                        .cmp(&right.name)
+                        .then_with(|| left.route_id.cmp(&right.route_id))
+                });
+                Ok(options)
+            }
+        }
+    }
+
+    /// Gateway origin + client key the editor embeds in a station-sourced
+    /// channel. Local uses the configured listen port; remote asks the node so
+    /// the key is issued on that machine.
+    pub(crate) async fn station_gateway_preview(
+        &self,
+        route_id: &str,
+        app: AppType,
+    ) -> Result<(String, String), WorkspaceBackendError> {
+        match self {
+            Self::Local(application) => {
+                let config = application.gateway_config()?;
+                let origin = format!("http://127.0.0.1:{}", config.port);
+                let key = apply::ensure_key_for_route(
+                    application.state(),
+                    &apply::gateway_key_label(app, route_id),
+                    Some(route_id),
+                )
+                .map_err(ApplicationError::from)?;
+                Ok((origin, key.key))
+            }
+            Self::Remote(_) => {
+                let info = self
+                    .station_connection_info(apply::station_id_from_route(route_id), &app.app_id())
+                    .await?;
+                let origin = info
+                    .get("baseUrl")
+                    .and_then(Value::as_str)
+                    .or_else(|| info.get("base_url").and_then(Value::as_str))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let key = info
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .or_else(|| info.get("api_key").and_then(Value::as_str))
+                    .or_else(|| info.get("key_secret").and_then(Value::as_str))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if origin.is_empty() || key.is_empty() || key == "******" {
+                    return Err(ApplicationError::OperationFailed(
+                        "remote station connection info did not include a gateway origin and key"
+                            .to_string(),
+                    )
+                    .into());
+                }
+                Ok((origin, key))
             }
         }
     }

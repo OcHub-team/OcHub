@@ -613,6 +613,24 @@ fn remote_provider_crud_uses_typed_payloads_and_redacts_secrets() {
             .contains("must-not-echo-plaintext")
     );
 
+    let shown = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "provider-show-secret",
+        methods::PROVIDER_GET,
+        serde_json::json!({
+            "app": "claude",
+            "providerId": "remote-team"
+        }),
+        (None, None),
+    );
+    assert!(shown.ok, "show error: {:?}", shown.error);
+    assert_eq!(
+        shown.data["provider"]["settingsConfig"]["env"]["ANTHROPIC_AUTH_TOKEN"],
+        "must-not-echo-plaintext"
+    );
+
     let deleted = request(
         &mut stdin,
         &mut stdout,
@@ -1048,7 +1066,7 @@ fn remote_station_crud_uses_typed_methods() {
                     "name": "Remote Station Chat",
                     "dialect": "chat",
                     "base_url": "https://gateway.example.com",
-                    "api_key": "",
+                    "api_key": "sk-remote-station",
                     "enabled": true
                 }],
                 "enabled": true
@@ -1058,6 +1076,18 @@ fn remote_station_crud_uses_typed_methods() {
     );
     assert!(created.ok, "station create error: {:?}", created.error);
     assert_eq!(created.data["id"], "remote-station");
+
+    let shown = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "station-show",
+        methods::STATION_GET,
+        serde_json::json!({ "stationId": "remote-station" }),
+        (None, None),
+    );
+    assert!(shown.ok, "station show error: {:?}", shown.error);
+    assert_eq!(shown.data["channels"][0]["api_key"], "sk-remote-station");
 
     let listed = request(
         &mut stdin,

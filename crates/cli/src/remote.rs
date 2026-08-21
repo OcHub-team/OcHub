@@ -1731,7 +1731,7 @@ impl RemoteSession {
                 protocol_version: self.protocol_version,
                 request_id: request.request_id,
                 ok: true,
-                data: remote_safe_value(&result.data),
+                data: remote_success_value(&result.data),
                 warnings: result.warnings,
                 error: None,
                 revision,
@@ -1806,7 +1806,7 @@ impl RemoteSession {
                 return cli_error_response(self.protocol_version, request.request_id, error);
             }
         };
-        let data = remote_safe_value(&result.data);
+        let data = remote_success_value(&result.data);
         let revision = Some(revision_for(&data));
         let response = ResponseFrame {
             protocol_version: self.protocol_version,
@@ -1831,13 +1831,22 @@ impl RemoteSession {
     }
 }
 
-fn traced_argv(request: &RequestFrame, argv: Vec<String>) -> Vec<String> {
+fn remote_execution_flags(request: &RequestFrame) -> Vec<String> {
     let trace = request
         .trace_id
         .as_deref()
         .unwrap_or(request.request_id.as_str());
-    let mut traced = vec!["--trace-id".to_string(), trace.to_string()];
-    traced.extend(argv);
+    vec![
+        "--trace-id".to_string(),
+        trace.to_string(),
+        "--show-secrets".to_string(),
+        "--yes".to_string(),
+    ]
+}
+
+fn traced_argv(request: &RequestFrame, argv: Vec<String>) -> Vec<String> {
+    let mut traced = remote_execution_flags(request);
+    traced.extend(argv.into_iter().filter(|arg| arg != "--yes"));
     traced
 }
 
@@ -1846,17 +1855,12 @@ fn audited_apply_argv(
     argv: Vec<String>,
     operation_id: &str,
 ) -> Vec<String> {
-    let trace = request
-        .trace_id
-        .as_deref()
-        .unwrap_or(request.request_id.as_str());
-    let mut audited = vec![
-        "--trace-id".to_string(),
-        trace.to_string(),
+    let mut audited = remote_execution_flags(request);
+    audited.extend([
         "--remote-operation-id".to_string(),
         operation_id.to_string(),
-    ];
-    audited.extend(argv);
+    ]);
+    audited.extend(argv.into_iter().filter(|arg| arg != "--yes"));
     audited
 }
 
@@ -3722,13 +3726,24 @@ fn revision_for(value: &Value) -> String {
         .collect::<String>()
 }
 
-/// Produce the only shape that may cross the SSH protocol boundary.
+/// Produce the only shape that may cross the SSH protocol boundary for
+/// journals, error details, and drift plans.
 ///
-/// The core redactor handles named secret fields. Drift conflicts also carry
-/// scalar values under the generic `live` and `incoming` keys, so those values
-/// are always masked while retaining the path needed to review the plan.
+/// Named secret fields are masked. Drift conflicts also carry scalar values
+/// under the generic `live` and `incoming` keys, so those values are always
+/// masked while retaining the path needed to review the plan.
 fn remote_safe_value(value: &Value) -> Value {
     let mut safe = redact_json(value);
+    redact_drift_values(&mut safe);
+    safe
+}
+
+/// Success payloads used by the desktop editor. Secrets stay visible so a
+/// remote workspace can show and edit keys the same way a local one does.
+/// Drift `live` / `incoming` values are still masked — those are not form
+/// fields.
+fn remote_success_value(value: &Value) -> Value {
+    let mut safe = value.clone();
     redact_drift_values(&mut safe);
     safe
 }
@@ -4193,6 +4208,87 @@ mod tests {
         assert!(!encoded.contains("named-secret"));
         assert!(!encoded.contains("scalar-live-secret"));
         assert!(!encoded.contains("scalar-incoming-secret"));
+    }
+
+    #[test]
+    fn remote_success_values_keep_named_secrets_and_still_mask_drift() {
+        let value = json!({
+            "public": "visible",
+            "apiKey": "named-secret",
+            "settingsConfig": {
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "sk-live"
+                }
+            },
+            "drift": {
+                "conflicts": [{
+                    "path": "env.CUSTOM_VALUE",
+                    "live": "scalar-live-secret",
+                    "incoming": {
+                        "nested": "scalar-incoming-secret"
+                    }
+                }]
+            }
+        });
+
+        let safe = remote_success_value(&value);
+        assert_eq!(safe["apiKey"], "named-secret");
+        assert_eq!(
+            safe["settingsConfig"]["env"]["ANTHROPIC_AUTH_TOKEN"],
+            "sk-live"
+        );
+        assert_eq!(safe["drift"]["conflicts"][0]["live"], "******");
+        assert_eq!(safe["drift"]["conflicts"][0]["incoming"], "******");
+    }
+
+    #[test]
+    fn remote_execution_flags_request_unredacted_cli_output() {
+        let argv = traced_argv(
+            &request(
+                methods::PROVIDER_GET,
+                json!({"app": "claude", "providerId": "team"}),
+            ),
+            vec![
+                "provider".into(),
+                "show".into(),
+                "team".into(),
+                "--app".into(),
+                "claude".into(),
+            ],
+        );
+        assert_eq!(
+            argv,
+            vec![
+                "--trace-id",
+                "request-1",
+                "--show-secrets",
+                "--yes",
+                "provider",
+                "show",
+                "team",
+                "--app",
+                "claude"
+            ]
+        );
+        let delete = traced_argv(
+            &request(
+                methods::PROVIDER_DELETE,
+                json!({"app": "claude", "providerId": "team"}),
+            ),
+            vec![
+                "--yes".into(),
+                "provider".into(),
+                "delete".into(),
+                "team".into(),
+                "--app".into(),
+                "claude".into(),
+            ],
+        );
+        assert_eq!(
+            delete.iter().filter(|arg| *arg == "--yes").count(),
+            1,
+            "{delete:?}"
+        );
     }
 
     /// Every usage payload is full of `*Tokens` counters, and the secret-key

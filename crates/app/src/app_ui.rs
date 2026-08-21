@@ -3363,14 +3363,12 @@ impl AppRoot {
     }
 
     fn open_edit_editor_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
-        // The list backend redacts secrets on purpose, so the cached copy cannot
-        // seed an edit form: the form decodes its API key field from it and the
-        // save writes the whole record back, which would put `******` where the
-        // credential was. Read the local SSOT at click time instead.
-        //
-        // A remote workspace has no unredacted copy to read — the node never
-        // sends the secret — so it still edits from the redacted record and
-        // relies on the save path restoring masked fields from what is stored.
+        // The list backend redacts secrets on a local workspace, so the cached
+        // copy cannot seed an edit form: the form decodes its API key field
+        // from it and the save writes the whole record back, which would put
+        // `******` where the credential was. Read the local SSOT at click time
+        // instead. Remote provider.get returns the live secret so the cached
+        // record is already the copy the editor should use.
         let local = self.active_remote_scope.is_none().then(|| {
             self.app
                 .db
