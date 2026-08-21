@@ -451,7 +451,6 @@ SSH 断线不等于 mutation 失败。重连后桌面端必须通过 operation I
 ```text
 read
 write
-secrets.write
 gateway.lifecycle
 daemon.lifecycle
 backup.restore
@@ -701,7 +700,7 @@ Provider，且远端 Gateway 能由 daemon 持续运行。
 迁移范围与完成状态：
 
 1. Provider 全功能：CRUD、排序、复制、原生配置导入/同步、公共配置、端点、测速、
-   模型、余额/额度、Auth 和受 Policy 保护的 Secret 写入。
+   模型、余额/额度、Auth 和 Secret 写入。
 2. App Settings 和桌面现有 Gateway/Station 全功能，包括应用连接信息。
 3. MCP、Skills。
 4. Usage、Pricing、Sessions 和 Session Index。
@@ -712,9 +711,9 @@ Provider，且远端 Gateway 能由 daemon 持续运行。
 当前开发状态：
 
 - Provider 已覆盖 CRUD、排序、复制、原生配置同步、公共配置、端点、测速、模型、
-  余额/额度和受策略保护的 Secret 写入。
+  余额/额度和 Secret 写入。
 - Provider 编辑使用 JSON Merge Patch，未修改的 Secret 不需要从远端读回。
-- 直接 mutation 要求 idempotency key；Secret 写入由 `allowSecretsWrite` 单独授权。
+- 直接 mutation 要求 idempotency key；Secret 写入跟随 `allowWrite`。
 - 工作区下拉驱动正常 GUI，而不是远程节点页里的另一套快捷操作。
 - MCP 列表、添加/编辑、删除、应用开关、导入与同步已通过同一 Backend，并使用
   Merge Patch 保留未回传的 Secret。
@@ -734,7 +733,7 @@ Provider，且远端 Gateway 能由 daemon 持续运行。
   页的更新检查/安装已使用受限 typed action；桌面登录项、托盘、主题和打开本地文件夹
   保持控制端语义。
 - 高风险恢复、数据导入和更新安装分别要求 `backup.restore` / `data.import` /
-  `update.install` capability；新 Secret 写入仍要求 `allowSecretsWrite`。
+  `update.install` capability；新 Secret 写入跟随 `allowWrite`。
 - 协议协商范围为 v1–v2，新增方法依赖 capability；旧 `ochcli` 可以继续建立连接，
   但完整工作区和受管更新需要新版桌面端与远端 `ochcli`。
 

@@ -280,8 +280,8 @@ Actor、时间、Operation ID 和结果，但不会把 Provider Secret 复制到
 OcHub 只在 SSH 进程的 stdin/stdout 上运行白名单化的
 `ochcli remote serve --stdio` 协议。请求是类型化操作，不是 Shell 命令字符串。
 
-默认策略允许读取状态、运行诊断、切换 Provider、管理网关生命周期和安装更新；
-远端 Secret 写入和备份恢复默认关闭。在远端查看有效策略：
+默认策略允许读取状态、运行诊断、切换 Provider（含新 Secret）、管理网关生命周期和安装更新；
+备份恢复默认关闭。在远端查看有效策略：
 
 ```sh
 ochcli remote policy show
@@ -295,7 +295,6 @@ schemaVersion = 1
 enabled = true
 allowWrite = false
 allowGatewayLifecycle = false
-allowSecretsWrite = false
 allowBackupRestore = false
 allowUpdateInstall = false
 ```
@@ -313,9 +312,8 @@ allowBackupRestore = true
 allowUpdateInstall = true
 ```
 
-编辑 Provider/OpenClaw 等包含新 Secret 的字段时，还需显式设置
-`allowSecretsWrite = true`。未修改的脱敏占位符会保留远端原值，不会把 `******`
-写回配置。策略变更在下一次 SSH 控制会话生效。
+未修改的脱敏占位符会保留远端原值，不会把 `******` 写回配置。策略变更在下一次 SSH
+控制会话生效。
 
 ## 故障排查与当前限制
 

@@ -342,8 +342,8 @@ allowlisted `ochcli remote serve --stdio` protocol over that SSH process.
 Requests are typed operations, not shell command strings.
 
 By default the remote policy permits status reads, diagnostics, provider
-switching, Gateway lifecycle, and update installation. Remote secret writes
-and backup restore remain disabled. Inspect the effective policy on the remote
+switching (including new secrets), Gateway lifecycle, and update installation.
+Backup restore remains disabled. Inspect the effective policy on the remote
 node with:
 
 ```sh
@@ -358,7 +358,6 @@ schemaVersion = 1
 enabled = true
 allowWrite = false
 allowGatewayLifecycle = false
-allowSecretsWrite = false
 allowBackupRestore = false
 allowUpdateInstall = false
 ```
@@ -379,10 +378,8 @@ allowBackupRestore = true
 allowUpdateInstall = true
 ```
 
-Writing a new Provider/OpenClaw secret also requires
-`allowSecretsWrite = true`. Untouched masked placeholders preserve the remote
-value instead of writing `******` back. Policy changes apply to the next SSH
-control session.
+Untouched masked placeholders preserve the remote value instead of writing
+`******` back. Policy changes apply to the next SSH control session.
 
 ## Troubleshooting and current limits
 

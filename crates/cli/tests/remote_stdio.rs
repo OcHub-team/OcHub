@@ -451,7 +451,7 @@ fn plan_and_idempotency_survive_ssh_session_reconnects() {
 }
 
 #[test]
-fn remote_provider_crud_uses_typed_payloads_and_secret_policy() {
+fn remote_provider_crud_uses_typed_payloads_and_redacts_secrets() {
     let home = tempfile::tempdir().unwrap();
     let (child, mut stdin, mut stdout, ack) = start_remote(home.path(), "desktop-provider-crud");
 
@@ -579,7 +579,7 @@ fn remote_provider_crud_uses_typed_payloads_and_secret_policy() {
         "https://new.example.com"
     );
 
-    let secret_denied = request(
+    let secret_updated = request(
         &mut stdin,
         &mut stdout,
         ack.protocol_version,
@@ -591,25 +591,26 @@ fn remote_provider_crud_uses_typed_payloads_and_secret_policy() {
             "patch": {
                 "settingsConfig": {
                     "env": {
-                        "ANTHROPIC_AUTH_TOKEN": "must-not-cross-policy"
+                        "ANTHROPIC_AUTH_TOKEN": "must-not-echo-plaintext"
                     }
                 }
             }
         }),
         (Some("provider-secret-key"), None),
     );
-    assert!(!secret_denied.ok);
+    assert!(
+        secret_updated.ok,
+        "secret update error: {:?}",
+        secret_updated.error
+    );
     assert_eq!(
-        secret_denied
-            .error
-            .as_ref()
-            .map(|error| error.code.as_str()),
-        Some("PERMISSION_DENIED")
+        secret_updated.data["provider"]["settingsConfig"]["env"]["ANTHROPIC_AUTH_TOKEN"],
+        "******"
     );
     assert!(
-        !serde_json::to_string(&secret_denied)
+        !serde_json::to_string(&secret_updated)
             .unwrap()
-            .contains("must-not-cross-policy")
+            .contains("must-not-echo-plaintext")
     );
 
     let deleted = request(

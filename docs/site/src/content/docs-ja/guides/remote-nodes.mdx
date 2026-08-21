@@ -298,8 +298,9 @@ host authentication、user authentication を提供し、OcHub は SSH process �
 上で allowlist 済みの `ochcli remote serve --stdio` protocol を動かします。request は
 typed operation であり、shell command string ではありません。
 
-既定 policy は status、diagnostics、Provider switching、Gateway lifecycle、update install を
-許可します。remote secret write と backup restore は無効です。remote node で確認します。
+既定 policy は status、diagnostics、Provider switching（新しい secret を含む）、
+Gateway lifecycle、update install を許可します。backup restore は無効です。
+remote node で確認します。
 
 ```sh
 ochcli remote policy show
@@ -313,7 +314,6 @@ schemaVersion = 1
 enabled = true
 allowWrite = false
 allowGatewayLifecycle = false
-allowSecretsWrite = false
 allowBackupRestore = false
 allowUpdateInstall = false
 ```
@@ -333,7 +333,6 @@ allowBackupRestore = true
 allowUpdateInstall = true
 ```
 
-新しい Provider/OpenClaw secret を書く場合は `allowSecretsWrite = true` も必要です。
 変更していない mask placeholder は remote の元値を保持し、`******` を書き戻しません。
 policy の変更は次の SSH control session から有効です。
 

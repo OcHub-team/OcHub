@@ -26,8 +26,10 @@ pub struct RemotePolicy {
     pub allow_gateway_lifecycle: bool,
     #[serde(default = "enabled")]
     pub allow_daemon_lifecycle: bool,
-    #[serde(default)]
-    pub allow_secrets_write: bool,
+    /// Legacy `remote.toml` key. Secret writes now follow `allow_write`.
+    #[allow(dead_code)]
+    #[serde(default, skip_serializing)]
+    allow_secrets_write: bool,
     #[serde(default)]
     pub allow_backup_restore: bool,
     #[serde(default = "enabled")]
@@ -109,17 +111,11 @@ fn validate(policy: &RemotePolicy) -> Result<(), AppError> {
         && (policy.allow_write
             || policy.allow_gateway_lifecycle
             || policy.allow_daemon_lifecycle
-            || policy.allow_secrets_write
             || policy.allow_backup_restore
             || policy.allow_update_install)
     {
         // This is allowed, because keeping the subordinate choices makes
         // disabling and re-enabling remote access reversible.
-    }
-    if policy.allow_secrets_write && !policy.allow_write {
-        return Err(AppError::Config(
-            "remote policy allowSecretsWrite requires allowWrite".to_string(),
-        ));
     }
     Ok(())
 }
@@ -144,7 +140,6 @@ mod tests {
         let policy = load_at(&directory.path().join("remote.toml")).unwrap();
         assert!(policy.enabled);
         assert!(policy.allow_write);
-        assert!(!policy.allow_secrets_write);
         assert!(!policy.allow_backup_restore);
         assert!(policy.allow_update_install);
     }
@@ -162,16 +157,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_fields_and_secret_write_without_write() {
+    fn rejects_unknown_fields() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("remote.toml");
         fs::write(&path, "unknown = true\n").unwrap();
         assert!(load_at(&path).is_err());
+    }
+
+    #[test]
+    fn accepts_legacy_allow_secrets_write_field() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("remote.toml");
         fs::write(
             &path,
             "schemaVersion = 1\nallowWrite = false\nallowSecretsWrite = true\n",
         )
         .unwrap();
-        assert!(load_at(&path).is_err());
+        let policy = load_at(&path).unwrap();
+        assert!(!policy.allow_write);
+        let shown = serde_json::to_value(&policy).unwrap();
+        assert!(shown.get("allowSecretsWrite").is_none());
     }
 }

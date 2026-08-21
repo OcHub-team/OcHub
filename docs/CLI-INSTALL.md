@@ -79,7 +79,6 @@ enabled = true
 allowWrite = true
 allowGatewayLifecycle = true
 allowDaemonLifecycle = true
-allowSecretsWrite = false
 allowBackupRestore = false
 allowUpdateInstall = true
 ```

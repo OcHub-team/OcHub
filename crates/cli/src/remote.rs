@@ -728,7 +728,7 @@ impl RemoteSession {
         ) {
             return self.execute_payload_request(request).await;
         }
-        let mut argv = match argv_for_request(&request) {
+        let argv = match argv_for_request(&request) {
             Ok(argv) => argv,
             Err(error) => {
                 return error_response(
@@ -741,14 +741,6 @@ impl RemoteSession {
                 );
             }
         };
-        if self.policy.allow_secrets_write
-            && matches!(
-                request.method.as_str(),
-                methods::GATEWAY_CONNECTION_INFO | methods::STATION_CONNECTION_INFO
-            )
-        {
-            argv.insert(0, "--show-secrets".into());
-        }
         if is_direct_mutation(&request.method) {
             self.execute_mutation_response(request, argv).await
         } else {
@@ -818,9 +810,6 @@ impl RemoteSession {
                     );
                 }
                 strip_redacted_secret_placeholders(&mut params.provider);
-                if !self.policy.allow_secrets_write && contains_secret_write(&params.provider) {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 let mut argv = vec!["provider".into(), "add".into(), "--app".into(), params.app];
                 if params.add_to_live {
                     argv.push("--add-to-live".into());
@@ -851,9 +840,6 @@ impl RemoteSession {
                     );
                 }
                 strip_redacted_secret_placeholders(&mut params.patch);
-                if !self.policy.allow_secrets_write && contains_secret_write(&params.patch) {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 (
                     Payload::Json(params.patch),
                     vec![
@@ -890,11 +876,6 @@ impl RemoteSession {
                         request.request_id,
                         error,
                     );
-                }
-                if !self.policy.allow_secrets_write
-                    && common_config_may_contain_secret(&params.snippet)
-                {
-                    return secret_write_denied(self.protocol_version, request.request_id);
                 }
                 (
                     Payload::Text(params.snippet),
@@ -937,9 +918,6 @@ impl RemoteSession {
                     );
                 }
                 strip_redacted_secret_placeholders(&mut params.server);
-                if !self.policy.allow_secrets_write && contains_secret_write(&params.server) {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 let argv = if let Some(original_id) = params.original_id {
                     vec!["mcp".into(), "edit".into(), original_id, "--patch".into()]
                 } else {
@@ -1059,9 +1037,6 @@ impl RemoteSession {
                     }
                 };
                 strip_redacted_secret_placeholders(&mut params.station);
-                if !self.policy.allow_secrets_write && contains_secret_write(&params.station) {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 (
                     Payload::Json(params.station),
                     vec!["station".into(), "add".into(), "--from".into()],
@@ -1074,7 +1049,7 @@ impl RemoteSession {
                     station_id: String,
                     patch: Value,
                 }
-                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                let mut params = match serde_json::from_value::<Params>(request.params.clone()) {
                     Ok(params) => params,
                     Err(error) => {
                         return invalid_params_response(
@@ -1092,9 +1067,7 @@ impl RemoteSession {
                         error,
                     );
                 }
-                if !self.policy.allow_secrets_write && contains_secret_write(&params.patch) {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
+                strip_redacted_secret_placeholders(&mut params.patch);
                 (
                     Payload::Json(params.patch),
                     vec![
@@ -1193,9 +1166,6 @@ impl RemoteSession {
                         "a redacted apiKey requires stationId",
                     );
                 }
-                if !params.api_key.is_empty() && !redacted_key && !self.policy.allow_secrets_write {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 let mut argv = match request.method.as_str() {
                     methods::STATION_DETECT_DIALECTS => vec![
                         "gateway".into(),
@@ -1246,9 +1216,6 @@ impl RemoteSession {
                         );
                     }
                 };
-                if !self.policy.allow_secrets_write && contains_secret_write(&params.proxy) {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 (
                     Payload::Json(params.proxy),
                     vec![
@@ -1288,12 +1255,6 @@ impl RemoteSession {
                         error,
                     );
                 }
-                if !self.policy.allow_secrets_write
-                    && (contains_secret_write(&params.value)
-                        || (is_secret_key(&params.path) && secret_value_is_present(&params.value)))
-                {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 (
                     Payload::Json(params.value),
                     vec![
@@ -1330,9 +1291,6 @@ impl RemoteSession {
                         request.request_id,
                         "backend must be webdav or s3",
                     );
-                }
-                if !self.policy.allow_secrets_write && contains_secret_write(&params.settings) {
-                    return secret_write_denied(self.protocol_version, request.request_id);
                 }
                 let mut settings = params.settings;
                 strip_redacted_secret_placeholders(&mut settings);
@@ -1371,9 +1329,6 @@ impl RemoteSession {
                 let mut argv = vec!["sync".into(), params.backend, "test".into()];
                 match params.settings {
                     Some(mut settings) => {
-                        if !self.policy.allow_secrets_write && contains_secret_write(&settings) {
-                            return secret_write_denied(self.protocol_version, request.request_id);
-                        }
                         strip_redacted_secret_placeholders(&mut settings);
                         argv.push("--from".into());
                         (Payload::Json(settings), argv)
@@ -1392,11 +1347,6 @@ impl RemoteSession {
                         );
                     }
                 };
-                if !self.policy.allow_secrets_write
-                    && matches!(&payload, Payload::Json(value) if contains_secret_write(value))
-                {
-                    return secret_write_denied(self.protocol_version, request.request_id);
-                }
                 (payload, argv)
             }
             _ => unreachable!("payload methods are filtered by handle_request"),
@@ -3462,32 +3412,6 @@ fn invalid_argument_response(
     )
 }
 
-fn secret_write_denied(protocol_version: u32, request_id: String) -> ResponseFrame {
-    error_response(
-        protocol_version,
-        request_id,
-        "PERMISSION_DENIED",
-        "the remote policy does not allow writing secrets",
-        false,
-        json!({ "capability": "secrets.write" }),
-    )
-}
-
-fn contains_secret_write(value: &Value) -> bool {
-    match value {
-        Value::Object(values) => values.iter().any(|(key, value)| {
-            (is_secret_key(key) && secret_value_is_present(value)) || contains_secret_write(value)
-        }),
-        Value::Array(values) => {
-            (values.len() == 2
-                && values[0].as_str().is_some_and(is_secret_key)
-                && secret_value_is_present(&values[1]))
-                || values.iter().any(contains_secret_write)
-        }
-        _ => false,
-    }
-}
-
 fn strip_redacted_secret_placeholders(value: &mut Value) {
     match value {
         Value::Object(values) => {
@@ -3519,16 +3443,6 @@ fn strip_redacted_secret_placeholders(value: &mut Value) {
     }
 }
 
-fn secret_value_is_present(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::String(value) => {
-            !value.is_empty() && !value.chars().all(|character| character == '*')
-        }
-        _ => true,
-    }
-}
-
 fn is_secret_key(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
     normalized.contains("password")
@@ -3541,22 +3455,6 @@ fn is_secret_key(key: &str) -> bool {
         || normalized == "apikey"
         || normalized.ends_with("_api_key")
         || normalized.ends_with("_key")
-}
-
-fn common_config_may_contain_secret(value: &str) -> bool {
-    let normalized = value.to_ascii_lowercase().replace(['-', '.'], "_");
-    [
-        "api_key",
-        "apikey",
-        "auth_token",
-        "access_token",
-        "authorization",
-        "password",
-        "secret",
-        "cookie",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
 }
 
 fn validate_switch_params(params: &ochub_protocol::ProviderSwitchParams) -> Result<(), String> {
@@ -4255,32 +4153,6 @@ mod tests {
         assert!(capabilities.contains(&Capability::NodeUpdateInstall));
         assert!(capabilities.contains(&Capability::NodeUpdateRelay));
         assert!(!capabilities.contains(&Capability::DataImport));
-    }
-
-    #[test]
-    fn secret_detection_matches_nested_provider_fields() {
-        assert!(contains_secret_write(&json!({
-            "settingsConfig": {
-                "env": { "ANTHROPIC_API_KEY": "sk-secret" }
-            }
-        })));
-        assert!(contains_secret_write(&json!({
-            "settingsConfig": {
-                "headers": [["Authorization", "Bearer secret"]]
-            }
-        })));
-        assert!(!contains_secret_write(&json!({
-            "settingsConfig": {
-                "apiKey": "******",
-                "model": "claude"
-            }
-        })));
-        assert!(common_config_may_contain_secret(
-            "ANTHROPIC_API_KEY = \"secret\""
-        ));
-        assert!(!common_config_may_contain_secret(
-            "model_reasoning_effort = \"high\""
-        ));
     }
 
     #[test]
