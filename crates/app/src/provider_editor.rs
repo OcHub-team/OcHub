@@ -147,7 +147,7 @@ struct StationGatewayInfo {
 /// mode, where the station declares the exact upstream models it serves.
 #[derive(Clone, PartialEq)]
 enum ModelSuggestionTarget {
-    /// A schema text field (currently always `model`).
+    /// A schema text field (`model` or Grok Build's `upstream_model`).
     Field(String),
     /// The `model` cell of one grid row: (grid field id, row id).
     GridCell(String, usize),
@@ -2135,7 +2135,9 @@ impl ProviderEditor {
                     .get(&field.id)
                     .map(|i| i.clone().into_any_element())
                     .unwrap_or_else(|| div().into_any_element());
-                if self.source == ProviderSource::Station && field.id == "model" {
+                if self.source == ProviderSource::Station
+                    && matches!(field.id.as_str(), "model" | "upstream_model")
+                {
                     self.with_model_suggestions(
                         ModelSuggestionTarget::Field(field.id.clone()),
                         input,

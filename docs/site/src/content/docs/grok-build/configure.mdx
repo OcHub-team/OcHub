@@ -8,7 +8,8 @@ sidebar:
 
 Grok Build operates with one current model profile: its live configuration
 points to one active connection. Its default directory is `~/.grok`, and OcHub
-can also manage its MCP servers. Start from a preset or fill the form manually.
+can also manage its MCP servers. Start from the official xAI preset, fill the
+form manually, or choose a configured model provider.
 
 <Steps>
 
@@ -45,6 +46,18 @@ can also manage its MCP servers. Start from a preset or fill the form manually.
 If environment-variable mode works in an OcHub check but not in Grok Build, the
 two processes probably inherited different environments. Launch from the same
 terminal or define the variable in the environment Grok Build actually reads.
+
+## One-click model provider
+
+At the top of the connection editor, change the source from **Direct connection**
+to **Model provider**. After you pick a configured model provider, OcHub fills in
+the local gateway address, issues a key, and pins the API backend to OpenAI
+Responses. You only set the profile name, upstream model, and display name.
+Dialect conversion happens in the gateway, so a Chat Completions-only upstream
+does not need to be written as a Grok Build direct connection.
+
+You can also apply the same model provider to Grok Build from the **Model
+providers** page after saving it.
 
 After saving, follow the [verification checklist](/guides/providers#verify-a-new-connection)
 to confirm the switch. For effective configuration, custom backends,

@@ -855,11 +855,20 @@ pub fn refresh_station_channel_settings(
 }
 
 /// A station channel must pin at least one model: Codex needs its single
-/// `model`, Claude needs the default model or one role filled in.
+/// `model`, Grok Build needs `upstream_model`, Claude needs the default
+/// model or one role filled in.
 fn validate_station_channel_models(app_type: AppType, values: &FormValues) -> Result<(), AppError> {
     match app_type {
         AppType::Codex => {
             if provider_config::str_val(values, "model").trim().is_empty() {
+                return Err(AppError::InvalidInput("请选择要使用的模型。".to_string()));
+            }
+        }
+        AppType::GrokBuild => {
+            if provider_config::str_val(values, "upstream_model")
+                .trim()
+                .is_empty()
+            {
                 return Err(AppError::InvalidInput("请选择要使用的模型。".to_string()));
             }
         }
@@ -1862,6 +1871,65 @@ mod tests {
     }
 
     #[test]
+    fn build_station_channel_grokbuild_points_at_gateway() {
+        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
+        let route = modeled_station_fixture(&state, "alpha", Dialect::Chat);
+        let mut values = FormValues::new();
+        provider_config::set_str(&mut values, "profile", "company-grok");
+        provider_config::set_str(&mut values, "upstream_model", "gpt-5.5");
+        provider_config::set_str(&mut values, "name", "Company Grok");
+        provider_config::set_str(&mut values, "context_window", "200000");
+        provider_config::set_str(&mut values, "credential_mode", "env");
+        provider_config::set_str(&mut values, "env_key", "XAI_API_KEY");
+        provider_config::set_str(&mut values, "api_backend", "chat_completions");
+
+        let provider = build_station_channel(
+            &state,
+            AppType::GrokBuild,
+            &route.id,
+            &values,
+            identity("grok-main"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+
+        let toml = provider.settings_config["config"].as_str().unwrap();
+        crate::apps::grokbuild::validate_config_toml(toml).unwrap();
+        assert!(toml.contains("[model.company-grok]"), "{toml}");
+        assert!(toml.contains("model = \"gpt-5.5\""), "{toml}");
+        assert!(toml.contains("name = \"Company Grok\""), "{toml}");
+        assert!(
+            toml.contains("base_url = \"http://127.0.0.1:4180/v1\""),
+            "{toml}"
+        );
+        assert!(toml.contains("api_key = \"rd-"), "{toml}");
+        assert!(!toml.contains("env_key"), "{toml}");
+        assert!(toml.contains("api_backend = \"responses\""), "{toml}");
+        assert!(toml.contains("context_window = 200000"), "{toml}");
+        assert_eq!(
+            provider.meta.as_ref().unwrap().gateway_route_id.as_deref(),
+            Some(route.id.as_str())
+        );
+
+        let (settings, _) = refresh_station_channel_settings(
+            &state,
+            AppType::GrokBuild,
+            &provider,
+            "http://127.0.0.1:5000",
+        )
+        .unwrap();
+        let toml = settings["config"].as_str().unwrap();
+        assert!(
+            toml.contains("base_url = \"http://127.0.0.1:5000/v1\""),
+            "{toml}"
+        );
+        assert!(toml.contains("model = \"gpt-5.5\""), "{toml}");
+        assert!(toml.contains("api_backend = \"responses\""), "{toml}");
+    }
+
+    #[test]
     fn build_station_channel_requires_a_model() {
         let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
         let route = modeled_station_fixture(&state, "alpha", Dialect::Responses);
@@ -1878,6 +1946,19 @@ mod tests {
         )
         .unwrap_err();
 
+        assert!(err.to_string().contains("模型"));
+
+        let err = build_station_channel(
+            &state,
+            AppType::GrokBuild,
+            &route.id,
+            &FormValues::new(),
+            identity("grok-x"),
+            "http://127.0.0.1:4180",
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("模型"));
     }
 

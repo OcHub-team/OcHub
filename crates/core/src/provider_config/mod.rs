@@ -423,7 +423,7 @@ pub fn set_bool(values: &mut FormValues, id: &str, value: bool) {
 /// creating a channel for this app. The station supplies endpoint + key via
 /// the local gateway; the form only asks for model(s).
 pub fn station_source_supported(app: AppType) -> bool {
-    matches!(app, AppType::Claude | AppType::Codex)
+    matches!(app, AppType::Claude | AppType::Codex | AppType::GrokBuild)
 }
 
 /// What the selected station can back, for the fields a station-sourced
@@ -466,6 +466,13 @@ pub fn station_managed_fields(app: AppType) -> &'static [&'static str] {
             "disable_response_storage",
             "query_params",
             "http_headers",
+        ],
+        AppType::GrokBuild => &[
+            "base_url",
+            "credential_mode",
+            "api_key",
+            "env_key",
+            "api_backend",
         ],
         _ => &[],
     }
@@ -565,6 +572,18 @@ pub fn inject_station_endpoint(
             values.insert("query_params".into(), Value::Object(Default::default()));
             values.insert("http_headers".into(), Value::Object(Default::default()));
         }
+        AppType::GrokBuild => {
+            set_str(values, "base_url", dialect_base_url(app, base_url));
+            set_str(values, "credential_mode", grokbuild::CREDENTIAL_INLINE);
+            set_str(values, "api_key", key);
+            // Grok Build talks Responses to the local gateway; conversion for
+            // Chat/Messages upstreams happens gateway-side.
+            set_str(
+                values,
+                "api_backend",
+                crate::apps::grokbuild::DEFAULT_API_BACKEND,
+            );
+        }
         _ => {}
     }
 }
@@ -591,6 +610,19 @@ mod tests {
         let mut codex = FormValues::new();
         inject_station_endpoint(&mut codex, AppType::Codex, origin, "k", caps);
         assert_eq!(str_val(&codex, "base_url"), "http://127.0.0.1:8080/v1");
+
+        let mut grok = FormValues::new();
+        inject_station_endpoint(&mut grok, AppType::GrokBuild, origin, "k", caps);
+        assert_eq!(str_val(&grok, "base_url"), "http://127.0.0.1:8080/v1");
+        assert_eq!(
+            str_val(&grok, "credential_mode"),
+            grokbuild::CREDENTIAL_INLINE
+        );
+        assert_eq!(str_val(&grok, "api_key"), "k");
+        assert_eq!(
+            str_val(&grok, "api_backend"),
+            crate::apps::grokbuild::DEFAULT_API_BACKEND
+        );
     }
 
     /// A trailing slash on the origin must not produce `//v1`.

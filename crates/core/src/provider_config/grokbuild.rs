@@ -11,7 +11,7 @@ use crate::AppType;
 use crate::apps::grokbuild::{DEFAULT_API_BACKEND, DEFAULT_CONTEXT_WINDOW, DEFAULT_MODEL};
 use crate::model::ProviderMeta;
 
-const CREDENTIAL_INLINE: &str = "inline";
+pub(crate) const CREDENTIAL_INLINE: &str = "inline";
 const CREDENTIAL_ENV: &str = "env";
 
 pub struct GrokBuildConfig;
@@ -263,22 +263,13 @@ impl AppConfig for GrokBuildConfig {
     }
 
     fn presets(&self) -> Vec<Preset> {
-        vec![
-            preset(
-                "xAI Grok API",
-                "xAI Grok",
-                "https://api.x.ai/v1",
-                DEFAULT_MODEL,
-                "XAI_API_KEY",
-            ),
-            preset(
-                "OpenRouter Grok",
-                "OpenRouter",
-                "https://openrouter.ai/api/v1",
-                "x-ai/grok-4.5",
-                "OPENROUTER_API_KEY",
-            ),
-        ]
+        vec![preset(
+            "xAI Grok API",
+            "xAI Grok",
+            "https://api.x.ai/v1",
+            DEFAULT_MODEL,
+            "XAI_API_KEY",
+        )]
     }
 }
 
@@ -395,5 +386,21 @@ mod tests {
         crate::apps::grokbuild::validate_config_toml(text).unwrap();
         assert!(text.contains("[model.\"grok-4.5\"]"));
         assert!(text.contains("env_key = \"XAI_API_KEY\""));
+    }
+
+    #[test]
+    fn presets_only_include_official_xai() {
+        let names: Vec<String> = GrokBuildConfig
+            .presets()
+            .into_iter()
+            .map(|preset| preset.name)
+            .collect();
+        assert_eq!(names, ["xAI Grok API"]);
+        assert!(
+            GrokBuildConfig
+                .presets()
+                .iter()
+                .all(|preset| str_val(&preset.values, "base_url") != "https://openrouter.ai/api/v1")
+        );
     }
 }
