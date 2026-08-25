@@ -4777,8 +4777,8 @@ dependencies = [
 
 [[package]]
 name = "ochub-ui"
-version = "0.4.0"
-source = "git+https://github.com/OcHub-team/ochub-ui.git?tag=v0.4.0#86dc658c3c3b75ce90ecc994b2e5fbc20c9e52c5"
+version = "0.6.2"
+source = "git+https://github.com/OcHub-team/ochub-ui.git?tag=v0.6.2#c9b7766d786f008088e2571ce0da06e7dbfe05aa"
 dependencies = [
  "anyhow",
  "chrono",
