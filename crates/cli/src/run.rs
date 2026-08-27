@@ -97,6 +97,27 @@ pub async fn execute(cli: Cli, output: &Output) -> Result<(), CliError> {
         _ => {}
     }
 
+    if cli.dry_run
+        && let Command::Gateway(crate::command::GatewayArgs { command }) = &cli.command
+    {
+        let action = match command {
+            GatewayCommand::Start => Some(("start-gateway", Some(true))),
+            GatewayCommand::Stop => Some(("stop-gateway", Some(false))),
+            GatewayCommand::Restart => Some(("restart-gateway", Some(true))),
+            GatewayCommand::Serve => Some(("serve-gateway", None)),
+            _ => None,
+        };
+        if let Some((action, enabled)) = action {
+            return output.success(
+                &json!({
+                    "action": action,
+                    "enabled": enabled,
+                    "dryRun": true
+                }),
+                &[],
+            );
+        }
+    }
     if matches!(
         &cli.command,
         Command::Gateway(crate::command::GatewayArgs {
@@ -133,31 +154,24 @@ pub async fn execute(cli: Cli, output: &Output) -> Result<(), CliError> {
         }
         .into());
     }
-    match &cli.command {
-        Command::Gateway(crate::command::GatewayArgs {
-            command: GatewayCommand::Start | GatewayCommand::Restart,
-        }) => {
-            if cli.direct {
-                return Err(CliError::InvalidInput(
-                    "gateway start/restart requires a persistent owner; use `gateway serve` for direct foreground operation"
-                        .to_string(),
-                ));
-            }
-            crate::daemon::start_background(&cli).await?;
-            if crate::runtime_client::try_execute(&cli, output).await? {
-                return Ok(());
-            }
-            return Err(ApplicationError::RuntimeUnavailable(
-                "daemon started but the gateway request could not be delivered".to_string(),
-            )
-            .into());
+    if let Command::Gateway(crate::command::GatewayArgs {
+        command: GatewayCommand::Start | GatewayCommand::Restart,
+    }) = &cli.command
+    {
+        if cli.direct {
+            return Err(CliError::InvalidInput(
+                "gateway start/restart requires a persistent owner; use `gateway serve` for direct foreground operation"
+                    .to_string(),
+            ));
         }
-        Command::Gateway(crate::command::GatewayArgs {
-            command: GatewayCommand::Stop,
-        }) => {
-            return output.success(&json!({ "stopped": false, "running": false }), &[]);
+        crate::daemon::start_background(&cli).await?;
+        if crate::runtime_client::try_execute(&cli, output).await? {
+            return Ok(());
         }
-        _ => {}
+        return Err(ApplicationError::RuntimeUnavailable(
+            "daemon started but the gateway request could not be delivered".to_string(),
+        )
+        .into());
     }
     let _mutation_guard = ochub_core::runtime::MutationGuard::acquire()?;
     let application = Application::open(OpenOptions::default())?;
@@ -255,7 +269,7 @@ async fn dispatch(application: &Application, cli: &Cli, output: &Output) -> Resu
         Command::Openclaw(args) => run_openclaw(application, &args.command, cli, output),
         Command::Hermes(args) => run_hermes(application, &args.command, cli, output),
         Command::Theme(args) => run_theme(application, &args.command, cli, output),
-        Command::Deeplink(args) => run_deeplink(application, &args.command, cli, output),
+        Command::Deeplink(args) => run_deeplink(application, &args.command, cli, output).await,
         Command::Update(args) => run_update(application, &args.command, cli, output).await,
         Command::Mcp(args) => run_mcp(application, &args.command, cli, output),
         Command::Skill(args) => run_skill(application, &args.command, cli, output).await,
@@ -3519,7 +3533,7 @@ fn run_theme(
     }
 }
 
-fn run_deeplink(
+async fn run_deeplink(
     application: &Application,
     command: &DeeplinkCommand,
     cli: &Cli,
@@ -3544,7 +3558,7 @@ fn run_deeplink(
                     &[],
                 )
             } else {
-                output.success(&application.import_deeplink(uri)?, &[])
+                output.success(&application.import_deeplink(uri).await?, &[])
             }
         }
     }
@@ -3757,7 +3771,7 @@ async fn run_gateway(
     match command {
         GatewayCommand::Status => output.success(&application.gateway_status().await?, &[]),
         GatewayCommand::Start => {
-            let status = application.start_gateway().await?;
+            let status = application.enable_gateway().await?;
             output.success(&status, &[])
         }
         GatewayCommand::Serve => {
@@ -3771,12 +3785,12 @@ async fn run_gateway(
             Ok(())
         }
         GatewayCommand::Stop => {
-            application.stop_gateway().await?;
+            application.disable_gateway().await?;
             output.success(&json!({ "stopped": true }), &[])
         }
         GatewayCommand::Restart => {
             application.stop_gateway().await?;
-            output.success(&application.start_gateway().await?, &[])
+            output.success(&application.enable_gateway().await?, &[])
         }
         GatewayCommand::Health => output.success(&application.gateway_health().await?, &[]),
         GatewayCommand::Models => output.success(&application.gateway_models()?, &[]),
@@ -4394,7 +4408,9 @@ async fn run_station(
                     &[],
                 )
             } else {
-                let result = application.apply_gateway_station(id, &app_id(app)?, policy)?;
+                let result = application
+                    .apply_gateway_station(id, &app_id(app)?, policy)
+                    .await?;
                 output.success(&maybe_redacted_value(result, cli.show_secrets)?, &[])
             }
         }

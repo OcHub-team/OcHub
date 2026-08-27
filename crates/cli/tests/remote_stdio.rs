@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -157,6 +158,55 @@ fn probe_reports_protocol_identity_without_starting_a_listener() {
             .iter()
             .any(|capability| capability == "node.update.install")
     );
+}
+
+#[test]
+fn remote_gateway_start_persists_autostart_for_the_next_owner() {
+    let home = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    drop(listener);
+
+    let configured = Command::new(env!("CARGO_BIN_EXE_ochcli"))
+        .env("OCHUB_TEST_HOME", home.path())
+        .args([
+            "--json",
+            "gateway",
+            "config",
+            "set",
+            "--port",
+            &port,
+            "--health-interval",
+            "0",
+        ])
+        .output()
+        .expect("configure gateway port");
+    assert!(configured.status.success());
+
+    let (child, mut stdin, mut stdout, ack) =
+        start_remote(home.path(), "desktop-gateway-lifecycle");
+    let started = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "gateway-start",
+        methods::GATEWAY_START,
+        serde_json::Value::Null,
+        (Some("gateway-start-key"), None),
+    );
+    assert!(started.ok, "gateway start error: {:?}", started.error);
+    assert_eq!(started.data["running"], true);
+    assert_eq!(started.data["port"].to_string(), port);
+    close_remote(child, stdin, "gateway-lifecycle-complete");
+
+    let shown = Command::new(env!("CARGO_BIN_EXE_ochcli"))
+        .env("OCHUB_TEST_HOME", home.path())
+        .args(["--json", "gateway", "config", "show"])
+        .output()
+        .expect("read persisted gateway config");
+    assert!(shown.status.success());
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["data"]["enabled"], true);
 }
 
 #[test]

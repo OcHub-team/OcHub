@@ -25,12 +25,15 @@ impl Application {
         })
     }
 
-    pub fn import_deeplink(&self, uri: &str) -> ApplicationResult<Value> {
+    pub async fn import_deeplink(&self, uri: &str) -> ApplicationResult<Value> {
         let request = crate::deeplink::parse_deeplink_url(uri)?;
-        self.import_deeplink_request(request)
+        self.import_deeplink_request(request).await
     }
 
-    fn import_deeplink_request(&self, request: DeepLinkImportRequest) -> ApplicationResult<Value> {
+    async fn import_deeplink_request(
+        &self,
+        request: DeepLinkImportRequest,
+    ) -> ApplicationResult<Value> {
         match request.resource.as_str() {
             "provider" => {
                 let app = request.app.clone();
@@ -45,6 +48,9 @@ impl Application {
             "model-provider" => {
                 let result =
                     crate::deeplink::import_model_provider_from_deeplink(self.state(), request)?;
+                if !result.applied_to.is_empty() {
+                    self.enable_gateway().await?;
+                }
                 if !result.apply_failures.is_empty() {
                     let details = serde_json::to_value(&result)
                         .map_err(|source| crate::AppError::JsonSerialize { source })?;

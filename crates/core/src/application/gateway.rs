@@ -104,6 +104,31 @@ impl Application {
         Ok(())
     }
 
+    /// Persist the user's intent to keep the Gateway available, then start the
+    /// in-process listener. Unlike [`Self::start_gateway`], this survives an
+    /// owner restart and is therefore the entry point for UI and CLI actions.
+    pub async fn enable_gateway(&self) -> ApplicationResult<GatewayStatus> {
+        self.persist_gateway_enabled(true).await?;
+        self.start_gateway().await
+    }
+
+    /// Persist the user's intent to keep the Gateway off, then stop the live
+    /// listener. Internal owner shutdown must continue using
+    /// [`Self::stop_gateway`] so a daemon restart can honor autostart.
+    pub async fn disable_gateway(&self) -> ApplicationResult<()> {
+        self.persist_gateway_enabled(false).await?;
+        self.stop_gateway().await
+    }
+
+    async fn persist_gateway_enabled(&self, enabled: bool) -> ApplicationResult<()> {
+        let mut config = self.gateway_config()?;
+        if config.enabled != enabled {
+            config.enabled = enabled;
+            self.set_gateway_config(config).await?;
+        }
+        Ok(())
+    }
+
     pub async fn gateway_health(&self) -> ApplicationResult<HashMap<String, ChannelHealth>> {
         Ok(self.state.gateway.health_snapshot().await)
     }
@@ -702,7 +727,7 @@ impl Application {
         )?)
     }
 
-    pub fn apply_gateway_station(
+    pub async fn apply_gateway_station(
         &self,
         id: &str,
         app: &AppId,
@@ -710,6 +735,7 @@ impl Application {
     ) -> ApplicationResult<apply::ApplyResult> {
         let station = self.get_gateway_station(id)?;
         let app_type = builtin_app(app, "gateway.station.apply")?;
+        self.enable_gateway().await?;
         let base_url = gateway_base_url(&self.state.db.get_gateway_config()?);
         let route_id = apply::station_route_id(&station.id);
         match policy {
@@ -1014,6 +1040,9 @@ fn validate_route_references(
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -1026,5 +1055,45 @@ mod tests {
     fn normalizes_station_route_prefix() {
         assert_eq!(station_id("station:alpha"), "alpha");
         assert_eq!(station_id("alpha"), "alpha");
+    }
+
+    #[test]
+    fn explicit_gateway_lifecycle_persists_across_owner_restarts() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let db = Arc::new(crate::Database::memory().unwrap());
+        db.set_gateway_config(&GatewayConfig {
+            enabled: false,
+            port,
+            health_interval_secs: 0,
+            ..GatewayConfig::default()
+        })
+        .unwrap();
+
+        let first_state = Arc::new(crate::AppState::new(db.clone()));
+        let first = Application::from_state(first_state.clone());
+        let started = futures::executor::block_on(first.enable_gateway()).unwrap();
+        assert!(started.running);
+        assert_eq!(started.port, port);
+        assert!(db.get_gateway_config().unwrap().enabled);
+
+        // Owner shutdown stops the listener without erasing autostart intent.
+        futures::executor::block_on(first.stop_gateway()).unwrap();
+        assert!(db.get_gateway_config().unwrap().enabled);
+        drop(first);
+        drop(first_state);
+
+        let second_state = Arc::new(crate::AppState::new(db.clone()));
+        let second = Application::from_state(second_state.clone());
+        futures::executor::block_on(second_state.gateway.maybe_autostart());
+        let restarted = futures::executor::block_on(second_state.gateway.status());
+        assert!(restarted.running);
+        assert_eq!(restarted.port, port);
+
+        futures::executor::block_on(second.disable_gateway()).unwrap();
+        assert!(!db.get_gateway_config().unwrap().enabled);
+        assert!(!futures::executor::block_on(second_state.gateway.status()).running);
     }
 }

@@ -1,3 +1,4 @@
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
@@ -75,6 +76,46 @@ fn managed_install_plan_runs_the_daemon_from_ochcli() {
             .ends_with("ochcli")
     );
     assert!(!home.path().join(".ochub/ochub.db").exists());
+}
+
+#[test]
+fn gateway_lifecycle_dry_run_never_starts_or_changes_autostart() {
+    let home = tempfile::tempdir().unwrap();
+    for (command, action, enabled) in [
+        ("start", "start-gateway", Some(true)),
+        ("stop", "stop-gateway", Some(false)),
+        ("restart", "restart-gateway", Some(true)),
+        ("serve", "serve-gateway", None),
+    ] {
+        let value = json(&ochcli(
+            home.path(),
+            &["--json", "--dry-run", "gateway", command],
+        ));
+        assert_eq!(value["data"]["action"], action);
+        assert_eq!(value["data"]["enabled"], serde_json::json!(enabled));
+        assert_eq!(value["data"]["dryRun"], true);
+    }
+
+    assert!(!home.path().join(".ochub/runtime/owner.json").exists());
+    let config = json(&ochcli(
+        home.path(),
+        &["--json", "gateway", "config", "show"],
+    ));
+    assert_eq!(config["data"]["enabled"], false);
+    assert!(!home.path().join(".ochub/runtime/owner.json").exists());
+
+    let enabled = json(&ochcli(
+        home.path(),
+        &["--json", "gateway", "config", "set", "--enabled", "true"],
+    ));
+    assert_eq!(enabled["data"]["enabled"], true);
+    let stopped = json(&ochcli(home.path(), &["--json", "gateway", "stop"]));
+    assert_eq!(stopped["data"]["stopped"], true);
+    let config = json(&ochcli(
+        home.path(),
+        &["--json", "gateway", "config", "show"],
+    ));
+    assert_eq!(config["data"]["enabled"], false);
 }
 
 #[test]
@@ -297,6 +338,41 @@ fn daemon_rpc_executes_mutations_and_blocks_direct_bypass() {
         std::thread::sleep(Duration::from_millis(100));
     }
     assert!(status.is_some(), "daemon did not become ready");
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let gateway_port = listener.local_addr().unwrap().port().to_string();
+    drop(listener);
+    let gateway_config = json(&ochcli(
+        home.path(),
+        &[
+            "--json",
+            "gateway",
+            "config",
+            "set",
+            "--port",
+            &gateway_port,
+            "--health-interval",
+            "0",
+        ],
+    ));
+    assert_eq!(gateway_config["data"]["enabled"], false);
+
+    let gateway_started = json(&ochcli(home.path(), &["--json", "gateway", "start"]));
+    assert_eq!(gateway_started["data"]["running"], true);
+    assert_eq!(gateway_started["data"]["port"].to_string(), gateway_port);
+    let gateway_config = json(&ochcli(
+        home.path(),
+        &["--json", "gateway", "config", "show"],
+    ));
+    assert_eq!(gateway_config["data"]["enabled"], true);
+
+    let gateway_stopped = json(&ochcli(home.path(), &["--json", "gateway", "stop"]));
+    assert_eq!(gateway_stopped["data"]["stopped"], true);
+    let gateway_config = json(&ochcli(
+        home.path(),
+        &["--json", "gateway", "config", "show"],
+    ));
+    assert_eq!(gateway_config["data"]["enabled"], false);
 
     let mutation = json(&ochcli(home.path(), &["--json", "app", "disable", "codex"]));
     assert_eq!(mutation["data"]["enabled"], false);

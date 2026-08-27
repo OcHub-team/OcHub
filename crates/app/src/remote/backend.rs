@@ -2598,11 +2598,11 @@ impl WorkspaceBackend {
     ) -> Result<Value, WorkspaceBackendError> {
         match self {
             Self::Local(application) if running => {
-                Ok(serde_json::to_value(application.start_gateway().await?)
+                Ok(serde_json::to_value(application.enable_gateway().await?)
                     .map_err(WorkspaceBackendError::Response)?)
             }
             Self::Local(application) => {
-                application.stop_gateway().await?;
+                application.disable_gateway().await?;
                 Ok(json!({ "stopped": true }))
             }
             Self::Remote(client) => {
@@ -2955,7 +2955,9 @@ impl WorkspaceBackend {
     ) -> Result<Value, WorkspaceBackendError> {
         match self {
             Self::Local(application) => Ok(serde_json::to_value(
-                application.apply_gateway_station(station_id, app, Some(policy))?,
+                application
+                    .apply_gateway_station(station_id, app, Some(policy))
+                    .await?,
             )?),
             Self::Remote(client) => {
                 client.require_capability(Capability::StationWrite)?;
