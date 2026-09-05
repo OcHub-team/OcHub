@@ -17,6 +17,7 @@ Codex は `config.toml` と `auth.json` を使います。前者はモデルと�
 | サードパーティー API のみ | ChatGPT ログイン不要 | サードパーティー API キー | 完全なサードパーティー Responses |
 | ChatGPT ログインのみ | `auth.json` を使用 | 公式ログイン状態 | Codex 公式アカウントとエンドポイント |
 | ChatGPT ログイン + サードパーティー API | `auth.json` を保持 | サードパーティー API キー | アカウント機能とサードパーティーのモデル要求 |
+| ChatGPT ログイン + OcHub 中継 | 実ログインまたは明示的な仮想ログイン | ログイントークン → OcHub ルート ID | 中継とコンテキスト管理 |
 
 併用方式ではアカウントは `auth.json`、モデルリクエストは現在のプロバイダーの
 `experimental_bearer_token` が担当します。
@@ -143,3 +144,81 @@ API キーフィールドに保存します。
 Chat 専用上流は[ルーティング実践](/ja/advanced/routing-recipes)へ進んでください。同時ログインと
 転送、リモート圧縮、Responses WebSocket、Provider 履歴バケットについては
 [Codex の高度な設定と落とし穴](/ja/codex/advanced)を参照してください。
+
+## 実際の ChatGPT ログインと中継、コンテキスト管理
+
+OcHub 0.5.16 以降、モデルプロバイダー接続は実際の ChatGPT ログインを保持し、ローカルゲートウェイの認証 ID を選択したルートに自動で関連付けます。
+
+1. Codex で ChatGPT にログインします。対応する Codex ソースでは実験的コンテキスト管理の対象は Plus、Pro、ProLite です。
+2. **モデルプロバイダー**でサードパーティーのエンドポイント、API キー、モデル、ルートを設定します。リモート圧縮には Responses の `/responses/compact` 対応が必要です。
+3. そのプロバイダーを接続元とする Codex 接続を追加し、**ChatGPT ログイン + OcHub 中継**を選択します。
+4. **仮想 ChatGPT ログイン**をオフ、**コンテキスト管理**をオンにして保存し、接続を切り替えます。上流 API キーはプロバイダー側に設定します。
+5. Codex の新しいセッションで短いリクエストを確認し、その後長い会話または `/compact` を検証します。使用量ログでルートと実際のモデルを確認してください。
+
+実際のログインが存在する場合、プロバイダーのワンクリック適用でもこの方式を選択します。有効化時に Codex バックエンドとモデルカタログを有効にし、選択したルートのキー ID に関連付けます。非アクティブな接続の保存だけでは関連付けは変わりません。関連付けはゲートウェイ全体で一つです。同じゲートウェイを使う実ログインのセッションには最後に選択したルートが適用されます。
+
+```toml
+model_provider = "custom"
+model = "your-model-id"
+
+[model_providers.custom]
+name = "OpenAI"
+base_url = "http://127.0.0.1:4180/backend-api/codex"
+wire_api = "responses"
+requires_openai_auth = true
+
+[features.context_management]
+experimental_mode = true
+```
+
+`auth.json` の実アカウントは保持されます。Codex はアカウントトークンをローカル OcHub に送り、OcHub は Authorization を上流の API キーに置き換えます。料金はサードパーティー側の規則に従います。
+
+### 有効化条件と仮想ログイン
+
+自動有効化には `OpenAI` という provider name、`/backend-api/codex` で終わる URL、`requires_openai_auth = true` が必要です。`experimental_bearer_token`、`env_key`、独立した `auth`、`aws` は設定できません。**ChatGPT ログイン + サードパーティー API** は Bearer キーを設定するため、この判定を通過しません。有効化されると Token Budget と history/notes 拡張がオンになりますが、管理ポリシーで無効にされる場合があります。モデルのコンテキスト長とツール能力を正確に設定してください。スイッチの有効化だけで全モデルの長い会話への互換性が保証されるわけではありません。
+
+仮想ログインは実アカウントがない場合に `rd-…` ゲートウェイキーをローカルログインファイルに格納する機能です。公式の契約や利用枠は付与されず、実ログインを上書きしません。プロバイダー接続でもスイッチの選択を尊重します。
+
+### 手動接続の関連付け
+
+手動接続は URL からプロバイダーを推測しません。有効かつルートに関連付けたキーを作成し、キー文字列ではなくレコード ID を指定します。
+
+```sh
+ochcli gateway key list
+ochcli gateway config set --codex-backend true --codex-models true --codex-oauth-key-id KEY_ID
+```
+
+実ログインの受け入れを解除するには：
+
+```sh
+ochcli gateway config set --clear-codex-oauth
+```
+
+この方式は未検証の空でない Bearer を指定ルートの ID に対応付け、ChatGPT アカウントの所有権は検証しません。ゲートウェイはループバックのみで待ち受けます。未関連付け、無効なキー、撤回済みの `rd-…` は拒否され、`/v1` の認証には影響しません。
+
+### 簡潔な画面のフィールド説明
+
+画面にはラベル、操作部品、状態、入力エラーを残し、詳しい説明は文書に集約します。エディターの文書ボタンから参照できます。
+
+| 項目 | 意味 |
+| --- | --- |
+| Provider ID | `model_providers` のキーと Codex の接続識別子。安定した値を使用します |
+| Provider 名 | Codex 内部名。ログイン型の OcHub 中継では `OpenAI` |
+| Base URL | API 直結は通常 `/v1`、ログイン中継はローカル `/backend-api/codex` |
+| API キー | API 直結の上流キー。仮想ログインでは `rd-…` ゲートウェイキー |
+| リモート圧縮 | Responses 圧縮プロトコル対応の上流が必要 |
+| コンテキスト管理 | `features.context_management.experimental_mode` を設定。有効化条件あり |
+| Token Budget | クライアントの予算管理。モデル既定値と管理設定の影響を受けます |
+| 通知しきい値 | 状態保存の通知を行う残り token 数。空欄はクライアント既定値 |
+| 履歴ノート拡張 | history/notes 拡張を有効化 |
+| Responses WebSocket | 上流の能力に合わせます。プロバイダー接続は設定を継承 |
+| 応答保存を無効化 | OcHub は Responses 保存を実装しないためプロバイダー接続で自動設定 |
+| Query パラメーターと HTTP ヘッダー | 上流固有の値。プロバイダー接続では OcHub が管理 |
+
+| 症状 | 確認事項 |
+| --- | --- |
+| 401 | 有効なルート付きキー ID。手動接続では KEY_ID が必要 |
+| 404 | バックエンド、URL、上流の圧縮対応 |
+| コンテキスト管理が無効 | プラン、名前、URL 末尾、独立認証、管理ポリシー |
+| 圧縮だけ失敗 | `/responses/compact` 対応。Chat-only 上流では圧縮不可 |
+| 仮想ログインが拒否される | 実ログインを保持し、仮想ログインをオフにする |

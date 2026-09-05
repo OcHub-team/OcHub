@@ -569,12 +569,18 @@ pub fn inject_station_endpoint(
                 // than an experimental_bearer_token.
                 let origin = base_url.trim().trim_end_matches('/');
                 set_str(values, "base_url", format!("{origin}/backend-api/codex"));
-                set_bool(values, "virtual_login", true);
                 set_bool(values, "context_management", true);
             } else {
                 set_str(values, "base_url", dialect_base_url(app, base_url));
             }
-            set_str(values, "api_key", key);
+            let credential = if str_val(values, "auth_mode") == codex::AUTH_OPENAI_LOGIN_GATEWAY
+                && !bool_val(values, "virtual_login")
+            {
+                ""
+            } else {
+                key
+            };
+            set_str(values, "api_key", credential);
             set_str(values, "wire_api", "responses");
             set_bool(values, "supports_websockets", caps.websockets);
             // The gateway does not implement the Responses store.
@@ -667,7 +673,10 @@ mod tests {
             str_val(&codex, "base_url"),
             "http://127.0.0.1:4180/backend-api/codex"
         );
-        assert_eq!(str_val(&codex, "api_key"), "rd-station");
+        assert_eq!(str_val(&codex, "api_key"), "");
+        assert!(!bool_val(&codex, "virtual_login"));
+        set_bool(&mut codex, "virtual_login", true);
+        inject_station_endpoint(&mut codex, AppType::Codex, origin, "rd-station", caps);
         assert!(bool_val(&codex, "virtual_login"));
         assert!(bool_val(&codex, "context_management"));
         assert_eq!(

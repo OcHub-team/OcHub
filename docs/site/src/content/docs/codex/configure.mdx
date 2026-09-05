@@ -18,6 +18,7 @@ official login.
 | Third-party API only | ChatGPT login not required | Third-party API key | A fully third-party Responses upstream |
 | ChatGPT login only | Uses `auth.json` | Official login state | Official Codex account and endpoint |
 | ChatGPT login + third-party API | Preserves `auth.json` | Third-party API key | Account features with third-party model requests |
+| ChatGPT login + OcHub relay | Real login or explicit virtual login | Login token → OcHub route identity | Third-party routing with context management |
 
 In combined mode, `auth.json` still owns the account. Model requests use the
 current provider's `experimental_bearer_token`.
@@ -168,3 +169,81 @@ For a Chat-only upstream, continue to
 [Routing recipes](/advanced/routing-recipes). For combined login and routing,
 remote compaction, Responses WebSocket, and provider history buckets, see
 [Advanced Codex pitfalls](/codex/advanced).
+
+## Real ChatGPT login with relay and context management
+
+Starting with OcHub 0.5.16, station connections preserve real ChatGPT login and automatically bind the local gateway identity to the selected station.
+
+1. Sign in to ChatGPT in Codex. The corresponding Codex source accepts Plus, Pro, and ProLite accounts for experimental context management.
+2. Configure the third-party endpoint, API key, models, and routing under **Model providers**. Remote compaction requires Responses `/responses/compact` support; ordinary Responses support alone is insufficient.
+3. Add a Codex connection sourced from that station and select **ChatGPT login + OcHub relay**.
+4. Leave **Virtual ChatGPT login** off, enable **Context management**, save, and switch. Keep the third-party key in the upstream endpoint configuration.
+5. Start a fresh Codex session. Verify a short request, then a long conversation or `/compact`, and inspect the routed model in usage logs.
+
+One-click station application also selects this mode when a real account is already present. Activation enables the Codex backend and model catalog and binds the account to the station key identity. Saving an inactive connection does not change the active binding. The binding is gateway-wide: real-login sessions sharing this gateway use the most recently selected identity.
+
+```toml
+model_provider = "custom"
+model = "your-model-id"
+
+[model_providers.custom]
+name = "OpenAI"
+base_url = "http://127.0.0.1:4180/backend-api/codex"
+wire_api = "responses"
+requires_openai_auth = true
+
+[features.context_management]
+experimental_mode = true
+```
+
+Keep the real account in `auth.json`. Codex sends its account token to the local gateway; OcHub replaces Authorization with the upstream endpoint key. Third-party billing still applies.
+
+### Eligibility and virtual login
+
+The automatic activation path requires provider name `OpenAI`, a URL ending in `/backend-api/codex`, `requires_openai_auth = true`, and no `experimental_bearer_token`, `env_key`, independent `auth`, or `aws` credentials. **ChatGPT login + third-party API** writes a provider bearer token and fails this check. Successful activation enables Token Budget and the history/notes extension. Managed requirements can still disable Token Budget. Configure accurate model context windows and tool capabilities; enabling the flag does not establish long-conversation reliability for every upstream model.
+
+Virtual login places an OcHub `rd-…` key in a local login file when no real account exists. It grants no ChatGPT subscription or official quota and cannot overwrite a real login. Station connections now respect this toggle.
+
+### Manual gateway binding
+
+Manual connections do not infer a station from an arbitrary URL. Create an enabled, route-bound gateway key, then use its record ID (not the `rd-…` secret):
+
+```sh
+ochcli gateway key list
+ochcli gateway config set --codex-backend true --codex-models true --codex-oauth-key-id KEY_ID
+```
+
+To revoke real-login access:
+
+```sh
+ochcli gateway config set --clear-codex-oauth
+```
+
+This mode maps unverified, nonempty bearer tokens to a specific route identity; it does not verify ChatGPT account ownership. The gateway listens on loopback only. Missing bindings, disabled keys, and retired `rd-…` keys are rejected. `/v1` authentication is unaffected.
+
+### Compact interface field reference
+
+Forms retain labels, controls, state, and validation. Detailed explanations live here; use the documentation button in the editor toolbar.
+
+| Field | Meaning |
+| --- | --- |
+| Provider ID | The `model_providers` key and Codex provider identity; keep it stable |
+| Provider name | Internal Codex name; login-shaped OcHub relay uses `OpenAI` |
+| Base URL | Usually `/v1` for direct APIs; local `/backend-api/codex` for login relay |
+| API key | Upstream credential for direct API modes; an OcHub `rd-…` key for virtual login |
+| Remote compaction | Requires a compatible Responses compaction upstream |
+| Context management | Writes `features.context_management.experimental_mode`; eligibility checks apply |
+| Token Budget | Explicit client budget activation, subject to model defaults and managed requirements |
+| Reminder threshold | Remaining tokens before the state-preservation reminder; blank uses client defaults |
+| History notes extension | Enables history/notes tools for context management |
+| Responses WebSocket | Must match upstream capability; station connections inherit it |
+| Disable response storage | Automatically enabled for station connections; OcHub has no Responses store |
+| Query parameters and headers | Upstream-specific metadata; station connections are managed by OcHub |
+
+| Symptom | Check |
+| --- | --- |
+| 401 | Enabled route-bound key identity; manual connections need KEY_ID |
+| 404 | Backend activation, endpoint path, and upstream compaction support |
+| Context feature absent | Plan, provider name, URL suffix, independent credentials, managed requirements |
+| Only compaction fails | `/responses/compact` support; Chat-only channels cannot compact |
+| Virtual login rejected | Keep the real account and turn virtual login off |

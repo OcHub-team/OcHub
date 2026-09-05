@@ -96,3 +96,5 @@
 "provider_editor.tools.balance" = "残高を照会"
 "provider_editor.tools.fetch_models" = "モデルを取得"
 "provider_editor.tools.speedtest" = "URL をテスト"
+
+"provider_editor.action.docs" = "ドキュメント"

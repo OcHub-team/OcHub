@@ -389,3 +389,70 @@ fn daemon_rpc_executes_mutations_and_blocks_direct_bypass() {
     assert!(status.success());
     std::mem::forget(child);
 }
+
+#[test]
+fn real_chatgpt_station_apply_preserves_live_login_and_changes_route_binding() {
+    let home = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    drop(listener);
+    json(&ochcli(
+        home.path(),
+        &[
+            "--json",
+            "gateway",
+            "config",
+            "set",
+            "--port",
+            &port,
+            "--health-interval",
+            "0",
+        ],
+    ));
+    let auth_dir = home.path().join(".codex");
+    std::fs::create_dir_all(&auth_dir).unwrap();
+    let original = "{\n  \"tokens\": {\"access_token\":\"real-access\",\"refresh_token\":\"real-refresh\",\"id_token\":\"real-id\",\"account_id\":\"real-account\"}\n}\n";
+    std::fs::write(auth_dir.join("auth.json"), original).unwrap();
+    let mut prior_binding = None;
+    for name in ["first", "second"] {
+        let path = home.path().join(format!("{name}.json"));
+        std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
+            "id": name, "name": name, "default_model":"test-model",
+            "channels":[{"id":format!("{name}-responses"),"name":"Responses","dialect":"responses","base_url":"http://127.0.0.1:9","api_key":"upstream-secret","models":["test-model"],"enabled":true,"priority":0,"weight":1}]
+        })).unwrap()).unwrap();
+        let added = json(&ochcli(
+            home.path(),
+            &["--json", "station", "add", "--from", path.to_str().unwrap()],
+        ));
+        let id = added["data"]["id"].as_str().unwrap();
+        json(&ochcli(
+            home.path(),
+            &["--json", "station", "apply", id, "--app", "codex"],
+        ));
+        assert_eq!(
+            std::fs::read_to_string(auth_dir.join("auth.json")).unwrap(),
+            original
+        );
+        let text = std::fs::read_to_string(auth_dir.join("config.toml")).unwrap();
+        assert!(text.contains("requires_openai_auth = true"));
+        assert!(text.contains("/backend-api/codex"));
+        assert!(!text.contains("experimental_bearer_token"));
+        let config = json(&ochcli(
+            home.path(),
+            &["--json", "gateway", "config", "show"],
+        ));
+        assert_eq!(config["data"]["codex_backend_accept_any_bearer"], true);
+        let binding = config["data"]["codex_backend_oauth_key_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(prior_binding.as_ref(), Some(&binding));
+        prior_binding = Some(binding);
+    }
+    let config = json(&ochcli(
+        home.path(),
+        &["--json", "gateway", "config", "set", "--clear-codex-oauth"],
+    ));
+    assert_eq!(config["data"]["codex_backend_accept_any_bearer"], false);
+    assert!(config["data"]["codex_backend_oauth_key_id"].is_null());
+}

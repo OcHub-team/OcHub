@@ -43,9 +43,12 @@ use gpui::{
 use gpui_platform::application;
 use ochub_core::AppState;
 use ochub_core::db::Database;
+mod components;
+mod layout;
+
 use ochub_ui::{
-    anim, chart, code_editor, components, diff_view, fold, gallery as gallery_view, highlight,
-    icons, layout, notifications, scrollbar, text_input, theme, window_chrome,
+    anim, chart, code_editor, diff_view, fold, gallery as gallery_view, highlight, icons,
+    notifications, scrollbar, text_input, theme, window_chrome,
 };
 
 use app_ui::AppRoot;

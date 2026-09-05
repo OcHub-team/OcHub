@@ -986,6 +986,7 @@ pub(crate) fn sync_current_provider_for_app_to_live(
                 Some(provider),
                 provider,
             )?;
+            crate::gateway::apply::activate_codex_station(state, *app_type, provider)?;
             log_drift(app_type, provider, &report);
         }
     }

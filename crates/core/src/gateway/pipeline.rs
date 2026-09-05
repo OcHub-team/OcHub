@@ -813,6 +813,7 @@ fn upstream_request(
     body: &Value,
     stream: bool,
     client_headers: &HeaderMap,
+    compact: bool,
 ) -> reqwest::RequestBuilder {
     let mut headers = forwardable_client_headers(client_headers);
 
@@ -833,7 +834,11 @@ fn upstream_request(
 
     state
         .http_client
-        .post(channel.endpoint_url())
+        .post(if compact {
+            format!("{}/compact", channel.endpoint_url().trim_end_matches('/'))
+        } else {
+            channel.endpoint_url()
+        })
         .headers(headers)
         .body(body.to_string())
 }
@@ -1449,6 +1454,17 @@ pub async fn run(
     key: Option<GatewayKey>,
     client_headers: HeaderMap,
 ) -> PipelineOutcome {
+    run_operation(state, inlet, raw_body, key, client_headers, false).await
+}
+
+pub(crate) async fn run_operation(
+    state: GatewayState,
+    inlet: Dialect,
+    raw_body: bytes::Bytes,
+    key: Option<GatewayKey>,
+    client_headers: HeaderMap,
+    compact: bool,
+) -> PipelineOutcome {
     let body: Value = match serde_json::from_slice(&raw_body) {
         Ok(v) => v,
         Err(e) => {
@@ -1502,7 +1518,10 @@ pub async fn run(
     };
     let rule = request_model_rule(model_policy, route.as_ref(), &meta.model).cloned();
     let route_model_override = request_model_override(rule.as_ref(), model_policy, route.as_ref());
-    let remote_compaction = is_remote_compaction_request(inlet, &body);
+    if compact {
+        meta.stream = false;
+    }
+    let remote_compaction = compact || is_remote_compaction_request(inlet, &body);
     let convertible: Vec<GatewayChannel> = channels
         .into_iter()
         .filter(|channel| channel_supports_request(inlet, channel.dialect, remote_compaction))
@@ -1555,7 +1574,7 @@ pub async fn run(
     let mut last_upstream_headers: Option<HeaderMap> = None;
 
     for channel in candidates {
-        let prepared = match prepare_request(
+        let mut prepared = match prepare_request(
             inlet,
             &channel,
             &body,
@@ -1574,12 +1593,16 @@ pub async fn run(
             }
         };
 
+        if compact && let Some(body) = prepared.body.as_object_mut() {
+            body.remove("stream");
+        }
         let resp = match upstream_request(
             &state,
             &channel,
             &prepared.body,
             meta.stream,
             &client_headers,
+            compact,
         )
         .send()
         .await

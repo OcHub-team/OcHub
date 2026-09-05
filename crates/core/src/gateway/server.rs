@@ -29,10 +29,15 @@ pub async fn build_router(state: GatewayState) -> Router {
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
         .route("/v1/chat/completions", post(handle_chat))
         .route("/v1/responses", any(handle_responses))
+        .route("/v1/responses/compact", post(handle_compact))
         .route("/v1/models", get(handle_models))
         .route("/models", get(handle_models))
         .route("/backend-api/codex/responses", any(handle_codex_responses))
-        .route("/backend-api/codex/models", get(handle_codex_models));
+        .route("/backend-api/codex/models", get(handle_codex_models))
+        .route(
+            "/backend-api/codex/responses/compact",
+            post(handle_codex_compact),
+        );
     router
         .layer(axum::extract::DefaultBodyLimit::max(200 * 1024 * 1024))
         .with_state(state)
@@ -254,6 +259,33 @@ async fn handle_responses_inner(
     }
 }
 
+async fn handle_compact(
+    State(state): State<GatewayState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let key = match authorize(&state, &headers, Dialect::Responses).await {
+        Ok(key) => key,
+        Err(response) => return response,
+    };
+    run_http_operation(state, Dialect::Responses, headers, body, key, true).await
+}
+
+async fn handle_codex_compact(
+    State(state): State<GatewayState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !state.config.read().await.codex_backend_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let key = match authorize_codex_backend(&state, &headers).await {
+        Ok(key) => key,
+        Err(response) => return response,
+    };
+    run_http_operation(state, Dialect::Responses, headers, body, key, true).await
+}
+
 /// Tag codex-backend replies with the local catalog ETag. An upstream ETag
 /// describes a different catalog and must not override the local identity.
 /// Headers are set before the body streams, so this covers
@@ -346,6 +378,17 @@ async fn run_http_authorized(
     body: Bytes,
     key: Option<GatewayKey>,
 ) -> Response {
+    run_http_operation(state, inlet, headers, body, key, false).await
+}
+
+async fn run_http_operation(
+    state: GatewayState,
+    inlet: Dialect,
+    headers: HeaderMap,
+    body: Bytes,
+    key: Option<GatewayKey>,
+    compact: bool,
+) -> Response {
     let mut headers = headers;
     let body = match headers.get("content-encoding") {
         None => body,
@@ -363,7 +406,12 @@ async fn run_http_authorized(
     };
     headers.remove("content-encoding");
     headers.remove("content-length");
-    match pipeline::run(state, inlet, body, key, headers).await {
+    let outcome = if compact {
+        pipeline::run_operation(state, inlet, body, key, headers, true).await
+    } else {
+        pipeline::run(state, inlet, body, key, headers).await
+    };
+    match outcome {
         PipelineOutcome::Json {
             status,
             body,
@@ -1345,6 +1393,105 @@ mod tests {
             decode_zstd_body(Bytes::from_static(b"broken"), 1024).unwrap_err(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn real_login_compaction_uses_bound_route_and_upstream_credentials() {
+        let received = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let capture = received.clone();
+        let upstream = Router::new().route("/v1/responses/compact", post(move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
+            let capture = capture.clone();
+            async move {
+                *capture.lock().unwrap() = Some((headers, body));
+                axum::Json(json!({"id":"compact-test","object":"response.compaction","output":[{"type":"compaction","encrypted_content":"opaque-history"}],"usage":{"input_tokens":10,"output_tokens":2}}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let (base, db, _) = serve_gateway(GatewayConfig {
+            codex_backend_enabled: true,
+            codex_backend_accept_any_bearer: true,
+            codex_backend_oauth_key_id: Some("account-route".into()),
+            ..GatewayConfig::default()
+        })
+        .await;
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "responses".into(),
+            endpoint_id: None,
+            name: "Responses".into(),
+            dialect: Dialect::Responses,
+            base_url: format!("http://{addr}"),
+            api_key: "third-party-secret".into(),
+            path_override: None,
+            models: vec![],
+            model_override: Some("upstream-model".into()),
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+            imported_from: None,
+        })
+        .unwrap();
+        let route = serde_json::from_value(json!({"id":"station:real", "name":"Real", "enabled":true,"created_at":1,"channel_ids":["responses"]})).unwrap();
+        db.upsert_gateway_route(&route).unwrap();
+        db.upsert_gateway_key(&GatewayKey {
+            id: "account-route".into(),
+            name: "Codex".into(),
+            key: "rd-local".into(),
+            route_id: Some("station:real".into()),
+            model_policy: None,
+            created_at: 1,
+            enabled: true,
+        })
+        .unwrap();
+        let client = reqwest::Client::new();
+        let url = format!("{base}/backend-api/codex/responses/compact");
+        assert_eq!(
+            client
+                .post(&url)
+                .json(&json!({"model":"client-model","input":[]}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let payload = serde_json::to_vec(
+            &json!({"model":"client-model","input":[],"instructions":"Keep important state"}),
+        )
+        .unwrap();
+        let response = client
+            .post(&url)
+            .bearer_auth("real-rotating-oauth")
+            .header("content-encoding", "zstd")
+            .body(zstd::stream::encode_all(&payload[..], 1).unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["output"][0]["encrypted_content"], "opaque-history");
+        let (headers, body) = received.lock().unwrap().take().unwrap();
+        assert_eq!(headers["authorization"], "Bearer third-party-secret");
+        assert_eq!(body["model"], "upstream-model");
+        assert!(body.get("stream").is_none());
+        let mut channel = db.get_gateway_channels().unwrap().remove(0);
+        channel.dialect = Dialect::Chat;
+        db.upsert_gateway_channel(&channel).unwrap();
+        let response = client
+            .post(&url)
+            .bearer_auth("real-rotating-oauth")
+            .json(&json!({"model":"client-model","input":[]}))
+            .send()
+            .await
+            .unwrap();
+        assert!(!response.status().is_success());
+        assert!(
+            received.lock().unwrap().is_none(),
+            "Chat-only upstream must never receive compaction"
+        );
+        task.abort();
     }
 
     /// Run explicitly with a local Codex installation; no OpenAI service or

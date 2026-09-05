@@ -98,3 +98,5 @@
 "provider_editor.tools.balance" = "查询余额"
 "provider_editor.tools.fetch_models" = "拉取模型"
 "provider_editor.tools.speedtest" = "测试 URL"
+
+"provider_editor.action.docs" = "文档"

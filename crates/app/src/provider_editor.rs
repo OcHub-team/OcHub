@@ -2407,24 +2407,7 @@ impl ProviderEditor {
                     )
                     .into_any_element()
                 };
-                let mut control = div()
-                    .flex()
-                    .flex_col()
-                    .items_start()
-                    .w_full()
-                    .min_w_0()
-                    .gap_1()
-                    .child(selector);
-                // The per-option hint (previously baked into each pill label)
-                // is shown for the selected option beneath the control.
-                if let Some(hint) = options.get(selected).and_then(|o| o.hint.as_ref()) {
-                    control = control.child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(SharedString::from(hint.clone())),
-                    );
-                }
+                let control = div().w_full().min_w_0().child(selector);
                 control.into_any_element()
             }
             FieldKind::Toggle => {
@@ -2461,19 +2444,12 @@ impl ProviderEditor {
                 .into_any_element(),
         };
 
-        components::field(
-            field.label.clone(),
-            field.required,
-            self.field_help(field),
-            body,
-        )
-        .into_any_element()
+        components::field(field.label.clone(), field.required, None, body).into_any_element()
     }
 
     /// A toggle the selected station leaves no room for: the transport it
     /// declares (`supports_websockets`), or a feature it has no upstream for.
-    /// It stays visible so "why can't I change this?" has an answer right
-    /// under it — see [`Self::field_help`].
+    /// Disabled capabilities stay visible without explanatory sublabels.
     fn station_toggle_disabled(&self, field: &FormField) -> bool {
         if self.source != ProviderSource::Station || self.app_type != AppType::Codex {
             return false;
@@ -2483,21 +2459,6 @@ impl ProviderEditor {
             "remote_compaction" => !self.station_capabilities().remote_compaction,
             _ => false,
         }
-    }
-
-    /// The field's schema help, or the station-mode variant when the source
-    /// changes what the control means.
-    fn field_help(&self, field: &FormField) -> Option<SharedString> {
-        if self.source == ProviderSource::Station
-            && let Some(help) = provider_config::station_field_help(
-                self.app_type,
-                &field.id,
-                !self.station_toggle_disabled(field),
-            )
-        {
-            return Some(SharedString::new_static(help));
-        }
-        field.help.clone().map(SharedString::from)
     }
 
     /// Wrap a model text input with a popover listing the selected station's
@@ -4043,6 +4004,22 @@ impl Render for ProviderEditor {
             .on_click(cx.listener(|this, _event, _window, cx| this.do_save(cx)))
         };
         let actions = actions
+            .child(
+                components::button(
+                    "editor-docs",
+                    t(k::PROVIDER_EDITOR_ACTION_DOCS),
+                    ButtonTone::Neutral,
+                    ButtonSize::Md,
+                )
+                .aria_label(t(k::PROVIDER_EDITOR_ACTION_DOCS))
+                .on_click(|_, _, cx| {
+                    cx.open_url(match ochub_core::i18n::current() {
+                        ochub_core::i18n::Locale::Zh => "https://docs.ochub.org/zh/codex/configure",
+                        ochub_core::i18n::Locale::Ja => "https://docs.ochub.org/ja/codex/configure",
+                        ochub_core::i18n::Locale::En => "https://docs.ochub.org/codex/configure",
+                    })
+                }),
+            )
             .child(
                 components::button(
                     "editor-convert",

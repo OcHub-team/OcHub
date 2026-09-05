@@ -16,7 +16,9 @@ on the Codex version. OcHub refuses to overwrite an existing real ChatGPT login
 with a virtual login. With no real login present, virtual login installation and
 key rotation work even when the generic preserve-official-login setting is on.
 
-For an existing real login, select the ChatGPT login + OcHub relay mode without
+From 0.5.16, applying a station with an existing real login automatically preserves it, enables the backend/catalog, and binds its route key. Saving an inactive station does not change the binding. The binding is gateway-wide and follows the most recently activated station.
+
+For a manual connection with an existing real login, select the ChatGPT login + OcHub relay mode without
 virtual login and explicitly configure both fields in `GatewayConfig`:
 
 ```json
@@ -73,3 +75,7 @@ access. It verifies catalog decoding and completion through the normal zstd
 request path with context-management and token-budget settings enabled. Tested
 with Codex CLI 0.153.4. It does not establish compatibility with future clients
 or verify long-conversation history management against a real model.
+
+## Remote compaction
+
+Both `/v1/responses/compact` and `/backend-api/codex/responses/compact` use the normal routing, model policy, authentication, credential replacement and usage pipeline. Compaction accepts bounded zstd bodies, uses only Responses upstreams and forwards to their `/responses/compact` endpoint. It preserves opaque compaction output. Ordinary Responses support does not guarantee upstream compaction support.

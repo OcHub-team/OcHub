@@ -3873,6 +3873,10 @@ async fn run_gateway(
                 require_key,
                 enabled,
                 health_interval,
+                codex_backend,
+                codex_models,
+                codex_oauth_key_id,
+                clear_codex_oauth,
             } => {
                 let mut config = application.gateway_config()?;
                 if let Some(port) = port {
@@ -3886,6 +3890,29 @@ async fn run_gateway(
                 }
                 if let Some(interval) = health_interval {
                     config.health_interval_secs = *interval;
+                }
+                if let Some(value) = codex_backend {
+                    config.codex_backend_enabled = *value;
+                }
+                if let Some(value) = codex_models {
+                    config.codex_models_enabled = *value;
+                }
+                if let Some(id) = codex_oauth_key_id {
+                    let keys = application.state().db.get_gateway_keys()?;
+                    if !keys
+                        .iter()
+                        .any(|key| key.id == *id && key.enabled && key.route_id.is_some())
+                    {
+                        return Err(CliError::InvalidInput(
+                            "Codex OAuth requires an enabled, route-bound gateway key ID".into(),
+                        ));
+                    }
+                    config.codex_backend_accept_any_bearer = true;
+                    config.codex_backend_oauth_key_id = Some(id.clone());
+                }
+                if *clear_codex_oauth {
+                    config.codex_backend_accept_any_bearer = false;
+                    config.codex_backend_oauth_key_id = None;
                 }
                 if cli.dry_run {
                     output.success(

@@ -883,6 +883,10 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                 AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_GATEWAY => {
                     ptbl.remove("env_key");
                     ptbl.remove("experimental_bearer_token");
+                    if auth_mode == AUTH_OPENAI_LOGIN_GATEWAY {
+                        ptbl.remove("auth");
+                        ptbl.remove("aws");
+                    }
                     ptbl.insert("requires_openai_auth", toml_edit::value(true));
                 }
                 AUTH_OPENAI_LOGIN_WITH_API_KEY => {
@@ -975,7 +979,9 @@ fn set_context_management(features: &mut Table, enabled: bool) {
     {
         table.insert("experimental_mode", toml_edit::value(enabled));
     } else if enabled {
-        features.insert("context_management", toml_edit::value(true));
+        let mut table = Table::new();
+        table.insert("experimental_mode", toml_edit::value(true));
+        features.insert("context_management", Item::Table(table));
     } else {
         features.remove("context_management");
     }
@@ -1516,8 +1522,8 @@ requires_openai_auth = true
         );
         assert!(!cfg.contains("experimental_bearer_token"), "{cfg}");
         assert!(!cfg.contains("env_key"), "{cfg}");
-        assert!(cfg.contains("[features]"), "{cfg}");
-        assert!(cfg.contains("context_management = true"), "{cfg}");
+        assert!(cfg.contains("[features.context_management]"), "{cfg}");
+        assert!(cfg.contains("experimental_mode = true"), "{cfg}");
         assert!(cfg.contains("[features.token_budget]"), "{cfg}");
         assert!(cfg.contains("reminder_threshold_tokens = 8000"), "{cfg}");
         assert!(cfg.contains("use_history_notes_extension = true"), "{cfg}");
@@ -1528,6 +1534,22 @@ requires_openai_auth = true
         assert_eq!(auth["tokens"]["refresh_token"], "unused");
         assert!(auth["tokens"]["id_token"].as_str().unwrap().contains('.'));
         assert_eq!(auth["last_refresh"], "2099-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn gateway_login_clears_other_provider_auth_without_losing_custom_settings() {
+        let prior = json!({"config": "model_provider = \"ochub-gateway\"\n[model_providers.ochub-gateway]\nauth = { command = \"old-auth\" }\naws = { region = \"us-east-1\" }\nenv_key = \"OLD_KEY\"\nexperimental_bearer_token = \"old-token\"\nrequest_max_retries = 7\n"});
+        let result = CodexConfig.encode(&gateway_login_values(), &prior, None);
+        let doc = result.settings_config["config"]
+            .as_str()
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        let provider = doc["model_providers"]["ochub-gateway"].as_table().unwrap();
+        for key in ["auth", "aws", "env_key", "experimental_bearer_token"] {
+            assert!(provider.get(key).is_none(), "{key}");
+        }
+        assert_eq!(provider["request_max_retries"].as_integer(), Some(7));
     }
 
     #[test]

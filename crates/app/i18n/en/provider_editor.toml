@@ -96,3 +96,5 @@
 "provider_editor.tools.balance" = "Check balance"
 "provider_editor.tools.fetch_models" = "Fetch models"
 "provider_editor.tools.speedtest" = "Test URL"
+
+"provider_editor.action.docs" = "Docs"
