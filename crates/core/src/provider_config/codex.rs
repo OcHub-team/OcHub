@@ -23,13 +23,21 @@ use crate::model::ProviderMeta;
 pub(super) const AUTH_API_KEY: &str = "api_key";
 const AUTH_OPENAI_LOGIN: &str = "openai_login";
 const AUTH_OPENAI_LOGIN_WITH_API_KEY: &str = "openai_login_with_api_key";
+/// ChatGPT login shape whose requests go to OcHub's `/backend-api/codex`
+/// backend: `requires_openai_auth=true` and no relay credentials, so Codex's
+/// client-side context-management gate (provider name `OpenAI` + backend
+/// base_url + ChatGPT auth) is satisfied.
+pub(super) const AUTH_OPENAI_LOGIN_GATEWAY: &str = "openai_login_gateway";
 
 /// Login-only auth carries no bearer, so a station-sourced channel would reach
-/// the gateway unauthenticated. The two relay-bearing modes both stay offered.
+/// the gateway unauthenticated. The two relay-bearing modes both stay offered,
+/// as does the gateway-login mode (its virtual login carries the key).
 pub(super) const STATION_HIDDEN_AUTH_MODES: &[&str] = &[AUTH_OPENAI_LOGIN];
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const HAS_OPENAI_LOGIN: &str = "_has_openai_login";
 const LEGACY_ENV_KEY: &str = "_legacy_env_key";
+/// Gateway backend base URL suffix that defines the login-gateway shape.
+const CODEX_BACKEND_PATH: &str = "/backend-api/codex";
 
 pub struct CodexConfig;
 
@@ -91,10 +99,15 @@ impl AppConfig for CodexConfig {
                                 .with_hint(
                                     "auth.json 保留登录态，请求使用 experimental_bearer_token",
                                 ),
+                                SelectOption::new(
+                                    AUTH_OPENAI_LOGIN_GATEWAY,
+                                    "ChatGPT 登录 + OcHub 转发",
+                                )
+                                .with_hint("requires_openai_auth=true，bearer 由 auth.json 提供"),
                             ],
                         },
                     )
-                    .help("组合模式不会把第三方密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。"),
+                    .help("组合模式不会把第三方密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。OcHub 转发模式不写任何 relay 凭据，Authorization 来自 auth.json 的 access_token。"),
                     FormField::new(
                         "api_key",
                         "第三方 API Key",
@@ -102,7 +115,10 @@ impl AppConfig for CodexConfig {
                             placeholder: "sk-...".into(),
                         },
                     )
-                    .help("仅两种第三方 API 模式使用；保存后写入当前 provider 的 experimental_bearer_token。"),
+                    .help("仅两种第三方 API 模式使用；保存后写入当前 provider 的 experimental_bearer_token。OcHub 转发模式下作为虚拟登录的 access_token（填网关签发的 rd- 密钥）。"),
+                    FormField::new("virtual_login", "虚拟 ChatGPT 登录", FieldKind::Toggle)
+                        .help("没有真实 ChatGPT 登录态时生成伪造的 auth.json（plan=pro，access_token 为上方密钥）。已有真实登录态时保留真实登录。")
+                        .visible_when("auth_mode", AUTH_OPENAI_LOGIN_GATEWAY),
                 ],
             ),
             FormSection::new(
@@ -132,6 +148,30 @@ impl AppConfig for CodexConfig {
                     .help("仅 Responses API 且依模型而定。"),
                 ],
             ),
+            FormSection::new(
+                "上下文管理",
+                vec![
+                    FormField::new("context_management", "启用上下文管理", FieldKind::Toggle)
+                        .help("写入 [features] context_management = true。Codex 仅在 OpenAI 登录形态的 /backend-api/codex 端点上生效。"),
+                    FormField::new("token_budget_enabled", "Token Budget", FieldKind::Toggle)
+                        .help("写入 [features.token_budget] enabled = true；目录关闭时（模式 3）用于显式开启。"),
+                    FormField::new(
+                        "token_budget_reminder_threshold_tokens",
+                        "提醒阈值 (tokens)",
+                        FieldKind::Text {
+                            placeholder: "例如 8000".into(),
+                        },
+                    )
+                    .help("[features.token_budget] reminder_threshold_tokens；留空使用 Codex 默认值。"),
+                    FormField::new(
+                        "token_budget_use_history_notes_extension",
+                        "历史笔记扩展",
+                        FieldKind::Toggle,
+                    )
+                    .help("[features.token_budget] use_history_notes_extension = true。"),
+                ],
+            )
+            .advanced(),
             FormSection::new(
                 "高级",
                 vec![
@@ -253,6 +293,7 @@ impl AppConfig for CodexConfig {
             },
         );
         set_str(&mut values, "base_url", read("base_url"));
+        let base_url = read("base_url");
 
         let wire_api = read("wire_api");
         set_str(
@@ -268,12 +309,21 @@ impl AppConfig for CodexConfig {
         let env_key = read("env_key");
         let provider_token =
             crate::apps::codex::extract_codex_experimental_bearer_token(config_text);
-        let auth_token = settings_config
-            .get("auth")
-            .and_then(crate::apps::codex::extract_codex_auth_api_key);
+        let auth_value = settings_config.get("auth");
+        let auth_token = auth_value.and_then(crate::apps::codex::extract_codex_auth_api_key);
+        let virtual_access_token = auth_value
+            .filter(|auth| crate::apps::codex::codex_auth_is_virtual_login(auth))
+            .and_then(|auth| auth.pointer("/tokens/access_token"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let literal_env_key =
             (!env_key.is_empty() && !is_valid_env_key_name(&env_key)).then(|| env_key.clone());
-        let api_key = provider_token.or(auth_token).or(literal_env_key);
+        // Relay credentials decide the auth-mode classification; the virtual
+        // login's access token is surfaced into the same field afterwards but
+        // must not turn the gateway-login shape into the combined mode.
+        let relay_api_key = provider_token.or(auth_token).or(literal_env_key);
+        let has_relay_credentials = relay_api_key.is_some() || !env_key.is_empty();
+        let api_key = relay_api_key.or(virtual_access_token);
         set_str(&mut values, "api_key", api_key.clone().unwrap_or_default());
         set_str(
             &mut values,
@@ -289,9 +339,16 @@ impl AppConfig for CodexConfig {
             .and_then(|t| t.get("requires_openai_auth"))
             .and_then(Item::as_bool)
             .unwrap_or(false);
-        let has_relay_credentials = api_key.is_some() || !env_key.is_empty();
+        let is_codex_backend = requires_openai_auth
+            && !has_relay_credentials
+            && base_url
+                .trim()
+                .trim_end_matches('/')
+                .ends_with(CODEX_BACKEND_PATH);
         let auth_mode = if requires_openai_auth && has_relay_credentials {
             AUTH_OPENAI_LOGIN_WITH_API_KEY
+        } else if is_codex_backend {
+            AUTH_OPENAI_LOGIN_GATEWAY
         } else if requires_openai_auth {
             AUTH_OPENAI_LOGIN
         } else {
@@ -304,6 +361,55 @@ impl AppConfig for CodexConfig {
             settings_config
                 .get("auth")
                 .is_some_and(crate::apps::codex::codex_auth_has_oauth_login_material),
+        );
+        set_bool(
+            &mut values,
+            "virtual_login",
+            settings_config
+                .get("auth")
+                .is_some_and(crate::apps::codex::codex_auth_is_virtual_login),
+        );
+
+        // [features] context management / token budget.
+        let features = doc
+            .as_ref()
+            .and_then(|d| d.get("features"))
+            .and_then(Item::as_table);
+        set_bool(
+            &mut values,
+            "context_management",
+            features
+                .and_then(|f| f.get("context_management"))
+                .and_then(Item::as_bool)
+                .unwrap_or(false),
+        );
+        let token_budget = features
+            .and_then(|f| f.get("token_budget"))
+            .and_then(Item::as_table);
+        set_bool(
+            &mut values,
+            "token_budget_enabled",
+            token_budget
+                .and_then(|t| t.get("enabled"))
+                .and_then(Item::as_bool)
+                .unwrap_or(false),
+        );
+        set_bool(
+            &mut values,
+            "token_budget_use_history_notes_extension",
+            token_budget
+                .and_then(|t| t.get("use_history_notes_extension"))
+                .and_then(Item::as_bool)
+                .unwrap_or(false),
+        );
+        set_str(
+            &mut values,
+            "token_budget_reminder_threshold_tokens",
+            token_budget
+                .and_then(|t| t.get("reminder_threshold_tokens"))
+                .and_then(Item::as_integer)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
         );
 
         values.insert(
@@ -390,10 +496,12 @@ impl AppConfig for CodexConfig {
         let auth_mode = str_val(values, "auth_mode");
         let uses_relay = auth_mode_uses_relay(auth_mode);
         let uses_login = auth_mode_uses_login(auth_mode);
+        let uses_gateway_login = auth_mode == AUTH_OPENAI_LOGIN_GATEWAY;
+        let virtual_login = uses_gateway_login && bool_val(values, "virtual_login");
 
-        if uses_relay && str_val(values, "base_url").trim().is_empty() {
+        if (uses_relay || uses_gateway_login) && str_val(values, "base_url").trim().is_empty() {
             issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
-        } else if !str_val(values, "base_url").trim().is_empty() {
+        } else if !str_val(values, "base_url").trim().is_empty() && !uses_gateway_login {
             let base = str_val(values, "base_url").trim_end_matches('/');
             if !base.ends_with("/v1") && !base.contains("127.0.0.1") && !base.contains("localhost")
             {
@@ -405,6 +513,18 @@ impl AppConfig for CodexConfig {
                 );
             }
         }
+        if uses_gateway_login
+            && !str_val(values, "base_url").trim().is_empty()
+            && !str_val(values, "base_url")
+                .trim()
+                .trim_end_matches('/')
+                .ends_with(CODEX_BACKEND_PATH)
+        {
+            issues.push(
+                ConfigIssue::info(format!("保存时将规范化为 {{origin}}{CODEX_BACKEND_PATH}。"))
+                    .for_field("base_url"),
+            );
+        }
 
         if uses_relay
             && str_val(values, "api_key").trim().is_empty()
@@ -414,16 +534,41 @@ impl AppConfig for CodexConfig {
                 ConfigIssue::warning("第三方 API 模式尚未填写 API Key。").for_field("api_key"),
             );
         }
-        if !uses_relay && !str_val(values, "api_key").trim().is_empty() {
+        if !uses_relay && !virtual_login && !str_val(values, "api_key").trim().is_empty() {
             issues.push(
                 ConfigIssue::info("仅账号登录模式不会使用该第三方 API Key，保存时将移除。")
                     .for_field("api_key"),
             );
         }
-        if uses_login && !bool_val(values, HAS_OPENAI_LOGIN) {
+        if virtual_login
+            && str_val(values, "api_key").trim().is_empty()
+            && !bool_val(values, HAS_OPENAI_LOGIN)
+        {
+            issues.push(
+                ConfigIssue::warning(
+                    "虚拟登录需要一个网关密钥（rd- …）作为 access_token；请填写上方 API Key。",
+                )
+                .for_field("api_key"),
+            );
+        }
+        if uses_login && !virtual_login && !bool_val(values, HAS_OPENAI_LOGIN) {
             issues.push(ConfigIssue::warning(
                 "此供应商尚未保存 ChatGPT 登录态；应用时会沿用当前 auth.json，请先在 Codex 完成登录。",
             ));
+        }
+
+        if !str_val(values, "token_budget_reminder_threshold_tokens")
+            .trim()
+            .is_empty()
+            && str_val(values, "token_budget_reminder_threshold_tokens")
+                .trim()
+                .parse::<i64>()
+                .is_err()
+        {
+            issues.push(
+                ConfigIssue::warning("Token Budget 提醒阈值必须是正整数。")
+                    .for_field("token_budget_reminder_threshold_tokens"),
+            );
         }
 
         issues
@@ -484,8 +629,31 @@ impl AppConfig for CodexConfig {
                 "gpt-5.5",
                 "high",
             ),
+            codex_gateway_preset(),
         ]
     }
+}
+
+/// Preset for the OcHub gateway's ChatGPT-login backend (mode 4 shape:
+/// virtual login + context management; the gateway serves the model catalog
+/// when enabled).
+fn codex_gateway_preset() -> super::Preset {
+    let mut v = FormValues::new();
+    set_str(&mut v, "provider_id", "ochub-gateway");
+    set_str(&mut v, "name", OPENAI_PROVIDER_NAME);
+    set_str(
+        &mut v,
+        "base_url",
+        format!("http://127.0.0.1:4180{CODEX_BACKEND_PATH}"),
+    );
+    set_str(&mut v, "auth_mode", AUTH_OPENAI_LOGIN_GATEWAY);
+    set_bool(&mut v, "virtual_login", true);
+    set_bool(&mut v, "context_management", true);
+    set_bool(&mut v, "remote_compaction", true);
+    set_str(&mut v, "model", "gpt-5.5");
+    set_str(&mut v, "reasoning_effort", "high");
+    set_str(&mut v, "wire_api", "responses");
+    super::Preset::new("OcHub 网关（ChatGPT 登录）", v)
 }
 
 /// Build a Codex preset's pre-filled form values.
@@ -529,20 +697,39 @@ fn normalize_base_url(raw: &str) -> String {
     }
 }
 
+/// Gateway-login URLs normalize to the Codex backend path instead of `/v1`:
+/// an origin or a `/v1` relay URL both map to `{origin}/backend-api/codex`.
+fn normalize_codex_backend_base_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.ends_with(CODEX_BACKEND_PATH) {
+        return trimmed.to_string();
+    }
+    let origin = trimmed
+        .strip_suffix("/v1")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/');
+    format!("{origin}{CODEX_BACKEND_PATH}")
+}
+
 fn auth_mode_uses_relay(auth_mode: &str) -> bool {
     matches!(auth_mode, AUTH_API_KEY | AUTH_OPENAI_LOGIN_WITH_API_KEY)
 }
 
 /// A station-sourced channel authenticates to the gateway with the key the
-/// gateway issued, so only the modes that actually send that bearer work.
+/// gateway issued, so only modes whose requests carry that key work: the
+/// relay modes send it as `experimental_bearer_token`, and the gateway-login
+/// mode sends it as the virtual login's `access_token`.
 pub(super) fn station_auth_mode_supported(auth_mode: &str) -> bool {
-    auth_mode_uses_relay(auth_mode)
+    auth_mode_uses_relay(auth_mode) || auth_mode == AUTH_OPENAI_LOGIN_GATEWAY
 }
 
 fn auth_mode_uses_login(auth_mode: &str) -> bool {
     matches!(
         auth_mode,
-        AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_WITH_API_KEY
+        AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_WITH_API_KEY | AUTH_OPENAI_LOGIN_GATEWAY
     )
 }
 
@@ -555,13 +742,35 @@ fn is_valid_env_key_name(value: &str) -> bool {
 /// `auth.json` remains the account-login document. Legacy providers may have
 /// kept a relay key in `auth.OPENAI_API_KEY`; saving migrates that key into the
 /// active provider's `experimental_bearer_token` without discarding OAuth data.
-fn build_auth(_values: &FormValues, prior: &Value) -> Value {
+///
+/// For the gateway-login mode with virtual login enabled and no real OAuth
+/// material on file, a virtual login is generated whose `access_token` is the
+/// gateway key from the form. An existing *virtual* login is regenerated so a
+/// rotated gateway key propagates; real OAuth material is always preserved.
+fn build_auth(values: &FormValues, prior: &Value) -> Value {
     let mut auth = prior
         .get("auth")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
     auth.remove("OPENAI_API_KEY");
+
+    if str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN_GATEWAY
+        && bool_val(values, "virtual_login")
+    {
+        let existing = Value::Object(auth.clone());
+        let replaceable = !crate::apps::codex::codex_auth_has_oauth_login_material(&existing)
+            || crate::apps::codex::codex_auth_is_virtual_login(&existing);
+        let access_token = str_val(values, "api_key").trim();
+        if replaceable
+            && !access_token.is_empty()
+            && let Value::Object(generated) =
+                crate::apps::codex::virtual_codex_auth_json(access_token)
+        {
+            auth = generated;
+        }
+    }
+
     Value::Object(auth)
 }
 
@@ -632,7 +841,11 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
         let ptbl = mps.entry(&provider_id).or_insert(Item::Table(Table::new()));
         if let Some(ptbl) = ptbl.as_table_mut() {
             let name = str_val(values, "name").trim();
-            let remote_compaction = bool_val(values, "remote_compaction");
+            let auth_mode = str_val(values, "auth_mode");
+            // The gateway login shape must also satisfy Codex's client-side
+            // context-management gate, which requires provider name "OpenAI".
+            let remote_compaction =
+                bool_val(values, "remote_compaction") || auth_mode == AUTH_OPENAI_LOGIN_GATEWAY;
             let normal_name = if name.is_empty() || name == OPENAI_PROVIDER_NAME {
                 provider_id.as_str()
             } else {
@@ -646,7 +859,11 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                     normal_name
                 }),
             );
-            let base_url = normalize_base_url(str_val(values, "base_url"));
+            let base_url = if auth_mode == AUTH_OPENAI_LOGIN_GATEWAY {
+                normalize_codex_backend_base_url(str_val(values, "base_url"))
+            } else {
+                normalize_base_url(str_val(values, "base_url"))
+            };
             if base_url.is_empty() {
                 ptbl.remove("base_url");
             } else {
@@ -659,8 +876,8 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                 ptbl.remove("supports_websockets");
             }
 
-            match str_val(values, "auth_mode") {
-                AUTH_OPENAI_LOGIN => {
+            match auth_mode {
+                AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_GATEWAY => {
                     ptbl.remove("env_key");
                     ptbl.remove("experimental_bearer_token");
                     ptbl.insert("requires_openai_auth", toml_edit::value(true));
@@ -678,6 +895,52 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
             set_or_remove_inline(ptbl, "query_params", values.get("query_params"));
             set_or_remove_inline(ptbl, "http_headers", values.get("http_headers"));
         }
+    }
+
+    // [features] context-management gate, plus an optional explicit token
+    // budget for catalog-less mode (no model_messages.token_budget source).
+    let context_management = bool_val(values, "context_management");
+    let token_budget_enabled = bool_val(values, "token_budget_enabled");
+    let token_budget_threshold = str_val(values, "token_budget_reminder_threshold_tokens")
+        .trim()
+        .to_string();
+    let token_budget_history_notes = bool_val(values, "token_budget_use_history_notes_extension");
+    let mut remove_empty_features = false;
+    if context_management || token_budget_enabled {
+        let features = root.entry("features").or_insert(Item::Table({
+            let mut table = Table::new();
+            table.set_implicit(true);
+            table
+        }));
+        if let Some(features) = features.as_table_mut() {
+            if context_management {
+                features.insert("context_management", toml_edit::value(true));
+            } else {
+                features.remove("context_management");
+            }
+            if token_budget_enabled {
+                let mut budget = Table::new();
+                budget.insert("enabled", toml_edit::value(true));
+                if token_budget_history_notes {
+                    budget.insert("use_history_notes_extension", toml_edit::value(true));
+                }
+                if let Ok(threshold) = token_budget_threshold.parse::<i64>()
+                    && threshold > 0
+                {
+                    budget.insert("reminder_threshold_tokens", toml_edit::value(threshold));
+                }
+                features.insert("token_budget", Item::Table(budget));
+            } else {
+                features.remove("token_budget");
+            }
+        }
+    } else if let Some(features) = root.get_mut("features").and_then(Item::as_table_mut) {
+        features.remove("context_management");
+        features.remove("token_budget");
+        remove_empty_features = features.is_empty();
+    }
+    if remove_empty_features {
+        root.remove("features");
     }
 
     doc.to_string()
@@ -1131,5 +1394,167 @@ env_key = "LEGACY_API_KEY"
                 "field {key}"
             );
         }
+    }
+
+    fn gateway_login_values() -> FormValues {
+        let mut v = FormValues::new();
+        set_str(&mut v, "provider_id", "ochub-gateway");
+        set_str(&mut v, "name", "ignored");
+        set_str(&mut v, "base_url", "http://127.0.0.1:4180");
+        set_str(&mut v, "auth_mode", AUTH_OPENAI_LOGIN_GATEWAY);
+        set_str(&mut v, "api_key", "rd-gateway-key");
+        set_bool(&mut v, "virtual_login", true);
+        set_bool(&mut v, "context_management", true);
+        set_bool(&mut v, "token_budget_enabled", true);
+        set_bool(&mut v, "token_budget_use_history_notes_extension", true);
+        set_str(&mut v, "token_budget_reminder_threshold_tokens", "8000");
+        set_str(&mut v, "model", "gpt-5.5");
+        v
+    }
+
+    #[test]
+    fn gateway_login_mode_encodes_login_shape_without_relay_credentials() {
+        let result = CodexConfig.encode(&gateway_login_values(), &Value::Null, None);
+        let cfg = result.settings_config["config"].as_str().unwrap();
+        assert!(cfg.contains("requires_openai_auth = true"), "{cfg}");
+        assert!(cfg.contains("name = \"OpenAI\""), "{cfg}");
+        assert!(
+            cfg.contains("base_url = \"http://127.0.0.1:4180/backend-api/codex\""),
+            "{cfg}"
+        );
+        assert!(!cfg.contains("experimental_bearer_token"), "{cfg}");
+        assert!(!cfg.contains("env_key"), "{cfg}");
+        assert!(cfg.contains("[features]"), "{cfg}");
+        assert!(cfg.contains("context_management = true"), "{cfg}");
+        assert!(cfg.contains("[features.token_budget]"), "{cfg}");
+        assert!(cfg.contains("reminder_threshold_tokens = 8000"), "{cfg}");
+        assert!(cfg.contains("use_history_notes_extension = true"), "{cfg}");
+
+        let auth = &result.settings_config["auth"];
+        assert_eq!(auth["auth_mode"], "chatgpt");
+        assert_eq!(auth["tokens"]["access_token"], "rd-gateway-key");
+        assert_eq!(auth["tokens"]["refresh_token"], "unused");
+        assert!(auth["tokens"]["id_token"].as_str().unwrap().contains('.'));
+        assert_eq!(auth["last_refresh"], "2099-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn gateway_login_mode_round_trips() {
+        let encoded = CodexConfig.encode(&gateway_login_values(), &Value::Null, None);
+        let decoded = CodexConfig.decode(&encoded.settings_config, None);
+        assert_eq!(str_val(&decoded, "auth_mode"), AUTH_OPENAI_LOGIN_GATEWAY);
+        assert_eq!(str_val(&decoded, "api_key"), "rd-gateway-key");
+        assert_eq!(
+            str_val(&decoded, "base_url"),
+            "http://127.0.0.1:4180/backend-api/codex"
+        );
+        assert!(bool_val(&decoded, "virtual_login"));
+        assert!(bool_val(&decoded, "context_management"));
+        assert!(bool_val(&decoded, "token_budget_enabled"));
+        assert!(bool_val(
+            &decoded,
+            "token_budget_use_history_notes_extension"
+        ));
+        assert_eq!(
+            str_val(&decoded, "token_budget_reminder_threshold_tokens"),
+            "8000"
+        );
+        assert!(bool_val(&decoded, HAS_OPENAI_LOGIN));
+
+        // Re-encode preserves the shape and refreshes the virtual login.
+        let reencoded = CodexConfig.encode(&decoded, &encoded.settings_config, None);
+        let cfg = reencoded.settings_config["config"].as_str().unwrap();
+        assert!(cfg.contains("requires_openai_auth = true"), "{cfg}");
+        assert!(!cfg.contains("experimental_bearer_token"), "{cfg}");
+        assert_eq!(
+            reencoded.settings_config["auth"]["tokens"]["access_token"],
+            "rd-gateway-key"
+        );
+    }
+
+    #[test]
+    fn gateway_login_mode_preserves_real_oauth_material() {
+        let prior = json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "oauth-access",
+                    "refresh_token": "oauth-refresh",
+                    "account_id": "real-account"
+                }
+            },
+            "config": ""
+        });
+        let result = CodexConfig.encode(&gateway_login_values(), &prior, None);
+        assert_eq!(
+            result.settings_config["auth"]["tokens"]["refresh_token"],
+            "oauth-refresh"
+        );
+        assert!(result.settings_config["auth"]["last_refresh"].is_null());
+    }
+
+    #[test]
+    fn gateway_login_shape_decodes_from_handwritten_config() {
+        let settings = json!({
+            "auth": {},
+            "config": r#"model_provider = "gw"
+
+[model_providers.gw]
+name = "OpenAI"
+base_url = "http://127.0.0.1:4180/backend-api/codex/"
+wire_api = "responses"
+requires_openai_auth = true
+"#
+        });
+        let values = CodexConfig.decode(&settings, None);
+        assert_eq!(str_val(&values, "auth_mode"), AUTH_OPENAI_LOGIN_GATEWAY);
+        // A trailing slash must not hide the backend shape.
+        assert!(!bool_val(&values, "virtual_login"));
+    }
+
+    #[test]
+    fn gateway_login_mode_requires_base_url_and_virtual_login_key() {
+        let mut values = gateway_login_values();
+        set_str(&mut values, "base_url", "");
+        set_str(&mut values, "api_key", "");
+        let issues = CodexConfig.validate(&values);
+        assert!(
+            issues.iter().any(|issue| {
+                issue.severity == super::super::Severity::Error
+                    && issue.field.as_deref() == Some("base_url")
+            }),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|issue| {
+                issue.severity == super::super::Severity::Warning
+                    && issue.field.as_deref() == Some("api_key")
+            }),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn gateway_login_mode_is_station_supported_and_not_hidden() {
+        assert!(station_auth_mode_supported(AUTH_OPENAI_LOGIN_GATEWAY));
+        assert!(!STATION_HIDDEN_AUTH_MODES.contains(&AUTH_OPENAI_LOGIN_GATEWAY));
+        assert!(STATION_HIDDEN_AUTH_MODES.contains(&AUTH_OPENAI_LOGIN));
+    }
+
+    #[test]
+    fn normalize_codex_backend_base_url_variants() {
+        assert_eq!(
+            normalize_codex_backend_base_url("http://127.0.0.1:4180"),
+            "http://127.0.0.1:4180/backend-api/codex"
+        );
+        assert_eq!(
+            normalize_codex_backend_base_url("http://127.0.0.1:4180/v1"),
+            "http://127.0.0.1:4180/backend-api/codex"
+        );
+        assert_eq!(
+            normalize_codex_backend_base_url("http://127.0.0.1:4180/backend-api/codex/"),
+            "http://127.0.0.1:4180/backend-api/codex"
+        );
+        assert_eq!(normalize_codex_backend_base_url("  "), "");
     }
 }

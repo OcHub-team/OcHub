@@ -17,6 +17,7 @@
 //!   ([`apply`]).
 
 pub mod apply;
+pub mod codex_catalog;
 pub mod health;
 pub mod pipeline;
 pub mod router;
@@ -26,8 +27,9 @@ pub mod types;
 
 pub use service::{GatewayService, GatewayStatus};
 pub use types::{
-    ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayEndpointTestResult, GatewayKey,
-    GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute, StationQuotaApi,
+    ChannelHealth, CodexModelOverride, CodexReasoningLevel, CodexTokenBudgetConfig, Dialect,
+    GatewayChannel, GatewayConfig, GatewayEndpointTestResult, GatewayKey, GatewayModelRule,
+    GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute, StationQuotaApi,
 };
 
 /// Generate a fresh local API key secret (`rd-` + 32 hex chars).

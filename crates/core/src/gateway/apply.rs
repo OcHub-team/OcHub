@@ -350,6 +350,19 @@ pub fn station_model_policy(
     })
 }
 
+/// How a one-click station apply shapes a Codex provider for the gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodexGatewayApply {
+    /// Legacy relay form: `/v1` endpoint + `experimental_bearer_token`.
+    #[default]
+    Relay,
+    /// ChatGPT-login form pointing at `/backend-api/codex` with a virtual
+    /// login carrying the station key. `remote_catalog` mirrors
+    /// `GatewayConfig::codex_models_enabled`: when the gateway serves the
+    /// model catalog, no local `modelCatalog` file is written.
+    Backend { remote_catalog: bool },
+}
+
 #[cfg(test)]
 fn gateway_settings_for(
     app_type: AppType,
@@ -369,9 +382,11 @@ fn gateway_settings_for(
         key,
         &policy,
         false,
+        CodexGatewayApply::Relay,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gateway_settings_for_provider(
     app_type: AppType,
     provider_id: &str,
@@ -380,6 +395,7 @@ fn gateway_settings_for_provider(
     key: &str,
     policy: &GatewayAppModelPolicy,
     supports_websockets: bool,
+    codex_apply: CodexGatewayApply,
 ) -> Result<serde_json::Value, AppError> {
     let models = policy.client_models();
     match app_type {
@@ -422,22 +438,49 @@ fn gateway_settings_for_provider(
             document["disable_response_storage"] = toml_edit::value(true);
             document["model_providers"] = toml_edit::table();
             document["model_providers"][provider_id] = toml_edit::table();
-            document["model_providers"][provider_id]["name"] = toml_edit::value(provider_name);
-            document["model_providers"][provider_id]["base_url"] =
-                toml_edit::value(format!("{base_url}/v1"));
             document["model_providers"][provider_id]["wire_api"] = toml_edit::value("responses");
             if supports_websockets {
                 document["model_providers"][provider_id]["supports_websockets"] =
                     toml_edit::value(true);
             }
-            document["model_providers"][provider_id]["experimental_bearer_token"] =
-                toml_edit::value(key);
+            let auth = match codex_apply {
+                CodexGatewayApply::Relay => {
+                    document["model_providers"][provider_id]["name"] =
+                        toml_edit::value(provider_name);
+                    document["model_providers"][provider_id]["base_url"] =
+                        toml_edit::value(format!("{base_url}/v1"));
+                    document["model_providers"][provider_id]["experimental_bearer_token"] =
+                        toml_edit::value(key);
+                    json!({})
+                }
+                CodexGatewayApply::Backend { .. } => {
+                    // ChatGPT-login shape: Codex's client-side context
+                    // management gate requires provider name "OpenAI", a
+                    // /backend-api/codex base URL, requires_openai_auth and no
+                    // relay credentials. The bearer is the virtual login's
+                    // access token from auth.json.
+                    document["model_providers"][provider_id]["name"] = toml_edit::value("OpenAI");
+                    document["model_providers"][provider_id]["base_url"] =
+                        toml_edit::value(format!("{base_url}/backend-api/codex"));
+                    document["model_providers"][provider_id]["requires_openai_auth"] =
+                        toml_edit::value(true);
+                    document["features"] = toml_edit::table();
+                    document["features"]["context_management"] = toml_edit::value(true);
+                    crate::apps::codex::virtual_codex_auth_json(key)
+                }
+            };
             let toml = document.to_string();
             let mut config = json!({
-                "auth": {},
+                "auth": auth,
                 "config": toml,
             });
-            if !models.is_empty() {
+            let write_local_catalog = !matches!(
+                codex_apply,
+                CodexGatewayApply::Backend {
+                    remote_catalog: true
+                }
+            );
+            if write_local_catalog && !models.is_empty() {
                 config["modelCatalog"] = json!({
                     "models": models.iter().map(|model| json!({
                         "model": model,
@@ -1032,6 +1075,23 @@ fn apply_route_to_app(
         model_rules: route.model_rules.clone(),
     });
     let client_models = config_policy.client_models();
+    let codex_apply = match app_type {
+        AppType::Codex
+            if state
+                .db
+                .get_gateway_config()
+                .map(|config| config.codex_backend_enabled)
+                .unwrap_or(false) =>
+        {
+            let remote_catalog = state
+                .db
+                .get_gateway_config()
+                .map(|config| config.codex_models_enabled)
+                .unwrap_or(false);
+            CodexGatewayApply::Backend { remote_catalog }
+        }
+        _ => CodexGatewayApply::Relay,
+    };
     let settings = gateway_settings_for_provider(
         app_type,
         &config_provider_id,
@@ -1040,6 +1100,7 @@ fn apply_route_to_app(
         &key.key,
         &config_policy,
         route.websocket_enabled,
+        codex_apply,
     )?;
     let mut meta = ProviderMeta {
         gateway_route_id: Some(route.id.clone()),
@@ -1328,6 +1389,7 @@ mod tests {
             "rd-k",
             &policy,
             true,
+            CodexGatewayApply::Relay,
         )
         .unwrap();
         let codex_toml = codex["config"].as_str().unwrap();
@@ -1350,6 +1412,7 @@ mod tests {
             "rd-k",
             &policy,
             false,
+            CodexGatewayApply::Relay,
         )
         .unwrap();
         assert_eq!(claude["env"]["ANTHROPIC_MODEL"], "gpt-5.6");
@@ -1361,6 +1424,58 @@ mod tests {
             claude["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"],
             "claude-opus-5"
         );
+    }
+
+    #[test]
+    fn codex_backend_apply_writes_login_shape_and_virtual_auth() {
+        let policy = GatewayAppModelPolicy {
+            models: vec!["grok-4.5".into()],
+            ..Default::default()
+        };
+
+        let codex = gateway_settings_for_provider(
+            AppType::Codex,
+            "custom",
+            "Relay",
+            "http://127.0.0.1:4180",
+            "rd-k",
+            &policy,
+            true,
+            CodexGatewayApply::Backend {
+                remote_catalog: false,
+            },
+        )
+        .unwrap();
+        let toml = codex["config"].as_str().unwrap();
+        assert!(toml.contains("name = \"OpenAI\""), "{toml}");
+        assert!(
+            toml.contains("base_url = \"http://127.0.0.1:4180/backend-api/codex\""),
+            "{toml}"
+        );
+        assert!(toml.contains("requires_openai_auth = true"), "{toml}");
+        assert!(!toml.contains("experimental_bearer_token"), "{toml}");
+        assert!(toml.contains("supports_websockets = true"), "{toml}");
+        assert!(toml.contains("context_management = true"), "{toml}");
+        assert_eq!(codex["auth"]["auth_mode"], "chatgpt");
+        assert_eq!(codex["auth"]["tokens"]["access_token"], "rd-k");
+        assert_eq!(codex["modelCatalog"]["models"][0]["model"], "grok-4.5");
+
+        // With the remote catalog enabled the local modelCatalog is omitted so
+        // the gateway-served catalog stays authoritative.
+        let codex_remote = gateway_settings_for_provider(
+            AppType::Codex,
+            "custom",
+            "Relay",
+            "http://127.0.0.1:4180",
+            "rd-k",
+            &policy,
+            false,
+            CodexGatewayApply::Backend {
+                remote_catalog: true,
+            },
+        )
+        .unwrap();
+        assert!(codex_remote.get("modelCatalog").is_none());
     }
 
     #[test]

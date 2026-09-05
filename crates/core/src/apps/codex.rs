@@ -311,6 +311,74 @@ pub fn codex_auth_has_oauth_login_material(auth: &Value) -> bool {
     })
 }
 
+// ---- Virtual ChatGPT login --------------------------------------------------
+//
+// A "virtual" login lets a user without real ChatGPT OAuth material run Codex
+// in its ChatGPT-login shape against the local gateway: Codex forwards the
+// `access_token` as the bearer credential, so we fill it with a
+// gateway-issued `rd-` key and the gateway's normal key check applies.
+// Codex does not verify the id_token signature; a non-JWT access_token is
+// never refreshed, and a future `last_refresh` keeps it that way.
+
+/// Fixed account id stamped into virtual logins (also how we recognize them).
+pub const VIRTUAL_CODEX_ACCOUNT_ID: &str = "c0dec0de-0000-4000-8000-00000000c0de";
+const VIRTUAL_CODEX_USER_ID: &str = "user-c0dec0de";
+const VIRTUAL_CODEX_REFRESH_TOKEN: &str = "unused";
+const VIRTUAL_CODEX_LAST_REFRESH: &str = "2099-01-01T00:00:00Z";
+const VIRTUAL_CODEX_EMAIL: &str = "user@example.com";
+
+fn base64url_json(value: &Value) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(value).unwrap_or_default())
+}
+
+/// Unsigned-style JWT advertising a ChatGPT Pro plan. The claim key
+/// `https://api.openai.com/auth` is Codex's plan source and must be verbatim.
+pub fn virtual_codex_id_token() -> String {
+    let header = json!({ "alg": "none", "typ": "JWT" });
+    let payload = json!({
+        "email": VIRTUAL_CODEX_EMAIL,
+        "exp": 4_102_444_800_i64,
+        "iat": 1_700_000_000,
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": "pro",
+            "chatgpt_account_id": VIRTUAL_CODEX_ACCOUNT_ID,
+            "chatgpt_user_id": VIRTUAL_CODEX_USER_ID,
+        },
+    });
+    format!(
+        "{}.{}.signature",
+        base64url_json(&header),
+        base64url_json(&payload)
+    )
+}
+
+/// Build a virtual `auth.json` whose bearer credential is the gateway key.
+pub fn virtual_codex_auth_json(access_token: &str) -> Value {
+    json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": virtual_codex_id_token(),
+            "access_token": access_token,
+            "refresh_token": VIRTUAL_CODEX_REFRESH_TOKEN,
+            "account_id": VIRTUAL_CODEX_ACCOUNT_ID,
+        },
+        "last_refresh": VIRTUAL_CODEX_LAST_REFRESH,
+    })
+}
+
+/// Whether this auth document is an OcHub-generated virtual login (as opposed
+/// to real ChatGPT OAuth material, which must be preserved as-is).
+pub fn codex_auth_is_virtual_login(auth: &Value) -> bool {
+    auth.pointer("/tokens/refresh_token")
+        .and_then(Value::as_str)
+        == Some(VIRTUAL_CODEX_REFRESH_TOKEN)
+        && auth.pointer("/tokens/account_id").and_then(Value::as_str)
+            == Some(VIRTUAL_CODEX_ACCOUNT_ID)
+}
+
 pub fn should_restore_codex_provider_token_for_backfill(
     category: Option<&str>,
     template_settings: &Value,
@@ -1683,6 +1751,54 @@ requires_openai_auth = true
             Some("")
         );
         assert!(settings.pointer("/auth/tokens/access_token").is_some());
+    }
+
+    #[test]
+    fn virtual_auth_json_shape_and_id_token_claims() {
+        let auth = virtual_codex_auth_json("rd-test-key");
+        assert_eq!(auth["auth_mode"], "chatgpt");
+        assert!(auth["OPENAI_API_KEY"].is_null());
+        assert_eq!(auth["tokens"]["access_token"], "rd-test-key");
+        assert_eq!(auth["tokens"]["refresh_token"], "unused");
+        assert_eq!(
+            auth["tokens"]["account_id"],
+            "c0dec0de-0000-4000-8000-00000000c0de"
+        );
+        assert_eq!(auth["last_refresh"], "2099-01-01T00:00:00Z");
+
+        let id_token = auth["tokens"]["id_token"].as_str().unwrap();
+        let parts: Vec<&str> = id_token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        use base64::Engine as _;
+        let payload: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            payload["https://api.openai.com/auth"]["chatgpt_plan_type"],
+            "pro"
+        );
+        assert_eq!(
+            payload["https://api.openai.com/auth"]["chatgpt_account_id"],
+            "c0dec0de-0000-4000-8000-00000000c0de"
+        );
+        assert_eq!(payload["email"], "user@example.com");
+        assert_eq!(payload["exp"], 4_102_444_800_i64);
+
+        assert!(codex_auth_is_virtual_login(&auth));
+        assert!(codex_auth_has_oauth_login_material(&auth));
+        let real = json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": "oauth-access",
+                "refresh_token": "oauth-refresh",
+                "account_id": "real-account",
+            }
+        });
+        assert!(!codex_auth_is_virtual_login(&real));
+        assert!(!codex_auth_is_virtual_login(&json!({})));
     }
 
     #[test]

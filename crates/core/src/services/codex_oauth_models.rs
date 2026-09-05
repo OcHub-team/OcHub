@@ -16,14 +16,33 @@ pub async fn fetch_models_with_token(
     token: &str,
     account_id: &str,
 ) -> Result<Vec<FetchedModel>, String> {
+    let value = fetch_raw_catalog(token, Some(account_id)).await?;
+    Ok(parse_models(value))
+}
+
+/// Fetch the raw Codex-native catalog JSON (`{"models": [...]}`) from the
+/// official backend. Used by the local gateway as a template source for its
+/// own `/backend-api/codex/models` catalog.
+pub async fn fetch_catalog_with_token(
+    token: &str,
+    account_id: Option<&str>,
+) -> Result<Value, String> {
+    fetch_raw_catalog(token, account_id).await
+}
+
+async fn fetch_raw_catalog(token: &str, account_id: Option<&str>) -> Result<Value, String> {
     let client = crate::http_client::get();
-    let response = client
+    let request = client
         .get(CODEX_OAUTH_MODELS_URL)
         .query(&[("client_version", CODEX_OAUTH_CLIENT_VERSION)])
         .header("Authorization", format!("Bearer {token}"))
         .header("originator", "ochub")
-        .header("chatgpt-account-id", account_id)
-        .timeout(Duration::from_secs(CODEX_OAUTH_FETCH_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(CODEX_OAUTH_FETCH_TIMEOUT_SECS));
+    let request = match account_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(account_id) => request.header("chatgpt-account-id", account_id),
+        None => request,
+    };
+    let response = request
         .send()
         .await
         .map_err(|e| format!("Request failed: {e}"))?;
@@ -34,12 +53,10 @@ pub async fn fetch_models_with_token(
         return Err(format!("HTTP {status}: {body}"));
     }
 
-    let value: Value = response
+    response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {e}"))?;
-
-    Ok(parse_models(value))
+        .map_err(|e| format!("Failed to parse response: {e}"))
 }
 
 fn parse_models(value: Value) -> Vec<FetchedModel> {

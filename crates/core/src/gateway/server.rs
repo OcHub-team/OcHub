@@ -18,18 +18,34 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Message as UpstreamMessage, protocol::CloseFrame};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
+use crate::gateway::codex_catalog;
 use crate::gateway::pipeline::{self, GatewayState, PipelineOutcome, StreamFrame};
 use crate::gateway::types::{ChannelHealth, Dialect, GatewayChannel, GatewayKey};
 
-pub fn build_router(state: GatewayState) -> Router {
-    Router::new()
+pub async fn build_router(state: GatewayState) -> Router {
+    let (codex_backend_enabled, codex_models_enabled) = {
+        let config = state.config.read().await;
+        (config.codex_backend_enabled, config.codex_models_enabled)
+    };
+    let mut router = Router::new()
         .route("/health", get(|| async { (StatusCode::OK, "OK") }))
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
         .route("/v1/chat/completions", post(handle_chat))
         .route("/v1/responses", any(handle_responses))
         .route("/v1/models", get(handle_models))
-        .route("/models", get(handle_models))
+        .route("/models", get(handle_models));
+    if codex_backend_enabled {
+        // ChatGPT-login-shaped Codex clients talk to `{base_url}/responses`;
+        // the request/response wire format is identical to `/v1/responses`.
+        router = router.route("/backend-api/codex/responses", any(handle_codex_responses));
+        if codex_models_enabled {
+            // Deliberately absent when disabled: Codex then keeps its bundled
+            // catalog (context-management-only mode).
+            router = router.route("/backend-api/codex/models", get(handle_codex_models));
+        }
+    }
+    router
         .layer(axum::extract::DefaultBodyLimit::max(200 * 1024 * 1024))
         .with_state(state)
 }
@@ -89,6 +105,32 @@ fn unauthorized(inlet: Dialect) -> Response {
     (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
 }
 
+/// Auth for the `/backend-api/codex/*` routes. A registered gateway key always
+/// wins (virtual logins carry one as their ChatGPT `access_token`). When the
+/// bearer is not a registered key and `codex_backend_accept_any_bearer` is on,
+/// any non-empty bearer is accepted as an anonymous caller — real ChatGPT
+/// OAuth tokens rotate and cannot be enrolled as static keys. Only these two
+/// routes use this helper; `/v1/*` behavior is unchanged.
+async fn authorize_codex_backend(
+    state: &GatewayState,
+    headers: &HeaderMap,
+) -> Result<Option<GatewayKey>, Response> {
+    if let Some(secret) = presented_secret(headers).filter(|secret| !secret.is_empty()) {
+        match state.db.find_gateway_key(&secret) {
+            Ok(Some(key)) => return Ok(Some(key)),
+            Ok(None) => {
+                if state.config.read().await.codex_backend_accept_any_bearer {
+                    return Ok(None);
+                }
+            }
+            Err(e) => {
+                log::warn!("[gateway] key lookup failed: {e}");
+            }
+        }
+    }
+    authorize(state, headers, Dialect::Responses).await
+}
+
 // ---------------------------------------------------------------------------
 // Inference handlers
 // ---------------------------------------------------------------------------
@@ -114,6 +156,31 @@ async fn handle_responses(
     State(state): State<GatewayState>,
     req: axum::extract::Request,
 ) -> Response {
+    handle_responses_inner(state, req, ResponsesRoute::Standard).await
+}
+
+/// `/backend-api/codex/responses`: same wire behavior as `/v1/responses`, but
+/// authenticated via [`authorize_codex_backend`] and tagged with the catalog's
+/// `X-Models-Etag` so Codex re-fetches `/backend-api/codex/models` when the
+/// catalog changes (Codex refreshes on ETag mismatch).
+async fn handle_codex_responses(
+    State(state): State<GatewayState>,
+    req: axum::extract::Request,
+) -> Response {
+    handle_responses_inner(state, req, ResponsesRoute::CodexBackend).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponsesRoute {
+    Standard,
+    CodexBackend,
+}
+
+async fn handle_responses_inner(
+    state: GatewayState,
+    req: axum::extract::Request,
+    route: ResponsesRoute,
+) -> Response {
     use axum::extract::FromRequestParts;
     let (mut parts, body) = req.into_parts();
     let is_ws = parts
@@ -121,8 +188,12 @@ async fn handle_responses(
         .get("upgrade")
         .map(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"))
         .unwrap_or(false);
+    let authorize = match route {
+        ResponsesRoute::Standard => authorize(&state, &parts.headers, Dialect::Responses).await,
+        ResponsesRoute::CodexBackend => authorize_codex_backend(&state, &parts.headers).await,
+    };
     if is_ws {
-        let key = match authorize(&state, &parts.headers, Dialect::Responses).await {
+        let key = match authorize {
             Ok(k) => k,
             Err(resp) => return resp,
         };
@@ -143,6 +214,10 @@ async fn handle_responses(
         }
     } else {
         let headers = parts.headers.clone();
+        let key = match authorize {
+            Ok(k) => k,
+            Err(resp) => return resp,
+        };
         let bytes = match axum::body::to_bytes(body, 200 * 1024 * 1024).await {
             Ok(b) => b,
             Err(e) => {
@@ -153,7 +228,50 @@ async fn handle_responses(
                     .into_response();
             }
         };
-        run_http(state, Dialect::Responses, headers, bytes).await
+        let response = run_http_authorized(
+            state.clone(),
+            Dialect::Responses,
+            headers,
+            bytes,
+            key.clone(),
+        )
+        .await;
+        if route == ResponsesRoute::CodexBackend {
+            inject_models_etag(state, key, response).await
+        } else {
+            response
+        }
+    }
+}
+
+/// Tag codex-backend replies with the current catalog ETag unless the upstream
+/// already sent one. Headers are set before the body streams, so this covers
+/// both JSON and SSE replies; the WebSocket upgrade path has no meaningful
+/// place for it and is skipped.
+async fn inject_models_etag(
+    state: GatewayState,
+    key: Option<GatewayKey>,
+    response: Response,
+) -> Response {
+    const MODELS_ETAG: &str = "x-models-etag";
+    if response.headers().contains_key(MODELS_ETAG) {
+        return response;
+    }
+    if !state.config.read().await.codex_models_enabled {
+        return response;
+    }
+    match codex_catalog::build_catalog(&state, key.as_ref()).await {
+        Ok((_body, etag)) => {
+            let mut response = response;
+            if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
+                response.headers_mut().insert(MODELS_ETAG, value);
+            }
+            response
+        }
+        Err(_) => {
+            log::warn!("[gateway] failed to compute codex catalog ETag for X-Models-Etag");
+            response
+        }
     }
 }
 
@@ -193,6 +311,17 @@ async fn run_http(
         Ok(k) => k,
         Err(resp) => return resp,
     };
+    run_http_authorized(state, inlet, headers, body, key).await
+}
+
+/// Pipeline dispatch for a request whose caller was already authorized.
+async fn run_http_authorized(
+    state: GatewayState,
+    inlet: Dialect,
+    headers: HeaderMap,
+    body: Bytes,
+    key: Option<GatewayKey>,
+) -> Response {
     match pipeline::run(state, inlet, body, key, headers).await {
         PipelineOutcome::Json {
             status,
@@ -763,39 +892,45 @@ async fn handle_count_tokens(
     }
 }
 
-/// OpenAI-style model list: exact model names + overrides from all enabled
-/// channels (wildcard patterns are skipped — they have no enumerable form).
-async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
-    let key = match authorize(&state, &headers, Dialect::Chat).await {
-        Ok(key) => key,
-        Err(resp) => return resp,
-    };
-    let route = match key.as_ref().and_then(|key| key.route_id.as_deref()) {
+/// Resolve the exact client-visible model names for `key`: key/route policy
+/// lists first, then — for legacy keys without a per-app policy — every model
+/// advertised by the allowed channels. Wildcard patterns are skipped (they
+/// have no enumerable form). Shared by `/v1/models` and the Codex-native
+/// catalog so both endpoints advertise the same names.
+pub(crate) fn visible_models(
+    state: &GatewayState,
+    key: Option<&GatewayKey>,
+) -> Result<Vec<String>, Box<Response>> {
+    let route = match key.and_then(|key| key.route_id.as_deref()) {
         Some(route_id) => match state.db.get_gateway_route_by_id(route_id) {
             Ok(Some(route)) if route.enabled => Some(route),
             Ok(_) => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    axum::Json(json!({
-                        "error": { "message": "client route is unavailable" }
-                    })),
-                )
-                    .into_response();
+                return Err(Box::new(
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        axum::Json(json!({
+                            "error": { "message": "client route is unavailable" }
+                        })),
+                    )
+                        .into_response(),
+                ));
             }
             Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({
-                        "error": { "message": "failed to load client route" }
-                    })),
-                )
-                    .into_response();
+                return Err(Box::new(
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::Json(json!({
+                            "error": { "message": "failed to load client route" }
+                        })),
+                    )
+                        .into_response(),
+                ));
             }
         },
         None => None,
     };
     let mut models: Vec<String> = Vec::new();
-    let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
+    let model_policy = key.and_then(|key| key.model_policy.as_ref());
     let effective_rules = match model_policy {
         Some(policy) => policy.model_rules.as_slice(),
         None => route
@@ -851,6 +986,20 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
         }
     }
     models.sort();
+    Ok(models)
+}
+
+/// OpenAI-style model list: exact model names + overrides from all enabled
+/// channels (wildcard patterns are skipped — they have no enumerable form).
+async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
+    let key = match authorize(&state, &headers, Dialect::Chat).await {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
+    let models = match visible_models(&state, key.as_ref()) {
+        Ok(models) => models,
+        Err(resp) => return *resp,
+    };
     let data: Vec<Value> = models
         .into_iter()
         .map(|id| json!({ "id": id, "object": "model", "owned_by": "gateway" }))
@@ -860,6 +1009,25 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
         axum::Json(json!({ "object": "list", "data": data })),
     )
         .into_response()
+}
+
+/// Codex-native model catalog (`{"models": [...]}`) for ChatGPT-login-shaped
+/// clients, with an `ETag` hashed from the exact body served.
+async fn handle_codex_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
+    let key = match authorize_codex_backend(&state, &headers).await {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
+    let (body, etag) = match codex_catalog::build_catalog(&state, key.as_ref()).await {
+        Ok(catalog) => catalog,
+        Err(resp) => return resp,
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .header(axum::http::header::ETAG, etag)
+        .body(Body::from(body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 #[cfg(test)]
@@ -891,7 +1059,11 @@ mod tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, build_router(state)).await.unwrap() });
+        tokio::spawn(async move {
+            axum::serve(listener, build_router(state).await)
+                .await
+                .unwrap()
+        });
 
         let error = connect_async(format!("ws://{addr}/v1/responses"))
             .await
@@ -1035,7 +1207,7 @@ mod tests {
         let gateway_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let gateway_addr = gateway_listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(gateway_listener, build_router(state))
+            axum::serve(gateway_listener, build_router(state).await)
                 .await
                 .unwrap()
         });
@@ -1082,5 +1254,326 @@ mod tests {
             assert_eq!(request["model"], "upstream-model");
             assert_eq!(request["stream"], true);
         }
+    }
+
+    /// Start a gateway with the given config and return its base URL, DB, and
+    /// live config handle (route registration itself happens at build time).
+    async fn serve_gateway(
+        config: GatewayConfig,
+    ) -> (String, Arc<Database>, Arc<RwLock<GatewayConfig>>) {
+        let db = Arc::new(Database::memory().unwrap());
+        let config = Arc::new(RwLock::new(config));
+        let state = GatewayState {
+            db: db.clone(),
+            http_client: reqwest::Client::new(),
+            config: config.clone(),
+            health: Arc::new(RwLock::new(HashMap::new())),
+            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, build_router(state).await)
+                .await
+                .unwrap()
+        });
+        (format!("http://{addr}"), db, config)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_backend_routes_are_absent_until_enabled() {
+        let client = reqwest::Client::new();
+        let body = json!({ "model": "m", "input": [] });
+
+        let (base, _db, _config) = serve_gateway(GatewayConfig {
+            require_key: false,
+            ..GatewayConfig::default()
+        })
+        .await;
+        let resp = client
+            .get(format!("{base}/backend-api/codex/models"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let resp = client
+            .post(format!("{base}/backend-api/codex/responses"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Backend on, catalog off: only the responses route exists.
+        let (base, _db, _config) = serve_gateway(GatewayConfig {
+            require_key: false,
+            codex_backend_enabled: true,
+            ..GatewayConfig::default()
+        })
+        .await;
+        let resp = client
+            .get(format!("{base}/backend-api/codex/models"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        // Registered but no channel serves the model: a routing error, not 404.
+        let resp = client
+            .post(format!("{base}/backend-api/codex/responses"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_models_route_auth_matrix() {
+        let (base, db, config) = serve_gateway(GatewayConfig {
+            require_key: true,
+            codex_backend_enabled: true,
+            codex_models_enabled: true,
+            ..GatewayConfig::default()
+        })
+        .await;
+        db.upsert_gateway_key(&GatewayKey {
+            id: "key-codex".into(),
+            name: "codex".into(),
+            key: "rd-codex".into(),
+            route_id: None,
+            model_policy: None,
+            created_at: 1,
+            enabled: true,
+        })
+        .unwrap();
+        let client = reqwest::Client::new();
+        let url = format!("{base}/backend-api/codex/models");
+
+        let resp = client.get(&url).send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "missing bearer");
+        let resp = client
+            .get(&url)
+            .bearer_auth("not-a-key")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "unknown bearer without the accept-any flag"
+        );
+        let resp = client
+            .get(&url)
+            .bearer_auth("rd-codex")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "registered key");
+
+        config.write().await.codex_backend_accept_any_bearer = true;
+        let resp = client
+            .get(&url)
+            .bearer_auth("not-a-key")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "unknown bearer accepted with the flag on"
+        );
+        // The flag never weakens /v1/* auth.
+        let resp = client
+            .get(format!("{base}/v1/models"))
+            .bearer_auth("not-a-key")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_models_catalog_shape_overrides_and_stable_etag() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(
+            "gpt-x".to_string(),
+            crate::gateway::types::CodexModelOverride {
+                display_name: Some("Gateway X".to_string()),
+                context_window: Some(64_000),
+                token_budget: Some(crate::gateway::types::CodexTokenBudgetConfig {
+                    enabled: true,
+                    reminder_threshold_tokens: 8_000,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let (base, db, _config) = serve_gateway(GatewayConfig {
+            require_key: false,
+            codex_backend_enabled: true,
+            codex_models_enabled: true,
+            codex_model_overrides: overrides,
+            ..GatewayConfig::default()
+        })
+        .await;
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "responses".into(),
+            endpoint_id: Some("mock".into()),
+            name: "mock".into(),
+            dialect: Dialect::Responses,
+            base_url: "http://127.0.0.1:9".into(),
+            api_key: "unused".into(),
+            path_override: None,
+            models: vec!["gpt-x".into()],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+            imported_from: None,
+        })
+        .unwrap();
+
+        let client = reqwest::Client::new();
+        let url = format!("{base}/backend-api/codex/models");
+        let first = client.get(&url).send().await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let etag = first
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("catalog response must carry an ETag")
+            .to_string();
+        assert!(etag.starts_with('"') && etag.ends_with('"'));
+        let body: Value = first.json().await.unwrap();
+        let models = body["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        let entry = &models[0];
+        assert_eq!(entry["slug"], "gpt-x");
+        assert_eq!(entry["display_name"], "Gateway X");
+        assert_eq!(entry["context_window"], 64_000);
+        assert_eq!(entry["shell_type"], "unified_exec");
+        assert_eq!(entry["visibility"], "list");
+        assert_eq!(entry["supported_in_api"], true);
+        assert!(entry["supported_reasoning_levels"].is_array());
+        assert_eq!(entry["truncation_policy"]["mode"], "tokens");
+        assert!(
+            entry["base_instructions"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
+        assert_eq!(entry["model_messages"]["token_budget"]["enabled"], true);
+        assert_eq!(
+            entry["model_messages"]["token_budget"]["reminder_threshold_tokens"],
+            8_000
+        );
+
+        let second = client.get(&url).send().await.unwrap();
+        let etag2 = second
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .unwrap()
+            .to_string();
+        assert_eq!(etag, etag2, "ETag must be stable for identical content");
+
+        // The OpenAI-style list keeps working alongside the codex catalog.
+        let resp = client
+            .get(format!("{base}/v1/models"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["data"][0]["id"], "gpt-x");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_responses_injects_models_etag_only_when_upstream_omits_it() {
+        let upstream_app = Router::new().route(
+            "/v1/responses",
+            post(|| async {
+                axum::Json(json!({
+                    "id": "resp_1",
+                    "model": "upstream-model",
+                    "status": "completed",
+                    "output": [],
+                    "usage": { "input_tokens": 1, "output_tokens": 1 }
+                }))
+            }),
+        );
+        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(upstream_listener, upstream_app).await.unwrap() });
+
+        let (base, db, _config) = serve_gateway(GatewayConfig {
+            require_key: false,
+            codex_backend_enabled: true,
+            codex_models_enabled: true,
+            ..GatewayConfig::default()
+        })
+        .await;
+        db.upsert_gateway_channel(&GatewayChannel {
+            id: "responses".into(),
+            endpoint_id: Some("mock".into()),
+            name: "mock".into(),
+            dialect: Dialect::Responses,
+            base_url: format!("http://{upstream_addr}"),
+            api_key: "upstream-key".into(),
+            path_override: None,
+            models: vec![],
+            model_override: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            extra_headers: vec![],
+            imported_from: None,
+        })
+        .unwrap();
+
+        let client = reqwest::Client::new();
+        let request = json!({
+            "model": "client-model",
+            "input": [{ "role": "user", "content": "hi" }]
+        });
+        let resp = client
+            .post(format!("{base}/backend-api/codex/responses"))
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let injected = resp
+            .headers()
+            .get("x-models-etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("codex backend responses must carry X-Models-Etag")
+            .to_string();
+
+        let catalog = client
+            .get(format!("{base}/backend-api/codex/models"))
+            .send()
+            .await
+            .unwrap();
+        let catalog_etag = catalog
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            injected, catalog_etag,
+            "X-Models-Etag must match the catalog ETag"
+        );
+
+        // The standard /v1 route is never tagged.
+        let resp = client
+            .post(format!("{base}/v1/responses"))
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(resp.headers().get("x-models-etag").is_none());
     }
 }

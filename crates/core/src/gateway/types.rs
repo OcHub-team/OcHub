@@ -6,6 +6,8 @@
 //! *channel* (upstream provider), converting dialects via `ochub-convert`
 //! when the inlet and the channel speak different formats.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Wire dialect an endpoint or channel speaks.
@@ -62,6 +64,32 @@ pub struct GatewayConfig {
     pub require_key: bool,
     /// Interval for channel health probes, seconds. 0 disables probing.
     pub health_interval_secs: u64,
+    /// Expose the Codex login-shape backend routes (`/backend-api/codex/*`).
+    #[serde(default)]
+    pub codex_backend_enabled: bool,
+    /// Let `/backend-api/codex/*` accept any non-empty bearer token that is not
+    /// a registered gateway key. Needed for real ChatGPT logins, whose OAuth
+    /// access token rotates and therefore cannot be enrolled as a static key.
+    /// Never affects the `/v1/*` endpoints.
+    #[serde(default)]
+    pub codex_backend_accept_any_bearer: bool,
+    /// Serve the Codex-native model catalog at `/backend-api/codex/models`.
+    /// When off the route is not registered, so Codex falls back to its
+    /// bundled catalog.
+    #[serde(default)]
+    pub codex_models_enabled: bool,
+    /// Per-model catalog overrides keyed by client-visible model name.
+    #[serde(default)]
+    pub codex_model_overrides: HashMap<String, CodexModelOverride>,
+    /// Optional pooled ChatGPT OAuth access token used to fetch the official
+    /// Codex model catalog as entry templates. Empty/absent keeps the catalog
+    /// purely locally synthesized.
+    #[serde(default)]
+    pub codex_catalog_upstream_token: Option<String>,
+    /// Account id paired with `codex_catalog_upstream_token`
+    /// (`chatgpt-account-id` header).
+    #[serde(default)]
+    pub codex_catalog_upstream_account_id: Option<String>,
 }
 
 impl Default for GatewayConfig {
@@ -71,8 +99,63 @@ impl Default for GatewayConfig {
             port: 4180,
             require_key: true,
             health_interval_secs: 300,
+            codex_backend_enabled: false,
+            codex_backend_accept_any_bearer: false,
+            codex_models_enabled: false,
+            codex_model_overrides: HashMap::new(),
+            codex_catalog_upstream_token: None,
+            codex_catalog_upstream_account_id: None,
         }
     }
+}
+
+/// One reasoning effort level in a Codex-native catalog entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexReasoningLevel {
+    pub effort: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Model-owned defaults for Codex's context-window token-budget feature.
+/// Mirrors Codex's `ModelTokenBudgetConfig`; emitted verbatim under
+/// `model_messages.token_budget` in the catalog entry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexTokenBudgetConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub use_history_notes_extension: bool,
+    #[serde(default)]
+    pub reminder_threshold_tokens: i64,
+    #[serde(default)]
+    pub reminder_message_template: String,
+    #[serde(default)]
+    pub guidance_message: String,
+    #[serde(default)]
+    pub auto_compact_fallback_prompt: String,
+    #[serde(default)]
+    pub auto_compact_fallback_buffer_tokens: i64,
+}
+
+/// Operator overrides applied on top of one synthesized Codex catalog entry.
+/// Unset fields keep the synthesized (or upstream-template) value.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexModelOverride {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub default_reasoning_level: Option<String>,
+    #[serde(default)]
+    pub supported_reasoning_levels: Option<Vec<CodexReasoningLevel>>,
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub token_budget: Option<CodexTokenBudgetConfig>,
 }
 
 /// A locally issued API key. Requests carrying it are attributed to `name` in
@@ -550,6 +633,22 @@ pub enum ChannelHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_gateway_config_blob_defaults_codex_fields() {
+        let config: GatewayConfig = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "port": 4180,
+            "require_key": true,
+            "health_interval_secs": 60
+        }))
+        .unwrap();
+        assert!(!config.codex_backend_enabled);
+        assert!(!config.codex_backend_accept_any_bearer);
+        assert!(!config.codex_models_enabled);
+        assert!(config.codex_model_overrides.is_empty());
+        assert_eq!(config.codex_catalog_upstream_token, None);
+    }
 
     #[test]
     fn wildcard_matching() {

@@ -403,7 +403,7 @@ impl GatewayWorker {
             .map(|a| a.port())
             .unwrap_or(config.port);
 
-        let router = crate::gateway::server::build_router(self.state.clone());
+        let router = crate::gateway::server::build_router(self.state.clone()).await;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let running_port = self.running_port.clone();
         let handle = tokio::spawn(async move {
