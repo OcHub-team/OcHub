@@ -380,7 +380,10 @@ impl AppConfig for CodexConfig {
             "context_management",
             features
                 .and_then(|f| f.get("context_management"))
-                .and_then(Item::as_bool)
+                .and_then(|item| {
+                    item.as_bool()
+                        .or_else(|| item.get("experimental_mode").and_then(Item::as_bool))
+                })
                 .unwrap_or(false),
         );
         let token_budget = features
@@ -914,29 +917,47 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
         }));
         if let Some(features) = features.as_table_mut() {
             if context_management {
-                features.insert("context_management", toml_edit::value(true));
+                set_context_management(features, true);
             } else {
-                features.remove("context_management");
+                set_context_management(features, false);
             }
             if token_budget_enabled {
-                let mut budget = Table::new();
+                let mut budget = features
+                    .get("token_budget")
+                    .and_then(Item::as_table)
+                    .cloned()
+                    .unwrap_or_default();
                 budget.insert("enabled", toml_edit::value(true));
                 if token_budget_history_notes {
                     budget.insert("use_history_notes_extension", toml_edit::value(true));
+                } else {
+                    budget.remove("use_history_notes_extension");
                 }
                 if let Ok(threshold) = token_budget_threshold.parse::<i64>()
                     && threshold > 0
                 {
                     budget.insert("reminder_threshold_tokens", toml_edit::value(threshold));
+                } else {
+                    budget.remove("reminder_threshold_tokens");
                 }
                 features.insert("token_budget", Item::Table(budget));
             } else {
-                features.remove("token_budget");
+                if let Some(budget) = features
+                    .get_mut("token_budget")
+                    .and_then(Item::as_table_mut)
+                {
+                    budget.insert("enabled", toml_edit::value(false));
+                }
             }
         }
     } else if let Some(features) = root.get_mut("features").and_then(Item::as_table_mut) {
-        features.remove("context_management");
-        features.remove("token_budget");
+        set_context_management(features, false);
+        if let Some(budget) = features
+            .get_mut("token_budget")
+            .and_then(Item::as_table_mut)
+        {
+            budget.insert("enabled", toml_edit::value(false));
+        }
         remove_empty_features = features.is_empty();
     }
     if remove_empty_features {
@@ -944,6 +965,20 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
     }
 
     doc.to_string()
+}
+
+// Accept the legacy boolean form while preserving extensions in modern tables.
+fn set_context_management(features: &mut Table, enabled: bool) {
+    if let Some(table) = features
+        .get_mut("context_management")
+        .and_then(Item::as_table_mut)
+    {
+        table.insert("experimental_mode", toml_edit::value(enabled));
+    } else if enabled {
+        features.insert("context_management", toml_edit::value(true));
+    } else {
+        features.remove("context_management");
+    }
 }
 
 fn write_relay_credentials(table: &mut Table, values: &FormValues) {
@@ -1394,6 +1429,63 @@ env_key = "LEGACY_API_KEY"
                 "field {key}"
             );
         }
+    }
+
+    #[test]
+    fn feature_edits_preserve_unmanaged_fields_and_clear_managed_values() {
+        let prior = json!({ "config": r#"
+model_provider = "custom"
+[features.context_management]
+experimental_mode = true
+future_option = "keep"
+[features.token_budget]
+enabled = true
+reminder_threshold_tokens = 8000
+use_history_notes_extension = true
+guidance_message = "custom guidance"
+[model_providers.custom]
+base_url = "http://127.0.0.1/backend-api/codex"
+requires_openai_auth = true
+"# });
+        let mut values = CodexConfig.decode(&prior, None);
+        assert!(bool_val(&values, "context_management"));
+        set_str(&mut values, "token_budget_reminder_threshold_tokens", "");
+        set_bool(
+            &mut values,
+            "token_budget_use_history_notes_extension",
+            false,
+        );
+        let encoded = CodexConfig.encode(&values, &prior, None);
+        let text = encoded.settings_config["config"].as_str().unwrap();
+        let doc = text.parse::<DocumentMut>().unwrap();
+        assert_eq!(
+            doc["features"]["context_management"]["future_option"].as_str(),
+            Some("keep")
+        );
+        let budget = doc["features"]["token_budget"].as_table().unwrap();
+        assert_eq!(budget["guidance_message"].as_str(), Some("custom guidance"));
+        assert!(!budget.contains_key("reminder_threshold_tokens"));
+        assert!(!budget.contains_key("use_history_notes_extension"));
+        set_bool(&mut values, "token_budget_enabled", false);
+        set_bool(&mut values, "context_management", false);
+        let encoded = CodexConfig.encode(&values, &encoded.settings_config, None);
+        let doc = encoded.settings_config["config"]
+            .as_str()
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            doc["features"]["token_budget"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            doc["features"]["token_budget"]["guidance_message"].as_str(),
+            Some("custom guidance")
+        );
+        assert_eq!(
+            doc["features"]["context_management"]["experimental_mode"].as_bool(),
+            Some(false)
+        );
     }
 
     fn gateway_login_values() -> FormValues {

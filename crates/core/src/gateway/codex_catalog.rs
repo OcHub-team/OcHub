@@ -4,9 +4,9 @@
 //! `{base_url}/models`. The response must be the native catalog shape
 //! (`{"models": [...]}`, each entry carrying `base_instructions` or
 //! `model_messages.instructions_template`), not the OpenAI-style `/v1/models`
-//! list. Entries are synthesized from a bundled gpt-5.5 template, optionally
-//! using the official catalog as per-slug templates when the operator
-//! configured a pooled OAuth token, with per-model overrides from
+//! list. Unknown models use conservative capabilities and neutral instructions.
+//! The bundled gpt-5.5 template is used only for that exact model. An optional
+//! official catalog supplies exact-slug templates, with per-model overrides from
 //! [`GatewayConfig::codex_model_overrides`] applied last.
 
 use std::sync::Mutex;
@@ -45,61 +45,103 @@ const UPSTREAM_CACHE_SUCCESS_TTL: Duration = Duration::from_secs(600);
 const UPSTREAM_CACHE_FAILURE_TTL: Duration = Duration::from_secs(60);
 
 struct UpstreamCacheEntry {
-    token: String,
-    fetched_at: Instant,
-    /// `None` records a failed fetch so a flapping upstream is not retried on
-    /// every request.
+    // Hash the complete credential identity; do not retain raw tokens in cache.
+    identity: [u8; 32],
+    fetched_at: Option<Instant>,
+    failed: bool,
     catalog: Option<Value>,
+    refresh: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl UpstreamCacheEntry {
+    fn needs_refresh(&self) -> bool {
+        if self
+            .refresh
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            return false;
+        }
+        let ttl = if self.failed {
+            UPSTREAM_CACHE_FAILURE_TTL
+        } else {
+            UPSTREAM_CACHE_SUCCESS_TTL
+        };
+        self.fetched_at.is_none_or(|time| time.elapsed() >= ttl)
+    }
 }
 
 static UPSTREAM_CACHE: Lazy<Mutex<Option<UpstreamCacheEntry>>> = Lazy::new(|| Mutex::new(None));
 
-/// Fetch the official Codex catalog when a pooled token is configured.
-/// Failures are cached briefly and never fail the local catalog.
+fn credential_identity(token: &str, account: Option<&str>) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(token.len().to_be_bytes());
+    hash.update(token.as_bytes());
+    hash.update(account.unwrap_or_default().as_bytes());
+    hash.finalize().into()
+}
+
+/// Read the last usable catalog and schedule at most one refresh. Neither a
+/// cold cache nor an expired cache puts network I/O on the response path.
+/// Failed refreshes retain the previous catalog and retry after a short TTL.
 async fn upstream_catalog(config: &GatewayConfig) -> Option<Value> {
     let token = config
         .codex_catalog_upstream_token
         .as_deref()
         .map(str::trim)
         .filter(|token| !token.is_empty())?;
-    {
-        let cache = UPSTREAM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.as_ref()
-            && entry.token == token
-        {
-            let ttl = if entry.catalog.is_some() {
-                UPSTREAM_CACHE_SUCCESS_TTL
-            } else {
-                UPSTREAM_CACHE_FAILURE_TTL
-            };
-            if entry.fetched_at.elapsed() < ttl {
-                return entry.catalog.clone();
-            }
-        }
-    }
-    let fetched = crate::services::codex_oauth_models::fetch_catalog_with_token(
-        token,
-        config.codex_catalog_upstream_account_id.as_deref(),
-    )
-    .await;
-    let catalog = match fetched {
-        Ok(value) if value.get("models").and_then(Value::as_array).is_some() => Some(value),
-        Ok(_) => {
-            log::warn!("[gateway] codex upstream catalog response has no models array");
-            None
-        }
-        Err(error) => {
-            log::warn!("[gateway] codex upstream catalog fetch failed: {error}");
-            None
-        }
-    };
+    let account = config
+        .codex_catalog_upstream_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|account| !account.is_empty());
+    let identity = credential_identity(token, account);
     let mut cache = UPSTREAM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    *cache = Some(UpstreamCacheEntry {
-        token: token.to_string(),
-        fetched_at: Instant::now(),
-        catalog: catalog.clone(),
-    });
-    catalog
+    if cache
+        .as_ref()
+        .is_none_or(|entry| entry.identity != identity)
+    {
+        if let Some(task) = cache.as_mut().and_then(|entry| entry.refresh.take()) {
+            task.abort();
+        }
+        *cache = Some(UpstreamCacheEntry {
+            identity,
+            fetched_at: None,
+            failed: false,
+            catalog: None,
+            refresh: None,
+        });
+    }
+    let entry = cache.as_mut().expect("cache initialized above");
+    if entry.needs_refresh() {
+        let token = token.to_owned();
+        let account = account.map(str::to_owned);
+        entry.refresh = Some(tokio::spawn(async move {
+            let result = crate::services::codex_oauth_models::fetch_catalog_with_token(
+                &token,
+                account.as_deref(),
+            )
+            .await;
+            let catalog = match result {
+                Ok(value) if value.get("models").and_then(Value::as_array).is_some() => Some(value),
+                _ => {
+                    log::warn!(
+                        "[gateway] codex catalog refresh failed; retaining cached templates"
+                    );
+                    None
+                }
+            };
+            let mut cache = UPSTREAM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(entry) = cache.as_mut().filter(|entry| entry.identity == identity) {
+                entry.failed = catalog.is_none();
+                entry.fetched_at = Some(Instant::now());
+                if let Some(catalog) = catalog {
+                    entry.catalog = Some(catalog);
+                }
+            }
+        }));
+    }
+    entry.catalog.clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -127,18 +169,35 @@ fn take_string(value: Option<&String>) -> Option<String> {
 }
 
 /// Build one catalog entry for a client-visible model. `upstream_entry` is the
-/// official catalog entry for the same slug when available; otherwise the
-/// bundled gpt-5.5 entry is the template. Local overrides always win.
+/// official catalog entry for the same slug when available. Only gpt-5.5
+/// uses the bundled template; other models start neutral. Local overrides win.
 fn catalog_entry(
     model: &str,
     index: usize,
     upstream_entry: Option<&Value>,
     overrides: Option<&CodexModelOverride>,
 ) -> Value {
-    let mut entry = upstream_entry
-        .cloned()
-        .unwrap_or_else(|| fallback_template().clone());
-    let exact_template = upstream_entry.is_some();
+    let template = upstream_entry.or_else(|| (model == "gpt-5.5").then(fallback_template));
+    let mut entry = template.cloned().unwrap_or_else(|| json!({
+        "base_instructions": "You are a coding assistant. Use the available tools to complete the user's task.",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [],
+        "visibility": "list",
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "apply_patch_tool_type": null,
+        "web_search_tool_type": "text",
+        "truncation_policy": { "mode": "tokens", "limit": 10000 },
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "context_window": 32768,
+        "max_context_window": 32768,
+        "effective_context_window_percent": 95,
+        "experimental_supported_tools": [],
+        "input_modalities": ["text"],
+        "supports_search_tool": false
+    }));
+    let exact_template = template.is_some();
     let Some(obj) = entry.as_object_mut() else {
         return json!({});
     };
@@ -161,8 +220,7 @@ fn catalog_entry(
         obj.insert("description".to_string(), json!(display_name));
     }
     if !exact_template {
-        // A third-party model cloned from the fallback entry must not inherit
-        // OpenAI product capabilities or onboarding nudges.
+        // Unknown models must not advertise OpenAI product capabilities.
         obj.insert("priority".to_string(), json!(index as i64));
         obj.insert("additional_speed_tiers".to_string(), json!([]));
         obj.insert("service_tiers".to_string(), json!([]));
@@ -194,9 +252,22 @@ fn catalog_entry(
             obj.insert("default_reasoning_level".to_string(), json!(default));
         }
         if let Some(token_budget) = &overrides.token_budget {
+            if !obj.get("model_messages").is_some_and(Value::is_object) {
+                let instructions = obj
+                    .get("base_instructions")
+                    .and_then(Value::as_str)
+                    .unwrap_or("You are a coding assistant.")
+                    .to_owned();
+                obj.insert(
+                    "model_messages".to_string(),
+                    json!({
+                        "instructions_template": instructions, "instructions_variables": {}
+                    }),
+                );
+            }
             let messages = obj
-                .entry("model_messages".to_string())
-                .or_insert_with(|| json!({}));
+                .get_mut("model_messages")
+                .expect("object inserted above");
             if let Some(messages) = messages.as_object_mut() {
                 messages.insert(
                     "token_budget".to_string(),
@@ -207,7 +278,10 @@ fn catalog_entry(
     }
 
     // Codex rejects entries missing both instruction sources.
-    let has_instructions = obj.contains_key("base_instructions")
+    let has_instructions = obj
+        .get("base_instructions")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.trim().is_empty())
         || obj
             .get("model_messages")
             .and_then(|messages| messages.get("instructions_template"))
@@ -281,6 +355,43 @@ mod tests {
             .and_then(Value::as_array)
             .cloned()
             .unwrap()
+    }
+
+    #[test]
+    fn unknown_models_use_neutral_capabilities_and_credentials_include_account() {
+        let body = catalog_body(&["third-party".into()], &GatewayConfig::default(), None);
+        let models = catalog_models(&body);
+        assert_eq!(models[0]["input_modalities"], json!(["text"]));
+        assert_eq!(models[0]["context_window"], 32768);
+        assert_eq!(models[0]["supports_reasoning_summaries"], false);
+        assert!(models[0]["apply_patch_tool_type"].is_null());
+        assert_ne!(
+            credential_identity("token", Some("a")),
+            credential_identity("token", Some("b"))
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_is_single_flight_and_retries_after_failure_or_cancellation() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        let mut entry = UpstreamCacheEntry {
+            identity: credential_identity("test", None),
+            fetched_at: None,
+            failed: false,
+            catalog: Some(json!({"models": []})),
+            refresh: Some(task),
+        };
+        assert!(!entry.needs_refresh());
+        let task = entry.refresh.take().unwrap();
+        task.abort();
+        let _ = task.await;
+        assert!(entry.needs_refresh());
+        entry.failed = true;
+        entry.fetched_at = Some(Instant::now());
+        assert!(!entry.needs_refresh());
+        entry.fetched_at = Some(Instant::now() - UPSTREAM_CACHE_FAILURE_TTL);
+        assert!(entry.needs_refresh());
+        assert!(entry.catalog.is_some());
     }
 
     #[test]

@@ -73,8 +73,12 @@ pub struct GatewayConfig {
     /// Never affects the `/v1/*` endpoints.
     #[serde(default)]
     pub codex_backend_accept_any_bearer: bool,
+    /// Explicit enabled, route-bound gateway key identity for unverified OAuth
+    /// bearers. Required when accept_any_bearer is enabled; never anonymous.
+    #[serde(default)]
+    pub codex_backend_oauth_key_id: Option<String>,
     /// Serve the Codex-native model catalog at `/backend-api/codex/models`.
-    /// When off the route is not registered, so Codex falls back to its
+    /// When off the route returns 404, so Codex falls back to its
     /// bundled catalog.
     #[serde(default)]
     pub codex_models_enabled: bool,
@@ -101,6 +105,7 @@ impl Default for GatewayConfig {
             health_interval_secs: 300,
             codex_backend_enabled: false,
             codex_backend_accept_any_bearer: false,
+            codex_backend_oauth_key_id: None,
             codex_models_enabled: false,
             codex_model_overrides: HashMap::new(),
             codex_catalog_upstream_token: None,

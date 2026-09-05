@@ -317,8 +317,10 @@ pub fn codex_auth_has_oauth_login_material(auth: &Value) -> bool {
 // in its ChatGPT-login shape against the local gateway: Codex forwards the
 // `access_token` as the bearer credential, so we fill it with a
 // gateway-issued `rd-` key and the gateway's normal key check applies.
-// Codex does not verify the id_token signature; a non-JWT access_token is
-// never refreshed, and a future `last_refresh` keeps it that way.
+// This is an experimental client compatibility shape, not real OAuth.
+// A future last_refresh avoids scheduled refresh in supported clients, but
+// account-specific services and authentication retries may still try refresh.
+// Keep a real-client smoke test: these details are not a stable OAuth contract.
 
 /// Fixed account id stamped into virtual logins (also how we recognize them).
 pub const VIRTUAL_CODEX_ACCOUNT_ID: &str = "c0dec0de-0000-4000-8000-00000000c0de";
@@ -1447,6 +1449,18 @@ pub fn write_codex_live_for_provider(
         };
     let config_text = unified_official_config.as_deref().or(config_text);
 
+    // A virtual provider must actually install its gateway credential, but
+    // must never silently replace a real ChatGPT login (even when the generic
+    // preserve-login setting is off).
+    if codex_auth_is_virtual_login(auth) {
+        let path = get_codex_auth_path();
+        let live = if path.exists() {
+            read_json_file(&path)?
+        } else {
+            json!({})
+        };
+        validate_virtual_codex_login_write(auth, &live)?;
+    }
     let preserve_official_auth = crate::settings::preserve_codex_official_auth_on_switch();
     let should_write_auth = codex_provider_owns_live_auth(
         category,
@@ -1472,6 +1486,20 @@ pub fn write_codex_live_for_provider(
     }
 }
 
+/// Check before either live file is modified. Real login material stays owned
+/// by the user; virtual-login key rotation is safe and remains supported.
+pub fn validate_virtual_codex_login_write(auth: &Value, live: &Value) -> Result<(), AppError> {
+    if codex_auth_is_virtual_login(auth)
+        && codex_auth_has_oauth_login_material(live)
+        && !codex_auth_is_virtual_login(live)
+    {
+        return Err(AppError::Config(
+            "无法用虚拟登录覆盖已有的 ChatGPT 登录。请使用普通 API 转发，或使用真实登录转发并配置绑定的网关身份。".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Whether this provider is authoritative for the live `auth.json`.
 ///
 /// Kept pure (the preserve setting is an argument) so switching and backfill
@@ -1486,7 +1514,7 @@ pub fn codex_provider_owns_live_auth(
         return codex_auth_has_login_material(auth);
     }
 
-    !preserve_official_auth
+    (!preserve_official_auth || codex_auth_is_virtual_login(auth))
         && codex_config_requires_openai_auth(config_text)
         && codex_auth_has_oauth_login_material(auth)
 }
@@ -1751,6 +1779,24 @@ requires_openai_auth = true
             Some("")
         );
         assert!(settings.pointer("/auth/tokens/access_token").is_some());
+    }
+
+    #[test]
+    fn virtual_login_write_protects_real_accounts_and_allows_key_rotation() {
+        let auth = virtual_codex_auth_json("rd-new");
+        let real =
+            json!({"tokens": {"access_token": "real-oauth", "refresh_token": "real-refresh"}});
+        assert!(validate_virtual_codex_login_write(&auth, &real).is_err());
+        assert!(validate_virtual_codex_login_write(&auth, &json!({})).is_ok());
+        assert!(
+            validate_virtual_codex_login_write(&auth, &virtual_codex_auth_json("rd-old")).is_ok()
+        );
+        assert!(codex_provider_owns_live_auth(
+            Some("gateway"),
+            &auth,
+            "model_provider = 'custom'\n[model_providers.custom]\nrequires_openai_auth = true",
+            true
+        ));
     }
 
     #[test]

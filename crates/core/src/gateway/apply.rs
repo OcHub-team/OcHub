@@ -1051,6 +1051,28 @@ fn apply_route_to_app(
     route: GatewayRoute,
     model_policy: Option<GatewayAppModelPolicy>,
 ) -> Result<ApplyResult, AppError> {
+    let codex_apply = if app_type == AppType::Codex {
+        let config = state.db.get_gateway_config()?;
+        if config.codex_backend_enabled {
+            let path = crate::apps::codex::get_codex_auth_path();
+            let live = if path.exists() {
+                crate::paths::read_json_file(&path)?
+            } else {
+                json!({})
+            };
+            crate::apps::codex::validate_virtual_codex_login_write(
+                &crate::apps::codex::virtual_codex_auth_json(""),
+                &live,
+            )?;
+            CodexGatewayApply::Backend {
+                remote_catalog: config.codex_models_enabled,
+            }
+        } else {
+            CodexGatewayApply::Relay
+        }
+    } else {
+        CodexGatewayApply::Relay
+    };
     let provider_id = gateway_provider_id(&route.id);
     let provider_name = route.name.clone();
     let existing = state
@@ -1075,23 +1097,6 @@ fn apply_route_to_app(
         model_rules: route.model_rules.clone(),
     });
     let client_models = config_policy.client_models();
-    let codex_apply = match app_type {
-        AppType::Codex
-            if state
-                .db
-                .get_gateway_config()
-                .map(|config| config.codex_backend_enabled)
-                .unwrap_or(false) =>
-        {
-            let remote_catalog = state
-                .db
-                .get_gateway_config()
-                .map(|config| config.codex_models_enabled)
-                .unwrap_or(false);
-            CodexGatewayApply::Backend { remote_catalog }
-        }
-        _ => CodexGatewayApply::Relay,
-    };
     let settings = gateway_settings_for_provider(
         app_type,
         &config_provider_id,
