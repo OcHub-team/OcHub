@@ -133,3 +133,19 @@
 "gateway.status.saved" = "モデルプロバイダー「{name}」を保存しました"
 "gateway.status.update_failed" = "モデルプロバイダーを更新できませんでした: {error}"
 "gateway.status.url_copied" = "アドレスをコピーしました"
+
+"gateway.capabilities.edit" = "モデル機能"
+
+"gateway.capabilities.compact" = "リモート圧縮"
+
+"gateway.capabilities.auto" = "自動"
+
+"gateway.capabilities.on" = "対応"
+
+"gateway.capabilities.off" = "非対応"
+
+"gateway.capabilities.context" = "コンテキスト長"
+
+"gateway.capabilities.declared" = "ユーザー指定 · 未検証"
+
+"gateway.capabilities.invalid_context" = "コンテキスト長には正の整数を指定してください"

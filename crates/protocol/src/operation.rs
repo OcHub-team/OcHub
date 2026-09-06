@@ -178,6 +178,8 @@ pub struct ProviderCreateParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderUpdateParams {
+    #[serde(default)]
+    pub draft: bool,
     pub app: String,
     pub provider_id: String,
     /// JSON Merge Patch applied to the stored provider.

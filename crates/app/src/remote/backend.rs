@@ -1170,6 +1170,32 @@ impl WorkspaceBackend {
         }
     }
 
+    pub(crate) async fn update_provider_draft(
+        &self,
+        app: &AppId,
+        provider_id: &str,
+        patch: Value,
+    ) -> Result<ProviderDetails, WorkspaceBackendError> {
+        match self {
+            Self::Local(application) => {
+                let mut provider = serde_json::to_value(
+                    application.get_provider(app, provider_id, true)?.provider,
+                )?;
+                merge_json_patch(&mut provider, &patch);
+                Ok(application.save_provider_draft(
+                    app,
+                    provider_id,
+                    serde_json::from_value(provider)?,
+                )?)
+            }
+            Self::Remote(client) => {
+                client.require_capability(Capability::ProviderWrite)?;
+                let response = client.request(methods::PROVIDER_UPDATE, json!({"app": app.as_str(), "providerId": provider_id, "patch": patch, "draft": true}), mutation_options()).await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
+    }
+
     pub(crate) async fn update_provider(
         &self,
         app: &AppId,

@@ -1,259 +1,103 @@
 ---
 title: 配置 Codex
-description: 选择账号与 API 鉴权模式，配置 Responses 上游，并管理会话历史。
+description: 分别选择账号、模型来源与模型能力，准确检查上下文管理支持情况。
 audience: human
 sidebar:
   order: 1
 ---
 
-Codex 同时使用 `config.toml` 和 `auth.json`。前者保存模型与 Provider，后者保存官方账号
-登录材料。OcHub 把两者作为一套连接配置管理，但不会把 API Key 伪装成官方账号登录。
+## 选择账号与模型来源
 
-## 先选择鉴权方式
+连接页分别管理账号身份和模型请求去向。第三方 API Key 只填写在模型供应商处；选择“手动配置”时才在连接中填写地址和密钥。
 
-新增 Codex 连接时，先根据目标选择一种模式：
-
-| 模式 | 账号状态 | 模型请求凭据 | 适用场景 |
-| --- | --- | --- | --- |
-| 仅第三方 API | 不要求 ChatGPT 登录 | 第三方 API Key | 完全使用第三方 Responses 上游 |
-| 仅 ChatGPT 账号登录 | 使用 `auth.json` | 官方登录态 | 使用 Codex 官方账号与端点 |
-| ChatGPT 登录 + 第三方 API | 保留 `auth.json` | 第三方 API Key | 需要账号能力，同时把模型请求发往第三方 |
-| ChatGPT 登录 + OcHub 转发 | 真实登录或显式虚拟登录 | 登录文件中的令牌 → OcHub 路由身份 | 第三方中转与上下文管理 |
-
-组合模式中，账号仍由 `auth.json` 管理；模型请求使用当前 Provider 的
-`experimental_bearer_token`。因此看到 `auth.json` 仍然存在是预期行为。
-
-<Aside type="note" title="API Key 与 OAuth 各司其职">
-
-“第三方连接保留当前 OAuth”只避免切换时覆盖 `auth.json`，不会让 OAuth 自动替代第三方
-API Key。第三方上游要求密钥时，仍要在连接中填写。
-
-</Aside>
-
-## 配置第三方 Responses 上游
-
-<Steps>
-
-1. **打开 Codex 并新增连接。** 如果页面提供合适预设，可从预设开始，再核对每个字段。
-
-2. **设置 Provider ID。** 这是 `config.toml` 中 `[model_providers.<id>]` 的键，也是 `model_provider` 的值。使用简短、稳定且不含空格的标识，例如 `company_proxy`。
-
-3. **填写普通 Provider 名称。** 它是 Codex 配置内部的名称，不是 OcHub 列表中显示的连接名称。
-
-4. **填写 Base URL。** 第三方模式通常以 `/v1` 结尾，Codex 会继续拼接 `/responses`。以供应商给出的 Responses 地址为准。
-
-5. **选择鉴权方式并填写 Key。** “仅第三方 API”和组合模式都会使用第三方 API Key；仅账号登录不会使用该字段。
-
-6. **填写模型。** 使用上游真实支持的模型 ID。需要时再选择 `minimal`、`low`、`medium`、`high` 或 `xhigh` 推理强度。
-
-7. **保持 `wire_api = responses`。** 当前 Codex 不再支持 `chat`；只有 Chat Completions 的上游应通过 OcHub 模型供应商做接口转换。
-
-8. **检查预览并切换。** 确认 `config.toml` 中的 Provider ID、Base URL、模型和鉴权模式正确，再保存并切换。
-
-9. **重开 Codex 会话。** 发起一条短请求，在“用量 → 请求日志”中核对请求模型、计价模型和状态。
-
-</Steps>
-
-<OcHubStepsVisual
-  locale="zh"
-  app="Codex"
-  labels="打开 Codex 并添加连接|设置稳定的 Provider ID|填写内部 Provider 名称|填写 Responses Base URL|选择鉴权并填写 Key|选择上游支持的模型|保持 Responses 接口|检查 config.toml 并切换|在新 Codex 会话中验证"
-  visuals="toolbar-add|identity|identity|fields|fields|model|source|preview|usage-nav"
-/>
-
-## 什么时候使用模型供应商
-
-以下情况优先使用[模型供应商模式](/zh/getting-started/relay)，不要勉强写成 Codex 直接连接：
-
-- 上游只支持 OpenAI Chat Completions，不支持 Responses。
-- 需要把 Codex 模型别名改写成上游模型名。
-- 需要在 Anthropic、Chat 与 Responses 接口之间自动选择。
-- 希望集中记录网关级首 Token、总延迟和错误。
-- 希望后续切换上游时不反复重写 `config.toml`。
-
-Codex 的远程压缩请求要求上游支持 OpenAI Responses。普通请求可以由网关转换到 Chat，但
-远程压缩不能依赖 Chat-only 上游。
-
-## 配置模型与推理
-
-连接表单中的“模型”会成为 Codex 当前模型。推理强度是否生效取决于模型和上游对
-Responses 推理参数的支持。
-
-建议按以下顺序验证：
-
-1. 不设置推理强度，确认模型能回复。
-2. 先尝试 `medium`。
-3. 再根据延迟和结果调整到 `low`、`high` 或 `xhigh`。
-4. 上游拒绝参数时，清空推理强度，而不是频繁更换模型与密钥。
-
-“远程压缩”只有在 Provider 名称精确为 `OpenAI` 时才由 Codex 开启。第三方上游必须完整支持
-Responses 的远程压缩语义，否则保持关闭。
-
-## 高级请求选项
-
-高级区域适合上游明确要求额外参数时使用：
-
-| 字段 | 用途 | 示例场景 |
+| 模型来源 | 账号 | 行为 |
 | --- | --- | --- |
-| 禁用响应存储 | 写入 `disable_response_storage = true` | ZDR 或不支持响应存储的上游 |
-| Query 参数 | 追加到每次请求 URL | Azure 的 `api-version` |
-| HTTP 头 | 附加自定义请求头 | 租户、项目或路由标识 |
+| 官方 | ChatGPT | 使用真实账号和官方端点 |
+| 模型供应商 | ChatGPT | 保留真实登录，经本地 OcHub 路由到第三方；上游使用供应商 API Key |
+| 模型供应商 | 不使用账号 | 使用 OcHub 签发的 API Key 接入供应商 |
+| 手动配置 | ChatGPT | 自定义地址与独立 API Key；不会因此获得实验性上下文管理 |
+| 手动配置 | 不使用账号 | 直接使用第三方 API |
 
-先在普通连接上完成请求，再逐项添加。密钥应放在专用 API Key 字段；不要为了方便把长期密钥
-复制到普通自定义头中。
+真实账号登录仍在 Codex 中完成。选择 ChatGPT 不代表已完成登录或验证订阅。
 
-## 管理官方登录
+1. 在**模型供应商**中填写地址、API Key、协议，选择模型并保存。
+2. 在 **Codex → 添加连接**选择模型来源和供应商。
+3. 账号选择 **ChatGPT**，使用已有真实登录；没有账号则选择**不使用账号**。
+4. 选择模型，上下文管理保留**自动**。
+5. 检查配置预览，保存连接并切换，然后重新打开 Codex 会话。
 
-如果 Codex 已经通过 ChatGPT 账号登录：
+**保存**仅保存 Codex 连接草稿，不改写当前连接文件。**保存并启用**保存后执行切换，保留外部配置修改。**检查配置**仅检查本地配置条件，不发送推理请求，也不验证订阅或服务端能力。远程工作区需要支持草稿操作的新版本节点。
 
-1. 新增或选择“官方登录”连接。
-2. 切换后确认 Base URL 回到官方行为。
-3. 重开 Codex。
-4. 执行一条请求，确认没有第三方 Provider 错误。
+**高级设置**中的虚拟登录仅用于兼容不具备真实账号的客户端，不提供订阅或官方额度。不要与真实账号同时使用；OcHub 会拒绝用虚拟登录覆盖真实凭据。
 
-从官方登录切到第三方时，可在**Codex 应用设置**开启“第三方连接保留当前 OAuth”。这样
-切换不会覆盖 `auth.json`，以后仍可快速切回官方登录。
+## 上下文管理的状态
 
-## 统一与迁移会话历史
+实验性上下文管理与普通压缩不是同一项能力。
 
-Codex 应用设置包含两个容易混淆的选项：
-
-- **迁入既有 Codex 会话**：在下一次迁移流程中导入已有官方会话历史。
-- **统一 Codex 会话历史**：让官方与第三方 Codex 会话使用统一历史位置。
-
-调整历史设置前：
-
-1. 退出所有 Codex 进程。
-2. 备份 `~/.codex`，或你配置的自定义 Codex 目录。
-3. 一次只改一个选项。
-4. 重启 OcHub 后检查“会话”中的数量与时间范围。
-
-需要撤回统一历史时，打开**高级工具 → Codex 历史**：
-
-- “检查统一历史备份”会判断当前目录是否存在可恢复备份。
-- “恢复官方历史备份”可能覆盖当前官方历史；确认前先再做一份目录备份。
-
-## MCP 与技能
-
-Codex 支持 OcHub 的 MCP 和技能分发。
-
-- 在**MCP 服务器**中打开 Codex 开关并同步，内容会写入 Codex 的 `config.toml`。
-- 在**技能**中选择 Codex 作为安装目标，或在已安装卡片上启用。
-- 修改自定义配置目录后，两者都会改用新目录；同步后重启 Codex。
-- 如果 MCP 表里出现 `[mcp.servers.*]` 之类旧格式，OcHub 会在导入时兼容读取，并按当前格式写回。
-
-## 常见问题
-
-| 现象 | 原因方向 | 处理 |
-| --- | --- | --- |
-| 提示 `chat` 已移除 | `wire_api` 或上游只支持 Chat | 改用 Responses，或通过模型供应商转换 |
-| Base URL 请求 404 | `/v1` 层级不对 | 核对最终应为 `/v1/responses` |
-| 官方账号仍在但第三方请求 401 | OAuth 不等于第三方 Key | 检查鉴权模式与第三方 API Key |
-| 远程压缩失败 | 上游不完整支持 Responses | 关闭远程压缩或改用 Responses 上游 |
-| 切换后模型没变 | 旧 Codex 进程仍在运行 | 退出后重开会话并查看 `config.toml` 预览 |
-| 会话数量异常 | 历史目录或统一历史设置改变 | 核对自定义目录并检查历史备份 |
-
-完成配置后，至少确认：
-
-- `config.toml` 中当前 `model_provider` 与预期 Provider ID 一致。
-- 账号模式与 API Key 模式没有混用。
-- 一条真实请求能返回，且日志显示正确请求模型。
-- MCP、技能和会话历史位于预期的 Codex 配置目录。
-
-如需把 Chat-only 上游接给 Codex，继续阅读
-[路由实战](/zh/advanced/routing-recipes)。同时登录与转发、远程压缩、Responses WebSocket 和
-Provider 历史分桶见 [Codex 进阶与易踩坑](/zh/codex/advanced)。
-
-## 真实 ChatGPT 登录、第三方中转与上下文管理
-
-从 OcHub 0.5.16 起，模型供应商连接可以保留真实 ChatGPT 登录，并自动绑定本地网关路由。
-不需要虚拟登录，也不需要手动填写网关身份 ID。
-
-1. 在 Codex 中完成真实 ChatGPT 登录。当前对应的 Codex 源码要求账号为 Plus、Pro 或 ProLite，才能通过实验性上下文管理的账号检查。
-2. 在 OcHub 的**模型供应商**中配置第三方端点、API Key、模型与路由。远程压缩要求上游支持 Responses 的 `/responses/compact`；仅支持普通 Responses 不代表支持压缩。
-3. 新增 Codex 连接，来源选择该模型供应商，鉴权选择 **ChatGPT 登录 + OcHub 转发**。
-4. 关闭**虚拟 ChatGPT 登录**，开启**上下文管理**，保存并切换连接。第三方 Key 留在供应商端点配置中。
-5. 重开 Codex 会话，先验证短请求，再验证长会话或 `/compact`。在用量日志中核对路由和实际模型。
-
-已有真实登录时，从模型供应商页面一键应用到 Codex 也会自动使用这一形态。
-切换会启用 Codex 后端和模型目录，将真实登录请求绑定到所选供应商的网关密钥身份。
-保存未启用的连接不会改变当前账号的路由；下一次切换会更新绑定。
-当前真实登录绑定为网关级单一身份，因此共享同一网关的真实登录会话使用最近切换的绑定。
-
-生成的 Codex 配置如下（端口和模型以实际配置为准）：
-
-```toml
-model_provider = "custom"
-model = "your-model-id"
-
-[model_providers.custom]
-name = "OpenAI"
-base_url = "http://127.0.0.1:4180/backend-api/codex"
-wire_api = "responses"
-requires_openai_auth = true
-
-[features.context_management]
-experimental_mode = true
-```
-
-`auth.json` 保留真实账号。模型请求先携带账号令牌到本地 OcHub，OcHub 移除该 Authorization，
-再使用供应商端点的 API Key 请求上游。上游调用按第三方规则计费，不会因此获得官方额度。
-
-### 为什么不能选“ChatGPT 登录 + 第三方 API”
-
-实验性上下文管理要求 provider name 精确为 `OpenAI`，端点以 `/backend-api/codex` 结尾，
-且 `requires_openai_auth = true`。Provider 不能设置 `experimental_bearer_token`、`env_key`、
-独立 `auth` 或 `aws`。组合 API 模式会写 Bearer Key，因此不能通过这条自动启用检查。
-通过检查后 Codex 启用 Token Budget 和 history/notes 扩展；受管配置仍可禁用 Token Budget。
-模型应正确声明上下文窗口，并支持所需工具。开关开启不等于任意第三方模型都能可靠完成长会话管理。
-
-### 虚拟登录与真实登录
-
-虚拟登录仅供没有真实登录资料的客户端使用，把 `rd-…` 网关密钥写入本地登录文件。
-它不是 ChatGPT 订阅，不提供官方额度。OcHub 不会用虚拟登录覆盖真实账号。
-模型供应商模式会尊重虚拟登录开关；已有真实账号时保持关闭即可。
-
-### 手工接入与网关身份
-
-手工连接不会根据任意 URL 自动选择供应商。先创建启用且绑定供应商路由的网关密钥，再配置：
-
-```sh
-ochcli gateway key list
-ochcli gateway config set --codex-backend true --codex-models true --codex-oauth-key-id KEY_ID
-```
-
-`KEY_ID` 是记录 ID，不是 `rd-…` 密钥内容。撤销真实登录接入：
-
-```sh
-ochcli gateway config set --clear-codex-oauth
-```
-
-此模式接受未经账号验证的非空 Bearer，并映射到指定路由身份；不验证 ChatGPT 账号归属。
-网关仅监听本机回环地址。缺少绑定、停用密钥和已撤销的 `rd-…` 密钥会被拒绝，`/v1` 鉴权不受影响。
-
-### 精简界面的字段参考
-
-界面只保留标签、控件、状态和校验反馈，字段说明在此查阅。编辑器右上角的文档按钮可打开文档站。
-
-| 字段 | 含义 |
+| 选择 | 配置行为 |
 | --- | --- |
-| Provider ID | `model_providers` 的配置键，也是 Codex 会话使用的供应商标识；尽量保持稳定 |
-| 普通 Provider 名称 | Codex 内部名称；OcHub 转发登录形态固定写为 `OpenAI` |
-| Base URL | 第三方直连通常以 `/v1` 结尾；登录转发使用本地 `/backend-api/codex` |
-| 第三方 API Key | 直连 API 模式的供应商凭据；虚拟登录时使用 OcHub 的 `rd-…` 密钥 |
-| 远程压缩 | 要求 Responses 压缩协议，上游不支持时压缩请求会失败 |
-| 上下文管理 | 写入 `features.context_management.experimental_mode`，受账号和 Provider 条件约束 |
-| Token Budget | 显式开启客户端预算管理，可受模型默认值和受管配置影响 |
-| 提醒阈值 | 剩余 token 到达阈值时提醒保存状态；留空采用客户端默认值 |
-| 历史笔记扩展 | 启用 history/notes 扩展，供上下文管理使用 |
-| Responses WebSocket | 必须与供应商能力一致；模型供应商连接由所选供应商决定 |
-| 禁用响应存储 | OcHub 不实现 Responses 存储，模型供应商连接自动启用此项 |
-| Query 参数与 HTTP 头 | 仅用于上游要求的附加参数；模型供应商连接由 OcHub 管理 |
+| 自动 | 官方默认端点采用 Codex 的实验性入口；第三方与 OcHub 路由不自动开启 |
+| 开启 | 明确请求实验性功能；OcHub 路由缺少历史服务时拒绝保存此配置 |
+| 关闭 | 写入关闭意图，后续供应商地址注入不会重新开启 |
 
-| 问题 | 检查 |
+“待 Codex 验证”表示只完成配置，不表示账号套餐、组织策略或后端可用性已验证。“不可用 · 历史服务未接通”表示当前 OcHub 没有实现所需历史服务。
+
+目前不能把“真实 ChatGPT 登录 + 第三方推理 + 完整实验性上下文管理”视为已支持。0.5.16 文档曾把登录绑定与压缩转发误写为完整支持，此处纠正。
+
+### Codex 的自动启用条件
+
+以下条件来自对应 Codex 源码的 `apply_experimental_context`，仅适用于该实验性自动入口：
+
+- `[features.context_management] experimental_mode = true`。
+- Provider 的 `name` 精确为 `OpenAI`。
+- `base_url` 留空，或去除尾部斜线后以 `/backend-api/codex` 结尾。
+- `requires_openai_auth = true`。
+- Provider 不含 `env_key`、`experimental_bearer_token`、`auth`、`aws`，空字符串也算存在。
+- 认证模式为 `Chatgpt`，读取到的套餐为 Plus、Pro 或 ProLite。
+- Token Budget 可启用，且没有被托管策略固定关闭。
+
+通过检查会启用 Token Budget 与 `use_history_notes_extension`。实际使用还要求客户端安装 History / Notes 扩展、知道模型上下文窗口，并具备可工作的历史写入、检索与笔记服务。仅手动设置 Token Budget 或使用模型默认预算配置，是其他启用路径，不能与这里的套餐限制混为一谈。
+
+### History / Notes 与压缩
+
+完整历史能力依赖 `alpha/history/v2/*` 和 `alpha/notes/v2/*`，包括 `thread_hint`、历史检索和笔记读写。当前 OcHub 没有实现这些服务，也没有验证第三方推理历史如何写入官方历史服务。
+
+`/responses/compact` 只是远程压缩接口。OcHub 支持转发 `/v1/responses/compact` 与 Codex 后端形态的压缩请求，上游仍必须支持该接口。Chat 或 Messages 转换不能代替远程压缩。
+
+## 声明模型能力
+
+在**模型供应商 → 编辑 → 模型**中，点击某个已选择模型的**模型能力**。
+
+| 字段 | 语义 |
 | --- | --- |
-| 401 | 真实登录身份是否绑定到启用的供应商密钥；手工连接是否配置 KEY_ID |
-| 404 | Codex 后端是否启用、Base URL 是否正确、上游是否实现压缩接口 |
-| 开关打开但无上下文管理 | 账号套餐、Provider 名称、端点后缀、独立凭据与受管配置 |
-| 普通请求成功而压缩失败 | 上游的 `/responses/compact` 能力；Chat-only 端点不能承担压缩 |
-| 切换虚拟登录被拒绝 | 当前已有真实登录，关闭虚拟登录并使用真实登录转发 |
+| Responses Lite：自动 | 未声明，保守关闭；不继承同名官方模型的 Lite 能力 |
+| Responses Lite：支持 | 在生成的 Codex 模型目录中声明 `use_responses_lite = true` |
+| Responses Lite：不支持 | 明确关闭 |
+| 远程压缩：自动 | 未验证，由实际 Responses 请求决定是否可用 |
+| 远程压缩：支持 | 用户声明上游支持；仍需实际请求验证 |
+| 远程压缩：不支持 | 网关明确拒绝该模型的压缩请求 |
+| 上下文窗口 | 正整数；留空使用目录默认值 |
+
+界面标注**用户声明 · 未验证**。当前模型列表获取不构成 Lite、压缩或历史服务验证。能力按供应商及上游模型保存，同名模型在不同供应商之间不共享声明；映射别名使用对应上游模型的声明。
+
+Lite 是 Responses 的请求行为，不是第三种认证方式，也不是上下文管理的先决条件。Lite 请求必须走原生 Responses 通道，不会降级到 Chat / Messages 转换。请只为实际支持 Lite 语义的上游声明支持。
+
+## 连接路由与凭据
+
+新生成的真实登录连接地址形如：
+
+```text
+http://127.0.0.1:4180/connection/rd-…/backend-api/codex
+```
+
+连接地址中的随机网关密钥绑定供应商路由；真实账号令牌仍来自 `auth.json`。OcHub 向上游发送供应商 API Key，并移除本地路由凭据。不同供应商的连接不再依赖同一个全局 OAuth 路由绑定。
+
+该 URL 含本地访问凭据，不应公开分享。服务仍只监听本机。路由密钥不验证 ChatGPT 订阅；账号有效性由 Codex 与对应账号服务判断。停用密钥会拒绝该连接。
+
+旧的不带 `/connection/…` 的地址仍兼容手动配置的全局 OAuth 绑定；重新保存并启用连接可迁移到独立路由。
+
+## 历史、MCP 与技能
+
+“统一 Codex 会话历史”与“迁入既有 Codex 会话”管理本地会话文件，与实验性 History / Notes 后端无关。调整历史位置前退出 Codex 并保留备份。
+
+MCP 和技能可在相应页面启用 Codex 并同步；配置目录改变后需重新同步并重启会话。更多内容见 [Codex 进阶](/zh/codex/advanced) 和 [模型供应商](/zh/getting-started/relay)。

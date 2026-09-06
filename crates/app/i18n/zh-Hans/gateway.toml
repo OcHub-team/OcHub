@@ -136,3 +136,19 @@
 "gateway.status.saved" = "模型供应商「{name}」已保存"
 "gateway.status.update_failed" = "更新模型供应商失败：{error}"
 "gateway.status.url_copied" = "已复制地址"
+
+"gateway.capabilities.edit" = "模型能力"
+
+"gateway.capabilities.compact" = "远程压缩"
+
+"gateway.capabilities.auto" = "自动"
+
+"gateway.capabilities.on" = "支持"
+
+"gateway.capabilities.off" = "不支持"
+
+"gateway.capabilities.context" = "上下文窗口"
+
+"gateway.capabilities.declared" = "用户声明 · 未验证"
+
+"gateway.capabilities.invalid_context" = "上下文窗口必须为正整数"

@@ -473,6 +473,9 @@ pub enum ProviderCommand {
         add_to_live: bool,
     },
     Edit {
+        /// Save a Codex connection without updating its live configuration.
+        #[arg(long)]
+        draft: bool,
         id: String,
         #[arg(long)]
         app: String,

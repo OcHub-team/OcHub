@@ -454,6 +454,14 @@ fn codex_catalog_model_entry(
     // OpenAI transport optimization and must not be inferred from a bundled
     // OpenAI entry for an arbitrary endpoint.
     entry_obj.insert("use_responses_lite".to_string(), json!(false));
+    if let Some(budget) = entry_obj
+        .get_mut("model_messages")
+        .and_then(|m| m.get_mut("token_budget"))
+        .and_then(Value::as_object_mut)
+    {
+        budget.insert("enabled".into(), json!(false));
+        budget.insert("use_history_notes_extension".into(), json!(false));
+    }
     entry_obj.insert("availability_nux".to_string(), Value::Null);
     entry_obj.insert("upgrade".to_string(), Value::Null);
 
@@ -522,6 +530,7 @@ fn apply_known_codex_model_capabilities(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CodexCatalogModelSpec {
+    use_responses_lite: bool,
     model: String,
     display_name: String,
     context_window: u64,
@@ -570,6 +579,10 @@ fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCa
         .unwrap_or(default_context_window);
 
         specs.push(CodexCatalogModelSpec {
+            use_responses_lite: model_config
+                .get("useResponsesLite")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             model: model.to_string(),
             display_name: display_name.to_string(),
             context_window,
@@ -866,14 +879,16 @@ fn codex_model_catalog_from_settings(
     for (index, spec) in specs.iter().enumerate() {
         let exact_template = find_codex_model_template(&template_source, &spec.model);
         let template = exact_template.as_ref().unwrap_or(&fallback_template);
-        entries.push(codex_catalog_model_entry(
+        let mut entry = codex_catalog_model_entry(
             template,
             &spec.model,
             &spec.display_name,
             spec.context_window,
             index,
             exact_template.is_some(),
-        ));
+        );
+        entry["use_responses_lite"] = json!(spec.use_responses_lite);
+        entries.push(entry);
     }
     Ok(Some(json!({ "models": entries })))
 }
@@ -1050,6 +1065,9 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
             obj.insert("contextWindow".to_string(), json!(context_window));
         }
 
+        if let Some(lite) = entry.get("use_responses_lite").and_then(Value::as_bool) {
+            obj.insert("useResponsesLite".to_string(), json!(lite));
+        }
         entries.push(Value::Object(obj));
     }
 

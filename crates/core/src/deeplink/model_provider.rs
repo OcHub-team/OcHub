@@ -418,6 +418,7 @@ pub fn prepare_model_provider_import(
         }
     }
     let route = GatewayRoute {
+        model_capabilities: Default::default(),
         id: route_id,
         name: manifest.name.trim().to_string(),
         website_url: manifest.website_url().map(ToOwned::to_owned),

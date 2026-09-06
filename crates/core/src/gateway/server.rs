@@ -38,7 +38,21 @@ pub async fn build_router(state: GatewayState) -> Router {
             "/backend-api/codex/responses/compact",
             post(handle_codex_compact),
         );
+    let scoped = router.clone().route_layer(axum::middleware::from_fn(
+        |axum::extract::Path(params): axum::extract::Path<
+            std::collections::HashMap<String, String>,
+        >,
+         mut request: axum::extract::Request,
+         next: axum::middleware::Next| async move {
+            let Some(key) = params.get("route_key").and_then(|v| v.parse().ok()) else {
+                return unauthorized(Dialect::Responses);
+            };
+            request.headers_mut().insert("x-ochub-route-key", key);
+            next.run(request).await
+        },
+    ));
     router
+        .nest("/connection/{route_key}", scoped)
         .layer(axum::extract::DefaultBodyLimit::max(200 * 1024 * 1024))
         .with_state(state)
 }
@@ -108,6 +122,28 @@ async fn authorize_codex_backend(
     state: &GatewayState,
     headers: &HeaderMap,
 ) -> Result<Option<GatewayKey>, Response> {
+    if let Some(route_key) = headers.get("x-ochub-route-key") {
+        // The connection URL identifies the route independently of rotating OAuth tokens.
+        let bearer = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| {
+                v.strip_prefix("Bearer ")
+                    .or_else(|| v.strip_prefix("bearer "))
+            })
+            .filter(|v| !v.trim().is_empty());
+        if bearer.is_none() {
+            return Err(unauthorized(Dialect::Responses));
+        }
+        let key = route_key
+            .to_str()
+            .ok()
+            .and_then(|secret| state.db.find_gateway_key(secret).ok().flatten())
+            .filter(|key| key.enabled && key.route_id.is_some());
+        return key
+            .map(Some)
+            .ok_or_else(|| unauthorized(Dialect::Responses));
+    }
     if let Some(secret) = presented_secret(headers).filter(|secret| !secret.is_empty()) {
         match state.db.find_gateway_key(&secret) {
             Ok(Some(key)) => return Ok(Some(key)),
@@ -1265,6 +1301,7 @@ mod tests {
         })
         .unwrap();
         db.upsert_gateway_route(&GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route-ws".into(),
             name: "WS route".into(),
             website_url: None,
@@ -1375,6 +1412,82 @@ mod tests {
         (format!("http://{addr}"), db, config)
     }
 
+    #[tokio::test]
+    async fn scoped_connections_keep_catalogs_and_credentials_isolated() {
+        let (base, db, _) = serve_gateway(GatewayConfig {
+            codex_backend_enabled: true,
+            codex_models_enabled: true,
+            // Scoped connections do not need global OAuth fallback.
+            ..GatewayConfig::default()
+        })
+        .await;
+        for (name, lite) in [("a", true), ("b", false)] {
+            let route: crate::gateway::GatewayRoute = serde_json::from_value(json!({
+                "id": name, "name": name, "enabled": true, "created_at": 1,
+                "model_capabilities": {"shared": {"use_responses_lite": lite, "context_window": if lite { 64000 } else { 32000 }}}
+            })).unwrap();
+            db.upsert_gateway_route(&route).unwrap();
+            db.upsert_gateway_key(&GatewayKey {
+                id: name.into(),
+                name: name.into(),
+                key: format!("rd-{name}"),
+                route_id: Some(name.into()),
+                model_policy: Some(crate::gateway::types::GatewayAppModelPolicy {
+                    models: vec!["alias".into()],
+                    model_rules: vec![crate::gateway::GatewayModelRule {
+                        model: "alias".into(),
+                        upstream_model: "shared".into(),
+                        channel_id: None,
+                        dialect: None,
+                    }],
+                    ..Default::default()
+                }),
+                enabled: true,
+                created_at: 1,
+            })
+            .unwrap();
+        }
+        let client = reqwest::Client::new();
+        for (name, expected) in [("a", true), ("b", false), ("a", true)] {
+            let response = client
+                .get(format!(
+                    "{base}/connection/rd-{name}/backend-api/codex/models"
+                ))
+                .bearer_auth("same-rotating-real-account-token")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["models"][0]["use_responses_lite"], expected);
+        }
+        for suffix in ["rd-a", "invalid"] {
+            let response = client
+                .get(format!(
+                    "{base}/connection/{suffix}/backend-api/codex/models"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let mut key = db
+            .get_gateway_keys()
+            .unwrap()
+            .into_iter()
+            .find(|k| k.id == "a")
+            .unwrap();
+        key.enabled = false;
+        db.upsert_gateway_key(&key).unwrap();
+        let response = client
+            .get(format!("{base}/connection/rd-a/backend-api/codex/models"))
+            .bearer_auth("real-account")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
     #[test]
     fn compressed_request_decode_is_bounded_and_rejects_invalid_frames() {
         let input = br#"{"model":"third-party","input":[]}"#;
@@ -1446,7 +1559,7 @@ mod tests {
         })
         .unwrap();
         let client = reqwest::Client::new();
-        let url = format!("{base}/backend-api/codex/responses/compact");
+        let url = format!("{base}/connection/rd-local/backend-api/codex/responses/compact");
         assert_eq!(
             client
                 .post(&url)
@@ -1474,8 +1587,29 @@ mod tests {
         assert_eq!(body["output"][0]["encrypted_content"], "opaque-history");
         let (headers, body) = received.lock().unwrap().take().unwrap();
         assert_eq!(headers["authorization"], "Bearer third-party-secret");
+        assert!(!headers.contains_key("x-ochub-route-key"));
         assert_eq!(body["model"], "upstream-model");
         assert!(body.get("stream").is_none());
+        let mut declared = db.get_gateway_route_by_id("station:real").unwrap().unwrap();
+        declared.model_capabilities.insert(
+            "client-model".into(),
+            crate::gateway::CodexModelOverride {
+                remote_compaction: Some(false),
+                ..Default::default()
+            },
+        );
+        db.upsert_gateway_route(&declared).unwrap();
+        let response = client
+            .post(&url)
+            .bearer_auth("real-account")
+            .json(&json!({"model":"client-model","input":[]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(received.lock().unwrap().is_none());
+        declared.model_capabilities.clear();
+        db.upsert_gateway_route(&declared).unwrap();
         let mut channel = db.get_gateway_channels().unwrap().remove(0);
         channel.dialect = Dialect::Chat;
         db.upsert_gateway_channel(&channel).unwrap();

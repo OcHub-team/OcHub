@@ -98,3 +98,33 @@
 "provider_editor.tools.speedtest" = "URL をテスト"
 
 "provider_editor.action.docs" = "ドキュメント"
+
+"provider_editor.codex.account" = "アカウント"
+
+"provider_editor.codex.no_account" = "使用しない"
+
+"provider_editor.codex.context" = "コンテキスト管理"
+
+"provider_editor.codex.context_off" = "無効"
+
+"provider_editor.codex.context_unavailable" = "利用不可 · 履歴サービス未接続"
+
+"provider_editor.codex.context_pending" = "Codex によるアカウントと履歴の検証待ち"
+
+"provider_editor.codex.official" = "公式"
+
+"provider_editor.codex.model_source" = "モデルの接続先"
+
+"provider_editor.codex.advanced" = "詳細設定"
+
+"provider_editor.codex.auto" = "自動"
+
+"provider_editor.codex.on" = "有効"
+
+"provider_editor.codex.off" = "無効"
+
+"provider_editor.codex.check" = "設定を確認"
+
+"provider_editor.codex.checked" = "設定確認済み · アカウントとサービスは未検証"
+
+"provider_editor.codex.save_activate" = "保存して有効化"

@@ -567,9 +567,15 @@ pub fn inject_station_endpoint(
                 // instead of /v1; the station key becomes the virtual login's
                 // access token (written into auth.json by the codec) rather
                 // than an experimental_bearer_token.
+                if str_val(values, "context_mode").is_empty() {
+                    set_str(values, "context_mode", "auto");
+                }
                 let origin = base_url.trim().trim_end_matches('/');
-                set_str(values, "base_url", format!("{origin}/backend-api/codex"));
-                set_bool(values, "context_management", true);
+                set_str(
+                    values,
+                    "base_url",
+                    format!("{origin}/connection/{key}/backend-api/codex"),
+                );
             } else {
                 set_str(values, "base_url", dialect_base_url(app, base_url));
             }
@@ -671,14 +677,15 @@ mod tests {
         inject_station_endpoint(&mut codex, AppType::Codex, origin, "rd-station", caps);
         assert_eq!(
             str_val(&codex, "base_url"),
-            "http://127.0.0.1:4180/backend-api/codex"
+            "http://127.0.0.1:4180/connection/rd-station/backend-api/codex"
         );
         assert_eq!(str_val(&codex, "api_key"), "");
         assert!(!bool_val(&codex, "virtual_login"));
         set_bool(&mut codex, "virtual_login", true);
         inject_station_endpoint(&mut codex, AppType::Codex, origin, "rd-station", caps);
         assert!(bool_val(&codex, "virtual_login"));
-        assert!(bool_val(&codex, "context_management"));
+        assert_eq!(str_val(&codex, "context_mode"), "auto");
+        assert!(!bool_val(&codex, "context_management"));
         assert_eq!(
             str_val(&codex, "auth_mode"),
             codex::AUTH_OPENAI_LOGIN_GATEWAY

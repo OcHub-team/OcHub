@@ -212,6 +212,14 @@ fn catalog_entry(
         })
         .unwrap_or_else(|| model.to_string());
 
+    if let Some(budget) = obj
+        .get_mut("model_messages")
+        .and_then(|m| m.get_mut("token_budget"))
+        .and_then(Value::as_object_mut)
+    {
+        budget.insert("enabled".into(), json!(false));
+        budget.insert("use_history_notes_extension".into(), json!(false));
+    }
     obj.insert("slug".to_string(), json!(model));
     obj.insert("display_name".to_string(), json!(display_name));
     if let Some(description) = overrides.and_then(|o| take_string(o.description.as_ref())) {
@@ -227,7 +235,14 @@ fn catalog_entry(
     }
     obj.insert("shell_type".to_string(), json!("unified_exec"));
     obj.insert("supported_in_api".to_string(), json!(true));
-    obj.insert("use_responses_lite".to_string(), json!(false));
+    obj.insert(
+        "use_responses_lite".to_string(),
+        json!(
+            overrides
+                .and_then(|o| o.use_responses_lite)
+                .unwrap_or(false)
+        ),
+    );
     obj.insert("availability_nux".to_string(), Value::Null);
     obj.insert("upgrade".to_string(), Value::Null);
     if let Some(visibility) = overrides.and_then(|o| take_string(o.visibility.as_ref())) {
@@ -336,7 +351,26 @@ pub(crate) async fn build_catalog(
     key: Option<&GatewayKey>,
 ) -> Result<(String, String), axum::response::Response> {
     let models = crate::gateway::server::visible_models(state, key).map_err(|resp| *resp)?;
-    let config = state.config.read().await.clone();
+    let mut config = state.config.read().await.clone();
+    if let Some(route_id) = key.and_then(|key| key.route_id.as_deref())
+        && let Ok(Some(route)) = state.db.get_gateway_route_by_id(route_id)
+    {
+        // Capability declarations belong to the selected upstream model, including aliases.
+        for model in &models {
+            let policy = key.and_then(|key| key.model_policy.as_ref());
+            let rule = crate::gateway::pipeline::request_model_rule(policy, Some(&route), model);
+            let upstream_model =
+                crate::gateway::pipeline::request_model_override(rule, policy, Some(&route))
+                    .unwrap_or(model);
+            if let Some(capabilities) = route.model_capabilities.get(upstream_model) {
+                config
+                    .codex_model_overrides
+                    .insert(model.clone(), capabilities.clone());
+            } else {
+                config.codex_model_overrides.remove(model);
+            }
+        }
+    }
     let upstream = upstream_catalog(&config).await;
     let body = catalog_body(&models, &config, upstream.as_ref());
     let etag = catalog_etag(&body);
@@ -434,6 +468,8 @@ mod tests {
         config.codex_model_overrides.insert(
             "gpt-x".to_string(),
             CodexModelOverride {
+                use_responses_lite: None,
+                remote_compaction: None,
                 display_name: Some("Custom X".to_string()),
                 description: Some("custom description".to_string()),
                 default_reasoning_level: Some("high".to_string()),
@@ -496,6 +532,8 @@ mod tests {
         config.codex_model_overrides.insert(
             "gpt-x".to_string(),
             CodexModelOverride {
+                use_responses_lite: None,
+                remote_compaction: None,
                 display_name: Some("Local Name".to_string()),
                 ..Default::default()
             },

@@ -100,3 +100,33 @@
 "provider_editor.tools.speedtest" = "测试 URL"
 
 "provider_editor.action.docs" = "文档"
+
+"provider_editor.codex.account" = "账号"
+
+"provider_editor.codex.no_account" = "不使用账号"
+
+"provider_editor.codex.context" = "上下文管理"
+
+"provider_editor.codex.context_off" = "已关闭"
+
+"provider_editor.codex.context_unavailable" = "不可用 · 历史服务未接通"
+
+"provider_editor.codex.context_pending" = "待 Codex 验证账号与历史服务"
+
+"provider_editor.codex.official" = "官方"
+
+"provider_editor.codex.model_source" = "模型来源"
+
+"provider_editor.codex.advanced" = "高级设置"
+
+"provider_editor.codex.auto" = "自动"
+
+"provider_editor.codex.on" = "开启"
+
+"provider_editor.codex.off" = "关闭"
+
+"provider_editor.codex.check" = "检查配置"
+
+"provider_editor.codex.checked" = "配置检查通过 · 账号与服务能力未验证"
+
+"provider_editor.codex.save_activate" = "保存并启用"

@@ -2339,6 +2339,7 @@ async fn run_provider(
             }
         }
         ProviderCommand::Edit {
+            draft,
             id,
             app,
             patch,
@@ -2367,7 +2368,11 @@ async fn run_provider(
                 )
             } else {
                 output.success(
-                    &application.update_provider(&app_id(app)?, id, provider)?,
+                    &if *draft {
+                        application.save_provider_draft(&app_id(app)?, id, provider)?
+                    } else {
+                        application.update_provider(&app_id(app)?, id, provider)?
+                    },
                     &[],
                 )
             }

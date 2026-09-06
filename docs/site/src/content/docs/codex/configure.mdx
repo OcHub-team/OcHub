@@ -1,249 +1,91 @@
 ---
 title: Configure Codex
-description: Choose account and API authentication, configure a Responses upstream, and manage session history.
+description: Choose account identity, model source, and model capabilities independently.
 audience: human
 sidebar:
   order: 1
 ---
 
-Codex uses both `config.toml` and `auth.json`. The first stores models and
-providers; the second stores official account login material. OcHub manages
-them as one connection without pretending that an API key is an
-official login.
+## Account and model source
 
-## Choose an authentication mode
+Choose **Official**, **Model provider**, or **Manual configuration** as the model source, and select **ChatGPT** or **No account** independently. Sign in through Codex; choosing ChatGPT in OcHub does not sign in or verify a subscription.
 
-| Mode | Account state | Model-request credential | Use it for |
-| --- | --- | --- | --- |
-| Third-party API only | ChatGPT login not required | Third-party API key | A fully third-party Responses upstream |
-| ChatGPT login only | Uses `auth.json` | Official login state | Official Codex account and endpoint |
-| ChatGPT login + third-party API | Preserves `auth.json` | Third-party API key | Account features with third-party model requests |
-| ChatGPT login + OcHub relay | Real login or explicit virtual login | Login token → OcHub route identity | Third-party routing with context management |
+1. Add the third-party URL, API key, protocol, and models under **Model providers**.
+2. Add a Codex connection, choose that provider, and select ChatGPT to retain an existing real login.
+3. Choose a model and leave context management on **Auto**.
+4. Review the configuration, save and switch the connection, then start a new Codex session.
 
-In combined mode, `auth.json` still owns the account. Model requests use the
-current provider's `experimental_bearer_token`.
+A provider connection keeps upstream credentials in the supplier. Manual connections use the address and API key entered in the connection. Keeping ChatGPT login alongside an independent API key does not qualify for experimental context management.
 
-<Aside type="note" title="OAuth and API keys have separate jobs">
+**Save** stores a Codex draft without rewriting the live connection files. **Save and activate** saves, then switches while preserving external configuration edits. **Check configuration** checks local configuration requirements only; it sends no inference request and does not verify subscriptions or backend capabilities. Remote workspaces require an updated node supporting draft operations.
 
-**Keep current OAuth for third parties** prevents a switch from
-overwriting `auth.json`. It does not replace an API key required by a
-third-party upstream.
+Virtual login is under **Advanced** for compatibility with clients without a real account. It grants no subscription or official quota and cannot replace real credentials.
 
-</Aside>
+## Context management
 
-## Configure a third-party Responses upstream
+| Choice | Behavior |
+| --- | --- |
+| Auto | Uses the experimental Codex entry point for the default official endpoint; does not automatically enable it for third-party or OcHub routes |
+| On | Explicitly requests the experiment; saving is rejected for OcHub routes without the required history service |
+| Off | Keeps the experiment disabled during subsequent endpoint injection |
 
-<Steps>
+**Pending Codex verification** is a configuration state, not proof of account eligibility or backend availability. **Unavailable · History service not connected** means OcHub has no implementation of the required service.
 
-1. **Open Codex and add a connection.** Start from a preset when one matches, then
-   verify every field.
+Real ChatGPT login, third-party inference, and complete experimental context management are not currently a supported end-to-end combination. The 0.5.16 documentation incorrectly equated login binding and compaction forwarding with complete support; this corrects that claim.
 
-2. **Set the Provider ID.** This is the key under
-   `[model_providers.<id>]` and the value of `model_provider`. Use a short,
-   stable identifier without spaces, such as `company_proxy`.
+### Automatic activation requirements
 
-3. **Set the provider name.** This is an internal Codex provider name, not the
-   display name of the OcHub card.
+The corresponding Codex source checks all of these in `apply_experimental_context`:
 
-4. **Enter the Base URL.** Third-party mode normally ends in `/v1`, after which
-   Codex appends `/responses`.
+- `[features.context_management] experimental_mode = true`.
+- Exact provider name `OpenAI`.
+- No base URL, or a URL ending in `/backend-api/codex` after removing trailing slashes.
+- `requires_openai_auth = true`.
+- No `env_key`, `experimental_bearer_token`, `auth`, or `aws` provider fields; empty strings still count as present.
+- `Chatgpt` authentication with a Plus, Pro, or ProLite plan.
+- Token Budget can be enabled and is not pinned off by managed requirements.
 
-5. **Choose auth and enter a key.** Third-party API and combined mode use the third-party
-   key. Login-only mode does not.
+Passing this check enables Token Budget and `use_history_notes_extension`. Actual use also requires a known model context window, an installed History / Notes extension, and working history ingestion, retrieval, and notes services. Explicit Token Budget configuration and model defaults are separate activation paths.
 
-6. **Choose a model.** Use an ID actually supported upstream. Add `minimal`,
-   `low`, `medium`, `high`, or `xhigh` reasoning only when needed.
+### History and compaction are separate
 
-7. **Keep `wire_api = responses`.** Codex no longer supports `chat`.
-   Chat-only upstreams require OcHub gateway conversion.
+History / Notes requires `alpha/history/v2/*` and `alpha/notes/v2/*`, including `thread_hint`, history search, and notes reads/writes. OcHub does not implement these services or a verified path for ingesting third-party inference history into the official service.
 
-8. **Review and switch.** Confirm the Provider ID, endpoint, model, and auth
-   mode in the `config.toml` preview.
+`/responses/compact` only provides remote compaction. OcHub forwards `/v1/responses/compact` and the Codex backend equivalent to Responses upstreams that support it. Chat or Messages conversion cannot substitute for this capability.
 
-9. **Open a new Codex session.** Make a short request and verify request model,
-   pricing model, and status in Usage.
+## Model capability declarations
 
-</Steps>
-
-<OcHubStepsVisual
-  locale="en"
-  app="Codex"
-  labels="Open Codex and add a connection|Set a stable Provider ID|Set the internal provider name|Enter the Responses Base URL|Choose authentication and enter a key|Choose a supported model|Keep the Responses wire API|Review config.toml and switch|Verify in a new Codex session"
-  visuals="toolbar-add|identity|identity|fields|fields|model|source|preview|usage-nav"
-/>
-
-## When to use a model provider
-
-Prefer [model provider mode](/getting-started/relay) when:
-
-- The upstream supports Chat Completions but not Responses.
-- A Codex model alias must be rewritten to an upstream ID.
-- Routing should choose among Anthropic, Chat, and Responses.
-- You need gateway-level time to first token, total latency, and errors.
-- Future upstream changes should not rewrite `config.toml` repeatedly.
-
-Codex remote compaction requires an OpenAI Responses upstream. Ordinary
-requests can convert to Chat, but remote compaction cannot use a Chat-only
-upstream.
-
-## Models and reasoning
-
-The model field becomes the current Codex model. Reasoning effort works only
-when the model and upstream support Responses reasoning parameters.
-
-1. First verify the model with no effort set.
-2. Try `medium`.
-3. Compare latency and output before moving to `low`, `high`, or `xhigh`.
-4. If the upstream rejects the parameter, clear it instead of changing the
-   key and model at the same time.
-
-Remote compaction is enabled by Codex only when the provider name is exactly
-`OpenAI`. Leave it off unless a third party fully implements the Responses
-compaction behavior.
-
-## Advanced request options
-
-| Field | Purpose | Example |
-| --- | --- | --- |
-| Disable response storage | Set `disable_response_storage = true` | ZDR or an upstream without storage |
-| Query parameters | Append values to every request URL | Azure `api-version` |
-| HTTP headers | Add custom request headers | Tenant, project, or route ID |
-
-Complete a normal request first, then add one option at a time. Keep long-lived
-secrets in the dedicated API-key field rather than ordinary custom headers.
-
-## Official login
-
-If Codex is already signed in:
-
-1. Add or choose an Official login connection.
-2. Switch and confirm the official endpoint behavior returns.
-3. Restart Codex.
-4. Make one request and verify that no third-party provider error remains.
-
-Enable **Keep current OAuth for third parties** in Codex App settings
-to preserve `auth.json` while using third-party model requests and make
-switching back easy.
-
-## Unified and migrated history
-
-Two Codex settings have different purposes:
-
-- **Migrate existing Codex sessions** imports official history during the next
-  migration.
-- **Unify Codex session history** places official and third-party sessions in
-  one history location.
-
-Before changing them, quit Codex, back up `~/.codex` or the custom directory,
-change one option at a time, restart, and inspect the session count and date
-range.
-
-Under **Advanced tools → Codex history**:
-
-- Check unified-history backup reports whether a restorable backup exists.
-- Restore official-history backup may overwrite current official history, so
-  make another directory backup first.
-
-## MCP and skills
-
-Codex supports OcHub-managed MCP and skills.
-
-- Enable Codex on an MCP card and sync it into `config.toml`.
-- Choose Codex when installing a skill or enable it on an installed card.
-- A custom Codex directory changes both destinations; restart after syncing.
-- OcHub tolerates legacy `[mcp.servers.*]` input during import and writes the
-  current format.
-
-## Common problems
-
-| Symptom | Likely direction | Fix |
-| --- | --- | --- |
-| `chat` was removed | Wrong `wire_api` or Chat-only upstream | Use Responses or gateway conversion |
-| Base URL returns 404 | Incorrect `/v1` level | Verify the final path is `/v1/responses` |
-| Account remains but request gets 401 | OAuth is not the third-party key | Check mode and third-party API key |
-| Remote compaction fails | Incomplete Responses support | Disable it or use a Responses upstream |
-| Model did not change | An old Codex process is running | Restart and inspect the preview |
-| Session count is wrong | History directory or unify setting changed | Verify the directory and backup |
-
-For a Chat-only upstream, continue to
-[Routing recipes](/advanced/routing-recipes). For combined login and routing,
-remote compaction, Responses WebSocket, and provider history buckets, see
-[Advanced Codex pitfalls](/codex/advanced).
-
-## Real ChatGPT login with relay and context management
-
-Starting with OcHub 0.5.16, station connections preserve real ChatGPT login and automatically bind the local gateway identity to the selected station.
-
-1. Sign in to ChatGPT in Codex. The corresponding Codex source accepts Plus, Pro, and ProLite accounts for experimental context management.
-2. Configure the third-party endpoint, API key, models, and routing under **Model providers**. Remote compaction requires Responses `/responses/compact` support; ordinary Responses support alone is insufficient.
-3. Add a Codex connection sourced from that station and select **ChatGPT login + OcHub relay**.
-4. Leave **Virtual ChatGPT login** off, enable **Context management**, save, and switch. Keep the third-party key in the upstream endpoint configuration.
-5. Start a fresh Codex session. Verify a short request, then a long conversation or `/compact`, and inspect the routed model in usage logs.
-
-One-click station application also selects this mode when a real account is already present. Activation enables the Codex backend and model catalog and binds the account to the station key identity. Saving an inactive connection does not change the active binding. The binding is gateway-wide: real-login sessions sharing this gateway use the most recently selected identity.
-
-```toml
-model_provider = "custom"
-model = "your-model-id"
-
-[model_providers.custom]
-name = "OpenAI"
-base_url = "http://127.0.0.1:4180/backend-api/codex"
-wire_api = "responses"
-requires_openai_auth = true
-
-[features.context_management]
-experimental_mode = true
-```
-
-Keep the real account in `auth.json`. Codex sends its account token to the local gateway; OcHub replaces Authorization with the upstream endpoint key. Third-party billing still applies.
-
-### Eligibility and virtual login
-
-The automatic activation path requires provider name `OpenAI`, a URL ending in `/backend-api/codex`, `requires_openai_auth = true`, and no `experimental_bearer_token`, `env_key`, independent `auth`, or `aws` credentials. **ChatGPT login + third-party API** writes a provider bearer token and fails this check. Successful activation enables Token Budget and the history/notes extension. Managed requirements can still disable Token Budget. Configure accurate model context windows and tool capabilities; enabling the flag does not establish long-conversation reliability for every upstream model.
-
-Virtual login places an OcHub `rd-…` key in a local login file when no real account exists. It grants no ChatGPT subscription or official quota and cannot overwrite a real login. Station connections now respect this toggle.
-
-### Manual gateway binding
-
-Manual connections do not infer a station from an arbitrary URL. Create an enabled, route-bound gateway key, then use its record ID (not the `rd-…` secret):
-
-```sh
-ochcli gateway key list
-ochcli gateway config set --codex-backend true --codex-models true --codex-oauth-key-id KEY_ID
-```
-
-To revoke real-login access:
-
-```sh
-ochcli gateway config set --clear-codex-oauth
-```
-
-This mode maps unverified, nonempty bearer tokens to a specific route identity; it does not verify ChatGPT account ownership. The gateway listens on loopback only. Missing bindings, disabled keys, and retired `rd-…` keys are rejected. `/v1` authentication is unaffected.
-
-### Compact interface field reference
-
-Forms retain labels, controls, state, and validation. Detailed explanations live here; use the documentation button in the editor toolbar.
+Under **Model providers → Edit → Models**, open **Model capabilities** for a selected model.
 
 | Field | Meaning |
 | --- | --- |
-| Provider ID | The `model_providers` key and Codex provider identity; keep it stable |
-| Provider name | Internal Codex name; login-shaped OcHub relay uses `OpenAI` |
-| Base URL | Usually `/v1` for direct APIs; local `/backend-api/codex` for login relay |
-| API key | Upstream credential for direct API modes; an OcHub `rd-…` key for virtual login |
-| Remote compaction | Requires a compatible Responses compaction upstream |
-| Context management | Writes `features.context_management.experimental_mode`; eligibility checks apply |
-| Token Budget | Explicit client budget activation, subject to model defaults and managed requirements |
-| Reminder threshold | Remaining tokens before the state-preservation reminder; blank uses client defaults |
-| History notes extension | Enables history/notes tools for context management |
-| Responses WebSocket | Must match upstream capability; station connections inherit it |
-| Disable response storage | Automatically enabled for station connections; OcHub has no Responses store |
-| Query parameters and headers | Upstream-specific metadata; station connections are managed by OcHub |
+| Responses Lite: Auto | Undeclared and conservatively disabled; never inferred from an official model with the same name |
+| Responses Lite: Supported / Unsupported | Explicit `use_responses_lite` declaration in the generated Codex catalog |
+| Remote compaction: Auto | Unverified; actual Responses requests determine availability |
+| Remote compaction: Supported | User declaration, still requiring a real request to verify |
+| Remote compaction: Unsupported | Gateway rejects this model's remote compaction requests |
+| Context window | Positive integer; blank uses catalog defaults |
 
-| Symptom | Check |
-| --- | --- |
-| 401 | Enabled route-bound key identity; manual connections need KEY_ID |
-| 404 | Backend activation, endpoint path, and upstream compaction support |
-| Context feature absent | Plan, provider name, URL suffix, independent credentials, managed requirements |
-| Only compaction fails | `/responses/compact` support; Chat-only channels cannot compact |
-| Virtual login rejected | Keep the real account and turn virtual login off |
+These settings are marked **User declared · Unverified**. Fetching a model list does not verify Lite, compaction, or history services. Declarations are scoped to the supplier and upstream model; aliases use the mapped upstream model's declarations.
+
+Lite changes Responses request behavior. It is neither an authentication mode nor a context-management prerequisite. Lite requests require native Responses channels and cannot fall back to Chat / Messages conversion.
+
+## Route isolation
+
+New real-login connections use an address such as:
+
+```text
+http://127.0.0.1:4180/connection/rd-…/backend-api/codex
+```
+
+The URL's local gateway credential identifies the supplier independently of rotating account tokens. Account credentials remain in `auth.json`; OcHub uses the supplier API key upstream and removes the local routing credential. Different suppliers no longer share a single OAuth route binding.
+
+The URL contains a local credential and should not be shared publicly. The listener remains loopback-only. Route authentication does not verify a ChatGPT subscription. Disabling its key rejects the connection.
+
+Legacy URLs without `/connection/…` still support the manually configured global OAuth binding. Save and activate the connection again to migrate.
+
+## Local history, MCP, and skills
+
+Local history unification and migration manage session files, not the experimental History / Notes backend. Exit Codex and retain backups before changing history locations. Enable Codex in the MCP or Skills page, sync, and restart sessions after configuration-directory changes.
+
+See [Codex advanced configuration](/codex/advanced) and [Model providers](/getting-started/relay).

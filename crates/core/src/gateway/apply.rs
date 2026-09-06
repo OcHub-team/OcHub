@@ -162,6 +162,7 @@ pub fn ensure_app_route(state: &AppState, app_type: AppType) -> Result<GatewayRo
         return Ok(route);
     }
     let route = GatewayRoute {
+        model_capabilities: Default::default(),
         id: format!("route-{}", app_type.as_str()),
         name: format!("{} 默认路由", app_label(app_type)),
         website_url: None,
@@ -201,6 +202,7 @@ pub fn ensure_station_route(
         return Ok(route);
     }
     let route = GatewayRoute {
+        model_capabilities: Default::default(),
         id: route_id,
         name: channel.name.clone(),
         website_url: None,
@@ -461,12 +463,8 @@ fn gateway_settings_for_provider(
                     // access token from auth.json.
                     document["model_providers"][provider_id]["name"] = toml_edit::value("OpenAI");
                     document["model_providers"][provider_id]["base_url"] =
-                        toml_edit::value(format!("{base_url}/backend-api/codex"));
+                        toml_edit::value(format!("{base_url}/connection/{key}/backend-api/codex"));
                     document["model_providers"][provider_id]["requires_openai_auth"] =
-                        toml_edit::value(true);
-                    document["features"] = toml_edit::table();
-                    document["features"]["context_management"] = toml_edit::table();
-                    document["features"]["context_management"]["experimental_mode"] =
                         toml_edit::value(true);
                     crate::apps::codex::virtual_codex_auth_json(key)
                 }
@@ -781,6 +779,7 @@ pub fn station_channel_option_from_station(
     app_type: AppType,
 ) -> Option<StationChannelOption> {
     let route = GatewayRoute {
+        model_capabilities: Default::default(),
         id: station_route_id(station_id),
         name: name.to_string(),
         website_url: None,
@@ -853,7 +852,7 @@ pub fn build_station_channel(
         Some(&route.id),
     )?;
     let channels = state.db.get_gateway_channels()?;
-    build_station_channel_with_endpoint(
+    let mut provider = build_station_channel_with_endpoint(
         app_type,
         &route.id,
         values,
@@ -864,7 +863,11 @@ pub fn build_station_channel(
         &station_models(&route, &channels),
         prior,
         prior_meta,
-    )
+    )?;
+    if app_type == AppType::Codex {
+        apply_station_model_capabilities(&mut provider.settings_config, &route);
+    }
+    Ok(provider)
 }
 
 /// Build a station-sourced provider when the gateway origin, client key, and
@@ -1084,7 +1087,36 @@ fn inject_codex_model_catalog(
 ) -> Result<(), AppError> {
     let channels = state.db.get_gateway_channels()?;
     apply_codex_model_catalog(settings, &station_models(route, &channels), picked_model);
+    apply_station_model_capabilities(settings, route);
     Ok(())
+}
+
+fn apply_station_model_capabilities(settings: &mut serde_json::Value, route: &GatewayRoute) {
+    if let Some(models) = settings
+        .pointer_mut("/modelCatalog/models")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for model in models {
+            let name = model
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let upstream = route
+                .rule_for_model(name)
+                .map(|r| r.upstream_model.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(name);
+            if let Some(caps) = route.model_capabilities.get(upstream) {
+                let caps = caps.clone();
+                if let Some(lite) = caps.use_responses_lite {
+                    model["useResponsesLite"] = json!(lite);
+                }
+                if let Some(window) = caps.context_window {
+                    model["contextWindow"] = json!(window);
+                }
+            }
+        }
+    }
 }
 
 fn apply_codex_model_catalog(
@@ -1250,6 +1282,7 @@ pub fn generic_client_info(state: &AppState, base_url: &str) -> Result<ApplyResu
         Some(route) if route.enabled => route,
         _ => {
             let route = GatewayRoute {
+                model_capabilities: Default::default(),
                 id: "route-generic-client".to_string(),
                 name: "通用客户端默认路由".to_string(),
                 website_url: None,
@@ -1417,7 +1450,7 @@ mod tests {
         assert_eq!(provider.settings_config["auth"], auth);
         let config = provider.settings_config["config"].as_str().unwrap();
         assert!(config.contains("requires_openai_auth = true"));
-        assert!(config.contains("experimental_mode = true"));
+        assert!(!config.contains("experimental_mode = true"));
         assert!(!config.contains("experimental_bearer_token"));
         assert!(
             !state
@@ -1590,13 +1623,13 @@ mod tests {
         let toml = codex["config"].as_str().unwrap();
         assert!(toml.contains("name = \"OpenAI\""), "{toml}");
         assert!(
-            toml.contains("base_url = \"http://127.0.0.1:4180/backend-api/codex\""),
+            toml.contains("base_url = \"http://127.0.0.1:4180/connection/rd-k/backend-api/codex\""),
             "{toml}"
         );
         assert!(toml.contains("requires_openai_auth = true"), "{toml}");
         assert!(!toml.contains("experimental_bearer_token"), "{toml}");
         assert!(toml.contains("supports_websockets = true"), "{toml}");
-        assert!(toml.contains("experimental_mode = true"), "{toml}");
+        assert!(!toml.contains("experimental_mode = true"), "{toml}");
         assert_eq!(codex["auth"]["auth_mode"], "chatgpt");
         assert_eq!(codex["auth"]["tokens"]["access_token"], "rd-k");
         assert_eq!(codex["modelCatalog"]["models"][0]["model"], "grok-4.5");
@@ -1654,6 +1687,7 @@ mod tests {
     #[test]
     fn route_models_skip_wildcards_and_deduplicate_the_default() {
         let route = GatewayRoute {
+            model_capabilities: Default::default(),
             id: "station:x".into(),
             name: "x".into(),
             website_url: None,
@@ -1766,6 +1800,7 @@ mod tests {
         assert_eq!(default_route.id, "route-claude");
 
         let alternate = GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route-claude-fast".into(),
             name: "Claude 快速".into(),
             website_url: None,

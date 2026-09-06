@@ -83,6 +83,7 @@ struct GatewayPageLoad {
 
 fn relay_station(station: GatewayStation) -> RelayStation {
     let GatewayStation {
+        model_capabilities,
         id,
         name,
         website_url,
@@ -97,6 +98,7 @@ fn relay_station(station: GatewayStation) -> RelayStation {
     } = station;
     RelayStation {
         route: GatewayRoute {
+            model_capabilities,
             id: apply::station_route_id(&id),
             name,
             website_url,
@@ -151,6 +153,7 @@ impl GatewayPageLoad {
             stations.push(RelayStation {
                 channels: vec![channel.clone()],
                 route: GatewayRoute {
+                    model_capabilities: Default::default(),
                     id: apply::station_route_id(&channel.id),
                     name: channel.name.clone(),
                     website_url: None,
@@ -390,6 +393,9 @@ struct BackupKeyEditor {
 
 /// Provider capabilities shared by every equivalent failover endpoint.
 struct StationModelsEditor {
+    capabilities: HashMap<String, ochub_core::gateway::CodexModelOverride>,
+    capability_model: Option<String>,
+    context_input: Entity<TextInput>,
     selected: Vec<String>,
     manual_input: Entity<TextInput>,
     scroll_handle: ScrollHandle,
@@ -985,6 +991,11 @@ impl GatewayView {
                 enabled_dialects
             },
             models: StationModelsEditor {
+                capability_model: None,
+                context_input: cx.new(|cx| text_input(cx, "tokens", "")),
+                capabilities: station
+                    .map(|s| s.route.model_capabilities.clone())
+                    .unwrap_or_default(),
                 selected: selected_models,
                 manual_input: cx
                     .new(|cx| TextInput::new(cx, t(k::GATEWAY_EDITOR_MODELS_PLACEHOLDER))),
@@ -1347,6 +1358,20 @@ impl GatewayView {
             return;
         };
 
+        let mut model_capabilities = editor.models.capabilities.clone();
+        if let Some(model) = &editor.models.capability_model {
+            let text = input_value(&editor.models.context_input, cx);
+            if !text.is_empty() && text.parse::<u64>().ok().filter(|n| *n > 0).is_none() {
+                self.status = Some(t(k::GATEWAY_CAPABILITIES_INVALID_CONTEXT));
+                self.status_level = Some(NotificationLevel::Error);
+                cx.notify();
+                return;
+            }
+            model_capabilities
+                .entry(model.clone())
+                .or_default()
+                .context_window = text.parse().ok();
+        }
         let api_key = input_value(&editor.api_key, cx);
         let station_id = editor
             .route_id
@@ -1396,6 +1421,7 @@ impl GatewayView {
             }
         }
         let route = GatewayRoute {
+            model_capabilities,
             id: editor.route_id.clone(),
             name: name.clone(),
             website_url: nonempty(input_value(&editor.website_url, cx)),
@@ -1440,6 +1466,7 @@ impl GatewayView {
             model_rules: route.model_rules.clone(),
         };
         let station = GatewayStation {
+            model_capabilities: route.model_capabilities.clone(),
             id: station_id.clone(),
             name: route.name.clone(),
             website_url: route.website_url.clone(),
@@ -2592,6 +2619,130 @@ impl GatewayView {
         .into_any_element()
     }
 
+    fn render_model_capabilities(
+        &self,
+        editor: &StationEditor,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mut rows = div().flex().flex_col().gap_2();
+        for model in &editor.models.selected {
+            let selected = editor.models.capability_model.as_ref() == Some(model);
+            let name = model.clone();
+            rows = rows.child(
+                components::button(
+                    SharedString::from(format!("capabilities-{model}")),
+                    SharedString::from(format!("{model} · {}", raw(k::GATEWAY_CAPABILITIES_EDIT))),
+                    ButtonTone::Ghost,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(editor) = &mut this.editor {
+                        if let Some(previous) = &editor.models.capability_model {
+                            let text = input_value(&editor.models.context_input, cx);
+                            if !text.is_empty()
+                                && text.parse::<u64>().ok().filter(|n| *n > 0).is_none()
+                            {
+                                this.status = Some(t(k::GATEWAY_CAPABILITIES_INVALID_CONTEXT));
+                                this.status_level = Some(NotificationLevel::Error);
+                                cx.notify();
+                                return;
+                            }
+                            editor
+                                .models
+                                .capabilities
+                                .entry(previous.clone())
+                                .or_default()
+                                .context_window = text.parse().ok();
+                        }
+                        editor.models.capability_model =
+                            if selected { None } else { Some(name.clone()) };
+                        let text = editor
+                            .models
+                            .capabilities
+                            .get(&name)
+                            .and_then(|c| c.context_window)
+                            .map(|n| n.to_string())
+                            .unwrap_or_default();
+                        editor
+                            .models
+                            .context_input
+                            .update(cx, |input, cx| input.set_content(text, cx));
+                    }
+                    cx.notify();
+                })),
+            );
+            if selected {
+                let capabilities = editor
+                    .models
+                    .capabilities
+                    .get(model)
+                    .cloned()
+                    .unwrap_or_default();
+                for (field, label, value) in [
+                    (
+                        "lite",
+                        "Responses Lite".to_string(),
+                        capabilities.use_responses_lite,
+                    ),
+                    (
+                        "compact",
+                        raw(k::GATEWAY_CAPABILITIES_COMPACT).to_string(),
+                        capabilities.remote_compaction,
+                    ),
+                ] {
+                    let model = model.clone();
+                    let on_select = cx.listener(move |this, index: &usize, _, cx| {
+                        if let Some(editor) = &mut this.editor {
+                            let capabilities =
+                                editor.models.capabilities.entry(model.clone()).or_default();
+                            let value = match index {
+                                1 => Some(true),
+                                2 => Some(false),
+                                _ => None,
+                            };
+                            if field == "lite" {
+                                capabilities.use_responses_lite = value;
+                            } else {
+                                capabilities.remote_compaction = value;
+                            }
+                        }
+                        cx.notify();
+                    });
+                    rows = rows.child(components::field(
+                        label,
+                        false,
+                        None,
+                        components::segmented(
+                            SharedString::from(format!("capability-{field}")),
+                            &[
+                                raw(k::GATEWAY_CAPABILITIES_AUTO),
+                                raw(k::GATEWAY_CAPABILITIES_ON),
+                                raw(k::GATEWAY_CAPABILITIES_OFF),
+                            ],
+                            match value {
+                                None => 0,
+                                Some(true) => 1,
+                                Some(false) => 2,
+                            },
+                            move |index, window, cx| on_select(&index, window, cx),
+                        ),
+                    ));
+                }
+                rows = rows.child(components::field(
+                    t(k::GATEWAY_CAPABILITIES_CONTEXT),
+                    false,
+                    None,
+                    editor.models.context_input.clone(),
+                ));
+                rows = rows.child(components::badge(
+                    BadgeTone::Neutral,
+                    t(k::GATEWAY_CAPABILITIES_DECLARED),
+                ));
+            }
+        }
+        rows.into_any_element()
+    }
+
     fn render_station_model_picker(
         &self,
         editor: &StationEditor,
@@ -3474,7 +3625,12 @@ impl GatewayView {
                     .into_any_element()
             })
             .collect();
-        let model_field = self.render_station_model_picker(editor, cx);
+        let model_field = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.render_station_model_picker(editor, cx))
+            .child(self.render_model_capabilities(editor, cx));
         // The quota console is stated, not detected: nothing about an inference
         // endpoint reveals whether a New API or Sub2API panel sits behind it.
         let quota_index = editor

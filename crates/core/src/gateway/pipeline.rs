@@ -692,6 +692,7 @@ const GATEWAY_OWNED_HEADERS: &[&str] = &[
     // Credentials.
     "authorization",
     "proxy-authorization",
+    "x-ochub-route-key",
     "x-api-key",
     "api-key",
     // Hop-by-hop.
@@ -974,7 +975,7 @@ fn log_usage(
     }
 }
 
-fn request_model_rule<'a>(
+pub(crate) fn request_model_rule<'a>(
     policy: Option<&'a GatewayAppModelPolicy>,
     route: Option<&'a GatewayRoute>,
     model: &str,
@@ -985,7 +986,7 @@ fn request_model_rule<'a>(
     }
 }
 
-fn request_model_override<'a>(
+pub(crate) fn request_model_override<'a>(
     rule: Option<&'a GatewayModelRule>,
     policy: Option<&'a GatewayAppModelPolicy>,
     route: Option<&'a GatewayRoute>,
@@ -1522,9 +1523,26 @@ pub(crate) async fn run_operation(
         meta.stream = false;
     }
     let remote_compaction = compact || is_remote_compaction_request(inlet, &body);
+    let responses_lite = client_headers
+        .get("x-openai-internal-codex-responses-lite")
+        .is_some_and(|value| value == "true");
+    let capability_model = route_model_override.unwrap_or(&meta.model);
+    if remote_compaction
+        && route
+            .as_ref()
+            .and_then(|r| r.model_capabilities.get(capability_model))
+            .and_then(|c| c.remote_compaction)
+            == Some(false)
+    {
+        return PipelineOutcome::local(
+            400,
+            error_body(inlet, "remote compaction is disabled for this model"),
+        );
+    }
     let convertible: Vec<GatewayChannel> = channels
         .into_iter()
         .filter(|channel| channel_supports_request(inlet, channel.dialect, remote_compaction))
+        .filter(|channel| !responses_lite || channel.dialect == Dialect::Responses)
         .filter(|channel| {
             route
                 .as_ref()
@@ -3466,6 +3484,7 @@ mod tests {
         })
         .unwrap();
         db.upsert_gateway_route(&GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route-test".into(),
             name: "test".into(),
             website_url: None,

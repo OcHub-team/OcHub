@@ -456,3 +456,59 @@ fn real_chatgpt_station_apply_preserves_live_login_and_changes_route_binding() {
     assert_eq!(config["data"]["codex_backend_accept_any_bearer"], false);
     assert!(config["data"]["codex_backend_oauth_key_id"].is_null());
 }
+
+#[test]
+fn codex_draft_save_leaves_live_files_untouched_until_switch() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join("provider.json");
+    let config = "model_provider = \"custom\"\nmodel = \"first\"\n[model_providers.custom]\nname = \"Custom\"\nbase_url = \"https://example.invalid/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"fake-key\"\n";
+    std::fs::write(&file, serde_json::to_vec(&serde_json::json!({"id":"draft", "name":"Draft", "settingsConfig":{"auth":{},"config":config}})).unwrap()).unwrap();
+    json(&ochcli(
+        home.path(),
+        &[
+            "--json",
+            "provider",
+            "add",
+            "--app",
+            "codex",
+            "--from",
+            file.to_str().unwrap(),
+        ],
+    ));
+    let live = home.path().join(".codex/config.toml");
+    assert!(!live.exists(), "first draft must not activate itself");
+    json(&ochcli(
+        home.path(),
+        &["--json", "provider", "switch", "draft", "--app", "codex"],
+    ));
+    let before = std::fs::read(&live).unwrap();
+    let patch = home.path().join("patch.json");
+    std::fs::write(
+        &patch,
+        serde_json::to_vec(
+            &serde_json::json!({"settingsConfig":{"config":config.replace("first", "second")}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    json(&ochcli(
+        home.path(),
+        &[
+            "--json",
+            "provider",
+            "edit",
+            "draft",
+            "--app",
+            "codex",
+            "--draft",
+            "--patch",
+            patch.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(std::fs::read(&live).unwrap(), before);
+    json(&ochcli(
+        home.path(),
+        &["--json", "provider", "switch", "draft", "--app", "codex"],
+    ));
+    assert!(std::fs::read_to_string(&live).unwrap().contains("second"));
+}

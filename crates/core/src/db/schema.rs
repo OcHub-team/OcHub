@@ -291,6 +291,7 @@ impl Database {
                 channel_ids TEXT NOT NULL DEFAULT '[]',
                 default_model TEXT,
                 model_rules TEXT NOT NULL DEFAULT '[]',
+                model_capabilities TEXT NOT NULL DEFAULT '{}',
                 reasoning TEXT NOT NULL DEFAULT '{}',
                 websocket_enabled INTEGER NOT NULL DEFAULT 0,
                 quota_api TEXT,
@@ -713,6 +714,15 @@ impl Database {
                             })?;
                         }
                         Self::set_user_version(conn, 12)?;
+                    }
+                    12 => {
+                        if Self::table_exists(conn, "gateway_routes")?
+                            && !Self::has_column(conn, "gateway_routes", "model_capabilities")?
+                        {
+                            conn.execute("ALTER TABLE gateway_routes ADD COLUMN model_capabilities TEXT NOT NULL DEFAULT '{}'", [])
+                                .map_err(|e| AppError::Database(e.to_string()))?;
+                        }
+                        Self::set_user_version(conn, 13)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -2376,6 +2386,27 @@ mod schema_migration_tests {
         assert_eq!(secret, "rd-existing");
         assert_eq!(route_id.as_deref(), Some("station:relay"));
         assert!(model_policy.is_none());
+    }
+
+    #[test]
+    fn migrates_v12_supplier_capabilities_without_changing_routes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gateway_routes (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            INSERT INTO gateway_routes VALUES ('existing', 'Existing supplier');
+            PRAGMA user_version = 12;",
+        )
+        .unwrap();
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+        let row: (String, String) = conn
+            .query_row(
+                "SELECT name, model_capabilities FROM gateway_routes WHERE id = 'existing'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("Existing supplier".into(), "{}".into()));
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]

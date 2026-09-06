@@ -18,6 +18,8 @@ use crate::{AppId, AppType, UsageResult};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayStation {
+    #[serde(default)]
+    pub model_capabilities: HashMap<String, crate::gateway::CodexModelOverride>,
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -505,6 +507,7 @@ impl Application {
             .filter(|channel| !referenced.contains(&channel.id))
         {
             let route = GatewayRoute {
+                model_capabilities: Default::default(),
                 id: apply::station_route_id(&channel.id),
                 name: channel.name.clone(),
                 website_url: None,
@@ -581,6 +584,7 @@ impl Application {
             validate_channel(channel)?;
         }
         let route = GatewayRoute {
+            model_capabilities: station.model_capabilities.clone(),
             id: apply::station_route_id(&id),
             name: station.name.clone(),
             website_url: station.website_url.clone(),
@@ -883,6 +887,7 @@ impl Application {
 
 fn station_from_route(route: GatewayRoute, channels: Vec<GatewayChannel>) -> GatewayStation {
     GatewayStation {
+        model_capabilities: route.model_capabilities,
         id: station_id(&route.id),
         name: route.name,
         website_url: route.website_url,
@@ -899,6 +904,7 @@ fn station_from_route(route: GatewayRoute, channels: Vec<GatewayChannel>) -> Gat
 
 fn station_route(station: &GatewayStation) -> GatewayRoute {
     GatewayRoute {
+        model_capabilities: station.model_capabilities.clone(),
         id: apply::station_route_id(&station.id),
         name: station.name.clone(),
         website_url: station.website_url.clone(),

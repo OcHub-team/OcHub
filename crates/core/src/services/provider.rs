@@ -244,7 +244,7 @@ impl ProviderService {
 
         // For other apps: Check if sync is needed
         let current = state.db.get_current_provider(app_type.as_str())?;
-        if current.is_none() {
+        if current.is_none() && add_to_live {
             // No current provider, set as current and sync
             state
                 .db
@@ -292,6 +292,21 @@ impl ProviderService {
 
         state.db.save_provider(app_type.as_str(), &copy)?;
         Ok(copy)
+    }
+
+    /// Save a validated Codex draft without touching live files or current identity.
+    pub fn save_codex_draft(state: &AppState, mut provider: Provider) -> Result<bool, AppError> {
+        if let Some(existing) = state.db.get_provider_by_id(&provider.id, "codex")? {
+            secrets::restore_masked_secrets(&AppType::Codex, &mut provider, &existing);
+        }
+        Self::validate_provider_settings(&AppType::Codex, &provider)?;
+        normalize_provider_common_config_for_storage(
+            state.db.as_ref(),
+            &AppType::Codex,
+            &mut provider,
+        )?;
+        state.db.save_provider("codex", &provider)?;
+        Ok(true)
     }
 
     /// Update a provider

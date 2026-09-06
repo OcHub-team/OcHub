@@ -840,17 +840,18 @@ impl RemoteSession {
                     );
                 }
                 strip_redacted_secret_placeholders(&mut params.patch);
-                (
-                    Payload::Json(params.patch),
-                    vec![
-                        "provider".into(),
-                        "edit".into(),
-                        params.provider_id,
-                        "--app".into(),
-                        params.app,
-                        "--patch".into(),
-                    ],
-                )
+                let mut argv = vec![
+                    "provider".into(),
+                    "edit".into(),
+                    params.provider_id,
+                    "--app".into(),
+                    params.app,
+                ];
+                if params.draft {
+                    argv.push("--draft".into());
+                }
+                argv.push("--patch".into());
+                (Payload::Json(params.patch), argv)
             }
             methods::PROVIDER_COMMON_SET => {
                 #[derive(Deserialize)]

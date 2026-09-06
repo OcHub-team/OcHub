@@ -1569,3 +1569,32 @@ fn non_ephemeral_bridge_starts_an_owner_that_survives_disconnect() {
         String::from_utf8_lossy(&stop.stderr)
     );
 }
+
+#[test]
+fn remote_codex_draft_update_does_not_create_live_configuration() {
+    let home = tempfile::tempdir().unwrap();
+    let (child, mut stdin, mut stdout, ack) = start_remote(home.path(), "codex-draft");
+    let created = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-create",
+        methods::PROVIDER_CREATE,
+        serde_json::json!({"app":"codex", "provider":{"id":"draft", "name":"Draft", "settingsConfig":{"auth":{},"config":"model_provider = \"custom\"\n[model_providers.custom]\nname = \"Custom\"\nbase_url = \"https://example.invalid/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"test-key\"\n"}},"addToLive":false}),
+        (Some("draft-create-key"), None),
+    );
+    assert!(created.ok, "{:?}", created.error);
+    let updated = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-update",
+        methods::PROVIDER_UPDATE,
+        serde_json::json!({"app":"codex", "providerId":"draft", "draft":true,"patch":{"name":"Updated draft"}}),
+        (Some("draft-update-key"), None),
+    );
+    assert!(updated.ok, "{:?}", updated.error);
+    assert_eq!(updated.data["provider"]["name"], "Updated draft");
+    assert!(!home.path().join(".codex/config.toml").exists());
+    close_remote(child, stdin, "done");
+}

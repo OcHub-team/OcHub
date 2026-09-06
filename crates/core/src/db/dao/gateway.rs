@@ -40,6 +40,7 @@ fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
     let model_rules: String = row.get(6)?;
     let reasoning: String = row.get(7)?;
     Ok(GatewayRoute {
+        model_capabilities: serde_json::from_str(&row.get::<_, String>(12)?).unwrap_or_default(),
         id: row.get(0)?,
         name: row.get(1)?,
         website_url: row.get(2)?,
@@ -60,7 +61,7 @@ fn row_to_route(row: &rusqlite::Row<'_>) -> rusqlite::Result<GatewayRoute> {
     })
 }
 
-const ROUTE_COLUMNS: &str = "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, websocket_enabled, quota_api, enabled, created_at";
+const ROUTE_COLUMNS: &str = "id, name, website_url, app_type, channel_ids, default_model, model_rules, reasoning, websocket_enabled, quota_api, enabled, created_at, model_capabilities";
 
 impl Database {
     // -- settings blob ------------------------------------------------------
@@ -200,8 +201,8 @@ impl Database {
         tx.execute(
             "INSERT INTO gateway_routes (
                 id, name, website_url, app_type, channel_ids, default_model, model_rules,
-                reasoning, websocket_enabled, quota_api, enabled, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                reasoning, websocket_enabled, quota_api, enabled, created_at, model_capabilities
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, website_url = excluded.website_url,
                 app_type = excluded.app_type,
@@ -211,6 +212,7 @@ impl Database {
                 reasoning = excluded.reasoning,
                 websocket_enabled = excluded.websocket_enabled,
                 quota_api = excluded.quota_api,
+                model_capabilities = excluded.model_capabilities,
                 enabled = excluded.enabled",
             params![
                 route.id,
@@ -225,6 +227,7 @@ impl Database {
                 route.quota_api.map(StationQuotaApi::as_str),
                 route.enabled,
                 route.created_at,
+                to_json_string(&route.model_capabilities)?,
             ],
         )
         .map_err(|error| AppError::Database(error.to_string()))?;
@@ -341,8 +344,8 @@ impl Database {
         conn.execute(
             "INSERT INTO gateway_routes (
                 id, name, website_url, app_type, channel_ids, default_model, model_rules,
-                reasoning, websocket_enabled, quota_api, enabled, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                reasoning, websocket_enabled, quota_api, enabled, created_at, model_capabilities
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, website_url = excluded.website_url,
                 app_type = excluded.app_type,
@@ -352,6 +355,7 @@ impl Database {
                 reasoning = excluded.reasoning,
                 websocket_enabled = excluded.websocket_enabled,
                 quota_api = excluded.quota_api,
+                model_capabilities = excluded.model_capabilities,
                 enabled = excluded.enabled",
             params![
                 route.id,
@@ -366,6 +370,7 @@ impl Database {
                 route.quota_api.map(StationQuotaApi::as_str),
                 route.enabled,
                 route.created_at,
+                to_json_string(&route.model_capabilities)?,
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -545,6 +550,7 @@ mod tests {
         let db = Database::memory().unwrap();
         let channel = channel("station-a");
         let route = GatewayRoute {
+            model_capabilities: Default::default(),
             id: "station-route:test".into(),
             name: "Imported station".into(),
             website_url: Some("https://example.com".into()),
@@ -592,6 +598,7 @@ mod tests {
         let db = Database::memory().unwrap();
         db.upsert_gateway_channel(&channel("a")).unwrap();
         let mut route = GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route".into(),
             name: "route".into(),
             website_url: None,
@@ -658,6 +665,7 @@ mod tests {
         db.upsert_gateway_channel(&channel("a")).unwrap();
         db.upsert_gateway_channel(&channel("b")).unwrap();
         db.upsert_gateway_route(&GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route".into(),
             name: "route".into(),
             website_url: None,
@@ -735,6 +743,7 @@ mod tests {
     fn route_crud_round_trips_and_clears_bound_keys() {
         let db = Database::memory().unwrap();
         let route = GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route-claude".into(),
             name: "Claude Code 默认路由".into(),
             website_url: Some("https://relay.example.com".into()),

@@ -153,6 +153,23 @@ impl Application {
         self.get_provider(app, &provider.id, false)
     }
 
+    pub fn save_provider_draft(
+        &self,
+        app: &AppId,
+        original_id: &str,
+        provider: Provider,
+    ) -> ApplicationResult<ProviderDetails> {
+        if AppType::from_app_id(app) != Some(AppType::Codex) || original_id != provider.id {
+            return Err(ApplicationError::InvalidInput(
+                "Draft updates require an unchanged Codex connection ID".into(),
+            ));
+        }
+        let plugin = self.resolve_plugin(app)?;
+        validate_provider_with_plugin(plugin.as_ref(), &provider)?;
+        ProviderService::save_codex_draft(&self.state, provider.clone())?;
+        self.get_provider(app, &provider.id, false)
+    }
+
     pub fn update_provider(
         &self,
         app: &AppId,

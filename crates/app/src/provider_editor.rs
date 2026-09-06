@@ -245,6 +245,9 @@ pub struct ProviderEditor {
     form_list_state: ListState,
     form_stack_grid: bool,
     form_official_login: bool,
+    show_advanced_fields: bool,
+    activate_after_save: bool,
+    saved_provider_id: Option<String>,
 }
 
 impl ProviderEditor {
@@ -470,6 +473,9 @@ impl ProviderEditor {
             form_list_state: ListState::new(form_item_count, ListAlignment::Top, px(720.)),
             form_stack_grid: false,
             form_official_login: false,
+            show_advanced_fields: false,
+            activate_after_save: false,
+            saved_provider_id: None,
         };
         this.load_common_snippet(cx);
         this
@@ -618,6 +624,17 @@ impl ProviderEditor {
             return;
         }
         self.source = source;
+        if self.app_type == AppType::Codex && str_val(&self.values, "auth_mode") != "api_key" {
+            provider_config::set_str(
+                &mut self.values,
+                "auth_mode",
+                if source == ProviderSource::Station {
+                    "openai_login_gateway"
+                } else {
+                    "openai_login_with_api_key"
+                },
+            );
+        }
         self.open_model_suggestion = None;
         self.station_dropdown_open = false;
         if source == ProviderSource::Station {
@@ -1286,6 +1303,72 @@ impl ProviderEditor {
         (snippet != self.original_snippet).then_some(snippet)
     }
 
+    fn check_configuration(&mut self, cx: &mut Context<Self>) {
+        self.pull_values(cx);
+        let mut values = self.values.clone();
+        if self.source == ProviderSource::Station {
+            if let Some(gateway) = &self.station_gateway {
+                provider_config::inject_station_endpoint(
+                    &mut values,
+                    self.app_type,
+                    &gateway.origin,
+                    &gateway.key,
+                    self.station_capabilities(),
+                );
+            } else {
+                self.set_error(t(k::PROVIDER_EDITOR_STATION_REQUIRED));
+                cx.notify();
+                return;
+            }
+        }
+        let issues = self.codec.validate(&values);
+        if let Some(issue) = issues.iter().find(|i| i.severity == Severity::Error) {
+            self.set_error(issue.message.clone());
+        } else {
+            self.set_status(NotificationLevel::Info, t(k::PROVIDER_EDITOR_CODEX_CHECKED));
+        }
+        cx.notify();
+    }
+
+    fn finish_save(&mut self, cx: &mut Context<Self>) {
+        if !self.activate_after_save {
+            cx.emit(EditorEvent::Saved);
+            return;
+        }
+        let Some(id) = self.saved_provider_id.clone() else {
+            cx.emit(EditorEvent::Saved);
+            return;
+        };
+        let backend = self.backend.clone();
+        let app = self.app_type.app_id();
+        self.saving = true;
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                let plan = backend
+                    .plan_provider_switch(
+                        &app,
+                        &id,
+                        ochub_core::application::ProviderSwitchPolicy::Preserve,
+                    )
+                    .await?;
+                backend.apply_provider_switch(plan).await
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.saving = false;
+                match result {
+                    Ok(_) => cx.emit(EditorEvent::Saved),
+                    Err(error) => {
+                        this.set_error(error.to_string());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn do_save(&mut self, cx: &mut Context<Self>) {
         if self.saving {
             return;
@@ -1364,6 +1447,7 @@ impl ProviderEditor {
             (None, provider)
         };
 
+        self.saved_provider_id = Some(provider.id.clone());
         self.saving = true;
         self.error = None;
         let backend = self.backend.clone();
@@ -1384,14 +1468,18 @@ impl ProviderEditor {
 
                 let result = match original_id {
                     Some(original_id) => match serde_json::to_value(provider) {
-                        Ok(patch) => backend
-                            .update_provider(&app_id, &original_id, patch)
-                            .await
-                            .map(|_| ()),
+                        Ok(patch) => if app_type == AppType::Codex {
+                            backend
+                                .update_provider_draft(&app_id, &original_id, patch)
+                                .await
+                        } else {
+                            backend.update_provider(&app_id, &original_id, patch).await
+                        }
+                        .map(|_| ()),
                         Err(error) => Err(error.into()),
                     },
                     None => backend
-                        .create_provider(&app_id, provider, true)
+                        .create_provider(&app_id, provider, app_type != AppType::Codex)
                         .await
                         .map(|_| ()),
                 }
@@ -1408,23 +1496,13 @@ impl ProviderEditor {
                     this.original_snippet = snippet;
                 }
                 match outcome.result {
-                    Ok(()) => cx.emit(EditorEvent::Saved),
-                    Err(ProviderSaveFailure::CommonConfig(error)) => {
-                        this.set_error(tf!(
-                            k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
-                            error = error
-                        ));
-                        cx.notify();
-                    }
-                    Err(ProviderSaveFailure::Provider(error)) => {
-                        this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
-                        cx.notify();
-                    }
-                    Err(ProviderSaveFailure::HistoryMigration(error)) => {
-                        this.set_error(tf!(
-                            k::PROVIDER_EDITOR_HISTORY_MIGRATION_FAILED,
-                            error = error
-                        ));
+                    Ok(()) => this.finish_save(cx),
+                    Err(error) => {
+                        this.set_error(match error {
+                            ProviderSaveFailure::CommonConfig(e)
+                            | ProviderSaveFailure::Provider(e)
+                            | ProviderSaveFailure::HistoryMigration(e) => e,
+                        });
                         cx.notify();
                     }
                 }
@@ -1432,13 +1510,8 @@ impl ProviderEditor {
             .ok();
         })
         .detach();
-        cx.notify();
     }
 
-    /// Save path for `source == Station`: endpoint + credential come from the
-    /// running local gateway (never from form fields), so the provider is
-    /// built in core once the gateway origin is known. The form only
-    /// contributes identity fields and model choices.
     fn do_save_station(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).content().trim().to_string();
         if name.is_empty() {
@@ -1465,6 +1538,7 @@ impl ProviderEditor {
                 typed
             }
         });
+        self.saved_provider_id = Some(channel_id.clone());
         let identity = apply::StationChannelIdentity {
             id: channel_id,
             name,
@@ -1595,20 +1669,23 @@ impl ProviderEditor {
                                 meta.common_config_enabled = None;
                             }
                         }
-                        match original_id {
-                            Some(original_id) => ProviderService::update(
-                                &app,
-                                app_type,
-                                Some(&original_id),
-                                provider,
-                            )
-                            .map(|_| ()),
-                            None => {
-                                ProviderService::add(&app, app_type, provider, true).map(|_| ())
+                        if app_type == AppType::Codex {
+                            ProviderService::save_codex_draft(&app, provider)
+                        } else {
+                            match original_id {
+                                Some(original_id) => ProviderService::update(
+                                    &app,
+                                    app_type,
+                                    Some(&original_id),
+                                    provider,
+                                ),
+                                None => ProviderService::add(&app, app_type, provider, true),
                             }
                         }
                         .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
-                        if let Some((old_id, new_id)) = history_bucket_rename {
+                        if app_type != AppType::Codex
+                            && let Some((old_id, new_id)) = history_bucket_rename
+                        {
                             ochub_core::services::migrate_codex_history_provider_bucket(
                                 &old_id, &new_id,
                             )
@@ -1630,7 +1707,7 @@ impl ProviderEditor {
                     this.original_snippet = snippet;
                 }
                 match outcome.result {
-                    Ok(()) => cx.emit(EditorEvent::Saved),
+                    Ok(()) => this.finish_save(cx),
                     Err(ProviderSaveFailure::CommonConfig(error)) => {
                         this.set_error(tf!(
                             k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
@@ -1734,14 +1811,18 @@ impl ProviderEditor {
                     }
                     match original_id {
                         Some(original_id) => match serde_json::to_value(&provider) {
-                            Ok(patch) => backend
-                                .update_provider(&app_id, &original_id, patch)
-                                .await
-                                .map(|_| ()),
+                            Ok(patch) => if app_type == AppType::Codex {
+                                backend
+                                    .update_provider_draft(&app_id, &original_id, patch)
+                                    .await
+                            } else {
+                                backend.update_provider(&app_id, &original_id, patch).await
+                            }
+                            .map(|_| ()),
                             Err(error) => Err(error.into()),
                         },
                         None => backend
-                            .create_provider(&app_id, provider, true)
+                            .create_provider(&app_id, provider, app_type != AppType::Codex)
                             .await
                             .map(|_| ()),
                     }
@@ -1760,7 +1841,7 @@ impl ProviderEditor {
                     this.original_snippet = snippet;
                 }
                 match outcome.result {
-                    Ok(()) => cx.emit(EditorEvent::Saved),
+                    Ok(()) => this.finish_save(cx),
                     Err(ProviderSaveFailure::CommonConfig(error)) => {
                         this.set_error(tf!(
                             k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
@@ -2289,6 +2370,38 @@ impl ProviderEditor {
         stack_grid: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if self.app_type == AppType::Codex && field.id == "auth_mode" {
+            let login = str_val(&self.values, "auth_mode") != "api_key";
+            let on_select = cx.listener(|this, index: &usize, _, cx| {
+                let mode = if *index == 0 {
+                    "api_key"
+                } else if this.source == ProviderSource::Station {
+                    "openai_login_gateway"
+                } else if this
+                    .text_inputs
+                    .get("base_url")
+                    .is_none_or(|i| i.read(cx).content().trim().is_empty())
+                {
+                    "openai_login"
+                } else {
+                    "openai_login_with_api_key"
+                };
+                provider_config::set_bool(&mut this.values, "virtual_login", false);
+                this.set_select("auth_mode".into(), mode.into(), cx);
+            });
+            return components::field(
+                t(k::PROVIDER_EDITOR_CODEX_ACCOUNT),
+                false,
+                None,
+                components::segmented(
+                    "codex-account",
+                    &[raw(k::PROVIDER_EDITOR_CODEX_NO_ACCOUNT), "ChatGPT"],
+                    usize::from(login),
+                    move |index, window, cx| on_select(&index, window, cx),
+                ),
+            )
+            .into_any_element();
+        }
         let body = match &field.kind {
             FieldKind::Text { .. } => {
                 let input = self
@@ -2363,7 +2476,16 @@ impl ProviderEditor {
                     .collect();
                 let current = str_val(&self.values, &field.id).to_string();
                 let selected = options.iter().position(|o| o.value == current).unwrap_or(0);
-                let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
+                let labels: Vec<&str> =
+                    if self.app_type == AppType::Codex && field.id == "context_mode" {
+                        vec![
+                            raw(k::PROVIDER_EDITOR_CODEX_AUTO),
+                            raw(k::PROVIDER_EDITOR_CODEX_ON),
+                            raw(k::PROVIDER_EDITOR_CODEX_OFF),
+                        ]
+                    } else {
+                        options.iter().map(|o| o.label.as_str()).collect()
+                    };
                 let values: Vec<String> = options.iter().map(|o| o.value.clone()).collect();
                 let selector = if components::select_prefers_dropdown(&labels) {
                     let fid = field.id.clone();
@@ -2444,6 +2566,30 @@ impl ProviderEditor {
                 .into_any_element(),
         };
 
+        if self.app_type == AppType::Codex && field.id == "context_mode" {
+            let mode = str_val(&self.values, "context_mode");
+            let status = if mode == "off" {
+                k::PROVIDER_EDITOR_CODEX_CONTEXT_OFF
+            } else if self.source == ProviderSource::Station
+                || str_val(&self.values, "auth_mode") != "openai_login"
+            {
+                k::PROVIDER_EDITOR_CODEX_CONTEXT_UNAVAILABLE
+            } else {
+                k::PROVIDER_EDITOR_CODEX_CONTEXT_PENDING
+            };
+            return components::field(
+                t(k::PROVIDER_EDITOR_CODEX_CONTEXT),
+                false,
+                None,
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(body)
+                    .child(components::badge(BadgeTone::Neutral, t(status))),
+            )
+            .into_any_element();
+        }
         components::field(field.label.clone(), field.required, None, body).into_any_element()
     }
 
@@ -3466,6 +3612,9 @@ impl ProviderEditor {
     }
 
     fn render_common_config(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.app_type == AppType::Codex && !self.show_advanced_fields {
+            return gpui::Empty.into_any_element();
+        }
         let enabled = self.common_config_enabled;
         div()
             .flex()
@@ -3597,7 +3746,11 @@ impl ProviderEditor {
                 provider_config::station_source_supported(self.app_type),
                 |column| {
                     column.child(components::field(
-                        t(k::PROVIDER_EDITOR_SOURCE_LABEL),
+                        if self.app_type == AppType::Codex {
+                            t(k::PROVIDER_EDITOR_CODEX_MODEL_SOURCE)
+                        } else {
+                            t(k::PROVIDER_EDITOR_SOURCE_LABEL)
+                        },
                         false,
                         None,
                         self.render_source_selector(cx),
@@ -3610,47 +3763,72 @@ impl ProviderEditor {
                 None,
                 self.name.clone(),
             ))
-            .when(!self.is_editing(), |s| {
-                s.child(components::field(
-                    t(k::PROVIDER_EDITOR_IDENTITY_ID_LABEL),
-                    false,
-                    None,
-                    self.provider_id.clone(),
-                ))
-            })
-            .child(components::field(
-                t(k::PROVIDER_EDITOR_IDENTITY_WEBSITE_LABEL),
-                false,
-                None,
-                self.website_url.clone(),
-            ))
-            .child(components::field(
-                t(k::PROVIDER_EDITOR_IDENTITY_CATEGORY_LABEL),
-                false,
-                None,
-                self.category.clone(),
-            ))
-            .child(components::field(
-                t(k::PROVIDER_EDITOR_IDENTITY_NOTES_LABEL),
-                false,
-                None,
-                self.notes.clone(),
-            ))
+            .when(
+                self.app_type != AppType::Codex || self.show_advanced_fields,
+                |column| {
+                    column
+                        .when(!self.is_editing(), |s| {
+                            s.child(components::field(
+                                t(k::PROVIDER_EDITOR_IDENTITY_ID_LABEL),
+                                false,
+                                None,
+                                self.provider_id.clone(),
+                            ))
+                        })
+                        .child(components::field(
+                            t(k::PROVIDER_EDITOR_IDENTITY_WEBSITE_LABEL),
+                            false,
+                            None,
+                            self.website_url.clone(),
+                        ))
+                        .child(components::field(
+                            t(k::PROVIDER_EDITOR_IDENTITY_CATEGORY_LABEL),
+                            false,
+                            None,
+                            self.category.clone(),
+                        ))
+                        .child(components::field(
+                            t(k::PROVIDER_EDITOR_IDENTITY_NOTES_LABEL),
+                            false,
+                            None,
+                            self.notes.clone(),
+                        ))
+                },
+            )
     }
 
     /// Direct-connection vs. relay-station toggle, plus the station picker
     /// when the station source is active.
     fn render_source_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let labels = [
-            t(k::PROVIDER_EDITOR_SOURCE_DIRECT),
-            t(k::PROVIDER_EDITOR_SOURCE_STATION),
-        ];
-        let label_refs: Vec<&str> = labels.iter().map(SharedString::as_ref).collect();
-        let selected = match self.source {
-            ProviderSource::Direct => 0,
-            ProviderSource::Station => 1,
+        let codex = self.app_type == AppType::Codex;
+        let official = codex
+            && self.source == ProviderSource::Direct
+            && str_val(&self.values, "auth_mode") == "openai_login"
+            && self
+                .text_inputs
+                .get("base_url")
+                .is_none_or(|i| i.read(cx).content().trim().is_empty());
+        let labels = if codex {
+            vec![
+                t(k::PROVIDER_EDITOR_CODEX_OFFICIAL),
+                t(k::PROVIDER_EDITOR_SOURCE_STATION),
+                t(k::PROVIDER_EDITOR_SOURCE_DIRECT),
+            ]
+        } else {
+            vec![
+                t(k::PROVIDER_EDITOR_SOURCE_DIRECT),
+                t(k::PROVIDER_EDITOR_SOURCE_STATION),
+            ]
         };
-        let on_select = cx.listener(|this, index: &usize, _window, cx| {
+        let label_refs: Vec<&str> = labels.iter().map(SharedString::as_ref).collect();
+        let selected = if self.source == ProviderSource::Station {
+            1
+        } else if codex && !official {
+            2
+        } else {
+            0
+        };
+        let on_select = cx.listener(move |this, index: &usize, _window, cx| {
             this.set_source(
                 if *index == 1 {
                     ProviderSource::Station
@@ -3659,6 +3837,26 @@ impl ProviderEditor {
                 },
                 cx,
             );
+            if codex && *index == 0 {
+                provider_config::set_str(&mut this.values, "auth_mode", "openai_login");
+                provider_config::set_bool(&mut this.values, "virtual_login", false);
+                if let Some(input) = this.text_inputs.get("base_url") {
+                    input.update(cx, |i, cx| i.set_content("", cx));
+                }
+                if let Some(input) = this.text_inputs.get("api_key") {
+                    input.update(cx, |i, cx| i.set_content("", cx));
+                }
+                provider_config::set_str(&mut this.values, "base_url", "");
+                provider_config::set_str(&mut this.values, "api_key", "");
+            } else if codex && *index == 2 && str_val(&this.values, "auth_mode") == "openai_login" {
+                provider_config::set_str(
+                    &mut this.values,
+                    "auth_mode",
+                    "openai_login_with_api_key",
+                );
+            }
+            this.form_list_state.remeasure();
+            this.invalidate_preview(cx);
         });
         let mut column =
             div()
@@ -3787,7 +3985,24 @@ impl ProviderEditor {
                 ),
             ));
         }
-        intro.child(self.render_identity(cx)).into_any_element()
+        intro
+            .child(self.render_identity(cx))
+            .when(self.app_type == AppType::Codex, |column| {
+                column.child(
+                    components::button(
+                        "codex-advanced",
+                        t(k::PROVIDER_EDITOR_CODEX_ADVANCED),
+                        ButtonTone::Ghost,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_advanced_fields = !this.show_advanced_fields;
+                        this.form_list_state.remeasure();
+                        cx.notify();
+                    })),
+                )
+            })
+            .into_any_element()
     }
 
     fn render_form_section(
@@ -3800,7 +4015,11 @@ impl ProviderEditor {
         let Some(section) = self.schema.get(section_index) else {
             return gpui::Empty.into_any_element();
         };
+        if self.app_type == AppType::Codex && section.advanced && !self.show_advanced_fields {
+            return gpui::Empty.into_any_element();
+        }
         if official_login
+            && self.app_type != AppType::Codex
             && (section.title == "端点与鉴权"
                 || (self.app_type == AppType::KimiCode && section_index == 0))
         {
@@ -3819,6 +4038,31 @@ impl ProviderEditor {
             .iter()
             .filter(|field| field.is_visible(&self.values))
             .filter(|field| {
+                !(self.app_type == AppType::Codex
+                    && !self.show_advanced_fields
+                    && matches!(
+                        field.id.as_str(),
+                        "name" | "provider_id" | "remote_compaction"
+                    ))
+            })
+            .filter(|field| {
+                !(self.app_type == AppType::Codex
+                    && self.source == ProviderSource::Direct
+                    && str_val(&self.values, "auth_mode") == "openai_login"
+                    && self
+                        .text_inputs
+                        .get("base_url")
+                        .is_none_or(|i| i.read(cx).content().trim().is_empty())
+                    && matches!(
+                        field.id.as_str(),
+                        "base_url"
+                            | "api_key"
+                            | "provider_name"
+                            | "provider_id"
+                            | "remote_compaction"
+                    ))
+            })
+            .filter(|field| {
                 !(station_mode
                     && provider_config::station_managed_fields(self.app_type)
                         .contains(&field.id.as_str())
@@ -3834,7 +4078,9 @@ impl ProviderEditor {
             .flex_col()
             .gap_3()
             .w_full()
-            .child(layout::section_header(section.title.clone(), None));
+            .when(self.app_type != AppType::Codex, |column| {
+                column.child(layout::section_header(section.title.clone(), None))
+            });
         for field in fields {
             column = column.child(self.render_field(field, stack_grid, cx));
         }
@@ -3990,7 +4236,11 @@ impl Render for ProviderEditor {
             components::busy_button(
                 "editor-save",
                 t(k::PROVIDER_EDITOR_ACTION_SAVE),
-                ButtonTone::Primary,
+                if self.app_type == AppType::Codex {
+                    ButtonTone::Neutral
+                } else {
+                    ButtonTone::Primary
+                },
                 ButtonSize::Md,
                 true,
             )
@@ -3998,12 +4248,43 @@ impl Render for ProviderEditor {
             components::button(
                 "editor-save",
                 t(k::PROVIDER_EDITOR_ACTION_SAVE),
-                ButtonTone::Primary,
+                if self.app_type == AppType::Codex {
+                    ButtonTone::Neutral
+                } else {
+                    ButtonTone::Primary
+                },
                 ButtonSize::Md,
             )
-            .on_click(cx.listener(|this, _event, _window, cx| this.do_save(cx)))
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.activate_after_save = false;
+                this.do_save(cx);
+            }))
         };
         let actions = actions
+            .when(self.app_type == AppType::Codex && !self.saving, |actions| {
+                actions
+                    .child(
+                        components::button(
+                            "editor-check",
+                            t(k::PROVIDER_EDITOR_CODEX_CHECK),
+                            ButtonTone::Neutral,
+                            ButtonSize::Md,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.check_configuration(cx))),
+                    )
+                    .child(
+                        components::button(
+                            "editor-save-activate",
+                            t(k::PROVIDER_EDITOR_CODEX_SAVE_ACTIVATE),
+                            ButtonTone::Primary,
+                            ButtonSize::Md,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.activate_after_save = true;
+                            this.do_save(cx);
+                        })),
+                    )
+            })
             .child(
                 components::button(
                     "editor-docs",

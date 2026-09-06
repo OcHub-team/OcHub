@@ -148,6 +148,10 @@ pub struct CodexTokenBudgetConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexModelOverride {
     #[serde(default)]
+    pub use_responses_lite: Option<bool>,
+    #[serde(default)]
+    pub remote_compaction: Option<bool>,
+    #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
@@ -444,6 +448,9 @@ impl std::str::FromStr for StationQuotaApi {
 /// clients may leave it empty and bind through a manually issued key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayRoute {
+    /// Explicit upstream model capabilities, scoped to this supplier.
+    #[serde(default)]
+    pub model_capabilities: HashMap<String, CodexModelOverride>,
     pub id: String,
     pub name: String,
     /// Optional public website for the commercial relay. This is display-only
@@ -490,6 +497,13 @@ impl GatewayRoute {
             .is_some_and(|app_type| app_type.trim().is_empty())
         {
             return Err("路由方案的应用类型不能为空字符串".to_string());
+        }
+        for (model, capabilities) in &self.model_capabilities {
+            if model.trim().is_empty() || capabilities.context_window == Some(0) {
+                return Err(
+                    "Model capabilities require a model name and a positive context window".into(),
+                );
+            }
         }
         if self.reasoning.low_budget == 0
             || self.reasoning.medium_budget == 0
@@ -703,6 +717,7 @@ mod tests {
     #[test]
     fn route_validation_rejects_inconsistent_upstream_binding() {
         let mut route = GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route".into(),
             name: "route".into(),
             website_url: None,
@@ -729,6 +744,7 @@ mod tests {
     #[test]
     fn model_rule_can_pin_a_channel_without_renaming_the_model() {
         let route = GatewayRoute {
+            model_capabilities: Default::default(),
             id: "route".into(),
             name: "route".into(),
             website_url: None,

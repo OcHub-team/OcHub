@@ -116,11 +116,14 @@ impl AppConfig for CodexConfig {
                         },
                     )
                     .help("仅两种第三方 API 模式使用；保存后写入当前 provider 的 experimental_bearer_token。OcHub 转发模式下作为虚拟登录的 access_token（填网关签发的 rd- 密钥）。"),
+
+                ],
+            ),
+            FormSection::new("高级兼容设置", vec![
                     FormField::new("virtual_login", "虚拟 ChatGPT 登录", FieldKind::Toggle)
                         .help("没有真实 ChatGPT 登录态时生成伪造的 auth.json（plan=pro，access_token 为上方密钥）。已有真实登录态时保留真实登录。")
                         .visible_when("auth_mode", AUTH_OPENAI_LOGIN_GATEWAY),
-                ],
-            ),
+            ]).advanced(),
             FormSection::new(
                 "模型",
                 vec![
@@ -151,8 +154,14 @@ impl AppConfig for CodexConfig {
             FormSection::new(
                 "上下文管理",
                 vec![
-                    FormField::new("context_management", "启用上下文管理", FieldKind::Toggle)
-                        .help("写入 [features] context_management = true。Codex 仅在 OpenAI 登录形态的 /backend-api/codex 端点上生效。"),
+                    FormField::new("context_mode", "上下文管理", FieldKind::Select { options: vec![
+                        SelectOption::new("auto", "自动"),
+                        SelectOption::new("on", "开启"),
+                        SelectOption::new("off", "关闭"),
+                    ] }),
+                ],
+            ),
+            FormSection::new("高级上下文设置", vec![
                     FormField::new("token_budget_enabled", "Token Budget", FieldKind::Toggle)
                         .help("写入 [features.token_budget] enabled = true；目录关闭时（模式 3）用于显式开启。"),
                     FormField::new(
@@ -386,6 +395,18 @@ impl AppConfig for CodexConfig {
                 })
                 .unwrap_or(false),
         );
+        let context_mode = settings_config
+            .get("ochubContextMode")
+            .and_then(Value::as_str)
+            .unwrap_or(
+                if bool_val(&values, "context_management") && auth_mode != AUTH_OPENAI_LOGIN_GATEWAY
+                {
+                    "on"
+                } else {
+                    "auto"
+                },
+            );
+        set_str(&mut values, "context_mode", context_mode);
         let token_budget = features
             .and_then(|f| f.get("token_budget"))
             .and_then(Item::as_table);
@@ -440,6 +461,12 @@ impl AppConfig for CodexConfig {
         let mut settings = prior.as_object().cloned().unwrap_or_default();
         settings.insert("auth".into(), build_auth(values, prior));
         settings.insert("config".into(), Value::String(config_text));
+        if !str_val(values, "context_mode").is_empty() {
+            settings.insert(
+                "ochubContextMode".into(),
+                json!(str_val(values, "context_mode")),
+            );
+        }
 
         EncodeResult {
             settings_config: Value::Object(settings),
@@ -501,6 +528,29 @@ impl AppConfig for CodexConfig {
         let uses_login = auth_mode_uses_login(auth_mode);
         let uses_gateway_login = auth_mode == AUTH_OPENAI_LOGIN_GATEWAY;
         let virtual_login = uses_gateway_login && bool_val(values, "virtual_login");
+        if uses_gateway_login && bool_val(values, "token_budget_use_history_notes_extension") {
+            issues.push(
+                ConfigIssue::error("历史笔记扩展不可用：OcHub 尚未接通 History / Notes 服务。")
+                    .for_field("token_budget_use_history_notes_extension"),
+            );
+        }
+        if str_val(values, "context_mode") == "on" {
+            if uses_gateway_login {
+                issues.push(
+                    ConfigIssue::error(
+                        "上下文管理不可用：OcHub 尚未接通 History / Notes 服务。请选择自动或关闭。",
+                    )
+                    .for_field("context_mode"),
+                );
+            } else if uses_relay || virtual_login {
+                issues.push(
+                    ConfigIssue::error("上下文管理不可用：需要 ChatGPT 账号认证与兼容的历史服务。")
+                        .for_field("context_mode"),
+                );
+            } else {
+                issues.push(ConfigIssue::warning("上下文管理待验证：账号套餐、策略与 History / Notes 服务由 Codex 在会话启动时检查。").for_field("context_mode"));
+            }
+        }
 
         if (uses_relay || uses_gateway_login) && str_val(values, "base_url").trim().is_empty() {
             issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
@@ -847,8 +897,10 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
             let auth_mode = str_val(values, "auth_mode");
             // The gateway login shape must also satisfy Codex's client-side
             // context-management gate, which requires provider name "OpenAI".
-            let remote_compaction =
-                bool_val(values, "remote_compaction") || auth_mode == AUTH_OPENAI_LOGIN_GATEWAY;
+            let remote_compaction = bool_val(values, "remote_compaction")
+                || auth_mode == AUTH_OPENAI_LOGIN_GATEWAY
+                || (auth_mode == AUTH_OPENAI_LOGIN
+                    && str_val(values, "base_url").trim().is_empty());
             let normal_name = if name.is_empty() || name == OPENAI_PROVIDER_NAME {
                 provider_id.as_str()
             } else {
@@ -883,10 +935,8 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                 AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_GATEWAY => {
                     ptbl.remove("env_key");
                     ptbl.remove("experimental_bearer_token");
-                    if auth_mode == AUTH_OPENAI_LOGIN_GATEWAY {
-                        ptbl.remove("auth");
-                        ptbl.remove("aws");
-                    }
+                    ptbl.remove("auth");
+                    ptbl.remove("aws");
                     ptbl.insert("requires_openai_auth", toml_edit::value(true));
                 }
                 AUTH_OPENAI_LOGIN_WITH_API_KEY => {
@@ -906,7 +956,15 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
 
     // [features] context-management gate, plus an optional explicit token
     // budget for catalog-less mode (no model_messages.token_budget source).
-    let context_management = bool_val(values, "context_management");
+    let context_management = match str_val(values, "context_mode") {
+        "auto" => {
+            str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN
+                && str_val(values, "base_url").trim().is_empty()
+        }
+        "on" => true,
+        "off" => false,
+        _ => bool_val(values, "context_management"),
+    };
     let token_budget_enabled = bool_val(values, "token_budget_enabled");
     let token_budget_threshold = str_val(values, "token_budget_reminder_threshold_tokens")
         .trim()
@@ -1362,6 +1420,42 @@ env_key = "LEGACY_API_KEY"
             decoded["query_params"]["api-version"].as_str(),
             Some("2025-04-01-preview")
         );
+    }
+
+    #[test]
+    fn context_intent_roundtrips_without_claiming_gateway_history_support() {
+        let mut values = deepseek_values();
+        set_str(&mut values, "auth_mode", AUTH_OPENAI_LOGIN_GATEWAY);
+        for mode in ["auto", "off"] {
+            set_str(&mut values, "context_mode", mode);
+            set_bool(&mut values, "context_management", true); // old persisted flag
+            let encoded = CodexConfig.encode(&values, &Value::Null, None);
+            assert!(
+                !encoded.settings_config["config"]
+                    .as_str()
+                    .unwrap()
+                    .contains("experimental_mode = true")
+            );
+            let decoded = CodexConfig.decode(&encoded.settings_config, None);
+            assert_eq!(str_val(&decoded, "context_mode"), mode);
+        }
+        set_str(&mut values, "context_mode", "on");
+        assert!(
+            CodexConfig
+                .validate(&values)
+                .iter()
+                .any(|issue| issue.field.as_deref() == Some("context_mode")
+                    && issue.severity == super::super::Severity::Error)
+        );
+        set_str(&mut values, "auth_mode", AUTH_OPENAI_LOGIN);
+        set_str(&mut values, "base_url", "");
+        set_str(&mut values, "api_key", "");
+        set_str(&mut values, "context_mode", "auto");
+        let encoded = CodexConfig.encode(&values, &Value::Null, None);
+        let text = encoded.settings_config["config"].as_str().unwrap();
+        assert!(text.contains("name = \"OpenAI\""));
+        assert!(text.contains("experimental_mode = true"));
+        assert!(!text.contains("experimental_bearer_token"));
     }
 
     #[test]
