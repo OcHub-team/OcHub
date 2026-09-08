@@ -1031,6 +1031,6 @@ HTTP mock：`device_authorization`、`token`、`me`、`usages`。Device 流覆�
 ### PR 5 — 测试与文档（不再堆功能）
 
 - **标题**：`test(kimi): multi-account OAuth fixtures and docs`
-- **文件**：补测、`docs/site/src/content/docs/kimi-code/index.mdx`（及 zh/ja）、README 一行
+- **文件**：补测、独立仓库 `OcHub-team/ochub-docs` 的 `src/content/docs/kimi-code/index.mdx`（及 zh/ja）、README 一行
 - **依赖**：PR 3a–3c
 - **内容**：用户文档：多账号、登录后须再点切换、重启 CLI、导入现有会话、`KIMI_CODE_HOME` 覆盖设置里的 Kimi 目录。无新 reconcile 实现。

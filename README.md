@@ -39,6 +39,8 @@
 
 ---
 
+User documentation: [docs.ochub.org](https://docs.ochub.org). Its source and GPUI WebAssembly renderer are maintained in [ochub-docs](https://github.com/OcHub-team/ochub-docs).
+
 ## Why OcHub
 
 AI coding tools are powerful, but each one keeps its providers, MCP servers,

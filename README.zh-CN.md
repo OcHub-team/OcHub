@@ -39,6 +39,8 @@
 
 ---
 
+用户文档见 [docs.ochub.org](https://docs.ochub.org/zh/)。文档源码与 GPUI WebAssembly 渲染器统一在独立仓库 [ochub-docs](https://github.com/OcHub-team/ochub-docs) 维护。
+
 ## 为什么选择 OcHub
 
 AI 编程工具功能强大，但各自的连接、MCP 服务器、Skills、会话和用量数据
