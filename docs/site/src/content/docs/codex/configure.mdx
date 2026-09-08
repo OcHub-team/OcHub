@@ -33,6 +33,8 @@ Virtual login is under **Advanced** for compatibility with clients without a rea
 
 For a distribution server implementing History / Notes, select ChatGPT, bind a supplier with exactly one Responses channel, and choose **On**. OcHub preserves real login credentials and explicitly writes `[features.token_budget] enabled = true` and `use_history_notes_extension = true`. This uses Codex's explicit configuration path without editing ID-token plan claims. Codex must include the extension and a known model context window; managed feature restrictions still apply. Remote control continues using the official `chatgpt_base_url`, which OcHub does not redirect. Provider capabilities and official pairing still require live verification.
 
+Keep the same distribution API key for a history session; start a new session after changing keys.
+
 ### Automatic activation requirements
 
 The corresponding Codex source checks all of these in `apply_experimental_context`:
