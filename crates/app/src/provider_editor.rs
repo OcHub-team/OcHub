@@ -2568,11 +2568,14 @@ impl ProviderEditor {
 
         if self.app_type == AppType::Codex && field.id == "context_mode" {
             let mode = str_val(&self.values, "context_mode");
-            let status = if mode == "off" {
-                k::PROVIDER_EDITOR_CODEX_CONTEXT_OFF
-            } else if self.source == ProviderSource::Station
-                || str_val(&self.values, "auth_mode") != "openai_login"
+            let status = if mode == "off"
+                || (mode == "auto" && str_val(&self.values, "auth_mode") == "openai_login_gateway")
             {
+                k::PROVIDER_EDITOR_CODEX_CONTEXT_OFF
+            } else if !matches!(
+                str_val(&self.values, "auth_mode"),
+                "openai_login" | "openai_login_gateway"
+            ) {
                 k::PROVIDER_EDITOR_CODEX_CONTEXT_UNAVAILABLE
             } else {
                 k::PROVIDER_EDITOR_CODEX_CONTEXT_PENDING

@@ -26,12 +26,12 @@ Virtual login is under **Advanced** for compatibility with clients without a rea
 | Choice | Behavior |
 | --- | --- |
 | Auto | Uses the experimental Codex entry point for the default official endpoint; does not automatically enable it for third-party or OcHub routes |
-| On | Explicitly requests the experiment; saving is rejected for OcHub routes without the required history service |
+| On | For ChatGPT + OcHub, explicitly enables Token Budget and History / Notes; requires a compatible distribution server |
 | Off | Keeps the experiment disabled during subsequent endpoint injection |
 
-**Pending Codex verification** is a configuration state, not proof of account eligibility or backend availability. **Unavailable · History service not connected** means OcHub has no implementation of the required service.
+**Pending Codex verification** is a configuration state, not proof of backend availability. Independent API-key connections do not enable this account extension.
 
-Real ChatGPT login, third-party inference, and complete experimental context management are not currently a supported end-to-end combination. The 0.5.16 documentation incorrectly equated login binding and compaction forwarding with complete support; this corrects that claim.
+For a distribution server implementing History / Notes, select ChatGPT, bind a supplier with exactly one Responses channel, and choose **On**. OcHub preserves real login credentials and explicitly writes `[features.token_budget] enabled = true` and `use_history_notes_extension = true`. This uses Codex's explicit configuration path without editing ID-token plan claims. Codex must include the extension and a known model context window; managed feature restrictions still apply. Remote control continues using the official `chatgpt_base_url`, which OcHub does not redirect. Provider capabilities and official pairing still require live verification.
 
 ### Automatic activation requirements
 
@@ -49,7 +49,9 @@ Passing this check enables Token Budget and `use_history_notes_extension`. Actua
 
 ### History and compaction are separate
 
-History / Notes requires `alpha/history/v2/*` and `alpha/notes/v2/*`, including `thread_hint`, history search, and notes reads/writes. OcHub does not implement these services or a verified path for ingesting third-party inference history into the official service.
+OcHub forwards the ten History / Notes operations, including `thread_hint`, under its scoped `/backend-api/codex/alpha/` route to the supplier's Responses endpoint sibling `alpha/` path. Requests need no model field. Opaque argument bytes, encrypted results, and upstream statuses are preserved; real OAuth and account headers are replaced with supplier authentication. Mixed or multiple enabled channels are rejected for these operations, and writes are never retried on another channel.
+
+The distribution server must implement history ingestion, storage, retrieval, notes, user ownership checks, and persistent session-to-account affinity. OcHub does not supply that backend or verify it when saving. Keep the supplier unchanged for existing sessions. **Auto** remains conservative for gateways. The older 0.5.16 claim of complete history support from compaction alone was incorrect.
 
 `/responses/compact` only provides remote compaction. OcHub forwards `/v1/responses/compact` and the Codex backend equivalent to Responses upstreams that support it. Chat or Messages conversion cannot substitute for this capability.
 

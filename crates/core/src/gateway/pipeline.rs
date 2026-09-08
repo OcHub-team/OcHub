@@ -692,6 +692,7 @@ const GATEWAY_OWNED_HEADERS: &[&str] = &[
     // Credentials.
     "authorization",
     "proxy-authorization",
+    "chatgpt-account-id",
     "x-ochub-route-key",
     "x-api-key",
     "api-key",
@@ -738,7 +739,7 @@ pub(crate) fn forwardable_client_headers(client_headers: &HeaderMap) -> HeaderMa
 /// `anthropic-version` is only defaulted, not forced: a Messages client that
 /// pinned a version knows which response shape it parses, and the gateway has
 /// no reason to overrule it.
-fn apply_channel_auth(headers: &mut HeaderMap, channel: &GatewayChannel) {
+pub(crate) fn apply_channel_auth(headers: &mut HeaderMap, channel: &GatewayChannel) {
     match channel.dialect {
         Dialect::Messages => {
             if let Ok(value) = HeaderValue::from_str(&channel.api_key) {
@@ -758,7 +759,7 @@ fn apply_channel_auth(headers: &mut HeaderMap, channel: &GatewayChannel) {
 
 /// Channel-configured headers win over anything forwarded: they are the
 /// operator's explicit statement about this upstream.
-fn apply_extra_headers(headers: &mut HeaderMap, channel: &GatewayChannel) {
+pub(crate) fn apply_extra_headers(headers: &mut HeaderMap, channel: &GatewayChannel) {
     for (name, value) in &channel.extra_headers {
         if let (Ok(name), Ok(value)) = (
             HeaderName::from_bytes(name.as_bytes()),
@@ -1738,7 +1739,10 @@ pub(crate) async fn run_operation(
     }
 }
 
-fn route_for_key(db: &Database, key: Option<&GatewayKey>) -> Result<Option<GatewayRoute>, String> {
+pub(crate) fn route_for_key(
+    db: &Database,
+    key: Option<&GatewayKey>,
+) -> Result<Option<GatewayRoute>, String> {
     let Some(route_id) = key.and_then(|key| key.route_id.as_deref()) else {
         return Ok(None);
     };

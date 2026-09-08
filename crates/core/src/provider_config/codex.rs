@@ -528,17 +528,11 @@ impl AppConfig for CodexConfig {
         let uses_login = auth_mode_uses_login(auth_mode);
         let uses_gateway_login = auth_mode == AUTH_OPENAI_LOGIN_GATEWAY;
         let virtual_login = uses_gateway_login && bool_val(values, "virtual_login");
-        if uses_gateway_login && bool_val(values, "token_budget_use_history_notes_extension") {
-            issues.push(
-                ConfigIssue::error("历史笔记扩展不可用：OcHub 尚未接通 History / Notes 服务。")
-                    .for_field("token_budget_use_history_notes_extension"),
-            );
-        }
         if str_val(values, "context_mode") == "on" {
             if uses_gateway_login {
                 issues.push(
-                    ConfigIssue::error(
-                        "上下文管理不可用：OcHub 尚未接通 History / Notes 服务。请选择自动或关闭。",
+                    ConfigIssue::warning(
+                        "将显式启用 Token Budget 与 History / Notes。需要唯一的 Responses 上游提供历史采集、笔记与会话绑定；保存配置不会验证上游能力。",
                     )
                     .for_field("context_mode"),
                 );
@@ -965,11 +959,19 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
         "off" => false,
         _ => bool_val(values, "context_management"),
     };
-    let token_budget_enabled = bool_val(values, "token_budget_enabled");
+    // Explicit gateway mode uses Codex's supported configuration path rather
+    // than modifying the real account's signed ID token or plan claims.
+    let gateway_context = str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN_GATEWAY
+        && str_val(values, "context_mode") == "on";
+    let gateway_context_disabled = str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN_GATEWAY
+        && matches!(str_val(values, "context_mode"), "auto" | "off");
+    let token_budget_enabled =
+        !gateway_context_disabled && (gateway_context || bool_val(values, "token_budget_enabled"));
     let token_budget_threshold = str_val(values, "token_budget_reminder_threshold_tokens")
         .trim()
         .to_string();
-    let token_budget_history_notes = bool_val(values, "token_budget_use_history_notes_extension");
+    let token_budget_history_notes =
+        gateway_context || bool_val(values, "token_budget_use_history_notes_extension");
     let mut remove_empty_features = false;
     if context_management || token_budget_enabled {
         let features = root.entry("features").or_insert(Item::Table({
@@ -1009,6 +1011,8 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                     .and_then(Item::as_table_mut)
                 {
                     budget.insert("enabled", toml_edit::value(false));
+                    budget.remove("use_history_notes_extension");
+                    budget.remove("reminder_threshold_tokens");
                 }
             }
         }
@@ -1019,6 +1023,8 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
             .and_then(Item::as_table_mut)
         {
             budget.insert("enabled", toml_edit::value(false));
+            budget.remove("use_history_notes_extension");
+            budget.remove("reminder_threshold_tokens");
         }
         remove_empty_features = features.is_empty();
     }
@@ -1423,7 +1429,7 @@ env_key = "LEGACY_API_KEY"
     }
 
     #[test]
-    fn context_intent_roundtrips_without_claiming_gateway_history_support() {
+    fn explicit_gateway_context_uses_token_budget_without_changing_auth() {
         let mut values = deepseek_values();
         set_str(&mut values, "auth_mode", AUTH_OPENAI_LOGIN_GATEWAY);
         for mode in ["auto", "off"] {
@@ -1445,8 +1451,26 @@ env_key = "LEGACY_API_KEY"
                 .validate(&values)
                 .iter()
                 .any(|issue| issue.field.as_deref() == Some("context_mode")
-                    && issue.severity == super::super::Severity::Error)
+                    && issue.severity == super::super::Severity::Warning)
         );
+        let encoded = CodexConfig.encode(&values, &Value::Null, None);
+        let text = encoded.settings_config["config"].as_str().unwrap();
+        assert!(text.contains("use_history_notes_extension = true"));
+        assert!(text.contains("[features.token_budget]"));
+        let mut reopened = CodexConfig.decode(&encoded.settings_config, None);
+        for mode in ["off", "auto"] {
+            set_str(&mut reopened, "context_mode", mode);
+            let encoded = CodexConfig.encode(&reopened, &encoded.settings_config, None);
+            let config: toml_edit::DocumentMut = encoded.settings_config["config"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(
+                config["features"]["token_budget"]["enabled"].as_bool(),
+                Some(false)
+            );
+        }
         set_str(&mut values, "auth_mode", AUTH_OPENAI_LOGIN);
         set_str(&mut values, "base_url", "");
         set_str(&mut values, "api_key", "");

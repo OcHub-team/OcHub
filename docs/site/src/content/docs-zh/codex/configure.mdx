@@ -37,12 +37,16 @@ sidebar:
 | 选择 | 配置行为 |
 | --- | --- |
 | 自动 | 官方默认端点采用 Codex 的实验性入口；第三方与 OcHub 路由不自动开启 |
-| 开启 | 明确请求实验性功能；OcHub 路由缺少历史服务时拒绝保存此配置 |
+| 开启 | ChatGPT + OcHub 显式启用 Token Budget 与 History / Notes，需要兼容的分发服务 |
 | 关闭 | 写入关闭意图，后续供应商地址注入不会重新开启 |
 
-“待 Codex 验证”表示只完成配置，不表示账号套餐、组织策略或后端可用性已验证。“不可用 · 历史服务未接通”表示当前 OcHub 没有实现所需历史服务。
+“待 Codex 验证”表示只完成配置，不表示后端可用性已验证。独立 API Key 连接不启用此账号扩展。
 
-目前不能把“真实 ChatGPT 登录 + 第三方推理 + 完整实验性上下文管理”视为已支持。0.5.16 文档曾把登录绑定与压缩转发误写为完整支持，此处纠正。
+分发服务支持 History / Notes 时，选择 **ChatGPT**，绑定只有一个 Responses 通道的供应商，上下文管理选择**开启**。OcHub 保留真实登录，显式写入 `[features.token_budget] enabled = true` 与 `use_history_notes_extension = true`，无需修改 ID Token 的套餐声明。Codex 仍需包含对应扩展、已知模型上下文长度，并满足管理策略。远程控制继续使用官方 `chatgpt_base_url`，该地址不会被此配置改写。保存不会验证上游能力或官方配对。
+
+OcHub 转发十个 History / Notes 操作，包含 `thread_hint`。请求从本地 `/backend-api/codex/alpha/` 转发到供应商 Responses 端点同级的 `alpha/` 路径，不要求 model 字段，保留加密参数、结果和上游状态；真实 OAuth 与账号头不会传给供应商。多个启用通道或非 Responses 通道会被拒绝，笔记写入不会换通道重试。
+
+分发服务负责历史采集、存储、查询、笔记、用户归属校验和会话到上游账号的持久绑定。已有会话不要切换供应商。网关**自动**模式保持保守，不自动启用。0.5.16 曾把压缩转发误写为完整历史支持，该说法不成立。
 
 ### Codex 的自动启用条件
 
@@ -60,7 +64,7 @@ sidebar:
 
 ### History / Notes 与压缩
 
-完整历史能力依赖 `alpha/history/v2/*` 和 `alpha/notes/v2/*`，包括 `thread_hint`、历史检索和笔记读写。当前 OcHub 没有实现这些服务，也没有验证第三方推理历史如何写入官方历史服务。
+完整历史能力依赖 `alpha/history/v2/*` 和 `alpha/notes/v2/*`，包括 `thread_hint`、历史检索和笔记读写。OcHub 提供转发，具体服务与历史采集由分发后端实现；转发不代表已验证官方历史服务。
 
 `/responses/compact` 只是远程压缩接口。OcHub 支持转发 `/v1/responses/compact` 与 Codex 后端形态的压缩请求，上游仍必须支持该接口。Chat 或 Messages 转换不能代替远程压缩。
 

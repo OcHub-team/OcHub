@@ -23,7 +23,7 @@ use crate::gateway::pipeline::{self, GatewayState, PipelineOutcome, StreamFrame}
 use crate::gateway::types::{ChannelHealth, Dialect, GatewayChannel, GatewayKey};
 
 pub async fn build_router(state: GatewayState) -> Router {
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/health", get(|| async { (StatusCode::OK, "OK") }))
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
@@ -38,6 +38,24 @@ pub async fn build_router(state: GatewayState) -> Router {
             "/backend-api/codex/responses/compact",
             post(handle_codex_compact),
         );
+    for path in [
+        "history/v2/list_windows",
+        "history/v2/list_items",
+        "history/v2/read_item",
+        "history/v2/search_contents",
+        "notes/v2/list_files_by_prefix",
+        "notes/v2/read_file",
+        "notes/v2/search_contents",
+        "notes/v2/append_to_file",
+        "notes/v2/write_file",
+        "notes/v2/thread_hint",
+    ] {
+        router = router.route(&format!("/backend-api/codex/alpha/{path}"), post(
+            move |State(state): State<GatewayState>, headers: HeaderMap, body: Bytes| async move {
+                handle_codex_history(state, headers, body, path).await
+            },
+        ));
+    }
     let scoped = router.clone().route_layer(axum::middleware::from_fn(
         |axum::extract::Path(params): axum::extract::Path<
             std::collections::HashMap<String, String>,
@@ -320,6 +338,113 @@ async fn handle_codex_compact(
         Err(response) => return response,
     };
     run_http_operation(state, Dialect::Responses, headers, body, key, true).await
+}
+
+/// Stateful tools never use model-based selection or retry on another channel.
+/// The distribution server owns session/account affinity and history storage.
+async fn handle_codex_history(
+    state: GatewayState,
+    headers: HeaderMap,
+    body: Bytes,
+    path: &str,
+) -> Response {
+    if !state.config.read().await.codex_backend_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let key = match authorize_codex_backend(&state, &headers).await {
+        Ok(Some(key)) if key.enabled => key,
+        Ok(_) => return unauthorized(Dialect::Responses),
+        Err(response) => return response,
+    };
+    let route = match pipeline::route_for_key(&state.db, Some(&key)) {
+        Ok(Some(route)) => route,
+        _ => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "History / Notes requires a bound supplier",
+            )
+                .into_response();
+        }
+    };
+    let channels = match state.db.get_gateway_channels() {
+        Ok(channels) => channels
+            .into_iter()
+            .filter(|c| c.enabled && route.allows_channel(&c.id))
+            .collect::<Vec<_>>(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    // Reject mixed/multiple channels: otherwise inference and retrieval could disagree.
+    let [channel] = channels.as_slice() else {
+        return (
+            StatusCode::CONFLICT,
+            "History / Notes requires exactly one upstream channel",
+        )
+            .into_response();
+    };
+    if channel.dialect != Dialect::Responses {
+        return (
+            StatusCode::CONFLICT,
+            "History / Notes requires a Responses upstream",
+        )
+            .into_response();
+    }
+    let valid = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .is_some_and(|v| {
+            v.get("context").is_some_and(|c| {
+                ["session_id", "current_agent_name"].iter().all(|field| {
+                    c.get(field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.trim().is_empty())
+                })
+            })
+        });
+    if !valid {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Missing History / Notes session context",
+        )
+            .into_response();
+    }
+    let endpoint = channel.endpoint_url();
+    let Some(base) = endpoint.trim_end_matches('/').strip_suffix("/responses") else {
+        return (
+            StatusCode::CONFLICT,
+            "History / Notes requires a /responses endpoint",
+        )
+            .into_response();
+    };
+    let mut upstream_headers = pipeline::forwardable_client_headers(&headers);
+    pipeline::apply_extra_headers(&mut upstream_headers, channel);
+    pipeline::apply_channel_auth(&mut upstream_headers, channel);
+    upstream_headers.insert("content-type", "application/json".parse().unwrap());
+    let upstream = match state
+        .http_client
+        .post(format!("{base}/alpha/{path}"))
+        .headers(upstream_headers)
+        .body(body)
+        .timeout(Duration::from_secs(35))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                "History / Notes upstream request failed",
+            )
+                .into_response();
+        }
+    };
+    let status = upstream.status();
+    let response_headers = pipeline::forwardable_upstream_headers(upstream.headers());
+    // Preserve opaque encrypted outputs, images, and upstream failures byte for byte.
+    (
+        status,
+        response_headers,
+        Body::from_stream(upstream.bytes_stream()),
+    )
+        .into_response()
 }
 
 /// Tag codex-backend replies with the local catalog ETag. An upstream ETag
@@ -1486,6 +1611,159 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn history_notes_preserve_opaque_payloads_and_replace_real_credentials() {
+        let payload = Bytes::from_static(br#"{"context":{"session_id":"session-1","current_agent_name":"/root"},"path":"/root/notes/test","text":"opaque-ciphertext"}"#);
+        let expected = payload.clone();
+        let upstream = Router::new().fallback(post(
+            move |uri: axum::http::Uri, headers: HeaderMap, body: Bytes| {
+                let expected = expected.clone();
+                async move {
+                    assert_eq!(body, expected);
+                    assert!(uri.path().starts_with("/v1/alpha/"));
+                    assert_eq!(headers["authorization"], "Bearer distribution-key");
+                    assert!(!headers.contains_key("chatgpt-account-id"));
+                    assert!(!headers.contains_key("x-ochub-route-key"));
+                    assert_eq!(headers["x-openai-encrypted-tool-arguments"], "true");
+                    (
+                        if headers.contains_key("x-test-upstream-error") {
+                            StatusCode::FORBIDDEN
+                        } else {
+                            StatusCode::ACCEPTED
+                        },
+                        [("content-type", "application/json")],
+                        "{\"encrypted_output\":\"opaque-result\"}",
+                    )
+                }
+            },
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let (base, db, _) = serve_gateway(GatewayConfig {
+            codex_backend_enabled: true,
+            ..GatewayConfig::default()
+        })
+        .await;
+        let mut channel: GatewayChannel = serde_json::from_value(json!({
+            "id":"history", "name":"History", "dialect":"responses", "base_url":format!("http://{addr}"),
+            "api_key":"distribution-key", "models":[], "priority":0, "weight":1, "enabled":true
+        })).unwrap();
+        db.upsert_gateway_channel(&channel).unwrap();
+        db.upsert_gateway_route(&serde_json::from_value(json!({"id":"history-route", "name":"History", "enabled":true,"created_at":1,"channel_ids":["history"]})).unwrap()).unwrap();
+        let mut key = GatewayKey {
+            id: "history-key".into(),
+            name: "History".into(),
+            key: "rd-history".into(),
+            route_id: Some("history-route".into()),
+            model_policy: None,
+            created_at: 1,
+            enabled: true,
+        };
+        db.upsert_gateway_key(&key).unwrap();
+        let client = reqwest::Client::new();
+        let url =
+            format!("{base}/connection/rd-history/backend-api/codex/alpha/notes/v2/write_file");
+        let response = client
+            .post(&url)
+            .bearer_auth("real-oauth-token")
+            .header("chatgpt-account-id", "real-account")
+            .header("x-openai-encrypted-tool-arguments", "true")
+            .body(payload.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response.text().await.unwrap(),
+            "{\"encrypted_output\":\"opaque-result\"}"
+        );
+        for path in [
+            "history/v2/list_windows",
+            "history/v2/list_items",
+            "history/v2/read_item",
+            "history/v2/search_contents",
+            "notes/v2/list_files_by_prefix",
+            "notes/v2/read_file",
+            "notes/v2/search_contents",
+            "notes/v2/append_to_file",
+            "notes/v2/thread_hint",
+        ] {
+            let response = client
+                .post(format!(
+                    "{base}/connection/rd-history/backend-api/codex/alpha/{path}"
+                ))
+                .bearer_auth("real")
+                .header("x-openai-encrypted-tool-arguments", "true")
+                .body(payload.clone())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED, "{path}");
+        }
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("real")
+                .header("x-openai-encrypted-tool-arguments", "true")
+                .header("x-test-upstream-error", "true")
+                .body(payload.clone())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            client
+                .post(&url)
+                .body(payload.clone())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("real")
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        channel.dialect = Dialect::Chat;
+        db.upsert_gateway_channel(&channel).unwrap();
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("real")
+                .body(payload.clone())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        key.enabled = false;
+        db.upsert_gateway_key(&key).unwrap();
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth("real")
+                .body(payload)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        task.abort();
     }
 
     #[test]
