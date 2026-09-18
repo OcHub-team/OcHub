@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.18"
+version = "0.5.19"
 edition = "2024"
 license = "GPL-3.0-or-later"
 authors = ["OcHub contributors"]
@@ -94,3 +94,12 @@ incremental = true
 # `ochub-ui`'s `zed-text`) needs Zed's async-process fork (`Child::adopt_raw_pid`).
 [patch.crates-io]
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+
+# Redirect every crate resolved from zed-industries/zed — including the ones
+# `ochub-ui` pulls in transitively — onto the OcHub-team fork pin that carries
+# the macOS 26+ blur material fix (branch ochub/macos-27-blur-material).
+# Without this, gpui would exist twice with different crate identities.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/OcHub-team/zed", rev = "ba106c57655d87fec8d6fc0a3ab4f9e6a4e9c23b" }
+gpui_platform = { git = "https://github.com/OcHub-team/zed", rev = "ba106c57655d87fec8d6fc0a3ab4f9e6a4e9c23b" }
+text = { git = "https://github.com/OcHub-team/zed", rev = "ba106c57655d87fec8d6fc0a3ab4f9e6a4e9c23b" }
