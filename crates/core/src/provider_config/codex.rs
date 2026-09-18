@@ -23,21 +23,13 @@ use crate::model::ProviderMeta;
 pub(super) const AUTH_API_KEY: &str = "api_key";
 const AUTH_OPENAI_LOGIN: &str = "openai_login";
 const AUTH_OPENAI_LOGIN_WITH_API_KEY: &str = "openai_login_with_api_key";
-/// ChatGPT login shape whose requests go to OcHub's `/backend-api/codex`
-/// backend: `requires_openai_auth=true` and no relay credentials, so Codex's
-/// client-side context-management gate (provider name `OpenAI` + backend
-/// base_url + ChatGPT auth) is satisfied.
-pub(super) const AUTH_OPENAI_LOGIN_GATEWAY: &str = "openai_login_gateway";
 
 /// Login-only auth carries no bearer, so a station-sourced channel would reach
-/// the gateway unauthenticated. The two relay-bearing modes both stay offered,
-/// as does the gateway-login mode (its virtual login carries the key).
+/// the gateway unauthenticated. The two relay-bearing modes both stay offered.
 pub(super) const STATION_HIDDEN_AUTH_MODES: &[&str] = &[AUTH_OPENAI_LOGIN];
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const HAS_OPENAI_LOGIN: &str = "_has_openai_login";
 const LEGACY_ENV_KEY: &str = "_legacy_env_key";
-/// Gateway backend base URL suffix that defines the login-gateway shape.
-const CODEX_BACKEND_PATH: &str = "/backend-api/codex";
 
 pub struct CodexConfig;
 
@@ -99,15 +91,10 @@ impl AppConfig for CodexConfig {
                                 .with_hint(
                                     "auth.json 保留登录态，请求使用 experimental_bearer_token",
                                 ),
-                                SelectOption::new(
-                                    AUTH_OPENAI_LOGIN_GATEWAY,
-                                    "ChatGPT 登录 + OcHub 转发",
-                                )
-                                .with_hint("requires_openai_auth=true，bearer 由 auth.json 提供"),
                             ],
                         },
                     )
-                    .help("组合模式不会把第三方密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。OcHub 转发模式不写任何 relay 凭据，Authorization 来自 auth.json 的 access_token。"),
+                    .help("组合模式不会把第三方密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。"),
                     FormField::new(
                         "api_key",
                         "第三方 API Key",
@@ -115,15 +102,9 @@ impl AppConfig for CodexConfig {
                             placeholder: "sk-...".into(),
                         },
                     )
-                    .help("仅两种第三方 API 模式使用；保存后写入当前 provider 的 experimental_bearer_token。OcHub 转发模式下作为虚拟登录的 access_token（填网关签发的 rd- 密钥）。"),
-
+                    .help("仅两种第三方 API 模式使用；保存后写入当前 provider 的 experimental_bearer_token。"),
                 ],
             ),
-            FormSection::new("高级兼容设置", vec![
-                    FormField::new("virtual_login", "虚拟 ChatGPT 登录", FieldKind::Toggle)
-                        .help("没有真实 ChatGPT 登录态时生成伪造的 auth.json（plan=pro，access_token 为上方密钥）。已有真实登录态时保留真实登录。")
-                        .visible_when("auth_mode", AUTH_OPENAI_LOGIN_GATEWAY),
-            ]).advanced(),
             FormSection::new(
                 "模型",
                 vec![
@@ -151,36 +132,6 @@ impl AppConfig for CodexConfig {
                     .help("仅 Responses API 且依模型而定。"),
                 ],
             ),
-            FormSection::new(
-                "上下文管理",
-                vec![
-                    FormField::new("context_mode", "上下文管理", FieldKind::Select { options: vec![
-                        SelectOption::new("auto", "自动"),
-                        SelectOption::new("on", "开启"),
-                        SelectOption::new("off", "关闭"),
-                    ] }),
-                ],
-            ),
-            FormSection::new("高级上下文设置", vec![
-                    FormField::new("token_budget_enabled", "Token Budget", FieldKind::Toggle)
-                        .help("写入 [features.token_budget] enabled = true；目录关闭时（模式 3）用于显式开启。"),
-                    FormField::new(
-                        "token_budget_reminder_threshold_tokens",
-                        "提醒阈值 (tokens)",
-                        FieldKind::Text {
-                            placeholder: "例如 8000".into(),
-                        },
-                    )
-                    .help("[features.token_budget] reminder_threshold_tokens；留空使用 Codex 默认值。"),
-                    FormField::new(
-                        "token_budget_use_history_notes_extension",
-                        "历史笔记扩展",
-                        FieldKind::Toggle,
-                    )
-                    .help("[features.token_budget] use_history_notes_extension = true。"),
-                ],
-            )
-            .advanced(),
             FormSection::new(
                 "高级",
                 vec![
@@ -302,7 +253,6 @@ impl AppConfig for CodexConfig {
             },
         );
         set_str(&mut values, "base_url", read("base_url"));
-        let base_url = read("base_url");
 
         let wire_api = read("wire_api");
         set_str(
@@ -318,21 +268,12 @@ impl AppConfig for CodexConfig {
         let env_key = read("env_key");
         let provider_token =
             crate::apps::codex::extract_codex_experimental_bearer_token(config_text);
-        let auth_value = settings_config.get("auth");
-        let auth_token = auth_value.and_then(crate::apps::codex::extract_codex_auth_api_key);
-        let virtual_access_token = auth_value
-            .filter(|auth| crate::apps::codex::codex_auth_is_virtual_login(auth))
-            .and_then(|auth| auth.pointer("/tokens/access_token"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let auth_token = settings_config
+            .get("auth")
+            .and_then(crate::apps::codex::extract_codex_auth_api_key);
         let literal_env_key =
             (!env_key.is_empty() && !is_valid_env_key_name(&env_key)).then(|| env_key.clone());
-        // Relay credentials decide the auth-mode classification; the virtual
-        // login's access token is surfaced into the same field afterwards but
-        // must not turn the gateway-login shape into the combined mode.
-        let relay_api_key = provider_token.or(auth_token).or(literal_env_key);
-        let has_relay_credentials = relay_api_key.is_some() || !env_key.is_empty();
-        let api_key = relay_api_key.or(virtual_access_token);
+        let api_key = provider_token.or(auth_token).or(literal_env_key);
         set_str(&mut values, "api_key", api_key.clone().unwrap_or_default());
         set_str(
             &mut values,
@@ -348,16 +289,9 @@ impl AppConfig for CodexConfig {
             .and_then(|t| t.get("requires_openai_auth"))
             .and_then(Item::as_bool)
             .unwrap_or(false);
-        let is_codex_backend = requires_openai_auth
-            && !has_relay_credentials
-            && base_url
-                .trim()
-                .trim_end_matches('/')
-                .ends_with(CODEX_BACKEND_PATH);
+        let has_relay_credentials = api_key.is_some() || !env_key.is_empty();
         let auth_mode = if requires_openai_auth && has_relay_credentials {
             AUTH_OPENAI_LOGIN_WITH_API_KEY
-        } else if is_codex_backend {
-            AUTH_OPENAI_LOGIN_GATEWAY
         } else if requires_openai_auth {
             AUTH_OPENAI_LOGIN
         } else {
@@ -370,70 +304,6 @@ impl AppConfig for CodexConfig {
             settings_config
                 .get("auth")
                 .is_some_and(crate::apps::codex::codex_auth_has_oauth_login_material),
-        );
-        set_bool(
-            &mut values,
-            "virtual_login",
-            settings_config
-                .get("auth")
-                .is_some_and(crate::apps::codex::codex_auth_is_virtual_login),
-        );
-
-        // [features] context management / token budget.
-        let features = doc
-            .as_ref()
-            .and_then(|d| d.get("features"))
-            .and_then(Item::as_table);
-        set_bool(
-            &mut values,
-            "context_management",
-            features
-                .and_then(|f| f.get("context_management"))
-                .and_then(|item| {
-                    item.as_bool()
-                        .or_else(|| item.get("experimental_mode").and_then(Item::as_bool))
-                })
-                .unwrap_or(false),
-        );
-        let context_mode = settings_config
-            .get("ochubContextMode")
-            .and_then(Value::as_str)
-            .unwrap_or(
-                if bool_val(&values, "context_management") && auth_mode != AUTH_OPENAI_LOGIN_GATEWAY
-                {
-                    "on"
-                } else {
-                    "auto"
-                },
-            );
-        set_str(&mut values, "context_mode", context_mode);
-        let token_budget = features
-            .and_then(|f| f.get("token_budget"))
-            .and_then(Item::as_table);
-        set_bool(
-            &mut values,
-            "token_budget_enabled",
-            token_budget
-                .and_then(|t| t.get("enabled"))
-                .and_then(Item::as_bool)
-                .unwrap_or(false),
-        );
-        set_bool(
-            &mut values,
-            "token_budget_use_history_notes_extension",
-            token_budget
-                .and_then(|t| t.get("use_history_notes_extension"))
-                .and_then(Item::as_bool)
-                .unwrap_or(false),
-        );
-        set_str(
-            &mut values,
-            "token_budget_reminder_threshold_tokens",
-            token_budget
-                .and_then(|t| t.get("reminder_threshold_tokens"))
-                .and_then(Item::as_integer)
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
         );
 
         values.insert(
@@ -461,12 +331,6 @@ impl AppConfig for CodexConfig {
         let mut settings = prior.as_object().cloned().unwrap_or_default();
         settings.insert("auth".into(), build_auth(values, prior));
         settings.insert("config".into(), Value::String(config_text));
-        if !str_val(values, "context_mode").is_empty() {
-            settings.insert(
-                "ochubContextMode".into(),
-                json!(str_val(values, "context_mode")),
-            );
-        }
 
         EncodeResult {
             settings_config: Value::Object(settings),
@@ -526,29 +390,10 @@ impl AppConfig for CodexConfig {
         let auth_mode = str_val(values, "auth_mode");
         let uses_relay = auth_mode_uses_relay(auth_mode);
         let uses_login = auth_mode_uses_login(auth_mode);
-        let uses_gateway_login = auth_mode == AUTH_OPENAI_LOGIN_GATEWAY;
-        let virtual_login = uses_gateway_login && bool_val(values, "virtual_login");
-        if str_val(values, "context_mode") == "on" {
-            if uses_gateway_login {
-                issues.push(
-                    ConfigIssue::warning(
-                        "将显式启用 Token Budget 与 History / Notes。需要唯一的 Responses 上游提供历史采集、笔记与会话绑定；保存配置不会验证上游能力。",
-                    )
-                    .for_field("context_mode"),
-                );
-            } else if uses_relay || virtual_login {
-                issues.push(
-                    ConfigIssue::error("上下文管理不可用：需要 ChatGPT 账号认证与兼容的历史服务。")
-                        .for_field("context_mode"),
-                );
-            } else {
-                issues.push(ConfigIssue::warning("上下文管理待验证：账号套餐、策略与 History / Notes 服务由 Codex 在会话启动时检查。").for_field("context_mode"));
-            }
-        }
 
-        if (uses_relay || uses_gateway_login) && str_val(values, "base_url").trim().is_empty() {
+        if uses_relay && str_val(values, "base_url").trim().is_empty() {
             issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
-        } else if !str_val(values, "base_url").trim().is_empty() && !uses_gateway_login {
+        } else if !str_val(values, "base_url").trim().is_empty() {
             let base = str_val(values, "base_url").trim_end_matches('/');
             if !base.ends_with("/v1") && !base.contains("127.0.0.1") && !base.contains("localhost")
             {
@@ -560,18 +405,6 @@ impl AppConfig for CodexConfig {
                 );
             }
         }
-        if uses_gateway_login
-            && !str_val(values, "base_url").trim().is_empty()
-            && !str_val(values, "base_url")
-                .trim()
-                .trim_end_matches('/')
-                .ends_with(CODEX_BACKEND_PATH)
-        {
-            issues.push(
-                ConfigIssue::info(format!("保存时将规范化为 {{origin}}{CODEX_BACKEND_PATH}。"))
-                    .for_field("base_url"),
-            );
-        }
 
         if uses_relay
             && str_val(values, "api_key").trim().is_empty()
@@ -581,41 +414,16 @@ impl AppConfig for CodexConfig {
                 ConfigIssue::warning("第三方 API 模式尚未填写 API Key。").for_field("api_key"),
             );
         }
-        if !uses_relay && !virtual_login && !str_val(values, "api_key").trim().is_empty() {
+        if !uses_relay && !str_val(values, "api_key").trim().is_empty() {
             issues.push(
                 ConfigIssue::info("仅账号登录模式不会使用该第三方 API Key，保存时将移除。")
                     .for_field("api_key"),
             );
         }
-        if virtual_login
-            && str_val(values, "api_key").trim().is_empty()
-            && !bool_val(values, HAS_OPENAI_LOGIN)
-        {
-            issues.push(
-                ConfigIssue::warning(
-                    "虚拟登录需要一个网关密钥（rd- …）作为 access_token；请填写上方 API Key。",
-                )
-                .for_field("api_key"),
-            );
-        }
-        if uses_login && !virtual_login && !bool_val(values, HAS_OPENAI_LOGIN) {
+        if uses_login && !bool_val(values, HAS_OPENAI_LOGIN) {
             issues.push(ConfigIssue::warning(
                 "此供应商尚未保存 ChatGPT 登录态；应用时会沿用当前 auth.json，请先在 Codex 完成登录。",
             ));
-        }
-
-        if !str_val(values, "token_budget_reminder_threshold_tokens")
-            .trim()
-            .is_empty()
-            && str_val(values, "token_budget_reminder_threshold_tokens")
-                .trim()
-                .parse::<i64>()
-                .is_err()
-        {
-            issues.push(
-                ConfigIssue::warning("Token Budget 提醒阈值必须是正整数。")
-                    .for_field("token_budget_reminder_threshold_tokens"),
-            );
         }
 
         issues
@@ -676,31 +484,8 @@ impl AppConfig for CodexConfig {
                 "gpt-5.5",
                 "high",
             ),
-            codex_gateway_preset(),
         ]
     }
-}
-
-/// Preset for the OcHub gateway's ChatGPT-login backend (mode 4 shape:
-/// virtual login + context management; the gateway serves the model catalog
-/// when enabled).
-fn codex_gateway_preset() -> super::Preset {
-    let mut v = FormValues::new();
-    set_str(&mut v, "provider_id", "ochub-gateway");
-    set_str(&mut v, "name", OPENAI_PROVIDER_NAME);
-    set_str(
-        &mut v,
-        "base_url",
-        format!("http://127.0.0.1:4180{CODEX_BACKEND_PATH}"),
-    );
-    set_str(&mut v, "auth_mode", AUTH_OPENAI_LOGIN_GATEWAY);
-    set_bool(&mut v, "virtual_login", true);
-    set_bool(&mut v, "context_management", true);
-    set_bool(&mut v, "remote_compaction", true);
-    set_str(&mut v, "model", "gpt-5.5");
-    set_str(&mut v, "reasoning_effort", "high");
-    set_str(&mut v, "wire_api", "responses");
-    super::Preset::new("OcHub 网关（ChatGPT 登录）", v)
 }
 
 /// Build a Codex preset's pre-filled form values.
@@ -744,39 +529,20 @@ fn normalize_base_url(raw: &str) -> String {
     }
 }
 
-/// Gateway-login URLs normalize to the Codex backend path instead of `/v1`:
-/// an origin or a `/v1` relay URL both map to `{origin}/backend-api/codex`.
-fn normalize_codex_backend_base_url(raw: &str) -> String {
-    let trimmed = raw.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    if trimmed.ends_with(CODEX_BACKEND_PATH) {
-        return trimmed.to_string();
-    }
-    let origin = trimmed
-        .strip_suffix("/v1")
-        .unwrap_or(trimmed)
-        .trim_end_matches('/');
-    format!("{origin}{CODEX_BACKEND_PATH}")
-}
-
 fn auth_mode_uses_relay(auth_mode: &str) -> bool {
     matches!(auth_mode, AUTH_API_KEY | AUTH_OPENAI_LOGIN_WITH_API_KEY)
 }
 
 /// A station-sourced channel authenticates to the gateway with the key the
-/// gateway issued, so only modes whose requests carry that key work: the
-/// relay modes send it as `experimental_bearer_token`, and the gateway-login
-/// mode sends it as the virtual login's `access_token`.
+/// gateway issued, so only the modes that actually send that bearer work.
 pub(super) fn station_auth_mode_supported(auth_mode: &str) -> bool {
-    auth_mode_uses_relay(auth_mode) || auth_mode == AUTH_OPENAI_LOGIN_GATEWAY
+    auth_mode_uses_relay(auth_mode)
 }
 
 fn auth_mode_uses_login(auth_mode: &str) -> bool {
     matches!(
         auth_mode,
-        AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_WITH_API_KEY | AUTH_OPENAI_LOGIN_GATEWAY
+        AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_WITH_API_KEY
     )
 }
 
@@ -789,35 +555,13 @@ fn is_valid_env_key_name(value: &str) -> bool {
 /// `auth.json` remains the account-login document. Legacy providers may have
 /// kept a relay key in `auth.OPENAI_API_KEY`; saving migrates that key into the
 /// active provider's `experimental_bearer_token` without discarding OAuth data.
-///
-/// For the gateway-login mode with virtual login enabled and no real OAuth
-/// material on file, a virtual login is generated whose `access_token` is the
-/// gateway key from the form. An existing *virtual* login is regenerated so a
-/// rotated gateway key propagates; real OAuth material is always preserved.
-fn build_auth(values: &FormValues, prior: &Value) -> Value {
+fn build_auth(_values: &FormValues, prior: &Value) -> Value {
     let mut auth = prior
         .get("auth")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
     auth.remove("OPENAI_API_KEY");
-
-    if str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN_GATEWAY
-        && bool_val(values, "virtual_login")
-    {
-        let existing = Value::Object(auth.clone());
-        let replaceable = !crate::apps::codex::codex_auth_has_oauth_login_material(&existing)
-            || crate::apps::codex::codex_auth_is_virtual_login(&existing);
-        let access_token = str_val(values, "api_key").trim();
-        if replaceable
-            && !access_token.is_empty()
-            && let Value::Object(generated) =
-                crate::apps::codex::virtual_codex_auth_json(access_token)
-        {
-            auth = generated;
-        }
-    }
-
     Value::Object(auth)
 }
 
@@ -888,13 +632,7 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
         let ptbl = mps.entry(&provider_id).or_insert(Item::Table(Table::new()));
         if let Some(ptbl) = ptbl.as_table_mut() {
             let name = str_val(values, "name").trim();
-            let auth_mode = str_val(values, "auth_mode");
-            // The gateway login shape must also satisfy Codex's client-side
-            // context-management gate, which requires provider name "OpenAI".
-            let remote_compaction = bool_val(values, "remote_compaction")
-                || auth_mode == AUTH_OPENAI_LOGIN_GATEWAY
-                || (auth_mode == AUTH_OPENAI_LOGIN
-                    && str_val(values, "base_url").trim().is_empty());
+            let remote_compaction = bool_val(values, "remote_compaction");
             let normal_name = if name.is_empty() || name == OPENAI_PROVIDER_NAME {
                 provider_id.as_str()
             } else {
@@ -908,11 +646,7 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                     normal_name
                 }),
             );
-            let base_url = if auth_mode == AUTH_OPENAI_LOGIN_GATEWAY {
-                normalize_codex_backend_base_url(str_val(values, "base_url"))
-            } else {
-                normalize_base_url(str_val(values, "base_url"))
-            };
+            let base_url = normalize_base_url(str_val(values, "base_url"));
             if base_url.is_empty() {
                 ptbl.remove("base_url");
             } else {
@@ -925,8 +659,8 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
                 ptbl.remove("supports_websockets");
             }
 
-            match auth_mode {
-                AUTH_OPENAI_LOGIN | AUTH_OPENAI_LOGIN_GATEWAY => {
+            match str_val(values, "auth_mode") {
+                AUTH_OPENAI_LOGIN => {
                     ptbl.remove("env_key");
                     ptbl.remove("experimental_bearer_token");
                     ptbl.remove("auth");
@@ -948,107 +682,7 @@ fn build_config_text(values: &FormValues, prior: &str) -> String {
         }
     }
 
-    // [features] context-management gate, plus an optional explicit token
-    // budget for catalog-less mode (no model_messages.token_budget source).
-    let context_management = match str_val(values, "context_mode") {
-        "auto" => {
-            str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN
-                && str_val(values, "base_url").trim().is_empty()
-        }
-        "on" => true,
-        "off" => false,
-        _ => bool_val(values, "context_management"),
-    };
-    // Explicit gateway mode uses Codex's supported configuration path rather
-    // than modifying the real account's signed ID token or plan claims.
-    let gateway_context = str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN_GATEWAY
-        && str_val(values, "context_mode") == "on";
-    let gateway_context_disabled = str_val(values, "auth_mode") == AUTH_OPENAI_LOGIN_GATEWAY
-        && matches!(str_val(values, "context_mode"), "auto" | "off");
-    let token_budget_enabled =
-        !gateway_context_disabled && (gateway_context || bool_val(values, "token_budget_enabled"));
-    let token_budget_threshold = str_val(values, "token_budget_reminder_threshold_tokens")
-        .trim()
-        .to_string();
-    let token_budget_history_notes =
-        gateway_context || bool_val(values, "token_budget_use_history_notes_extension");
-    let mut remove_empty_features = false;
-    if context_management || token_budget_enabled {
-        let features = root.entry("features").or_insert(Item::Table({
-            let mut table = Table::new();
-            table.set_implicit(true);
-            table
-        }));
-        if let Some(features) = features.as_table_mut() {
-            if context_management {
-                set_context_management(features, true);
-            } else {
-                set_context_management(features, false);
-            }
-            if token_budget_enabled {
-                let mut budget = features
-                    .get("token_budget")
-                    .and_then(Item::as_table)
-                    .cloned()
-                    .unwrap_or_default();
-                budget.insert("enabled", toml_edit::value(true));
-                if token_budget_history_notes {
-                    budget.insert("use_history_notes_extension", toml_edit::value(true));
-                } else {
-                    budget.remove("use_history_notes_extension");
-                }
-                if let Ok(threshold) = token_budget_threshold.parse::<i64>()
-                    && threshold > 0
-                {
-                    budget.insert("reminder_threshold_tokens", toml_edit::value(threshold));
-                } else {
-                    budget.remove("reminder_threshold_tokens");
-                }
-                features.insert("token_budget", Item::Table(budget));
-            } else {
-                if let Some(budget) = features
-                    .get_mut("token_budget")
-                    .and_then(Item::as_table_mut)
-                {
-                    budget.insert("enabled", toml_edit::value(false));
-                    budget.remove("use_history_notes_extension");
-                    budget.remove("reminder_threshold_tokens");
-                }
-            }
-        }
-    } else if let Some(features) = root.get_mut("features").and_then(Item::as_table_mut) {
-        set_context_management(features, false);
-        if let Some(budget) = features
-            .get_mut("token_budget")
-            .and_then(Item::as_table_mut)
-        {
-            budget.insert("enabled", toml_edit::value(false));
-            budget.remove("use_history_notes_extension");
-            budget.remove("reminder_threshold_tokens");
-        }
-        remove_empty_features = features.is_empty();
-    }
-    if remove_empty_features {
-        root.remove("features");
-    }
-
     doc.to_string()
-}
-
-// Accept the legacy boolean form while preserving extensions in modern tables.
-fn set_context_management(features: &mut Table, enabled: bool) {
-    if let Some(table) = features
-        .get_mut("context_management")
-        .and_then(Item::as_table_mut)
-    {
-        table.insert("experimental_mode", toml_edit::value(enabled));
-    } else if enabled {
-        let mut table = Table::new();
-        table.insert("experimental_mode", toml_edit::value(true));
-        features.insert("context_management", Item::Table(table));
-    } else {
-        features.remove("context_management");
-    }
 }
 
 fn write_relay_credentials(table: &mut Table, values: &FormValues) {
@@ -1429,60 +1063,6 @@ env_key = "LEGACY_API_KEY"
     }
 
     #[test]
-    fn explicit_gateway_context_uses_token_budget_without_changing_auth() {
-        let mut values = deepseek_values();
-        set_str(&mut values, "auth_mode", AUTH_OPENAI_LOGIN_GATEWAY);
-        for mode in ["auto", "off"] {
-            set_str(&mut values, "context_mode", mode);
-            set_bool(&mut values, "context_management", true); // old persisted flag
-            let encoded = CodexConfig.encode(&values, &Value::Null, None);
-            assert!(
-                !encoded.settings_config["config"]
-                    .as_str()
-                    .unwrap()
-                    .contains("experimental_mode = true")
-            );
-            let decoded = CodexConfig.decode(&encoded.settings_config, None);
-            assert_eq!(str_val(&decoded, "context_mode"), mode);
-        }
-        set_str(&mut values, "context_mode", "on");
-        assert!(
-            CodexConfig
-                .validate(&values)
-                .iter()
-                .any(|issue| issue.field.as_deref() == Some("context_mode")
-                    && issue.severity == super::super::Severity::Warning)
-        );
-        let encoded = CodexConfig.encode(&values, &Value::Null, None);
-        let text = encoded.settings_config["config"].as_str().unwrap();
-        assert!(text.contains("use_history_notes_extension = true"));
-        assert!(text.contains("[features.token_budget]"));
-        let mut reopened = CodexConfig.decode(&encoded.settings_config, None);
-        for mode in ["off", "auto"] {
-            set_str(&mut reopened, "context_mode", mode);
-            let encoded = CodexConfig.encode(&reopened, &encoded.settings_config, None);
-            let config: toml_edit::DocumentMut = encoded.settings_config["config"]
-                .as_str()
-                .unwrap()
-                .parse()
-                .unwrap();
-            assert_eq!(
-                config["features"]["token_budget"]["enabled"].as_bool(),
-                Some(false)
-            );
-        }
-        set_str(&mut values, "auth_mode", AUTH_OPENAI_LOGIN);
-        set_str(&mut values, "base_url", "");
-        set_str(&mut values, "api_key", "");
-        set_str(&mut values, "context_mode", "auto");
-        let encoded = CodexConfig.encode(&values, &Value::Null, None);
-        let text = encoded.settings_config["config"].as_str().unwrap();
-        assert!(text.contains("name = \"OpenAI\""));
-        assert!(text.contains("experimental_mode = true"));
-        assert!(!text.contains("experimental_bearer_token"));
-    }
-
-    #[test]
     fn validate_rejects_chat_wire_api() {
         let mut v = deepseek_values();
         set_str(&mut v, "wire_api", "chat");
@@ -1553,240 +1133,5 @@ env_key = "LEGACY_API_KEY"
                 "field {key}"
             );
         }
-    }
-
-    #[test]
-    fn feature_edits_preserve_unmanaged_fields_and_clear_managed_values() {
-        let prior = json!({ "config": r#"
-model_provider = "custom"
-[features.context_management]
-experimental_mode = true
-future_option = "keep"
-[features.token_budget]
-enabled = true
-reminder_threshold_tokens = 8000
-use_history_notes_extension = true
-guidance_message = "custom guidance"
-[model_providers.custom]
-base_url = "http://127.0.0.1/backend-api/codex"
-requires_openai_auth = true
-"# });
-        let mut values = CodexConfig.decode(&prior, None);
-        assert!(bool_val(&values, "context_management"));
-        set_str(&mut values, "token_budget_reminder_threshold_tokens", "");
-        set_bool(
-            &mut values,
-            "token_budget_use_history_notes_extension",
-            false,
-        );
-        let encoded = CodexConfig.encode(&values, &prior, None);
-        let text = encoded.settings_config["config"].as_str().unwrap();
-        let doc = text.parse::<DocumentMut>().unwrap();
-        assert_eq!(
-            doc["features"]["context_management"]["future_option"].as_str(),
-            Some("keep")
-        );
-        let budget = doc["features"]["token_budget"].as_table().unwrap();
-        assert_eq!(budget["guidance_message"].as_str(), Some("custom guidance"));
-        assert!(!budget.contains_key("reminder_threshold_tokens"));
-        assert!(!budget.contains_key("use_history_notes_extension"));
-        set_bool(&mut values, "token_budget_enabled", false);
-        set_bool(&mut values, "context_management", false);
-        let encoded = CodexConfig.encode(&values, &encoded.settings_config, None);
-        let doc = encoded.settings_config["config"]
-            .as_str()
-            .unwrap()
-            .parse::<DocumentMut>()
-            .unwrap();
-        assert_eq!(
-            doc["features"]["token_budget"]["enabled"].as_bool(),
-            Some(false)
-        );
-        assert_eq!(
-            doc["features"]["token_budget"]["guidance_message"].as_str(),
-            Some("custom guidance")
-        );
-        assert_eq!(
-            doc["features"]["context_management"]["experimental_mode"].as_bool(),
-            Some(false)
-        );
-    }
-
-    fn gateway_login_values() -> FormValues {
-        let mut v = FormValues::new();
-        set_str(&mut v, "provider_id", "ochub-gateway");
-        set_str(&mut v, "name", "ignored");
-        set_str(&mut v, "base_url", "http://127.0.0.1:4180");
-        set_str(&mut v, "auth_mode", AUTH_OPENAI_LOGIN_GATEWAY);
-        set_str(&mut v, "api_key", "rd-gateway-key");
-        set_bool(&mut v, "virtual_login", true);
-        set_bool(&mut v, "context_management", true);
-        set_bool(&mut v, "token_budget_enabled", true);
-        set_bool(&mut v, "token_budget_use_history_notes_extension", true);
-        set_str(&mut v, "token_budget_reminder_threshold_tokens", "8000");
-        set_str(&mut v, "model", "gpt-5.5");
-        v
-    }
-
-    #[test]
-    fn gateway_login_mode_encodes_login_shape_without_relay_credentials() {
-        let result = CodexConfig.encode(&gateway_login_values(), &Value::Null, None);
-        let cfg = result.settings_config["config"].as_str().unwrap();
-        assert!(cfg.contains("requires_openai_auth = true"), "{cfg}");
-        assert!(cfg.contains("name = \"OpenAI\""), "{cfg}");
-        assert!(
-            cfg.contains("base_url = \"http://127.0.0.1:4180/backend-api/codex\""),
-            "{cfg}"
-        );
-        assert!(!cfg.contains("experimental_bearer_token"), "{cfg}");
-        assert!(!cfg.contains("env_key"), "{cfg}");
-        assert!(cfg.contains("[features.context_management]"), "{cfg}");
-        assert!(cfg.contains("experimental_mode = true"), "{cfg}");
-        assert!(cfg.contains("[features.token_budget]"), "{cfg}");
-        assert!(cfg.contains("reminder_threshold_tokens = 8000"), "{cfg}");
-        assert!(cfg.contains("use_history_notes_extension = true"), "{cfg}");
-
-        let auth = &result.settings_config["auth"];
-        assert_eq!(auth["auth_mode"], "chatgpt");
-        assert_eq!(auth["tokens"]["access_token"], "rd-gateway-key");
-        assert_eq!(auth["tokens"]["refresh_token"], "unused");
-        assert!(auth["tokens"]["id_token"].as_str().unwrap().contains('.'));
-        assert_eq!(auth["last_refresh"], "2099-01-01T00:00:00Z");
-    }
-
-    #[test]
-    fn gateway_login_clears_other_provider_auth_without_losing_custom_settings() {
-        let prior = json!({"config": "model_provider = \"ochub-gateway\"\n[model_providers.ochub-gateway]\nauth = { command = \"old-auth\" }\naws = { region = \"us-east-1\" }\nenv_key = \"OLD_KEY\"\nexperimental_bearer_token = \"old-token\"\nrequest_max_retries = 7\n"});
-        let result = CodexConfig.encode(&gateway_login_values(), &prior, None);
-        let doc = result.settings_config["config"]
-            .as_str()
-            .unwrap()
-            .parse::<DocumentMut>()
-            .unwrap();
-        let provider = doc["model_providers"]["ochub-gateway"].as_table().unwrap();
-        for key in ["auth", "aws", "env_key", "experimental_bearer_token"] {
-            assert!(provider.get(key).is_none(), "{key}");
-        }
-        assert_eq!(provider["request_max_retries"].as_integer(), Some(7));
-    }
-
-    #[test]
-    fn gateway_login_mode_round_trips() {
-        let encoded = CodexConfig.encode(&gateway_login_values(), &Value::Null, None);
-        let decoded = CodexConfig.decode(&encoded.settings_config, None);
-        assert_eq!(str_val(&decoded, "auth_mode"), AUTH_OPENAI_LOGIN_GATEWAY);
-        assert_eq!(str_val(&decoded, "api_key"), "rd-gateway-key");
-        assert_eq!(
-            str_val(&decoded, "base_url"),
-            "http://127.0.0.1:4180/backend-api/codex"
-        );
-        assert!(bool_val(&decoded, "virtual_login"));
-        assert!(bool_val(&decoded, "context_management"));
-        assert!(bool_val(&decoded, "token_budget_enabled"));
-        assert!(bool_val(
-            &decoded,
-            "token_budget_use_history_notes_extension"
-        ));
-        assert_eq!(
-            str_val(&decoded, "token_budget_reminder_threshold_tokens"),
-            "8000"
-        );
-        assert!(bool_val(&decoded, HAS_OPENAI_LOGIN));
-
-        // Re-encode preserves the shape and refreshes the virtual login.
-        let reencoded = CodexConfig.encode(&decoded, &encoded.settings_config, None);
-        let cfg = reencoded.settings_config["config"].as_str().unwrap();
-        assert!(cfg.contains("requires_openai_auth = true"), "{cfg}");
-        assert!(!cfg.contains("experimental_bearer_token"), "{cfg}");
-        assert_eq!(
-            reencoded.settings_config["auth"]["tokens"]["access_token"],
-            "rd-gateway-key"
-        );
-    }
-
-    #[test]
-    fn gateway_login_mode_preserves_real_oauth_material() {
-        let prior = json!({
-            "auth": {
-                "auth_mode": "chatgpt",
-                "tokens": {
-                    "access_token": "oauth-access",
-                    "refresh_token": "oauth-refresh",
-                    "account_id": "real-account"
-                }
-            },
-            "config": ""
-        });
-        let result = CodexConfig.encode(&gateway_login_values(), &prior, None);
-        assert_eq!(
-            result.settings_config["auth"]["tokens"]["refresh_token"],
-            "oauth-refresh"
-        );
-        assert!(result.settings_config["auth"]["last_refresh"].is_null());
-    }
-
-    #[test]
-    fn gateway_login_shape_decodes_from_handwritten_config() {
-        let settings = json!({
-            "auth": {},
-            "config": r#"model_provider = "gw"
-
-[model_providers.gw]
-name = "OpenAI"
-base_url = "http://127.0.0.1:4180/backend-api/codex/"
-wire_api = "responses"
-requires_openai_auth = true
-"#
-        });
-        let values = CodexConfig.decode(&settings, None);
-        assert_eq!(str_val(&values, "auth_mode"), AUTH_OPENAI_LOGIN_GATEWAY);
-        // A trailing slash must not hide the backend shape.
-        assert!(!bool_val(&values, "virtual_login"));
-    }
-
-    #[test]
-    fn gateway_login_mode_requires_base_url_and_virtual_login_key() {
-        let mut values = gateway_login_values();
-        set_str(&mut values, "base_url", "");
-        set_str(&mut values, "api_key", "");
-        let issues = CodexConfig.validate(&values);
-        assert!(
-            issues.iter().any(|issue| {
-                issue.severity == super::super::Severity::Error
-                    && issue.field.as_deref() == Some("base_url")
-            }),
-            "{issues:?}"
-        );
-        assert!(
-            issues.iter().any(|issue| {
-                issue.severity == super::super::Severity::Warning
-                    && issue.field.as_deref() == Some("api_key")
-            }),
-            "{issues:?}"
-        );
-    }
-
-    #[test]
-    fn gateway_login_mode_is_station_supported_and_not_hidden() {
-        assert!(station_auth_mode_supported(AUTH_OPENAI_LOGIN_GATEWAY));
-        assert!(!STATION_HIDDEN_AUTH_MODES.contains(&AUTH_OPENAI_LOGIN_GATEWAY));
-        assert!(STATION_HIDDEN_AUTH_MODES.contains(&AUTH_OPENAI_LOGIN));
-    }
-
-    #[test]
-    fn normalize_codex_backend_base_url_variants() {
-        assert_eq!(
-            normalize_codex_backend_base_url("http://127.0.0.1:4180"),
-            "http://127.0.0.1:4180/backend-api/codex"
-        );
-        assert_eq!(
-            normalize_codex_backend_base_url("http://127.0.0.1:4180/v1"),
-            "http://127.0.0.1:4180/backend-api/codex"
-        );
-        assert_eq!(
-            normalize_codex_backend_base_url("http://127.0.0.1:4180/backend-api/codex/"),
-            "http://127.0.0.1:4180/backend-api/codex"
-        );
-        assert_eq!(normalize_codex_backend_base_url("  "), "");
     }
 }

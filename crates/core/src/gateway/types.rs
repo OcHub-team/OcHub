@@ -6,8 +6,6 @@
 //! *channel* (upstream provider), converting dialects via `ochub-convert`
 //! when the inlet and the channel speak different formats.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 /// Wire dialect an endpoint or channel speaks.
@@ -64,36 +62,6 @@ pub struct GatewayConfig {
     pub require_key: bool,
     /// Interval for channel health probes, seconds. 0 disables probing.
     pub health_interval_secs: u64,
-    /// Expose the Codex login-shape backend routes (`/backend-api/codex/*`).
-    #[serde(default)]
-    pub codex_backend_enabled: bool,
-    /// Let `/backend-api/codex/*` accept any non-empty bearer token that is not
-    /// a registered gateway key. Needed for real ChatGPT logins, whose OAuth
-    /// access token rotates and therefore cannot be enrolled as a static key.
-    /// Never affects the `/v1/*` endpoints.
-    #[serde(default)]
-    pub codex_backend_accept_any_bearer: bool,
-    /// Explicit enabled, route-bound gateway key identity for unverified OAuth
-    /// bearers. Required when accept_any_bearer is enabled; never anonymous.
-    #[serde(default)]
-    pub codex_backend_oauth_key_id: Option<String>,
-    /// Serve the Codex-native model catalog at `/backend-api/codex/models`.
-    /// When off the route returns 404, so Codex falls back to its
-    /// bundled catalog.
-    #[serde(default)]
-    pub codex_models_enabled: bool,
-    /// Per-model catalog overrides keyed by client-visible model name.
-    #[serde(default)]
-    pub codex_model_overrides: HashMap<String, CodexModelOverride>,
-    /// Optional pooled ChatGPT OAuth access token used to fetch the official
-    /// Codex model catalog as entry templates. Empty/absent keeps the catalog
-    /// purely locally synthesized.
-    #[serde(default)]
-    pub codex_catalog_upstream_token: Option<String>,
-    /// Account id paired with `codex_catalog_upstream_token`
-    /// (`chatgpt-account-id` header).
-    #[serde(default)]
-    pub codex_catalog_upstream_account_id: Option<String>,
 }
 
 impl Default for GatewayConfig {
@@ -103,68 +71,8 @@ impl Default for GatewayConfig {
             port: 4180,
             require_key: true,
             health_interval_secs: 300,
-            codex_backend_enabled: false,
-            codex_backend_accept_any_bearer: false,
-            codex_backend_oauth_key_id: None,
-            codex_models_enabled: false,
-            codex_model_overrides: HashMap::new(),
-            codex_catalog_upstream_token: None,
-            codex_catalog_upstream_account_id: None,
         }
     }
-}
-
-/// One reasoning effort level in a Codex-native catalog entry.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CodexReasoningLevel {
-    pub effort: String,
-    #[serde(default)]
-    pub description: String,
-}
-
-/// Model-owned defaults for Codex's context-window token-budget feature.
-/// Mirrors Codex's `ModelTokenBudgetConfig`; emitted verbatim under
-/// `model_messages.token_budget` in the catalog entry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CodexTokenBudgetConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub use_history_notes_extension: bool,
-    #[serde(default)]
-    pub reminder_threshold_tokens: i64,
-    #[serde(default)]
-    pub reminder_message_template: String,
-    #[serde(default)]
-    pub guidance_message: String,
-    #[serde(default)]
-    pub auto_compact_fallback_prompt: String,
-    #[serde(default)]
-    pub auto_compact_fallback_buffer_tokens: i64,
-}
-
-/// Operator overrides applied on top of one synthesized Codex catalog entry.
-/// Unset fields keep the synthesized (or upstream-template) value.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CodexModelOverride {
-    #[serde(default)]
-    pub use_responses_lite: Option<bool>,
-    #[serde(default)]
-    pub remote_compaction: Option<bool>,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub default_reasoning_level: Option<String>,
-    #[serde(default)]
-    pub supported_reasoning_levels: Option<Vec<CodexReasoningLevel>>,
-    #[serde(default)]
-    pub context_window: Option<u64>,
-    #[serde(default)]
-    pub visibility: Option<String>,
-    #[serde(default)]
-    pub token_budget: Option<CodexTokenBudgetConfig>,
 }
 
 /// A locally issued API key. Requests carrying it are attributed to `name` in
@@ -448,9 +356,6 @@ impl std::str::FromStr for StationQuotaApi {
 /// clients may leave it empty and bind through a manually issued key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayRoute {
-    /// Explicit upstream model capabilities, scoped to this supplier.
-    #[serde(default)]
-    pub model_capabilities: HashMap<String, CodexModelOverride>,
     pub id: String,
     pub name: String,
     /// Optional public website for the commercial relay. This is display-only
@@ -497,13 +402,6 @@ impl GatewayRoute {
             .is_some_and(|app_type| app_type.trim().is_empty())
         {
             return Err("路由方案的应用类型不能为空字符串".to_string());
-        }
-        for (model, capabilities) in &self.model_capabilities {
-            if model.trim().is_empty() || capabilities.context_window == Some(0) {
-                return Err(
-                    "Model capabilities require a model name and a positive context window".into(),
-                );
-            }
         }
         if self.reasoning.low_budget == 0
             || self.reasoning.medium_budget == 0
@@ -654,22 +552,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_gateway_config_blob_defaults_codex_fields() {
-        let config: GatewayConfig = serde_json::from_value(serde_json::json!({
-            "enabled": true,
-            "port": 4180,
-            "require_key": true,
-            "health_interval_secs": 60
-        }))
-        .unwrap();
-        assert!(!config.codex_backend_enabled);
-        assert!(!config.codex_backend_accept_any_bearer);
-        assert!(!config.codex_models_enabled);
-        assert!(config.codex_model_overrides.is_empty());
-        assert_eq!(config.codex_catalog_upstream_token, None);
-    }
-
-    #[test]
     fn wildcard_matching() {
         assert!(pattern_matches("claude-*", "claude-x-4"));
         assert!(pattern_matches("*", "anything"));
@@ -717,7 +599,6 @@ mod tests {
     #[test]
     fn route_validation_rejects_inconsistent_upstream_binding() {
         let mut route = GatewayRoute {
-            model_capabilities: Default::default(),
             id: "route".into(),
             name: "route".into(),
             website_url: None,
@@ -744,7 +625,6 @@ mod tests {
     #[test]
     fn model_rule_can_pin_a_channel_without_renaming_the_model() {
         let route = GatewayRoute {
-            model_capabilities: Default::default(),
             id: "route".into(),
             name: "route".into(),
             website_url: None,

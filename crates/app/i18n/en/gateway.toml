@@ -58,7 +58,6 @@
 "gateway.editor.keys.untested" = "Not tested"
 "gateway.editor.cancel" = "Cancel Esc"
 "gateway.editor.connection.title" = "Connection details"
-"gateway.editor.capabilities.title" = "Provider capabilities"
 "gateway.editor.default_model.placeholder" = "e.g. claude-sonnet-4-6"
 "gateway.editor.dialect.detect" = "Detect"
 "gateway.editor.dialect.detected_compact" = "{count} detected"
@@ -135,18 +134,10 @@
 "gateway.status.update_failed" = "Couldn't update the model provider: {error}"
 "gateway.status.url_copied" = "Address copied"
 
-"gateway.capabilities.edit" = "Model capabilities"
 
-"gateway.capabilities.compact" = "Remote compaction"
 
-"gateway.capabilities.auto" = "Auto"
 
-"gateway.capabilities.on" = "Supported"
 
-"gateway.capabilities.off" = "Unsupported"
 
-"gateway.capabilities.context" = "Context window"
 
-"gateway.capabilities.declared" = "User declared · Unverified"
 
-"gateway.capabilities.invalid_context" = "Context window must be a positive integer"

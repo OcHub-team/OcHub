@@ -1725,16 +1725,6 @@ pub enum GatewayConfigCommand {
         enabled: Option<bool>,
         #[arg(long)]
         health_interval: Option<u64>,
-        #[arg(long)]
-        codex_backend: Option<bool>,
-        #[arg(long)]
-        codex_models: Option<bool>,
-        /// Bind real ChatGPT login requests to an enabled, route-bound key ID.
-        #[arg(long)]
-        codex_oauth_key_id: Option<String>,
-        /// Stop accepting real ChatGPT login requests.
-        #[arg(long, conflicts_with = "codex_oauth_key_id")]
-        clear_codex_oauth: bool,
     },
 }
 

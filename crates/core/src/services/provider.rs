@@ -250,7 +250,6 @@ impl ProviderService {
                 .db
                 .set_current_provider(app_type.as_str(), &provider.id)?;
             write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
-            crate::gateway::apply::activate_codex_station(state, app_type, &provider)?;
         }
 
         Ok(true)
@@ -481,7 +480,6 @@ impl ProviderService {
                 existing_provider.as_ref(),
                 &provider,
             )?;
-            crate::gateway::apply::activate_codex_station(state, app_type, &provider)?;
             live::log_drift(&app_type, &provider, &drift);
             crate::services::mcp::McpService::sync_all_enabled(state)?;
         }
@@ -739,7 +737,6 @@ impl ProviderService {
             provider,
             resolution,
         )?;
-        crate::gateway::apply::activate_codex_station(state, app_type, provider)?;
         live::log_drift(&app_type, provider, &drift);
         if !drift.is_empty() {
             result.drift = Some(drift);

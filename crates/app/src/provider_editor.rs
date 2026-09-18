@@ -629,7 +629,7 @@ impl ProviderEditor {
                 &mut self.values,
                 "auth_mode",
                 if source == ProviderSource::Station {
-                    "openai_login_gateway"
+                    "api_key"
                 } else {
                     "openai_login_with_api_key"
                 },
@@ -2375,8 +2375,6 @@ impl ProviderEditor {
             let on_select = cx.listener(|this, index: &usize, _, cx| {
                 let mode = if *index == 0 {
                     "api_key"
-                } else if this.source == ProviderSource::Station {
-                    "openai_login_gateway"
                 } else if this
                     .text_inputs
                     .get("base_url")
@@ -2386,7 +2384,6 @@ impl ProviderEditor {
                 } else {
                     "openai_login_with_api_key"
                 };
-                provider_config::set_bool(&mut this.values, "virtual_login", false);
                 this.set_select("auth_mode".into(), mode.into(), cx);
             });
             return components::field(
@@ -2476,16 +2473,7 @@ impl ProviderEditor {
                     .collect();
                 let current = str_val(&self.values, &field.id).to_string();
                 let selected = options.iter().position(|o| o.value == current).unwrap_or(0);
-                let labels: Vec<&str> =
-                    if self.app_type == AppType::Codex && field.id == "context_mode" {
-                        vec![
-                            raw(k::PROVIDER_EDITOR_CODEX_AUTO),
-                            raw(k::PROVIDER_EDITOR_CODEX_ON),
-                            raw(k::PROVIDER_EDITOR_CODEX_OFF),
-                        ]
-                    } else {
-                        options.iter().map(|o| o.label.as_str()).collect()
-                    };
+                let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
                 let values: Vec<String> = options.iter().map(|o| o.value.clone()).collect();
                 let selector = if components::select_prefers_dropdown(&labels) {
                     let fid = field.id.clone();
@@ -2566,33 +2554,6 @@ impl ProviderEditor {
                 .into_any_element(),
         };
 
-        if self.app_type == AppType::Codex && field.id == "context_mode" {
-            let mode = str_val(&self.values, "context_mode");
-            let status = if mode == "off"
-                || (mode == "auto" && str_val(&self.values, "auth_mode") == "openai_login_gateway")
-            {
-                k::PROVIDER_EDITOR_CODEX_CONTEXT_OFF
-            } else if !matches!(
-                str_val(&self.values, "auth_mode"),
-                "openai_login" | "openai_login_gateway"
-            ) {
-                k::PROVIDER_EDITOR_CODEX_CONTEXT_UNAVAILABLE
-            } else {
-                k::PROVIDER_EDITOR_CODEX_CONTEXT_PENDING
-            };
-            return components::field(
-                t(k::PROVIDER_EDITOR_CODEX_CONTEXT),
-                false,
-                None,
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(body)
-                    .child(components::badge(BadgeTone::Neutral, t(status))),
-            )
-            .into_any_element();
-        }
         components::field(field.label.clone(), field.required, None, body).into_any_element()
     }
 
@@ -3842,7 +3803,6 @@ impl ProviderEditor {
             );
             if codex && *index == 0 {
                 provider_config::set_str(&mut this.values, "auth_mode", "openai_login");
-                provider_config::set_bool(&mut this.values, "virtual_login", false);
                 if let Some(input) = this.text_inputs.get("base_url") {
                     input.update(cx, |i, cx| i.set_content("", cx));
                 }

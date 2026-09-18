@@ -162,7 +162,6 @@ pub fn ensure_app_route(state: &AppState, app_type: AppType) -> Result<GatewayRo
         return Ok(route);
     }
     let route = GatewayRoute {
-        model_capabilities: Default::default(),
         id: format!("route-{}", app_type.as_str()),
         name: format!("{} 默认路由", app_label(app_type)),
         website_url: None,
@@ -202,7 +201,6 @@ pub fn ensure_station_route(
         return Ok(route);
     }
     let route = GatewayRoute {
-        model_capabilities: Default::default(),
         id: route_id,
         name: channel.name.clone(),
         website_url: None,
@@ -352,19 +350,6 @@ pub fn station_model_policy(
     })
 }
 
-/// How a one-click station apply shapes a Codex provider for the gateway.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CodexGatewayApply {
-    /// Legacy relay form: `/v1` endpoint + `experimental_bearer_token`.
-    #[default]
-    Relay,
-    /// ChatGPT-login form pointing at `/backend-api/codex` with a virtual
-    /// login carrying the station key. `remote_catalog` mirrors
-    /// `GatewayConfig::codex_models_enabled`: when the gateway serves the
-    /// model catalog, no local `modelCatalog` file is written.
-    Backend { remote_catalog: bool },
-}
-
 #[cfg(test)]
 fn gateway_settings_for(
     app_type: AppType,
@@ -384,11 +369,9 @@ fn gateway_settings_for(
         key,
         &policy,
         false,
-        CodexGatewayApply::Relay,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn gateway_settings_for_provider(
     app_type: AppType,
     provider_id: &str,
@@ -397,7 +380,6 @@ fn gateway_settings_for_provider(
     key: &str,
     policy: &GatewayAppModelPolicy,
     supports_websockets: bool,
-    codex_apply: CodexGatewayApply,
 ) -> Result<serde_json::Value, AppError> {
     let models = policy.client_models();
     match app_type {
@@ -440,47 +422,22 @@ fn gateway_settings_for_provider(
             document["disable_response_storage"] = toml_edit::value(true);
             document["model_providers"] = toml_edit::table();
             document["model_providers"][provider_id] = toml_edit::table();
+            document["model_providers"][provider_id]["name"] = toml_edit::value(provider_name);
+            document["model_providers"][provider_id]["base_url"] =
+                toml_edit::value(format!("{base_url}/v1"));
             document["model_providers"][provider_id]["wire_api"] = toml_edit::value("responses");
             if supports_websockets {
                 document["model_providers"][provider_id]["supports_websockets"] =
                     toml_edit::value(true);
             }
-            let auth = match codex_apply {
-                CodexGatewayApply::Relay => {
-                    document["model_providers"][provider_id]["name"] =
-                        toml_edit::value(provider_name);
-                    document["model_providers"][provider_id]["base_url"] =
-                        toml_edit::value(format!("{base_url}/v1"));
-                    document["model_providers"][provider_id]["experimental_bearer_token"] =
-                        toml_edit::value(key);
-                    json!({})
-                }
-                CodexGatewayApply::Backend { .. } => {
-                    // ChatGPT-login shape: Codex's client-side context
-                    // management gate requires provider name "OpenAI", a
-                    // /backend-api/codex base URL, requires_openai_auth and no
-                    // relay credentials. The bearer is the virtual login's
-                    // access token from auth.json.
-                    document["model_providers"][provider_id]["name"] = toml_edit::value("OpenAI");
-                    document["model_providers"][provider_id]["base_url"] =
-                        toml_edit::value(format!("{base_url}/connection/{key}/backend-api/codex"));
-                    document["model_providers"][provider_id]["requires_openai_auth"] =
-                        toml_edit::value(true);
-                    crate::apps::codex::virtual_codex_auth_json(key)
-                }
-            };
+            document["model_providers"][provider_id]["experimental_bearer_token"] =
+                toml_edit::value(key);
             let toml = document.to_string();
             let mut config = json!({
-                "auth": auth,
+                "auth": {},
                 "config": toml,
             });
-            let write_local_catalog = !matches!(
-                codex_apply,
-                CodexGatewayApply::Backend {
-                    remote_catalog: true
-                }
-            );
-            if write_local_catalog && !models.is_empty() {
+            if !models.is_empty() {
                 config["modelCatalog"] = json!({
                     "models": models.iter().map(|model| json!({
                         "model": model,
@@ -779,7 +736,6 @@ pub fn station_channel_option_from_station(
     app_type: AppType,
 ) -> Option<StationChannelOption> {
     let route = GatewayRoute {
-        model_capabilities: Default::default(),
         id: station_route_id(station_id),
         name: name.to_string(),
         website_url: None,
@@ -852,7 +808,7 @@ pub fn build_station_channel(
         Some(&route.id),
     )?;
     let channels = state.db.get_gateway_channels()?;
-    let mut provider = build_station_channel_with_endpoint(
+    let provider = build_station_channel_with_endpoint(
         app_type,
         &route.id,
         values,
@@ -864,9 +820,6 @@ pub fn build_station_channel(
         prior,
         prior_meta,
     )?;
-    if app_type == AppType::Codex {
-        apply_station_model_capabilities(&mut provider.settings_config, &route);
-    }
     Ok(provider)
 }
 
@@ -901,14 +854,7 @@ pub fn build_station_channel_with_endpoint(
     }
     let encoded = codec.encode(&merged, prior, prior_meta);
     let mut settings = encoded.settings_config;
-    if app_type == AppType::Codex
-        && provider_config::str_val(&merged, "auth_mode") == "openai_login_gateway"
-    {
-        settings
-            .as_object_mut()
-            .expect("settings object")
-            .remove("modelCatalog");
-    } else if app_type == AppType::Codex {
+    if app_type == AppType::Codex {
         apply_codex_model_catalog(
             &mut settings,
             catalog_models,
@@ -930,56 +876,6 @@ pub fn build_station_channel_with_endpoint(
         icon: None,
         icon_color: None,
     })
-}
-
-/// Activate the selected station's login backend. Saving an inactive connection
-/// must never redirect the active account's requests to another station.
-pub fn activate_codex_station(
-    state: &AppState,
-    app: AppType,
-    provider: &Provider,
-) -> Result<(), AppError> {
-    if app != AppType::Codex {
-        return Ok(());
-    }
-    let Some(route_id) = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.gateway_route_id.as_deref())
-    else {
-        return Ok(());
-    };
-    let codec = provider_config::config_for(app).expect("Codex codec");
-    let values = codec.decode(&provider.settings_config, provider.meta.as_ref());
-    if provider_config::str_val(&values, "auth_mode") != "openai_login_gateway" {
-        return Ok(());
-    }
-    let route = station_route_for_apply(state, app, route_id)?;
-    let key = ensure_key_for_route(state, &gateway_key_label(app, &route.id), Some(&route.id))?;
-    let auth_path = crate::apps::codex::get_codex_auth_path();
-    let auth = if auth_path.exists() {
-        crate::paths::read_json_file(&auth_path)?
-    } else {
-        json!({})
-    };
-    bind_codex_station_login(state, &key, &auth)
-}
-
-fn bind_codex_station_login(
-    state: &AppState,
-    key: &GatewayKey,
-    auth: &serde_json::Value,
-) -> Result<(), AppError> {
-    let real_login = crate::apps::codex::codex_auth_has_oauth_login_material(auth)
-        && !crate::apps::codex::codex_auth_is_virtual_login(auth);
-    let mut config = state.db.get_gateway_config()?;
-    config.codex_backend_enabled = true;
-    config.codex_models_enabled = true;
-    config.codex_backend_accept_any_bearer = real_login;
-    config.codex_backend_oauth_key_id = real_login.then(|| key.id.clone());
-    state.db.set_gateway_config(&config)?;
-    futures::executor::block_on(state.gateway.reload_config())?;
-    Ok(())
 }
 
 /// Re-embed the current gateway origin + shared key into a station channel's
@@ -1015,14 +911,7 @@ pub fn refresh_station_channel_settings(
     );
     let encoded = codec.encode(&values, &provider.settings_config, provider.meta.as_ref());
     let mut settings = encoded.settings_config;
-    if app_type == AppType::Codex
-        && provider_config::str_val(&values, "auth_mode") == "openai_login_gateway"
-    {
-        settings
-            .as_object_mut()
-            .expect("settings object")
-            .remove("modelCatalog");
-    } else if app_type == AppType::Codex {
+    if app_type == AppType::Codex {
         inject_codex_model_catalog(
             state,
             &route,
@@ -1087,36 +976,7 @@ fn inject_codex_model_catalog(
 ) -> Result<(), AppError> {
     let channels = state.db.get_gateway_channels()?;
     apply_codex_model_catalog(settings, &station_models(route, &channels), picked_model);
-    apply_station_model_capabilities(settings, route);
     Ok(())
-}
-
-fn apply_station_model_capabilities(settings: &mut serde_json::Value, route: &GatewayRoute) {
-    if let Some(models) = settings
-        .pointer_mut("/modelCatalog/models")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        for model in models {
-            let name = model
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let upstream = route
-                .rule_for_model(name)
-                .map(|r| r.upstream_model.as_str())
-                .filter(|s| !s.is_empty())
-                .unwrap_or(name);
-            if let Some(caps) = route.model_capabilities.get(upstream) {
-                let caps = caps.clone();
-                if let Some(lite) = caps.use_responses_lite {
-                    model["useResponsesLite"] = json!(lite);
-                }
-                if let Some(window) = caps.context_window {
-                    model["contextWindow"] = json!(window);
-                }
-            }
-        }
-    }
 }
 
 fn apply_codex_model_catalog(
@@ -1149,27 +1009,6 @@ fn apply_route_to_app(
     route: GatewayRoute,
     model_policy: Option<GatewayAppModelPolicy>,
 ) -> Result<ApplyResult, AppError> {
-    let live_auth = if app_type == AppType::Codex {
-        let path = crate::apps::codex::get_codex_auth_path();
-        if path.exists() {
-            crate::paths::read_json_file(&path)?
-        } else {
-            json!({})
-        }
-    } else {
-        json!({})
-    };
-    let real_login = crate::apps::codex::codex_auth_has_oauth_login_material(&live_auth)
-        && !crate::apps::codex::codex_auth_is_virtual_login(&live_auth);
-    let config = state.db.get_gateway_config()?;
-    let codex_apply = if app_type == AppType::Codex && (real_login || config.codex_backend_enabled)
-    {
-        CodexGatewayApply::Backend {
-            remote_catalog: true,
-        }
-    } else {
-        CodexGatewayApply::Relay
-    };
     let provider_id = gateway_provider_id(&route.id);
     let provider_name = route.name.clone();
     let existing = state
@@ -1194,7 +1033,7 @@ fn apply_route_to_app(
         model_rules: route.model_rules.clone(),
     });
     let client_models = config_policy.client_models();
-    let mut settings = gateway_settings_for_provider(
+    let settings = gateway_settings_for_provider(
         app_type,
         &config_provider_id,
         &provider_name,
@@ -1202,12 +1041,7 @@ fn apply_route_to_app(
         &key.key,
         &config_policy,
         route.websocket_enabled,
-        codex_apply,
     )?;
-    if real_login {
-        // The live account remains authoritative, including refreshed tokens.
-        settings["auth"] = json!({});
-    }
     let mut meta = ProviderMeta {
         gateway_route_id: Some(route.id.clone()),
         ..Default::default()
@@ -1282,7 +1116,6 @@ pub fn generic_client_info(state: &AppState, base_url: &str) -> Result<ApplyResu
         Some(route) if route.enabled => route,
         _ => {
             let route = GatewayRoute {
-                model_capabilities: Default::default(),
                 id: "route-generic-client".to_string(),
                 name: "通用客户端默认路由".to_string(),
                 website_url: None,
@@ -1427,73 +1260,6 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn real_login_station_preserves_auth_and_rebinds_only_on_activation() {
-        let state = AppState::new(Arc::new(crate::db::Database::memory().unwrap()));
-        let first = modeled_station_fixture(&state, "real-first", Dialect::Responses);
-        let second = modeled_station_fixture(&state, "real-second", Dialect::Responses);
-        let auth = json!({"tokens":{"access_token":"real-access", "refresh_token":"real-refresh", "id_token":"real-id", "account_id":"real-account"}});
-        let mut values = FormValues::new();
-        provider_config::set_str(&mut values, "auth_mode", "openai_login_gateway");
-        provider_config::set_str(&mut values, "model", "gpt-5.5");
-        provider_config::set_bool(&mut values, "virtual_login", false);
-        let provider = build_station_channel(
-            &state,
-            AppType::Codex,
-            &first.id,
-            &values,
-            identity("real"),
-            "http://127.0.0.1:4180",
-            &json!({"auth":auth}),
-            None,
-        )
-        .unwrap();
-        assert_eq!(provider.settings_config["auth"], auth);
-        let config = provider.settings_config["config"].as_str().unwrap();
-        assert!(config.contains("requires_openai_auth = true"));
-        assert!(!config.contains("experimental_mode = true"));
-        assert!(!config.contains("experimental_bearer_token"));
-        assert!(
-            !state
-                .db
-                .get_gateway_config()
-                .unwrap()
-                .codex_backend_accept_any_bearer
-        );
-        let first_key = ensure_key_for_route(&state, "codex-first", Some(&first.id)).unwrap();
-        bind_codex_station_login(&state, &first_key, &auth).unwrap();
-        let second_key = ensure_key_for_route(&state, "codex-second", Some(&second.id)).unwrap();
-        assert_eq!(
-            state
-                .db
-                .get_gateway_config()
-                .unwrap()
-                .codex_backend_oauth_key_id
-                .as_deref(),
-            Some(first_key.id.as_str())
-        );
-        bind_codex_station_login(&state, &second_key, &auth).unwrap();
-        let config = state.db.get_gateway_config().unwrap();
-        assert!(
-            config.codex_backend_enabled
-                && config.codex_models_enabled
-                && config.codex_backend_accept_any_bearer
-        );
-        assert_eq!(
-            config.codex_backend_oauth_key_id.as_deref(),
-            Some(second_key.id.as_str())
-        );
-        bind_codex_station_login(
-            &state,
-            &second_key,
-            &crate::apps::codex::virtual_codex_auth_json(&second_key.key),
-        )
-        .unwrap();
-        let config = state.db.get_gateway_config().unwrap();
-        assert!(!config.codex_backend_accept_any_bearer);
-        assert!(config.codex_backend_oauth_key_id.is_none());
-    }
-
-    #[test]
     fn settings_shapes_per_app() {
         let base = "http://127.0.0.1:4180";
         let models = vec!["claude-sonnet-4-6".to_string()];
@@ -1563,7 +1329,6 @@ mod tests {
             "rd-k",
             &policy,
             true,
-            CodexGatewayApply::Relay,
         )
         .unwrap();
         let codex_toml = codex["config"].as_str().unwrap();
@@ -1586,7 +1351,6 @@ mod tests {
             "rd-k",
             &policy,
             false,
-            CodexGatewayApply::Relay,
         )
         .unwrap();
         assert_eq!(claude["env"]["ANTHROPIC_MODEL"], "gpt-5.6");
@@ -1598,58 +1362,6 @@ mod tests {
             claude["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"],
             "claude-opus-5"
         );
-    }
-
-    #[test]
-    fn codex_backend_apply_writes_login_shape_and_virtual_auth() {
-        let policy = GatewayAppModelPolicy {
-            models: vec!["grok-4.5".into()],
-            ..Default::default()
-        };
-
-        let codex = gateway_settings_for_provider(
-            AppType::Codex,
-            "custom",
-            "Relay",
-            "http://127.0.0.1:4180",
-            "rd-k",
-            &policy,
-            true,
-            CodexGatewayApply::Backend {
-                remote_catalog: false,
-            },
-        )
-        .unwrap();
-        let toml = codex["config"].as_str().unwrap();
-        assert!(toml.contains("name = \"OpenAI\""), "{toml}");
-        assert!(
-            toml.contains("base_url = \"http://127.0.0.1:4180/connection/rd-k/backend-api/codex\""),
-            "{toml}"
-        );
-        assert!(toml.contains("requires_openai_auth = true"), "{toml}");
-        assert!(!toml.contains("experimental_bearer_token"), "{toml}");
-        assert!(toml.contains("supports_websockets = true"), "{toml}");
-        assert!(!toml.contains("experimental_mode = true"), "{toml}");
-        assert_eq!(codex["auth"]["auth_mode"], "chatgpt");
-        assert_eq!(codex["auth"]["tokens"]["access_token"], "rd-k");
-        assert_eq!(codex["modelCatalog"]["models"][0]["model"], "grok-4.5");
-
-        // With the remote catalog enabled the local modelCatalog is omitted so
-        // the gateway-served catalog stays authoritative.
-        let codex_remote = gateway_settings_for_provider(
-            AppType::Codex,
-            "custom",
-            "Relay",
-            "http://127.0.0.1:4180",
-            "rd-k",
-            &policy,
-            false,
-            CodexGatewayApply::Backend {
-                remote_catalog: true,
-            },
-        )
-        .unwrap();
-        assert!(codex_remote.get("modelCatalog").is_none());
     }
 
     #[test]
@@ -1687,7 +1399,6 @@ mod tests {
     #[test]
     fn route_models_skip_wildcards_and_deduplicate_the_default() {
         let route = GatewayRoute {
-            model_capabilities: Default::default(),
             id: "station:x".into(),
             name: "x".into(),
             website_url: None,
@@ -1800,7 +1511,6 @@ mod tests {
         assert_eq!(default_route.id, "route-claude");
 
         let alternate = GatewayRoute {
-            model_capabilities: Default::default(),
             id: "route-claude-fast".into(),
             name: "Claude 快速".into(),
             website_url: None,

@@ -562,31 +562,8 @@ pub fn inject_station_endpoint(
             set_bool(values, "is_full_url", false);
         }
         AppType::Codex => {
-            if str_val(values, "auth_mode") == codex::AUTH_OPENAI_LOGIN_GATEWAY {
-                // The ChatGPT-login shape talks to the codex backend routes
-                // instead of /v1; the station key becomes the virtual login's
-                // access token (written into auth.json by the codec) rather
-                // than an experimental_bearer_token.
-                if str_val(values, "context_mode").is_empty() {
-                    set_str(values, "context_mode", "auto");
-                }
-                let origin = base_url.trim().trim_end_matches('/');
-                set_str(
-                    values,
-                    "base_url",
-                    format!("{origin}/connection/{key}/backend-api/codex"),
-                );
-            } else {
-                set_str(values, "base_url", dialect_base_url(app, base_url));
-            }
-            let credential = if str_val(values, "auth_mode") == codex::AUTH_OPENAI_LOGIN_GATEWAY
-                && !bool_val(values, "virtual_login")
-            {
-                ""
-            } else {
-                key
-            };
-            set_str(values, "api_key", credential);
+            set_str(values, "base_url", dialect_base_url(app, base_url));
+            set_str(values, "api_key", key);
             set_str(values, "wire_api", "responses");
             set_bool(values, "supports_websockets", caps.websockets);
             // The gateway does not implement the Responses store.
@@ -659,41 +636,5 @@ mod tests {
             dialect_base_url(AppType::Claude, "https://example.test/"),
             "https://example.test"
         );
-    }
-
-    /// The gateway-login auth mode points the station channel at the codex
-    /// backend routes and routes the key through the virtual login instead of
-    /// a provider bearer token; the default relay mode is untouched.
-    #[test]
-    fn station_injection_supports_codex_gateway_login_mode() {
-        let caps = StationCapabilities {
-            websockets: false,
-            remote_compaction: false,
-        };
-        let origin = "http://127.0.0.1:4180";
-
-        let mut codex = FormValues::new();
-        set_str(&mut codex, "auth_mode", codex::AUTH_OPENAI_LOGIN_GATEWAY);
-        inject_station_endpoint(&mut codex, AppType::Codex, origin, "rd-station", caps);
-        assert_eq!(
-            str_val(&codex, "base_url"),
-            "http://127.0.0.1:4180/connection/rd-station/backend-api/codex"
-        );
-        assert_eq!(str_val(&codex, "api_key"), "");
-        assert!(!bool_val(&codex, "virtual_login"));
-        set_bool(&mut codex, "virtual_login", true);
-        inject_station_endpoint(&mut codex, AppType::Codex, origin, "rd-station", caps);
-        assert!(bool_val(&codex, "virtual_login"));
-        assert_eq!(str_val(&codex, "context_mode"), "auto");
-        assert!(!bool_val(&codex, "context_management"));
-        assert_eq!(
-            str_val(&codex, "auth_mode"),
-            codex::AUTH_OPENAI_LOGIN_GATEWAY
-        );
-
-        let mut relay = FormValues::new();
-        inject_station_endpoint(&mut relay, AppType::Codex, origin, "rd-station", caps);
-        assert_eq!(str_val(&relay, "base_url"), "http://127.0.0.1:4180/v1");
-        assert!(!bool_val(&relay, "virtual_login"));
     }
 }

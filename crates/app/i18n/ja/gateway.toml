@@ -57,7 +57,6 @@
 "gateway.editor.keys.untested" = "未テスト"
 "gateway.editor.cancel" = "キャンセル Esc"
 "gateway.editor.connection.title" = "接続情報"
-"gateway.editor.capabilities.title" = "プロバイダー機能"
 "gateway.editor.default_model.placeholder" = "例：claude-sonnet-4-6"
 "gateway.editor.dialect.detect" = "検出"
 "gateway.editor.dialect.detected_compact" = "{count} 件検出"
@@ -134,18 +133,10 @@
 "gateway.status.update_failed" = "モデルプロバイダーを更新できませんでした: {error}"
 "gateway.status.url_copied" = "アドレスをコピーしました"
 
-"gateway.capabilities.edit" = "モデル機能"
 
-"gateway.capabilities.compact" = "リモート圧縮"
 
-"gateway.capabilities.auto" = "自動"
 
-"gateway.capabilities.on" = "対応"
 
-"gateway.capabilities.off" = "非対応"
 
-"gateway.capabilities.context" = "コンテキスト長"
 
-"gateway.capabilities.declared" = "ユーザー指定 · 未検証"
 
-"gateway.capabilities.invalid_context" = "コンテキスト長には正の整数を指定してください"

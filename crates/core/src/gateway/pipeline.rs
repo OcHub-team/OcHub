@@ -692,8 +692,6 @@ const GATEWAY_OWNED_HEADERS: &[&str] = &[
     // Credentials.
     "authorization",
     "proxy-authorization",
-    "chatgpt-account-id",
-    "x-ochub-route-key",
     "x-api-key",
     "api-key",
     // Hop-by-hop.
@@ -739,7 +737,7 @@ pub(crate) fn forwardable_client_headers(client_headers: &HeaderMap) -> HeaderMa
 /// `anthropic-version` is only defaulted, not forced: a Messages client that
 /// pinned a version knows which response shape it parses, and the gateway has
 /// no reason to overrule it.
-pub(crate) fn apply_channel_auth(headers: &mut HeaderMap, channel: &GatewayChannel) {
+fn apply_channel_auth(headers: &mut HeaderMap, channel: &GatewayChannel) {
     match channel.dialect {
         Dialect::Messages => {
             if let Ok(value) = HeaderValue::from_str(&channel.api_key) {
@@ -759,7 +757,7 @@ pub(crate) fn apply_channel_auth(headers: &mut HeaderMap, channel: &GatewayChann
 
 /// Channel-configured headers win over anything forwarded: they are the
 /// operator's explicit statement about this upstream.
-pub(crate) fn apply_extra_headers(headers: &mut HeaderMap, channel: &GatewayChannel) {
+fn apply_extra_headers(headers: &mut HeaderMap, channel: &GatewayChannel) {
     for (name, value) in &channel.extra_headers {
         if let (Ok(name), Ok(value)) = (
             HeaderName::from_bytes(name.as_bytes()),
@@ -1524,26 +1522,9 @@ pub(crate) async fn run_operation(
         meta.stream = false;
     }
     let remote_compaction = compact || is_remote_compaction_request(inlet, &body);
-    let responses_lite = client_headers
-        .get("x-openai-internal-codex-responses-lite")
-        .is_some_and(|value| value == "true");
-    let capability_model = route_model_override.unwrap_or(&meta.model);
-    if remote_compaction
-        && route
-            .as_ref()
-            .and_then(|r| r.model_capabilities.get(capability_model))
-            .and_then(|c| c.remote_compaction)
-            == Some(false)
-    {
-        return PipelineOutcome::local(
-            400,
-            error_body(inlet, "remote compaction is disabled for this model"),
-        );
-    }
     let convertible: Vec<GatewayChannel> = channels
         .into_iter()
         .filter(|channel| channel_supports_request(inlet, channel.dialect, remote_compaction))
-        .filter(|channel| !responses_lite || channel.dialect == Dialect::Responses)
         .filter(|channel| {
             route
                 .as_ref()
@@ -1739,10 +1720,7 @@ pub(crate) async fn run_operation(
     }
 }
 
-pub(crate) fn route_for_key(
-    db: &Database,
-    key: Option<&GatewayKey>,
-) -> Result<Option<GatewayRoute>, String> {
+fn route_for_key(db: &Database, key: Option<&GatewayKey>) -> Result<Option<GatewayRoute>, String> {
     let Some(route_id) = key.and_then(|key| key.route_id.as_deref()) else {
         return Ok(None);
     };
@@ -3488,7 +3466,6 @@ mod tests {
         })
         .unwrap();
         db.upsert_gateway_route(&GatewayRoute {
-            model_capabilities: Default::default(),
             id: "route-test".into(),
             name: "test".into(),
             website_url: None,

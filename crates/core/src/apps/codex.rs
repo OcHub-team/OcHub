@@ -311,76 +311,6 @@ pub fn codex_auth_has_oauth_login_material(auth: &Value) -> bool {
     })
 }
 
-// ---- Virtual ChatGPT login --------------------------------------------------
-//
-// A "virtual" login lets a user without real ChatGPT OAuth material run Codex
-// in its ChatGPT-login shape against the local gateway: Codex forwards the
-// `access_token` as the bearer credential, so we fill it with a
-// gateway-issued `rd-` key and the gateway's normal key check applies.
-// This is an experimental client compatibility shape, not real OAuth.
-// A future last_refresh avoids scheduled refresh in supported clients, but
-// account-specific services and authentication retries may still try refresh.
-// Keep a real-client smoke test: these details are not a stable OAuth contract.
-
-/// Fixed account id stamped into virtual logins (also how we recognize them).
-pub const VIRTUAL_CODEX_ACCOUNT_ID: &str = "c0dec0de-0000-4000-8000-00000000c0de";
-const VIRTUAL_CODEX_USER_ID: &str = "user-c0dec0de";
-const VIRTUAL_CODEX_REFRESH_TOKEN: &str = "unused";
-const VIRTUAL_CODEX_LAST_REFRESH: &str = "2099-01-01T00:00:00Z";
-const VIRTUAL_CODEX_EMAIL: &str = "user@example.com";
-
-fn base64url_json(value: &Value) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(serde_json::to_vec(value).unwrap_or_default())
-}
-
-/// Unsigned-style JWT advertising a ChatGPT Pro plan. The claim key
-/// `https://api.openai.com/auth` is Codex's plan source and must be verbatim.
-pub fn virtual_codex_id_token() -> String {
-    let header = json!({ "alg": "none", "typ": "JWT" });
-    let payload = json!({
-        "email": VIRTUAL_CODEX_EMAIL,
-        "exp": 4_102_444_800_i64,
-        "iat": 1_700_000_000,
-        "https://api.openai.com/auth": {
-            "chatgpt_plan_type": "pro",
-            "chatgpt_account_id": VIRTUAL_CODEX_ACCOUNT_ID,
-            "chatgpt_user_id": VIRTUAL_CODEX_USER_ID,
-        },
-    });
-    format!(
-        "{}.{}.signature",
-        base64url_json(&header),
-        base64url_json(&payload)
-    )
-}
-
-/// Build a virtual `auth.json` whose bearer credential is the gateway key.
-pub fn virtual_codex_auth_json(access_token: &str) -> Value {
-    json!({
-        "auth_mode": "chatgpt",
-        "OPENAI_API_KEY": null,
-        "tokens": {
-            "id_token": virtual_codex_id_token(),
-            "access_token": access_token,
-            "refresh_token": VIRTUAL_CODEX_REFRESH_TOKEN,
-            "account_id": VIRTUAL_CODEX_ACCOUNT_ID,
-        },
-        "last_refresh": VIRTUAL_CODEX_LAST_REFRESH,
-    })
-}
-
-/// Whether this auth document is an OcHub-generated virtual login (as opposed
-/// to real ChatGPT OAuth material, which must be preserved as-is).
-pub fn codex_auth_is_virtual_login(auth: &Value) -> bool {
-    auth.pointer("/tokens/refresh_token")
-        .and_then(Value::as_str)
-        == Some(VIRTUAL_CODEX_REFRESH_TOKEN)
-        && auth.pointer("/tokens/account_id").and_then(Value::as_str)
-            == Some(VIRTUAL_CODEX_ACCOUNT_ID)
-}
-
 pub fn should_restore_codex_provider_token_for_backfill(
     category: Option<&str>,
     template_settings: &Value,
@@ -1467,18 +1397,6 @@ pub fn write_codex_live_for_provider(
         };
     let config_text = unified_official_config.as_deref().or(config_text);
 
-    // A virtual provider must actually install its gateway credential, but
-    // must never silently replace a real ChatGPT login (even when the generic
-    // preserve-login setting is off).
-    if codex_auth_is_virtual_login(auth) {
-        let path = get_codex_auth_path();
-        let live = if path.exists() {
-            read_json_file(&path)?
-        } else {
-            json!({})
-        };
-        validate_virtual_codex_login_write(auth, &live)?;
-    }
     let preserve_official_auth = crate::settings::preserve_codex_official_auth_on_switch();
     let should_write_auth = codex_provider_owns_live_auth(
         category,
@@ -1504,20 +1422,6 @@ pub fn write_codex_live_for_provider(
     }
 }
 
-/// Check before either live file is modified. Real login material stays owned
-/// by the user; virtual-login key rotation is safe and remains supported.
-pub fn validate_virtual_codex_login_write(auth: &Value, live: &Value) -> Result<(), AppError> {
-    if codex_auth_is_virtual_login(auth)
-        && codex_auth_has_oauth_login_material(live)
-        && !codex_auth_is_virtual_login(live)
-    {
-        return Err(AppError::Config(
-            "无法用虚拟登录覆盖已有的 ChatGPT 登录。请使用普通 API 转发，或使用真实登录转发并配置绑定的网关身份。".into(),
-        ));
-    }
-    Ok(())
-}
-
 /// Whether this provider is authoritative for the live `auth.json`.
 ///
 /// Kept pure (the preserve setting is an argument) so switching and backfill
@@ -1532,7 +1436,7 @@ pub fn codex_provider_owns_live_auth(
         return codex_auth_has_login_material(auth);
     }
 
-    (!preserve_official_auth || codex_auth_is_virtual_login(auth))
+    !preserve_official_auth
         && codex_config_requires_openai_auth(config_text)
         && codex_auth_has_oauth_login_material(auth)
 }
@@ -1797,72 +1701,6 @@ requires_openai_auth = true
             Some("")
         );
         assert!(settings.pointer("/auth/tokens/access_token").is_some());
-    }
-
-    #[test]
-    fn virtual_login_write_protects_real_accounts_and_allows_key_rotation() {
-        let auth = virtual_codex_auth_json("rd-new");
-        let real =
-            json!({"tokens": {"access_token": "real-oauth", "refresh_token": "real-refresh"}});
-        assert!(validate_virtual_codex_login_write(&auth, &real).is_err());
-        assert!(validate_virtual_codex_login_write(&auth, &json!({})).is_ok());
-        assert!(
-            validate_virtual_codex_login_write(&auth, &virtual_codex_auth_json("rd-old")).is_ok()
-        );
-        assert!(codex_provider_owns_live_auth(
-            Some("gateway"),
-            &auth,
-            "model_provider = 'custom'\n[model_providers.custom]\nrequires_openai_auth = true",
-            true
-        ));
-    }
-
-    #[test]
-    fn virtual_auth_json_shape_and_id_token_claims() {
-        let auth = virtual_codex_auth_json("rd-test-key");
-        assert_eq!(auth["auth_mode"], "chatgpt");
-        assert!(auth["OPENAI_API_KEY"].is_null());
-        assert_eq!(auth["tokens"]["access_token"], "rd-test-key");
-        assert_eq!(auth["tokens"]["refresh_token"], "unused");
-        assert_eq!(
-            auth["tokens"]["account_id"],
-            "c0dec0de-0000-4000-8000-00000000c0de"
-        );
-        assert_eq!(auth["last_refresh"], "2099-01-01T00:00:00Z");
-
-        let id_token = auth["tokens"]["id_token"].as_str().unwrap();
-        let parts: Vec<&str> = id_token.split('.').collect();
-        assert_eq!(parts.len(), 3);
-        use base64::Engine as _;
-        let payload: Value = serde_json::from_slice(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(parts[1])
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            payload["https://api.openai.com/auth"]["chatgpt_plan_type"],
-            "pro"
-        );
-        assert_eq!(
-            payload["https://api.openai.com/auth"]["chatgpt_account_id"],
-            "c0dec0de-0000-4000-8000-00000000c0de"
-        );
-        assert_eq!(payload["email"], "user@example.com");
-        assert_eq!(payload["exp"], 4_102_444_800_i64);
-
-        assert!(codex_auth_is_virtual_login(&auth));
-        assert!(codex_auth_has_oauth_login_material(&auth));
-        let real = json!({
-            "auth_mode": "chatgpt",
-            "tokens": {
-                "access_token": "oauth-access",
-                "refresh_token": "oauth-refresh",
-                "account_id": "real-account",
-            }
-        });
-        assert!(!codex_auth_is_virtual_login(&real));
-        assert!(!codex_auth_is_virtual_login(&json!({})));
     }
 
     #[test]

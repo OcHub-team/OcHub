@@ -18,12 +18,11 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Message as UpstreamMessage, protocol::CloseFrame};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
-use crate::gateway::codex_catalog;
 use crate::gateway::pipeline::{self, GatewayState, PipelineOutcome, StreamFrame};
 use crate::gateway::types::{ChannelHealth, Dialect, GatewayChannel, GatewayKey};
 
-pub async fn build_router(state: GatewayState) -> Router {
-    let mut router = Router::new()
+pub fn build_router(state: GatewayState) -> Router {
+    Router::new()
         .route("/health", get(|| async { (StatusCode::OK, "OK") }))
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
@@ -32,45 +31,6 @@ pub async fn build_router(state: GatewayState) -> Router {
         .route("/v1/responses/compact", post(handle_compact))
         .route("/v1/models", get(handle_models))
         .route("/models", get(handle_models))
-        .route("/backend-api/codex/responses", any(handle_codex_responses))
-        .route("/backend-api/codex/models", get(handle_codex_models))
-        .route(
-            "/backend-api/codex/responses/compact",
-            post(handle_codex_compact),
-        );
-    for path in [
-        "history/v2/list_windows",
-        "history/v2/list_items",
-        "history/v2/read_item",
-        "history/v2/search_contents",
-        "notes/v2/list_files_by_prefix",
-        "notes/v2/read_file",
-        "notes/v2/search_contents",
-        "notes/v2/append_to_file",
-        "notes/v2/write_file",
-        "notes/v2/thread_hint",
-    ] {
-        router = router.route(&format!("/backend-api/codex/alpha/{path}"), post(
-            move |State(state): State<GatewayState>, headers: HeaderMap, body: Bytes| async move {
-                handle_codex_history(state, headers, body, path).await
-            },
-        ));
-    }
-    let scoped = router.clone().route_layer(axum::middleware::from_fn(
-        |axum::extract::Path(params): axum::extract::Path<
-            std::collections::HashMap<String, String>,
-        >,
-         mut request: axum::extract::Request,
-         next: axum::middleware::Next| async move {
-            let Some(key) = params.get("route_key").and_then(|v| v.parse().ok()) else {
-                return unauthorized(Dialect::Responses);
-            };
-            request.headers_mut().insert("x-ochub-route-key", key);
-            next.run(request).await
-        },
-    ));
-    router
-        .nest("/connection/{route_key}", scoped)
         .layer(axum::extract::DefaultBodyLimit::max(200 * 1024 * 1024))
         .with_state(state)
 }
@@ -130,73 +90,6 @@ fn unauthorized(inlet: Dialect) -> Response {
     (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
 }
 
-/// Auth for the `/backend-api/codex/*` routes. A registered gateway key always
-/// wins (virtual logins carry one as their ChatGPT `access_token`). When the
-/// bearer is not a registered key and `codex_backend_accept_any_bearer` is on,
-/// a non-empty bearer is bound to an explicitly configured gateway key — real ChatGPT
-/// OAuth tokens rotate and cannot be enrolled as static keys. Only these two
-/// routes use this helper; `/v1/*` behavior is unchanged.
-async fn authorize_codex_backend(
-    state: &GatewayState,
-    headers: &HeaderMap,
-) -> Result<Option<GatewayKey>, Response> {
-    if let Some(route_key) = headers.get("x-ochub-route-key") {
-        // The connection URL identifies the route independently of rotating OAuth tokens.
-        let bearer = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| {
-                v.strip_prefix("Bearer ")
-                    .or_else(|| v.strip_prefix("bearer "))
-            })
-            .filter(|v| !v.trim().is_empty());
-        if bearer.is_none() {
-            return Err(unauthorized(Dialect::Responses));
-        }
-        let key = route_key
-            .to_str()
-            .ok()
-            .and_then(|secret| state.db.find_gateway_key(secret).ok().flatten())
-            .filter(|key| key.enabled && key.route_id.is_some());
-        return key
-            .map(Some)
-            .ok_or_else(|| unauthorized(Dialect::Responses));
-    }
-    if let Some(secret) = presented_secret(headers).filter(|secret| !secret.is_empty()) {
-        match state.db.find_gateway_key(&secret) {
-            Ok(Some(key)) => return Ok(Some(key)),
-            Ok(None) => {
-                // A retired gateway key must never acquire the fallback identity.
-                let is_bearer = headers
-                    .get("authorization")
-                    .and_then(|v| v.to_str().ok())
-                    .is_some_and(|v| v.starts_with("Bearer ") || v.starts_with("bearer "));
-                if is_bearer && !secret.starts_with("rd-") {
-                    let config = state.config.read().await;
-                    if config.codex_backend_accept_any_bearer {
-                        let key_id = config.codex_backend_oauth_key_id.as_deref();
-                        let keys = state
-                            .db
-                            .get_gateway_keys()
-                            .map_err(|_| unauthorized(Dialect::Responses))?;
-                        if let Some(key) = keys.into_iter().find(|key| {
-                            key.enabled && Some(key.id.as_str()) == key_id && key.route_id.is_some()
-                        }) {
-                            return Ok(Some(key));
-                        }
-                        return Err(unauthorized(Dialect::Responses));
-                    }
-                }
-                return Err(unauthorized(Dialect::Responses));
-            }
-            Err(e) => {
-                log::warn!("[gateway] key lookup failed: {e}");
-            }
-        }
-    }
-    authorize(state, headers, Dialect::Responses).await
-}
-
 // ---------------------------------------------------------------------------
 // Inference handlers
 // ---------------------------------------------------------------------------
@@ -222,34 +115,6 @@ async fn handle_responses(
     State(state): State<GatewayState>,
     req: axum::extract::Request,
 ) -> Response {
-    handle_responses_inner(state, req, ResponsesRoute::Standard).await
-}
-
-/// `/backend-api/codex/responses`: same wire behavior as `/v1/responses`, but
-/// authenticated via [`authorize_codex_backend`] and tagged with the catalog's
-/// `X-Models-Etag` so Codex re-fetches `/backend-api/codex/models` when the
-/// catalog changes (Codex refreshes on ETag mismatch).
-async fn handle_codex_responses(
-    State(state): State<GatewayState>,
-    req: axum::extract::Request,
-) -> Response {
-    if !state.config.read().await.codex_backend_enabled {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    handle_responses_inner(state, req, ResponsesRoute::CodexBackend).await
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResponsesRoute {
-    Standard,
-    CodexBackend,
-}
-
-async fn handle_responses_inner(
-    state: GatewayState,
-    req: axum::extract::Request,
-    route: ResponsesRoute,
-) -> Response {
     use axum::extract::FromRequestParts;
     let (mut parts, body) = req.into_parts();
     let is_ws = parts
@@ -257,12 +122,8 @@ async fn handle_responses_inner(
         .get("upgrade")
         .map(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"))
         .unwrap_or(false);
-    let authorize = match route {
-        ResponsesRoute::Standard => authorize(&state, &parts.headers, Dialect::Responses).await,
-        ResponsesRoute::CodexBackend => authorize_codex_backend(&state, &parts.headers).await,
-    };
     if is_ws {
-        let key = match authorize {
+        let key = match authorize(&state, &parts.headers, Dialect::Responses).await {
             Ok(k) => k,
             Err(resp) => return resp,
         };
@@ -283,10 +144,6 @@ async fn handle_responses_inner(
         }
     } else {
         let headers = parts.headers.clone();
-        let key = match authorize {
-            Ok(k) => k,
-            Err(resp) => return resp,
-        };
         let bytes = match axum::body::to_bytes(body, 200 * 1024 * 1024).await {
             Ok(b) => b,
             Err(e) => {
@@ -297,19 +154,7 @@ async fn handle_responses_inner(
                     .into_response();
             }
         };
-        let response = run_http_authorized(
-            state.clone(),
-            Dialect::Responses,
-            headers,
-            bytes,
-            key.clone(),
-        )
-        .await;
-        if route == ResponsesRoute::CodexBackend {
-            inject_models_etag(state, key, response).await
-        } else {
-            response
-        }
+        run_http(state, Dialect::Responses, headers, bytes).await
     }
 }
 
@@ -323,157 +168,6 @@ async fn handle_compact(
         Err(response) => return response,
     };
     run_http_operation(state, Dialect::Responses, headers, body, key, true).await
-}
-
-async fn handle_codex_compact(
-    State(state): State<GatewayState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if !state.config.read().await.codex_backend_enabled {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let key = match authorize_codex_backend(&state, &headers).await {
-        Ok(key) => key,
-        Err(response) => return response,
-    };
-    run_http_operation(state, Dialect::Responses, headers, body, key, true).await
-}
-
-/// Stateful tools never use model-based selection or retry on another channel.
-/// The distribution server owns session/account affinity and history storage.
-async fn handle_codex_history(
-    state: GatewayState,
-    headers: HeaderMap,
-    body: Bytes,
-    path: &str,
-) -> Response {
-    if !state.config.read().await.codex_backend_enabled {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let key = match authorize_codex_backend(&state, &headers).await {
-        Ok(Some(key)) if key.enabled => key,
-        Ok(_) => return unauthorized(Dialect::Responses),
-        Err(response) => return response,
-    };
-    let route = match pipeline::route_for_key(&state.db, Some(&key)) {
-        Ok(Some(route)) => route,
-        _ => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "History / Notes requires a bound supplier",
-            )
-                .into_response();
-        }
-    };
-    let channels = match state.db.get_gateway_channels() {
-        Ok(channels) => channels
-            .into_iter()
-            .filter(|c| c.enabled && route.allows_channel(&c.id))
-            .collect::<Vec<_>>(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    // Reject mixed/multiple channels: otherwise inference and retrieval could disagree.
-    let [channel] = channels.as_slice() else {
-        return (
-            StatusCode::CONFLICT,
-            "History / Notes requires exactly one upstream channel",
-        )
-            .into_response();
-    };
-    if channel.dialect != Dialect::Responses {
-        return (
-            StatusCode::CONFLICT,
-            "History / Notes requires a Responses upstream",
-        )
-            .into_response();
-    }
-    let valid = serde_json::from_slice::<Value>(&body)
-        .ok()
-        .is_some_and(|v| {
-            v.get("context").is_some_and(|c| {
-                ["session_id", "current_agent_name"].iter().all(|field| {
-                    c.get(field)
-                        .and_then(Value::as_str)
-                        .is_some_and(|s| !s.trim().is_empty())
-                })
-            })
-        });
-    if !valid {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Missing History / Notes session context",
-        )
-            .into_response();
-    }
-    let endpoint = channel.endpoint_url();
-    let Some(base) = endpoint.trim_end_matches('/').strip_suffix("/responses") else {
-        return (
-            StatusCode::CONFLICT,
-            "History / Notes requires a /responses endpoint",
-        )
-            .into_response();
-    };
-    let mut upstream_headers = pipeline::forwardable_client_headers(&headers);
-    pipeline::apply_extra_headers(&mut upstream_headers, channel);
-    pipeline::apply_channel_auth(&mut upstream_headers, channel);
-    upstream_headers.insert("content-type", "application/json".parse().unwrap());
-    let upstream = match state
-        .http_client
-        .post(format!("{base}/alpha/{path}"))
-        .headers(upstream_headers)
-        .body(body)
-        .timeout(Duration::from_secs(35))
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                "History / Notes upstream request failed",
-            )
-                .into_response();
-        }
-    };
-    let status = upstream.status();
-    let response_headers = pipeline::forwardable_upstream_headers(upstream.headers());
-    // Preserve opaque encrypted outputs, images, and upstream failures byte for byte.
-    (
-        status,
-        response_headers,
-        Body::from_stream(upstream.bytes_stream()),
-    )
-        .into_response()
-}
-
-/// Tag codex-backend replies with the local catalog ETag. An upstream ETag
-/// describes a different catalog and must not override the local identity.
-/// Headers are set before the body streams, so this covers
-/// both JSON and SSE replies; the WebSocket upgrade path has no meaningful
-/// place for it and is skipped.
-async fn inject_models_etag(
-    state: GatewayState,
-    key: Option<GatewayKey>,
-    response: Response,
-) -> Response {
-    const MODELS_ETAG: &str = "x-models-etag";
-    if !state.config.read().await.codex_models_enabled {
-        return response;
-    }
-    match codex_catalog::build_catalog(&state, key.as_ref()).await {
-        Ok((_body, etag)) => {
-            let mut response = response;
-            if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
-                response.headers_mut().insert(MODELS_ETAG, value);
-            }
-            response
-        }
-        Err(_) => {
-            log::warn!("[gateway] failed to compute codex catalog ETag for X-Models-Etag");
-            response
-        }
-    }
 }
 
 fn websocket_unavailable() -> Response {
@@ -512,33 +206,6 @@ async fn run_http(
         Ok(k) => k,
         Err(resp) => return resp,
     };
-    run_http_authorized(state, inlet, headers, body, key).await
-}
-
-/// Bound decompressed size as well as the compressed HTTP body size.
-fn decode_zstd_body(body: Bytes, limit: usize) -> Result<Bytes, StatusCode> {
-    use std::io::Read;
-    let decoder =
-        zstd::stream::read::Decoder::new(body.as_ref()).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let mut decoded = Vec::new();
-    decoder
-        .take(limit as u64 + 1)
-        .read_to_end(&mut decoded)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    if decoded.len() > limit {
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
-    Ok(Bytes::from(decoded))
-}
-
-/// Pipeline dispatch for a request whose caller was already authorized.
-async fn run_http_authorized(
-    state: GatewayState,
-    inlet: Dialect,
-    headers: HeaderMap,
-    body: Bytes,
-    key: Option<GatewayKey>,
-) -> Response {
     run_http_operation(state, inlet, headers, body, key, false).await
 }
 
@@ -551,20 +218,12 @@ async fn run_http_operation(
     compact: bool,
 ) -> Response {
     let mut headers = headers;
-    let body = match headers.get("content-encoding") {
-        None => body,
-        Some(encoding) if encoding.as_bytes().eq_ignore_ascii_case(b"identity") => body,
-        Some(encoding) if encoding.as_bytes().eq_ignore_ascii_case(b"zstd") => {
-            match tokio::task::spawn_blocking(move || decode_zstd_body(body, 200 * 1024 * 1024))
-                .await
-            {
-                Ok(Ok(body)) => body,
-                Ok(Err(status)) => return status.into_response(),
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-        Some(_) => return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response(),
-    };
+    if headers
+        .get("content-encoding")
+        .is_some_and(|encoding| !encoding.as_bytes().eq_ignore_ascii_case(b"identity"))
+    {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    }
     headers.remove("content-encoding");
     headers.remove("content-length");
     let outcome = if compact {
@@ -1142,45 +801,39 @@ async fn handle_count_tokens(
     }
 }
 
-/// Resolve the exact client-visible model names for `key`: key/route policy
-/// lists first, then — for legacy keys without a per-app policy — every model
-/// advertised by the allowed channels. Wildcard patterns are skipped (they
-/// have no enumerable form). Shared by `/v1/models` and the Codex-native
-/// catalog so both endpoints advertise the same names.
-pub(crate) fn visible_models(
-    state: &GatewayState,
-    key: Option<&GatewayKey>,
-) -> Result<Vec<String>, Box<Response>> {
-    let route = match key.and_then(|key| key.route_id.as_deref()) {
+/// OpenAI-style model list: exact model names + overrides from all enabled
+/// channels (wildcard patterns are skipped — they have no enumerable form).
+async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
+    let key = match authorize(&state, &headers, Dialect::Chat).await {
+        Ok(key) => key,
+        Err(resp) => return resp,
+    };
+    let route = match key.as_ref().and_then(|key| key.route_id.as_deref()) {
         Some(route_id) => match state.db.get_gateway_route_by_id(route_id) {
             Ok(Some(route)) if route.enabled => Some(route),
             Ok(_) => {
-                return Err(Box::new(
-                    (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        axum::Json(json!({
-                            "error": { "message": "client route is unavailable" }
-                        })),
-                    )
-                        .into_response(),
-                ));
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(json!({
+                        "error": { "message": "client route is unavailable" }
+                    })),
+                )
+                    .into_response();
             }
             Err(_) => {
-                return Err(Box::new(
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        axum::Json(json!({
-                            "error": { "message": "failed to load client route" }
-                        })),
-                    )
-                        .into_response(),
-                ));
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(json!({
+                        "error": { "message": "failed to load client route" }
+                    })),
+                )
+                    .into_response();
             }
         },
         None => None,
     };
     let mut models: Vec<String> = Vec::new();
-    let model_policy = key.and_then(|key| key.model_policy.as_ref());
+    let model_policy = key.as_ref().and_then(|key| key.model_policy.as_ref());
     let effective_rules = match model_policy {
         Some(policy) => policy.model_rules.as_slice(),
         None => route
@@ -1236,20 +889,6 @@ pub(crate) fn visible_models(
         }
     }
     models.sort();
-    Ok(models)
-}
-
-/// OpenAI-style model list: exact model names + overrides from all enabled
-/// channels (wildcard patterns are skipped — they have no enumerable form).
-async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
-    let key = match authorize(&state, &headers, Dialect::Chat).await {
-        Ok(key) => key,
-        Err(resp) => return resp,
-    };
-    let models = match visible_models(&state, key.as_ref()) {
-        Ok(models) => models,
-        Err(resp) => return *resp,
-    };
     let data: Vec<Value> = models
         .into_iter()
         .map(|id| json!({ "id": id, "object": "model", "owned_by": "gateway" }))
@@ -1259,31 +898,6 @@ async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) ->
         axum::Json(json!({ "object": "list", "data": data })),
     )
         .into_response()
-}
-
-/// Codex-native model catalog (`{"models": [...]}`) for ChatGPT-login-shaped
-/// clients, with an `ETag` hashed from the exact body served.
-async fn handle_codex_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
-    {
-        let config = state.config.read().await;
-        if !config.codex_backend_enabled || !config.codex_models_enabled {
-            return StatusCode::NOT_FOUND.into_response();
-        }
-    }
-    let key = match authorize_codex_backend(&state, &headers).await {
-        Ok(key) => key,
-        Err(resp) => return resp,
-    };
-    let (body, etag) = match codex_catalog::build_catalog(&state, key.as_ref()).await {
-        Ok(catalog) => catalog,
-        Err(resp) => return resp,
-    };
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .header(axum::http::header::ETAG, etag)
-        .body(Body::from(body))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 #[cfg(test)]
@@ -1315,11 +929,7 @@ mod tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, build_router(state).await)
-                .await
-                .unwrap()
-        });
+        tokio::spawn(async move { axum::serve(listener, build_router(state)).await.unwrap() });
 
         let error = connect_async(format!("ws://{addr}/v1/responses"))
             .await
@@ -1426,7 +1036,6 @@ mod tests {
         })
         .unwrap();
         db.upsert_gateway_route(&GatewayRoute {
-            model_capabilities: Default::default(),
             id: "route-ws".into(),
             name: "WS route".into(),
             website_url: None,
@@ -1464,7 +1073,7 @@ mod tests {
         let gateway_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let gateway_addr = gateway_listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(gateway_listener, build_router(state).await)
+            axum::serve(gateway_listener, build_router(state))
                 .await
                 .unwrap()
         });
@@ -1511,915 +1120,5 @@ mod tests {
             assert_eq!(request["model"], "upstream-model");
             assert_eq!(request["stream"], true);
         }
-    }
-
-    /// Start a gateway with the given config and return its base URL, DB, and
-    /// live config handle (feature gates are checked on each request).
-    async fn serve_gateway(
-        config: GatewayConfig,
-    ) -> (String, Arc<Database>, Arc<RwLock<GatewayConfig>>) {
-        let db = Arc::new(Database::memory().unwrap());
-        let config = Arc::new(RwLock::new(config));
-        let state = GatewayState {
-            db: db.clone(),
-            http_client: reqwest::Client::new(),
-            config: config.clone(),
-            health: Arc::new(RwLock::new(HashMap::new())),
-            signatures: Arc::new(ochub_convert::MemorySignatureStore::default()),
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, build_router(state).await)
-                .await
-                .unwrap()
-        });
-        (format!("http://{addr}"), db, config)
-    }
-
-    #[tokio::test]
-    async fn scoped_connections_keep_catalogs_and_credentials_isolated() {
-        let (base, db, _) = serve_gateway(GatewayConfig {
-            codex_backend_enabled: true,
-            codex_models_enabled: true,
-            // Scoped connections do not need global OAuth fallback.
-            ..GatewayConfig::default()
-        })
-        .await;
-        for (name, lite) in [("a", true), ("b", false)] {
-            let route: crate::gateway::GatewayRoute = serde_json::from_value(json!({
-                "id": name, "name": name, "enabled": true, "created_at": 1,
-                "model_capabilities": {"shared": {"use_responses_lite": lite, "context_window": if lite { 64000 } else { 32000 }}}
-            })).unwrap();
-            db.upsert_gateway_route(&route).unwrap();
-            db.upsert_gateway_key(&GatewayKey {
-                id: name.into(),
-                name: name.into(),
-                key: format!("rd-{name}"),
-                route_id: Some(name.into()),
-                model_policy: Some(crate::gateway::types::GatewayAppModelPolicy {
-                    models: vec!["alias".into()],
-                    model_rules: vec![crate::gateway::GatewayModelRule {
-                        model: "alias".into(),
-                        upstream_model: "shared".into(),
-                        channel_id: None,
-                        dialect: None,
-                    }],
-                    ..Default::default()
-                }),
-                enabled: true,
-                created_at: 1,
-            })
-            .unwrap();
-        }
-        let client = reqwest::Client::new();
-        for (name, expected) in [("a", true), ("b", false), ("a", true)] {
-            let response = client
-                .get(format!(
-                    "{base}/connection/rd-{name}/backend-api/codex/models"
-                ))
-                .bearer_auth("same-rotating-real-account-token")
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            let body: Value = response.json().await.unwrap();
-            assert_eq!(body["models"][0]["use_responses_lite"], expected);
-        }
-        for suffix in ["rd-a", "invalid"] {
-            let response = client
-                .get(format!(
-                    "{base}/connection/{suffix}/backend-api/codex/models"
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        }
-        let mut key = db
-            .get_gateway_keys()
-            .unwrap()
-            .into_iter()
-            .find(|k| k.id == "a")
-            .unwrap();
-        key.enabled = false;
-        db.upsert_gateway_key(&key).unwrap();
-        let response = client
-            .get(format!("{base}/connection/rd-a/backend-api/codex/models"))
-            .bearer_auth("real-account")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn history_notes_preserve_opaque_payloads_and_replace_real_credentials() {
-        let payload = Bytes::from_static(br#"{"context":{"session_id":"session-1","current_agent_name":"/root"},"path":"/root/notes/test","text":"opaque-ciphertext"}"#);
-        let expected = payload.clone();
-        let upstream = Router::new().fallback(post(
-            move |uri: axum::http::Uri, headers: HeaderMap, body: Bytes| {
-                let expected = expected.clone();
-                async move {
-                    assert_eq!(body, expected);
-                    assert!(uri.path().starts_with("/v1/alpha/"));
-                    assert_eq!(headers["authorization"], "Bearer distribution-key");
-                    assert!(!headers.contains_key("chatgpt-account-id"));
-                    assert!(!headers.contains_key("x-ochub-route-key"));
-                    assert_eq!(headers["x-openai-encrypted-tool-arguments"], "true");
-                    (
-                        if headers.contains_key("x-test-upstream-error") {
-                            StatusCode::FORBIDDEN
-                        } else {
-                            StatusCode::ACCEPTED
-                        },
-                        [("content-type", "application/json")],
-                        "{\"encrypted_output\":\"opaque-result\"}",
-                    )
-                }
-            },
-        ));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
-        let (base, db, _) = serve_gateway(GatewayConfig {
-            codex_backend_enabled: true,
-            ..GatewayConfig::default()
-        })
-        .await;
-        let mut channel: GatewayChannel = serde_json::from_value(json!({
-            "id":"history", "name":"History", "dialect":"responses", "base_url":format!("http://{addr}"),
-            "api_key":"distribution-key", "models":[], "priority":0, "weight":1, "enabled":true
-        })).unwrap();
-        db.upsert_gateway_channel(&channel).unwrap();
-        db.upsert_gateway_route(&serde_json::from_value(json!({"id":"history-route", "name":"History", "enabled":true,"created_at":1,"channel_ids":["history"]})).unwrap()).unwrap();
-        let mut key = GatewayKey {
-            id: "history-key".into(),
-            name: "History".into(),
-            key: "rd-history".into(),
-            route_id: Some("history-route".into()),
-            model_policy: None,
-            created_at: 1,
-            enabled: true,
-        };
-        db.upsert_gateway_key(&key).unwrap();
-        let client = reqwest::Client::new();
-        let url =
-            format!("{base}/connection/rd-history/backend-api/codex/alpha/notes/v2/write_file");
-        let response = client
-            .post(&url)
-            .bearer_auth("real-oauth-token")
-            .header("chatgpt-account-id", "real-account")
-            .header("x-openai-encrypted-tool-arguments", "true")
-            .body(payload.clone())
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert_eq!(
-            response.text().await.unwrap(),
-            "{\"encrypted_output\":\"opaque-result\"}"
-        );
-        for path in [
-            "history/v2/list_windows",
-            "history/v2/list_items",
-            "history/v2/read_item",
-            "history/v2/search_contents",
-            "notes/v2/list_files_by_prefix",
-            "notes/v2/read_file",
-            "notes/v2/search_contents",
-            "notes/v2/append_to_file",
-            "notes/v2/thread_hint",
-        ] {
-            let response = client
-                .post(format!(
-                    "{base}/connection/rd-history/backend-api/codex/alpha/{path}"
-                ))
-                .bearer_auth("real")
-                .header("x-openai-encrypted-tool-arguments", "true")
-                .body(payload.clone())
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::ACCEPTED, "{path}");
-        }
-        assert_eq!(
-            client
-                .post(&url)
-                .bearer_auth("real")
-                .header("x-openai-encrypted-tool-arguments", "true")
-                .header("x-test-upstream-error", "true")
-                .body(payload.clone())
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            client
-                .post(&url)
-                .body(payload.clone())
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            client
-                .post(&url)
-                .bearer_auth("real")
-                .json(&json!({}))
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::BAD_REQUEST
-        );
-        channel.dialect = Dialect::Chat;
-        db.upsert_gateway_channel(&channel).unwrap();
-        assert_eq!(
-            client
-                .post(&url)
-                .bearer_auth("real")
-                .body(payload.clone())
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::CONFLICT
-        );
-        key.enabled = false;
-        db.upsert_gateway_key(&key).unwrap();
-        assert_eq!(
-            client
-                .post(&url)
-                .bearer_auth("real")
-                .body(payload)
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
-        task.abort();
-    }
-
-    #[test]
-    fn compressed_request_decode_is_bounded_and_rejects_invalid_frames() {
-        let input = br#"{"model":"third-party","input":[]}"#;
-        let compressed = Bytes::from(zstd::stream::encode_all(&input[..], 1).unwrap());
-        assert_eq!(
-            decode_zstd_body(compressed.clone(), input.len())
-                .unwrap()
-                .as_ref(),
-            input
-        );
-        assert_eq!(
-            decode_zstd_body(compressed, input.len() - 1).unwrap_err(),
-            StatusCode::PAYLOAD_TOO_LARGE
-        );
-        assert_eq!(
-            decode_zstd_body(Bytes::from_static(b"broken"), 1024).unwrap_err(),
-            StatusCode::BAD_REQUEST
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn real_login_compaction_uses_bound_route_and_upstream_credentials() {
-        let received = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let capture = received.clone();
-        let upstream = Router::new().route("/v1/responses/compact", post(move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
-            let capture = capture.clone();
-            async move {
-                *capture.lock().unwrap() = Some((headers, body));
-                axum::Json(json!({"id":"compact-test","object":"response.compaction","output":[{"type":"compaction","encrypted_content":"opaque-history"}],"usage":{"input_tokens":10,"output_tokens":2}}))
-            }
-        }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
-        let (base, db, _) = serve_gateway(GatewayConfig {
-            codex_backend_enabled: true,
-            codex_backend_accept_any_bearer: true,
-            codex_backend_oauth_key_id: Some("account-route".into()),
-            ..GatewayConfig::default()
-        })
-        .await;
-        db.upsert_gateway_channel(&GatewayChannel {
-            id: "responses".into(),
-            endpoint_id: None,
-            name: "Responses".into(),
-            dialect: Dialect::Responses,
-            base_url: format!("http://{addr}"),
-            api_key: "third-party-secret".into(),
-            path_override: None,
-            models: vec![],
-            model_override: Some("upstream-model".into()),
-            priority: 0,
-            weight: 1,
-            enabled: true,
-            extra_headers: vec![],
-            imported_from: None,
-        })
-        .unwrap();
-        let route = serde_json::from_value(json!({"id":"station:real", "name":"Real", "enabled":true,"created_at":1,"channel_ids":["responses"]})).unwrap();
-        db.upsert_gateway_route(&route).unwrap();
-        db.upsert_gateway_key(&GatewayKey {
-            id: "account-route".into(),
-            name: "Codex".into(),
-            key: "rd-local".into(),
-            route_id: Some("station:real".into()),
-            model_policy: None,
-            created_at: 1,
-            enabled: true,
-        })
-        .unwrap();
-        let client = reqwest::Client::new();
-        let url = format!("{base}/connection/rd-local/backend-api/codex/responses/compact");
-        assert_eq!(
-            client
-                .post(&url)
-                .json(&json!({"model":"client-model","input":[]}))
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
-        let payload = serde_json::to_vec(
-            &json!({"model":"client-model","input":[],"instructions":"Keep important state"}),
-        )
-        .unwrap();
-        let response = client
-            .post(&url)
-            .bearer_auth("real-rotating-oauth")
-            .header("content-encoding", "zstd")
-            .body(zstd::stream::encode_all(&payload[..], 1).unwrap())
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body: Value = response.json().await.unwrap();
-        assert_eq!(body["output"][0]["encrypted_content"], "opaque-history");
-        let (headers, body) = received.lock().unwrap().take().unwrap();
-        assert_eq!(headers["authorization"], "Bearer third-party-secret");
-        assert!(!headers.contains_key("x-ochub-route-key"));
-        assert_eq!(body["model"], "upstream-model");
-        assert!(body.get("stream").is_none());
-        let mut declared = db.get_gateway_route_by_id("station:real").unwrap().unwrap();
-        declared.model_capabilities.insert(
-            "client-model".into(),
-            crate::gateway::CodexModelOverride {
-                remote_compaction: Some(false),
-                ..Default::default()
-            },
-        );
-        db.upsert_gateway_route(&declared).unwrap();
-        let response = client
-            .post(&url)
-            .bearer_auth("real-account")
-            .json(&json!({"model":"client-model","input":[]}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(received.lock().unwrap().is_none());
-        declared.model_capabilities.clear();
-        db.upsert_gateway_route(&declared).unwrap();
-        let mut channel = db.get_gateway_channels().unwrap().remove(0);
-        channel.dialect = Dialect::Chat;
-        db.upsert_gateway_channel(&channel).unwrap();
-        let response = client
-            .post(&url)
-            .bearer_auth("real-rotating-oauth")
-            .json(&json!({"model":"client-model","input":[]}))
-            .send()
-            .await
-            .unwrap();
-        assert!(!response.status().is_success());
-        assert!(
-            received.lock().unwrap().is_none(),
-            "Chat-only upstream must never receive compaction"
-        );
-        task.abort();
-    }
-
-    /// Run explicitly with a local Codex installation; no OpenAI service or
-    /// user credentials are used. Exercises generated catalog/auth and HTTP SSE.
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "requires codex CLI on PATH"]
-    async fn codex_cli_gateway_smoke() {
-        let upstream = Router::new().route("/v1/responses", post(|| async {
-            let output = json!([{"id":"msg_smoke","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OCHUB_SMOKE_OK","annotations":[]}]}]);
-            let created = json!({"type":"response.created","response":{"id":"resp_smoke","status":"in_progress","output":[]}});
-            let completed = json!({"type":"response.completed","response":{"id":"resp_smoke","status":"completed","output":output,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}});
-            ([("content-type", "text/event-stream")], {
-                    let item = &output[0];
-                    let added = json!({"type":"response.output_item.added","output_index":0,"item":{"id":"msg_smoke","type":"message","role":"assistant","content":[]}});
-                    let delta = json!({"type":"response.output_text.delta","item_id":"msg_smoke","output_index":0,"content_index":0,"delta":"OCHUB_SMOKE_OK"});
-                    let done = json!({"type":"response.output_item.done","output_index":0,"item":item});
-                    format!("data: {created}\n\ndata: {added}\n\ndata: {delta}\n\ndata: {done}\n\ndata: {completed}\n\n")
-                })
-        }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream_addr = listener.local_addr().unwrap();
-        let upstream_task =
-            tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
-        let (base, db, _) = serve_gateway(GatewayConfig {
-            codex_backend_enabled: true,
-            codex_models_enabled: true,
-            ..GatewayConfig::default()
-        })
-        .await;
-        db.upsert_gateway_key(&GatewayKey {
-            id: "smoke".into(),
-            name: "smoke".into(),
-            key: "rd-smoke".into(),
-            route_id: None,
-            model_policy: None,
-            enabled: true,
-            created_at: 1,
-        })
-        .unwrap();
-        db.upsert_gateway_channel(&GatewayChannel {
-            id: "smoke".into(),
-            endpoint_id: None,
-            name: "smoke".into(),
-            dialect: Dialect::Responses,
-            base_url: format!("http://{upstream_addr}"),
-            api_key: "mock-upstream".into(),
-            path_override: None,
-            models: vec!["third-party".into()],
-            model_override: None,
-            priority: 0,
-            weight: 1,
-            enabled: true,
-            extra_headers: vec![],
-            imported_from: None,
-        })
-        .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let codec = crate::provider_config::config_for(crate::AppType::Codex).unwrap();
-        let values = serde_json::from_value(json!({
-            "provider_id": "ochub", "name": "OcHub", "model": "third-party",
-            "base_url": base, "auth_mode": "openai_login_gateway", "api_key": "rd-smoke",
-            "virtual_login": true, "context_management": true, "token_budget_enabled": true
-        }))
-        .unwrap();
-        let generated = codec.encode(
-            &values,
-            &json!({"config": r#"
-cli_auth_credentials_store = "file"
-[features]
-apps = false
-plugins = false
-remote_plugin = false
-skip_host_skill_discovery = true
-[model_providers.ochub]
-request_max_retries = 0
-stream_max_retries = 0
-"#}),
-            None,
-        );
-        std::fs::write(
-            dir.path().join("auth.json"),
-            generated.settings_config["auth"].to_string(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("config.toml"),
-            generated.settings_config["config"].as_str().unwrap(),
-        )
-        .unwrap();
-        let out_path = dir.path().join("stdout");
-        let err_path = dir.path().join("stderr");
-        let mut child = std::process::Command::new("codex")
-            .args([
-                "exec",
-                "--skip-git-repo-check",
-                "--ephemeral",
-                "Reply with OCHUB_SMOKE_OK; do not use tools.",
-            ])
-            .env("CODEX_HOME", dir.path())
-            .env_remove("OPENAI_API_KEY")
-            .env("HTTPS_PROXY", "http://127.0.0.1:9")
-            .env("HTTP_PROXY", "http://127.0.0.1:9")
-            .env("ALL_PROXY", "http://127.0.0.1:9")
-            .env("NO_PROXY", "127.0.0.1,localhost")
-            .current_dir(dir.path())
-            .stdin(std::process::Stdio::null())
-            .stdout(std::fs::File::create(&out_path).unwrap())
-            .stderr(std::fs::File::create(&err_path).unwrap())
-            .spawn()
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(25);
-        let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break Some(status);
-            }
-            if Instant::now() >= deadline {
-                child.kill().unwrap();
-                child.wait().unwrap();
-                break None;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        };
-        upstream_task.abort();
-        let stdout = std::fs::read_to_string(out_path).unwrap();
-        let stderr = std::fs::read_to_string(err_path).unwrap();
-        assert!(
-            status.is_some_and(|status| status.success()),
-            "{stdout}\n{stderr}"
-        );
-        assert!(stdout.contains("OCHUB_SMOKE_OK"), "{stdout}\n{stderr}");
-        assert!(
-            !stderr.contains("failed to refresh available models"),
-            "{stderr}"
-        );
-        assert!(!stderr.contains("Model metadata for"), "{stderr}");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn codex_backend_routes_are_absent_until_enabled() {
-        let client = reqwest::Client::new();
-        let body = json!({ "model": "m", "input": [] });
-
-        let (base, _db, config) = serve_gateway(GatewayConfig {
-            require_key: false,
-            ..GatewayConfig::default()
-        })
-        .await;
-        let resp = client
-            .get(format!("{base}/backend-api/codex/models"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        let resp = client
-            .post(format!("{base}/backend-api/codex/responses"))
-            .json(&body)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-
-        // Flip the live configuration without rebuilding the router.
-        config.write().await.codex_backend_enabled = true;
-        let resp = client
-            .get(format!("{base}/backend-api/codex/models"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        // Registered but no channel serves the model: a routing error, not 404.
-        let resp = client
-            .post(format!("{base}/backend-api/codex/responses"))
-            .json(&body)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        config.write().await.codex_models_enabled = true;
-        assert_eq!(
-            client
-                .get(format!("{base}/backend-api/codex/models"))
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::OK
-        );
-        config.write().await.codex_models_enabled = false;
-        assert_eq!(
-            client
-                .get(format!("{base}/backend-api/codex/models"))
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        config.write().await.codex_backend_enabled = false;
-        assert_eq!(
-            client
-                .post(format!("{base}/backend-api/codex/responses"))
-                .json(&body)
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn codex_models_route_auth_matrix() {
-        let (base, db, config) = serve_gateway(GatewayConfig {
-            require_key: true,
-            codex_backend_enabled: true,
-            codex_models_enabled: true,
-            ..GatewayConfig::default()
-        })
-        .await;
-        db.upsert_gateway_key(&GatewayKey {
-            id: "key-codex".into(),
-            name: "codex".into(),
-            key: "rd-codex".into(),
-            route_id: None,
-            model_policy: None,
-            created_at: 1,
-            enabled: true,
-        })
-        .unwrap();
-        let client = reqwest::Client::new();
-        let url = format!("{base}/backend-api/codex/models");
-
-        let resp = client.get(&url).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "missing bearer");
-        let resp = client
-            .get(&url)
-            .bearer_auth("not-a-key")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::UNAUTHORIZED,
-            "unknown bearer without the accept-any flag"
-        );
-        let resp = client
-            .get(&url)
-            .bearer_auth("rd-codex")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "registered key");
-
-        config.write().await.codex_backend_accept_any_bearer = true;
-        let resp = client
-            .get(&url)
-            .bearer_auth("not-a-key")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::UNAUTHORIZED,
-            "unbound OAuth bearer must fail closed"
-        );
-        let route: crate::gateway::types::GatewayRoute = serde_json::from_value(json!({
-            "id": "oauth-route", "name": "OAuth", "enabled": true, "created_at": 1,
-            "default_model": "restricted-model"
-        }))
-        .unwrap();
-        db.upsert_gateway_route(&route).unwrap();
-        let mut key = db.get_gateway_keys().unwrap().remove(0);
-        key.route_id = Some(route.id.clone());
-        db.upsert_gateway_key(&key).unwrap();
-        config.write().await.codex_backend_oauth_key_id = Some(key.id.clone());
-        let resp = client
-            .get(&url)
-            .bearer_auth("rotating-oauth")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body: Value = resp.json().await.unwrap();
-        assert_eq!(body["models"][0]["slug"], "restricted-model");
-        for token in ["rd-retired", ""] {
-            assert_eq!(
-                client
-                    .get(&url)
-                    .bearer_auth(token)
-                    .send()
-                    .await
-                    .unwrap()
-                    .status(),
-                StatusCode::UNAUTHORIZED
-            );
-        }
-        assert_eq!(
-            client
-                .get(&url)
-                .header("x-api-key", "arbitrary")
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
-        key.enabled = false;
-        db.upsert_gateway_key(&key).unwrap();
-        assert_eq!(
-            client
-                .get(&url)
-                .bearer_auth("rotating-oauth")
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
-        // The flag never weakens /v1/* auth.
-        let resp = client
-            .get(format!("{base}/v1/models"))
-            .bearer_auth("not-a-key")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn codex_models_catalog_shape_overrides_and_stable_etag() {
-        let mut overrides = std::collections::HashMap::new();
-        overrides.insert(
-            "gpt-x".to_string(),
-            crate::gateway::types::CodexModelOverride {
-                display_name: Some("Gateway X".to_string()),
-                context_window: Some(64_000),
-                token_budget: Some(crate::gateway::types::CodexTokenBudgetConfig {
-                    enabled: true,
-                    reminder_threshold_tokens: 8_000,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        );
-        let (base, db, _config) = serve_gateway(GatewayConfig {
-            require_key: false,
-            codex_backend_enabled: true,
-            codex_models_enabled: true,
-            codex_model_overrides: overrides,
-            ..GatewayConfig::default()
-        })
-        .await;
-        db.upsert_gateway_channel(&GatewayChannel {
-            id: "responses".into(),
-            endpoint_id: Some("mock".into()),
-            name: "mock".into(),
-            dialect: Dialect::Responses,
-            base_url: "http://127.0.0.1:9".into(),
-            api_key: "unused".into(),
-            path_override: None,
-            models: vec!["gpt-x".into()],
-            model_override: None,
-            priority: 0,
-            weight: 1,
-            enabled: true,
-            extra_headers: vec![],
-            imported_from: None,
-        })
-        .unwrap();
-
-        let client = reqwest::Client::new();
-        let url = format!("{base}/backend-api/codex/models");
-        let first = client.get(&url).send().await.unwrap();
-        assert_eq!(first.status(), StatusCode::OK);
-        let etag = first
-            .headers()
-            .get("etag")
-            .and_then(|value| value.to_str().ok())
-            .expect("catalog response must carry an ETag")
-            .to_string();
-        assert!(etag.starts_with('"') && etag.ends_with('"'));
-        let body: Value = first.json().await.unwrap();
-        let models = body["models"].as_array().unwrap();
-        assert_eq!(models.len(), 1);
-        let entry = &models[0];
-        assert_eq!(entry["slug"], "gpt-x");
-        assert_eq!(entry["display_name"], "Gateway X");
-        assert_eq!(entry["context_window"], 64_000);
-        assert_eq!(entry["shell_type"], "unified_exec");
-        assert_eq!(entry["visibility"], "list");
-        assert_eq!(entry["supported_in_api"], true);
-        assert!(entry["supported_reasoning_levels"].is_array());
-        assert_eq!(entry["truncation_policy"]["mode"], "tokens");
-        assert!(
-            entry["base_instructions"]
-                .as_str()
-                .is_some_and(|text| !text.is_empty())
-        );
-        assert_eq!(entry["model_messages"]["token_budget"]["enabled"], true);
-        assert_eq!(
-            entry["model_messages"]["token_budget"]["reminder_threshold_tokens"],
-            8_000
-        );
-
-        let second = client.get(&url).send().await.unwrap();
-        let etag2 = second
-            .headers()
-            .get("etag")
-            .and_then(|value| value.to_str().ok())
-            .unwrap()
-            .to_string();
-        assert_eq!(etag, etag2, "ETag must be stable for identical content");
-
-        // The OpenAI-style list keeps working alongside the codex catalog.
-        let resp = client
-            .get(format!("{base}/v1/models"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body: Value = resp.json().await.unwrap();
-        assert_eq!(body["data"][0]["id"], "gpt-x");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn codex_responses_uses_local_catalog_etag_even_when_upstream_sends_one() {
-        let upstream_app = Router::new().route(
-            "/v1/responses",
-            post(|| async {
-                (
-                    [("x-models-etag", "unrelated-upstream-catalog")],
-                    axum::Json(json!({
-                        "id": "resp_1",
-                        "model": "upstream-model",
-                        "status": "completed",
-                        "output": [],
-                        "usage": { "input_tokens": 1, "output_tokens": 1 }
-                    })),
-                )
-            }),
-        );
-        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream_addr = upstream_listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(upstream_listener, upstream_app).await.unwrap() });
-
-        let (base, db, _config) = serve_gateway(GatewayConfig {
-            require_key: false,
-            codex_backend_enabled: true,
-            codex_models_enabled: true,
-            ..GatewayConfig::default()
-        })
-        .await;
-        db.upsert_gateway_channel(&GatewayChannel {
-            id: "responses".into(),
-            endpoint_id: Some("mock".into()),
-            name: "mock".into(),
-            dialect: Dialect::Responses,
-            base_url: format!("http://{upstream_addr}"),
-            api_key: "upstream-key".into(),
-            path_override: None,
-            models: vec![],
-            model_override: None,
-            priority: 0,
-            weight: 1,
-            enabled: true,
-            extra_headers: vec![],
-            imported_from: None,
-        })
-        .unwrap();
-
-        let client = reqwest::Client::new();
-        let request = json!({
-            "model": "client-model",
-            "input": [{ "role": "user", "content": "hi" }]
-        });
-        let resp = client
-            .post(format!("{base}/backend-api/codex/responses"))
-            .json(&request)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let injected = resp
-            .headers()
-            .get("x-models-etag")
-            .and_then(|value| value.to_str().ok())
-            .expect("codex backend responses must carry X-Models-Etag")
-            .to_string();
-
-        let catalog = client
-            .get(format!("{base}/backend-api/codex/models"))
-            .send()
-            .await
-            .unwrap();
-        let catalog_etag = catalog
-            .headers()
-            .get("etag")
-            .and_then(|value| value.to_str().ok())
-            .unwrap()
-            .to_string();
-        assert_eq!(
-            injected, catalog_etag,
-            "X-Models-Etag must match the catalog ETag"
-        );
-
-        // The standard /v1 route is never tagged.
-        let resp = client
-            .post(format!("{base}/v1/responses"))
-            .json(&request)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get("x-models-etag").unwrap(),
-            "unrelated-upstream-catalog"
-        );
     }
 }

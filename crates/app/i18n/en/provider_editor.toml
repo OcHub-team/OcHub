@@ -103,13 +103,9 @@
 
 "provider_editor.codex.no_account" = "No account"
 
-"provider_editor.codex.context" = "Context management"
 
-"provider_editor.codex.context_off" = "Off"
 
-"provider_editor.codex.context_unavailable" = "Unavailable · History service not connected"
 
-"provider_editor.codex.context_pending" = "Pending Codex account and history verification"
 
 "provider_editor.codex.official" = "Official"
 
@@ -117,11 +113,8 @@
 
 "provider_editor.codex.advanced" = "Advanced"
 
-"provider_editor.codex.auto" = "Auto"
 
-"provider_editor.codex.on" = "On"
 
-"provider_editor.codex.off" = "Off"
 
 "provider_editor.codex.check" = "Check configuration"
 
