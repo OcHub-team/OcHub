@@ -3145,8 +3145,8 @@ impl WorkspaceBackend {
 fn policy_name(policy: ProviderSwitchPolicy) -> &'static str {
     match policy {
         ProviderSwitchPolicy::Abort => "abort",
-        ProviderSwitchPolicy::Preserve => "preserve",
-        ProviderSwitchPolicy::Discard => "discard",
+        ProviderSwitchPolicy::Save => "save",
+        ProviderSwitchPolicy::Revert => "revert",
     }
 }
 

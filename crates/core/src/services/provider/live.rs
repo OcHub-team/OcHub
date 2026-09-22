@@ -609,16 +609,81 @@ pub enum DriftResolution {
     Discard,
 }
 
-/// Report what a live write would change on disk, without writing anything.
-pub(crate) fn preview_live_drift(
+/// What to do with a changed live version before leaving its provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProviderVersionResolution {
+    /// Store the live files as the provider's new version.
+    #[default]
+    Save,
+    /// Keep the stored provider version and drop the live changes.
+    Revert,
+}
+
+/// The active provider version as stored by OcHub and as it currently exists
+/// on disk. This is deliberately independent of the provider being switched
+/// to: the decision belongs to the version the user is leaving.
+#[derive(Debug, Clone)]
+pub struct LiveChangePreview {
+    pub stored: Value,
+    pub live: Value,
+    pub drift: LiveDrift,
+}
+
+impl Default for LiveChangePreview {
+    fn default() -> Self {
+        Self {
+            stored: Value::Null,
+            live: Value::Null,
+            drift: LiveDrift::default(),
+        }
+    }
+}
+
+/// Compare the active provider's stored version with the files on disk.
+pub(crate) fn preview_current_live_change(
     db: &Database,
     app_type: &AppType,
     outgoing: Option<&Provider>,
-    incoming: &Provider,
-) -> Result<LiveDrift, AppError> {
+) -> Result<LiveChangePreview, AppError> {
     crate::plugin::registry::ensure_app_type_enabled(app_type)?;
-    let (_, _, report) = resolve_live_write(db, app_type, outgoing, incoming)?;
-    Ok(report)
+    if !drift::tracks_live_drift(app_type) {
+        return Ok(LiveChangePreview::default());
+    }
+    let Some(outgoing) = outgoing else {
+        return Ok(LiveChangePreview::default());
+    };
+
+    let stored = match drift::load_snapshot(app_type)
+        .filter(|snapshot| snapshot.provider_id == outgoing.id)
+    {
+        Some(snapshot) => snapshot.settings,
+        None => build_effective_settings_with_common_config(db, app_type, outgoing)?,
+    };
+    let live = match read_live_settings(*app_type) {
+        Ok(live) => live,
+        Err(_) => return Ok(LiveChangePreview::default()),
+    };
+    let (_, drift) = drift::merge_user_edits(app_type, &stored, &live, &stored);
+    Ok(LiveChangePreview {
+        stored,
+        live,
+        drift,
+    })
+}
+
+/// Persist the exact live version into the provider being left. Common config
+/// is removed before storage so it remains a shared overlay rather than being
+/// duplicated into every provider record.
+pub(crate) fn save_live_as_provider_version(
+    db: &Database,
+    app_type: &AppType,
+    outgoing: &Provider,
+) -> Result<Provider, AppError> {
+    let mut saved = outgoing.clone();
+    saved.settings_config = read_live_settings(*app_type)?;
+    normalize_provider_common_config_for_storage(db, app_type, &mut saved)?;
+    db.save_provider(app_type.as_str(), &saved)?;
+    Ok(saved)
 }
 
 /// Write `incoming` to the live config, keeping edits made outside OcHub.
@@ -1739,7 +1804,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hand_edit_survives_a_switch_without_being_absorbed_by_the_outgoing_provider() {
+    fn a_hand_edit_is_saved_to_the_outgoing_version_without_polluting_the_target() {
         let _home = TestHome::new();
         let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
 
@@ -1770,28 +1835,32 @@ mod tests {
             crate::services::provider::ProviderService::switch(&state, AppType::Claude, "beta")
                 .expect("switch to beta");
 
-        // The edit is carried onto beta's configuration ...
+        // Beta is written from its own stored version, so alpha's edit does not
+        // leak into the target connection.
         let after: Value = read_json_file(&path).expect("read live after switch");
-        assert_eq!(after["hooks"], json!({ "PreToolUse": [] }));
+        assert!(after.get("hooks").is_none());
         assert_eq!(
             after["env"]["ANTHROPIC_BASE_URL"],
             json!("https://beta.example")
         );
 
-        // ... and is not absorbed into the provider being left behind.
+        // The exact live edit becomes alpha's new stored version.
         let alpha = state
             .db
             .get_provider_by_id("alpha", "claude")
             .expect("load alpha")
             .expect("alpha exists");
-        assert!(
-            alpha.settings_config.get("hooks").is_none(),
-            "a file-level edit must not become a property of the outgoing provider"
-        );
+        assert_eq!(alpha.settings_config["hooks"], json!({ "PreToolUse": [] }));
 
         let drift = result.drift.expect("switch reports the external edit");
         assert_eq!(drift.preserved, vec!["hooks".to_string()]);
         assert!(!drift.has_conflicts());
+
+        // Switching back restores alpha's saved version.
+        crate::services::provider::ProviderService::switch(&state, AppType::Claude, "alpha")
+            .expect("switch back to alpha");
+        let restored: Value = read_json_file(&path).expect("read restored alpha");
+        assert_eq!(restored["hooks"], json!({ "PreToolUse": [] }));
     }
 
     #[test]
@@ -1852,7 +1921,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hand_edited_codex_key_survives_a_switch_that_changes_a_different_key() {
+    fn a_hand_edited_codex_file_is_saved_to_the_outgoing_version_only() {
         let _home = TestHome::new();
         let state = AppState::new(Arc::new(Database::memory().expect("memory db")));
 
@@ -1885,26 +1954,43 @@ mod tests {
                 .expect("switch to beta");
 
         let after = std::fs::read_to_string(&path).expect("read live after switch");
-        assert!(
-            after.contains("approval_policy = \"never\""),
-            "an edit beta says nothing about must survive: {after}"
-        );
-        assert!(
-            after.contains("[mcp_servers.mine]"),
-            "a hand-added table must survive: {after}"
-        );
+        assert!(!after.contains("approval_policy = \"never\""));
+        assert!(!after.contains("[mcp_servers.mine]"));
         assert!(after.contains("model_provider = \"beta\""));
 
-        // The whole file used to be one unresolvable conflict; now only the key
-        // both sides set is reported.
+        // The whole live file becomes alpha's new version instead of being
+        // merged into beta.
+        let alpha = state
+            .db
+            .get_provider_by_id("alpha", "codex")
+            .expect("load alpha")
+            .expect("alpha exists");
+        let saved = alpha.settings_config["config"]
+            .as_str()
+            .expect("saved config string");
+        assert!(saved.contains("approval_policy = \"never\""));
+        assert!(saved.contains("[mcp_servers.mine]"));
+        assert!(saved.contains("model_provider = \"hand\""));
+
         let drift = result.drift.expect("switch reports the external edit");
-        assert_eq!(
-            drift.conflicts.len(),
-            1,
-            "unexpected conflicts: {:?}",
-            drift.conflicts
+        assert!(!drift.is_empty());
+        assert!(
+            !drift.has_conflicts(),
+            "the decision compares alpha with its own saved version, not beta"
         );
-        assert_eq!(drift.conflicts[0].path, "config.model_provider");
+        assert!(
+            drift
+                .preserved
+                .iter()
+                .any(|path| path == "config.model_provider")
+        );
+
+        crate::services::provider::ProviderService::switch(&state, AppType::Codex, "alpha")
+            .expect("switch back to alpha");
+        let restored = std::fs::read_to_string(&path).expect("read restored alpha");
+        assert!(restored.contains("approval_policy = \"never\""));
+        assert!(restored.contains("[mcp_servers.mine]"));
+        assert!(restored.contains("model_provider = \"hand\""));
     }
 
     #[test]

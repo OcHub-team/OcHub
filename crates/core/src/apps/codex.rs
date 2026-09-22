@@ -4,8 +4,8 @@ use std::process::Command;
 
 use crate::error::AppError;
 use crate::paths::{
-    atomic_write, delete_file, get_home_dir, read_json_file, sanitize_provider_name,
-    write_json_file, write_text_file,
+    atomic_write, delete_file, get_home_dir, sanitize_provider_name, write_json_file,
+    write_text_file,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -86,6 +86,24 @@ pub fn write_codex_live_atomic(
     auth: &Value,
     config_text_opt: Option<&str>,
 ) -> Result<(), AppError> {
+    let auth_bytes =
+        serde_json::to_vec_pretty(auth).map_err(|source| AppError::JsonSerialize { source })?;
+    write_codex_live_bytes_atomic(&auth_bytes, config_text_opt)
+}
+
+/// Restore an `auth.json` version even when its contents are not valid JSON.
+/// Invalid syntax is still user data and must survive a provider round trip.
+pub fn write_codex_live_raw_atomic(
+    auth_text: &str,
+    config_text_opt: Option<&str>,
+) -> Result<(), AppError> {
+    write_codex_live_bytes_atomic(auth_text.as_bytes(), config_text_opt)
+}
+
+fn write_codex_live_bytes_atomic(
+    auth_bytes: &[u8],
+    config_text_opt: Option<&str>,
+) -> Result<(), AppError> {
     let auth_path = get_codex_auth_path();
     let config_path = get_codex_config_path();
 
@@ -115,7 +133,7 @@ pub fn write_codex_live_atomic(
     }
 
     // 第一步：写 auth.json
-    write_json_file(&auth_path, auth)?;
+    atomic_write(&auth_path, auth_bytes)?;
 
     // 第二步：写 config.toml（失败则回滚 auth.json）
     if let Err(e) = write_text_file(&config_path, &cfg_text) {
@@ -1018,7 +1036,11 @@ pub fn write_codex_provider_live_with_catalog(
         .map(|text| prepare_codex_config_text_with_model_catalog(settings, text))
         .transpose()?;
 
-    write_codex_live_for_provider(category, auth, prepared_config.as_deref())
+    if let Some(auth_raw) = settings.get("authRaw").and_then(Value::as_str) {
+        write_codex_live_raw_atomic(auth_raw, prepared_config.as_deref())
+    } else {
+        write_codex_live_for_provider(category, auth, prepared_config.as_deref())
+    }
 }
 
 /// Extract a provider-scoped `experimental_bearer_token` from Codex `config.toml`.
@@ -1190,10 +1212,14 @@ fn remove_codex_experimental_bearer_token(config_text: &str) -> Result<String, A
 pub fn read_codex_live_settings() -> Result<Value, AppError> {
     let auth_path = get_codex_auth_path();
     let auth_present = auth_path.exists();
-    let auth: Value = if auth_present {
-        read_json_file(&auth_path)?
+    let (auth, auth_raw): (Value, Option<String>) = if auth_present {
+        let text = std::fs::read_to_string(&auth_path).map_err(|e| AppError::io(&auth_path, e))?;
+        match serde_json::from_str(&text) {
+            Ok(value) => (value, None),
+            Err(_) => (json!({}), Some(text)),
+        }
     } else {
-        json!({})
+        (json!({}), None)
     };
     let cfg_text = read_and_validate_codex_config_text()?;
     if !auth_present && cfg_text.trim().is_empty() {
@@ -1203,7 +1229,13 @@ pub fn read_codex_live_settings() -> Result<Value, AppError> {
             "Codex configuration is missing",
         ));
     }
-    Ok(json!({ "auth": auth, "config": cfg_text }))
+    let mut result = json!({ "auth": auth, "config": cfg_text });
+    if let Some(auth_raw) = auth_raw
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("authRaw".to_string(), Value::String(auth_raw));
+    }
+    Ok(result)
 }
 
 /// `[model_providers.custom]` entry that makes an official (ChatGPT OAuth)
@@ -1372,13 +1404,7 @@ pub fn strip_codex_unified_session_bucket_from_settings(
     Ok(())
 }
 
-/// Route a Codex live write between full auth+config or config-only.
-///
-/// Official providers with usable login material own `auth.json`. A custom
-/// provider owns it only when it explicitly enables `requires_openai_auth`,
-/// carries OAuth material, and the compatibility setting does not request that
-/// the current official login be preserved. Relay-only providers always update
-/// `config.toml` alone.
+/// Restore one complete Codex provider version.
 ///
 /// 统一会话开关开启时，官方配置在落盘前注入共享的 `custom` 路由
 /// （见 `inject_codex_unified_session_bucket`）。
@@ -1397,54 +1423,12 @@ pub fn write_codex_live_for_provider(
         };
     let config_text = unified_official_config.as_deref().or(config_text);
 
-    let preserve_official_auth = crate::settings::preserve_codex_official_auth_on_switch();
-    let should_write_auth = codex_provider_owns_live_auth(
-        category,
-        auth,
-        config_text.unwrap_or(""),
-        preserve_official_auth,
-    );
-
     if category == Some("official") {
-        if should_write_auth {
-            write_codex_live_atomic(auth, config_text)
-        } else {
-            write_codex_live_config_atomic(config_text)
-        }
+        write_codex_live_atomic(auth, config_text)
     } else {
         let live_config = prepare_codex_provider_live_config(auth, config_text.unwrap_or(""))?;
-        if should_write_auth {
-            let live_auth = codex_auth_without_api_key(auth);
-            write_codex_live_atomic(&live_auth, Some(&live_config))
-        } else {
-            write_codex_live_config_atomic(Some(&live_config))
-        }
+        write_codex_live_atomic(auth, Some(&live_config))
     }
-}
-
-/// Whether this provider is authoritative for the live `auth.json`.
-///
-/// Kept pure (the preserve setting is an argument) so switching and backfill
-/// can make the same decision without hiding global state inside the rule.
-pub fn codex_provider_owns_live_auth(
-    category: Option<&str>,
-    auth: &Value,
-    config_text: &str,
-    preserve_official_auth: bool,
-) -> bool {
-    if category == Some("official") {
-        return codex_auth_has_login_material(auth);
-    }
-
-    !preserve_official_auth
-        && codex_config_requires_openai_auth(config_text)
-        && codex_auth_has_oauth_login_material(auth)
-}
-
-fn codex_auth_without_api_key(auth: &Value) -> Value {
-    let mut live_auth = auth.as_object().cloned().unwrap_or_default();
-    live_auth.remove("OPENAI_API_KEY");
-    Value::Object(live_auth)
 }
 
 /// Build the live Codex config for provider switching.
@@ -1598,7 +1582,42 @@ pub fn update_codex_toml_field(toml_str: &str, field: &str, value: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{env_lock, remove_var, set_var};
     use serde_json::json;
+
+    #[test]
+    fn malformed_auth_is_read_and_restored_as_exact_text() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().expect("create temp home");
+        set_var("OCHUB_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload isolated settings");
+
+        let auth_text = "{ this is deliberately not valid json\n";
+        let config_text = "model = \"gpt-5.5\"\n";
+        std::fs::create_dir_all(get_codex_config_dir()).expect("create codex dir");
+        std::fs::write(get_codex_auth_path(), auth_text).expect("write malformed auth");
+        std::fs::write(get_codex_config_path(), config_text).expect("write config");
+
+        let settings = read_codex_live_settings().expect("read live settings");
+        assert_eq!(settings["auth"], json!({}));
+        assert_eq!(settings["authRaw"], auth_text);
+
+        std::fs::write(get_codex_auth_path(), "{}").expect("replace auth");
+        write_codex_provider_live_with_catalog(
+            &settings,
+            Some("official"),
+            &settings["auth"],
+            settings["config"].as_str(),
+        )
+        .expect("restore malformed auth");
+        assert_eq!(
+            std::fs::read_to_string(get_codex_auth_path()).expect("read restored auth"),
+            auth_text
+        );
+
+        remove_var("OCHUB_TEST_HOME");
+        crate::settings::reload_settings().expect("restore settings");
+    }
 
     #[test]
     fn unified_session_bucket_injects_for_empty_official_config() {
@@ -1760,46 +1779,6 @@ requires_openai_auth = true
 
         assert!(codex_config_requires_openai_auth(combined));
         assert!(!codex_config_requires_openai_auth(&relay_only));
-    }
-
-    #[test]
-    fn provider_auth_ownership_matches_the_three_modes() {
-        let oauth = json!({
-            "auth_mode": "chatgpt",
-            "tokens": { "access_token": "oauth-access" }
-        });
-        let relay_only = r#"model_provider = "relay"
-
-[model_providers.relay]
-base_url = "https://relay.example/v1"
-experimental_bearer_token = "sk-relay"
-"#;
-        let login_or_combined = format!("{relay_only}requires_openai_auth = true\n");
-
-        assert!(!codex_provider_owns_live_auth(
-            Some("custom"),
-            &oauth,
-            relay_only,
-            false
-        ));
-        assert!(codex_provider_owns_live_auth(
-            Some("custom"),
-            &oauth,
-            &login_or_combined,
-            false
-        ));
-        assert!(!codex_provider_owns_live_auth(
-            Some("custom"),
-            &oauth,
-            &login_or_combined,
-            true
-        ));
-        assert!(codex_provider_owns_live_auth(
-            Some("official"),
-            &oauth,
-            "",
-            true
-        ));
     }
 
     #[test]

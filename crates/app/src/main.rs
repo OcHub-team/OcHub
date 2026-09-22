@@ -29,6 +29,7 @@ mod skills_view;
 mod theme_view;
 mod tools_view;
 mod usage_view;
+mod window_chrome;
 
 use std::borrow::Cow;
 use std::fs;
@@ -48,7 +49,7 @@ mod layout;
 
 use ochub_ui::{
     anim, chart, code_editor, diff_view, fold, gallery as gallery_view, highlight, icons,
-    notifications, scrollbar, text_input, theme, window_chrome,
+    notifications, scrollbar, text_input, theme,
 };
 
 use app_ui::AppRoot;

@@ -1160,8 +1160,10 @@ pub enum CommonConfigCommand {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum DriftPolicyArg {
     Abort,
-    Preserve,
-    Discard,
+    #[value(alias = "preserve")]
+    Save,
+    #[value(alias = "discard")]
+    Revert,
 }
 
 #[derive(Debug, Args)]

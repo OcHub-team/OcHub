@@ -12,7 +12,7 @@ use crate::gateway::{
     GatewayModelRule, GatewayReasoningConfig, GatewayRoute, GatewayStatus, StationQuotaApi,
 };
 use crate::services::key_quota;
-use crate::services::provider::{DriftResolution, ProviderService};
+use crate::services::provider::ProviderService;
 use crate::{AppId, AppType, UsageResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -870,7 +870,7 @@ impl Application {
             &self.state,
             app_type,
             &target.id,
-            DriftResolution::Preserve,
+            crate::services::provider::ProviderVersionResolution::Save,
         )?;
         Ok(json!({
             "app": app,

@@ -41,7 +41,7 @@ pub(crate) use live::{
 };
 
 pub use drift::{DriftConflict, LiveDrift, LiveSnapshot};
-pub use live::DriftResolution;
+pub use live::{DriftResolution, LiveChangePreview, ProviderVersionResolution};
 
 // Internal re-exports
 use live::{
@@ -105,72 +105,6 @@ impl ProviderService {
         } else {
             provider_exists_in_live_config(app_type, provider_id)
         }
-    }
-
-    /// Store account material the tool refreshed on its own back onto the
-    /// provider being switched away from.
-    ///
-    /// Codex rewrites `auth.json` when its OAuth token is refreshed. That token
-    /// belongs to the account that was active, so unlike the rest of the file it
-    /// cannot be carried onto the next provider — it has to be captured here or
-    /// it is lost. Only a provider that actually owns the live `auth.json` may
-    /// claim it; a config-only provider is merely borrowing whichever account
-    /// happens to be logged in.
-    fn capture_outgoing_account_state(
-        state: &AppState,
-        app_type: &AppType,
-        outgoing: &Provider,
-    ) -> Result<(), AppError> {
-        if !matches!(app_type, AppType::Codex) {
-            return Ok(());
-        }
-
-        let Ok(live) = read_live_settings(*app_type) else {
-            return Ok(());
-        };
-        let Some(live_auth) = live.get("auth") else {
-            return Ok(());
-        };
-
-        let stored_auth = outgoing.settings_config.get("auth");
-        if stored_auth == Some(live_auth) {
-            return Ok(());
-        }
-
-        let owns_live_auth = crate::apps::codex::codex_provider_owns_live_auth(
-            outgoing.category.as_deref(),
-            stored_auth.unwrap_or(&Value::Null),
-            outgoing
-                .settings_config
-                .get("config")
-                .and_then(Value::as_str)
-                .unwrap_or(""),
-            crate::settings::preserve_codex_official_auth_on_switch(),
-        );
-        if !owns_live_auth {
-            return Ok(());
-        }
-
-        let mut captured = live_auth.clone();
-
-        // The writer strips `OPENAI_API_KEY` out of a non-official provider's
-        // live `auth.json` and projects it into the config's bearer token, so
-        // taking the live object verbatim would delete the stored key.
-        if let (Some(captured), Some(stored_key)) = (
-            captured.as_object_mut(),
-            stored_auth.and_then(crate::apps::codex::extract_codex_auth_api_key),
-        ) {
-            captured
-                .entry("OPENAI_API_KEY".to_string())
-                .or_insert(Value::String(stored_key));
-        }
-
-        let mut updated = outgoing.clone();
-        let Some(settings) = updated.settings_config.as_object_mut() else {
-            return Ok(());
-        };
-        settings.insert("auth".to_string(), captured);
-        state.db.save_provider(app_type.as_str(), &updated)
     }
 
     fn provider_live_config_managed(provider: &Provider) -> Option<bool> {
@@ -611,26 +545,27 @@ impl ProviderService {
         state: &AppState,
         app_type: AppType,
         id: &str,
-    ) -> Result<LiveDrift, AppError> {
+    ) -> Result<LiveChangePreview, AppError> {
         crate::plugin::registry::ensure_app_type_enabled(&app_type)?;
 
         let providers = state.db.get_all_providers(app_type.as_str())?;
-        let Some(provider) = providers.get(id) else {
-            return Ok(LiveDrift::default());
+        let Some(_provider) = providers.get(id) else {
+            return Ok(LiveChangePreview::default());
         };
         if app_type.is_additive_mode() {
-            return Ok(LiveDrift::default());
+            return Ok(LiveChangePreview::default());
         }
 
         let outgoing = crate::settings::get_effective_current_provider(&state.db, &app_type)?
             .and_then(|current_id| providers.get(&current_id).cloned());
 
-        live::preview_live_drift(state.db.as_ref(), &app_type, outgoing.as_ref(), provider)
+        live::preview_current_live_change(state.db.as_ref(), &app_type, outgoing.as_ref())
     }
 
-    /// Switch to a provider, keeping any edit made outside OcHub.
+    /// Switch to a provider, storing any changed live files as a new version of
+    /// the provider being left.
     pub fn switch(state: &AppState, app_type: AppType, id: &str) -> Result<SwitchResult, AppError> {
-        Self::switch_with(state, app_type, id, DriftResolution::Preserve)
+        Self::switch_with(state, app_type, id, ProviderVersionResolution::Save)
     }
 
     /// Switch to a provider, resolving an external edit as the caller decided.
@@ -638,7 +573,7 @@ impl ProviderService {
         state: &AppState,
         app_type: AppType,
         id: &str,
-        resolution: DriftResolution,
+        resolution: ProviderVersionResolution,
     ) -> Result<SwitchResult, AppError> {
         crate::plugin::registry::ensure_app_type_enabled(&app_type)?;
 
@@ -657,7 +592,7 @@ impl ProviderService {
         app_type: AppType,
         id: &str,
         providers: &indexmap::IndexMap<String, Provider>,
-        resolution: DriftResolution,
+        resolution: ProviderVersionResolution,
     ) -> Result<SwitchResult, AppError> {
         let provider = providers
             .get(id)
@@ -689,11 +624,22 @@ impl ProviderService {
             .as_deref()
             .and_then(|current_id| providers.get(current_id));
 
-        // The live file is no longer read back wholesale into the provider we
-        // are leaving — an edit made outside OcHub is a property of the file,
-        // not of that provider, and `write_live_preserving_user_edits` carries
-        // it forward instead. Account state is the exception: it belongs to the
-        // account that was active and cannot follow the switch.
+        let preview = live::preview_current_live_change(state.db.as_ref(), &app_type, outgoing)?;
+        let mut provider_to_write = provider.clone();
+        if resolution == ProviderVersionResolution::Save
+            && !preview.drift.is_empty()
+            && let Some(outgoing) = outgoing
+        {
+            let saved =
+                live::save_live_as_provider_version(state.db.as_ref(), &app_type, outgoing)?;
+            if saved.id == provider_to_write.id {
+                provider_to_write = saved;
+            }
+        }
+
+        // Claude and Kimi keep their official-login vaults outside the provider
+        // settings payload. Preserve that existing account-card behavior while
+        // the application configuration itself follows the version decision.
         if let Some(tool) = crate::official_auth::OfficialTool::from_app(app_type) {
             let outgoing_official =
                 outgoing.filter(|provider| crate::official_auth::is_official_card(provider));
@@ -709,17 +655,6 @@ impl ProviderService {
             }
         }
 
-        if let (Some(current_id), Some(outgoing)) = (current_id.as_deref(), outgoing)
-            && current_id != id
-            && !app_type.is_additive_mode()
-            && let Err(e) = Self::capture_outgoing_account_state(state, &app_type, outgoing)
-        {
-            log::warn!("Backfill failed: {e}");
-            result
-                .warnings
-                .push(format!("backfill_failed:{current_id}"));
-        }
-
         // Additive mode apps skip setting is_current (no such concept)
         if !app_type.is_additive_mode() {
             // Update local settings (device-level, takes priority)
@@ -729,17 +664,18 @@ impl ProviderService {
             state.db.set_current_provider(app_type.as_str(), id)?;
         }
 
-        // Sync to live, resolving any external edit the way the caller decided.
-        let drift = live::write_live_resolving_drift(
+        // The target is always written from its stored version. Live edits
+        // belong to the provider being left and were either saved above or
+        // explicitly reverted by the caller.
+        live::write_live_with_common_config_ungated(
             state.db.as_ref(),
             &app_type,
-            outgoing,
-            provider,
-            resolution,
+            &provider_to_write,
         )?;
-        live::log_drift(&app_type, provider, &drift);
-        if !drift.is_empty() {
-            result.drift = Some(drift);
+        drift::record_snapshot(&app_type, &provider_to_write.id);
+        live::log_drift(&app_type, &provider_to_write, &preview.drift);
+        if !preview.drift.is_empty() {
+            result.drift = Some(preview.drift);
         }
 
         // Hermes is additive: update top-level `model:` section to point at this provider.
@@ -1611,6 +1547,7 @@ pub struct ProviderSortUpdate {
 mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::test_support::{env_lock, remove_var, set_var};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -1698,5 +1635,92 @@ mod tests {
     fn duplicating_an_unknown_provider_is_an_error() {
         let state = state();
         assert!(ProviderService::duplicate(&state, AppType::Claude, "ghost").is_err());
+    }
+
+    #[test]
+    fn saving_a_malformed_codex_auth_version_survives_a_round_trip() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().expect("create temp home");
+        set_var("OCHUB_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload isolated settings");
+
+        let state = state();
+        let mut first = Provider::with_id(
+            "first".to_string(),
+            "First".to_string(),
+            json!({
+                "auth": {"OPENAI_API_KEY": "first-old"},
+                "config": "model = \"gpt-5.5\"\n"
+            }),
+            None,
+        );
+        first.category = Some("official".to_string());
+        let mut second = Provider::with_id(
+            "second".to_string(),
+            "Second".to_string(),
+            json!({
+                "auth": {"OPENAI_API_KEY": "second"},
+                "config": "model = \"gpt-5.4\"\n"
+            }),
+            None,
+        );
+        second.category = Some("official".to_string());
+        state.db.save_provider("codex", &first).expect("save first");
+        state
+            .db
+            .save_provider("codex", &second)
+            .expect("save second");
+        state
+            .db
+            .set_current_provider("codex", "first")
+            .expect("set current in db");
+        crate::settings::set_current_provider(&AppType::Codex, Some("first"))
+            .expect("set local current");
+
+        let malformed = "{ invalid auth that Codex left behind\n";
+        crate::apps::codex::write_codex_live_raw_atomic(
+            malformed,
+            Some("model = \"gpt-5.5\"\nnew_option = true\n"),
+        )
+        .expect("write edited live version");
+
+        let preview = ProviderService::preview_switch(&state, AppType::Codex, "second")
+            .expect("preview switch");
+        assert!(!preview.drift.is_empty());
+        assert_eq!(preview.live["authRaw"], malformed);
+
+        ProviderService::switch_with(
+            &state,
+            AppType::Codex,
+            "second",
+            ProviderVersionResolution::Save,
+        )
+        .expect("save first and switch to second");
+        let saved_first = state
+            .db
+            .get_provider_by_id("first", "codex")
+            .expect("read first")
+            .expect("first exists");
+        assert_eq!(saved_first.settings_config["authRaw"], malformed);
+        assert_eq!(
+            saved_first.settings_config["config"],
+            "model = \"gpt-5.5\"\nnew_option = true\n"
+        );
+
+        ProviderService::switch_with(
+            &state,
+            AppType::Codex,
+            "first",
+            ProviderVersionResolution::Save,
+        )
+        .expect("switch back to saved first version");
+        assert_eq!(
+            std::fs::read_to_string(crate::apps::codex::get_codex_auth_path())
+                .expect("read restored auth"),
+            malformed
+        );
+
+        remove_var("OCHUB_TEST_HOME");
+        crate::settings::reload_settings().expect("restore settings");
     }
 }

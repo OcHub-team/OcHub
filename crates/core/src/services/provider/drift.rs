@@ -6,9 +6,9 @@
 //! "does the file differ from the database?" into the two that matter: what did
 //! somebody else change, and does that collide with what we are about to write?
 //!
-//! Everything that did not collide is carried onto the next configuration, so a
-//! hand-added `hooks` block survives a provider switch instead of being absorbed
-//! into the outgoing provider's stored settings.
+//! A changed live file is treated as a new version of the active provider. The
+//! caller can save that version into the provider record or restore the stored
+//! version before switching away.
 //!
 //! The snapshot store is device-local (`~/.ochub/live_snapshots.json`) on
 //! purpose: a live file belongs to one machine, so a baseline must never ride DB
@@ -25,20 +25,6 @@ use crate::error::AppError;
 
 /// Snapshot file name under the app config dir.
 const STORE_FILE: &str = "live_snapshots.json";
-
-/// Subtrees that belong to the *outgoing* provider rather than to the file, and
-/// so must never be carried forward onto the next provider.
-///
-/// Codex `auth` holds account login material: a token refreshed by Codex itself
-/// belongs to the account that was active, not to whatever provider is being
-/// switched to. Carrying it forward would hand one account's credentials to
-/// another provider.
-fn protected_paths(app_type: &AppType) -> &'static [&'static str] {
-    match app_type {
-        AppType::Codex => &["auth"],
-        _ => &[],
-    }
-}
 
 /// Keys whose value is an entire TOML document carried as one string.
 ///
@@ -57,15 +43,10 @@ pub(crate) fn toml_text_paths(app_type: &AppType) -> &'static [&'static str] {
 /// Per-app rules the merge consults as it walks down a settings tree.
 #[derive(Clone, Copy)]
 struct MergeRules<'a> {
-    protected: &'a [&'a str],
     toml_text: &'a [&'a str],
 }
 
 impl MergeRules<'_> {
-    fn is_protected(&self, path: &str) -> bool {
-        matches_path(path, self.protected)
-    }
-
     fn is_toml_text(&self, path: &str) -> bool {
         matches_path(path, self.toml_text)
     }
@@ -177,7 +158,6 @@ pub(crate) fn merge_user_edits(
     let incoming_map = incoming.as_object().cloned().unwrap_or_default();
 
     let rules = MergeRules {
-        protected: protected_paths(app_type),
         toml_text: toml_text_paths(app_type),
     };
     let merged = merge_objects(base_map, live_map, &incoming_map, "", rules, &mut drift);
@@ -220,10 +200,6 @@ fn merge_objects(
 
     for key in keys {
         let path = join_path(prefix, key);
-        if rules.is_protected(&path) {
-            continue;
-        }
-
         let base_value = base.get(key);
         let live_value = live.get(key);
         let incoming_value = incoming.get(key);
@@ -789,9 +765,9 @@ mod tests {
     }
 
     #[test]
-    fn codex_auth_is_never_carried_onto_the_next_account() {
-        // Codex refreshes its own OAuth token in auth.json. That belongs to the
-        // account that was active, not to whatever provider comes next.
+    fn codex_auth_participates_in_version_drift() {
+        // auth.json is part of a Codex connection version. A refreshed token is
+        // therefore visible to the same three-way drift machinery as config.toml.
         let base = json!({
             "auth": { "tokens": { "access_token": "old" } },
             "config": "model = \"gpt-5\"\n"
@@ -807,8 +783,17 @@ mod tests {
 
         let (merged, drift) = merge_user_edits(&AppType::Codex, &base, &live, &incoming);
 
-        assert_eq!(merged["auth"], json!({ "OPENAI_API_KEY": "sk-other" }));
-        assert!(drift.is_empty());
+        assert_eq!(
+            merged["auth"],
+            json!({
+                "OPENAI_API_KEY": "sk-other",
+                "tokens": { "access_token": "refreshed" }
+            })
+        );
+        assert_eq!(
+            drift.preserved,
+            vec!["auth.tokens.access_token".to_string()]
+        );
     }
 
     fn merge_codex_config(base: &str, live: &str, incoming: &str) -> (String, LiveDrift) {

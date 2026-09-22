@@ -7,7 +7,6 @@
 "app_settings.claude.onboarding.label" = "Claude の初期案内をスキップ"
 "app_settings.claude.plugin.label" = "Claude プラグイン連携"
 "app_settings.codex.migrate_history.label" = "既存の Codex セッションを取り込む"
-"app_settings.codex.preserve_auth.label" = "サードパーティでも現在の OAuth を保持"
 "app_settings.codex.unify_history.label" = "Codex のセッション履歴を統合"
 "app_settings.config_dir.save" = "ディレクトリを保存"
 "app_settings.config_dir.title" = "設定ディレクトリ"

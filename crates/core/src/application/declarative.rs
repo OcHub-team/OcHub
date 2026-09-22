@@ -373,8 +373,8 @@ impl Application {
                     .and_then(|live| live.on_drift.as_deref())
                     .unwrap_or("abort")
                 {
-                    "preserve" => ProviderSwitchPolicy::Preserve,
-                    "discard" => ProviderSwitchPolicy::Discard,
+                    "save" | "preserve" => ProviderSwitchPolicy::Save,
+                    "revert" | "discard" => ProviderSwitchPolicy::Revert,
                     _ => ProviderSwitchPolicy::Abort,
                 };
                 let plugin =

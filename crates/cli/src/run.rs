@@ -4463,8 +4463,8 @@ fn app_id(raw: &str) -> Result<AppId, CliError> {
 fn policy(policy: DriftPolicyArg) -> ProviderSwitchPolicy {
     match policy {
         DriftPolicyArg::Abort => ProviderSwitchPolicy::Abort,
-        DriftPolicyArg::Preserve => ProviderSwitchPolicy::Preserve,
-        DriftPolicyArg::Discard => ProviderSwitchPolicy::Discard,
+        DriftPolicyArg::Save => ProviderSwitchPolicy::Save,
+        DriftPolicyArg::Revert => ProviderSwitchPolicy::Revert,
     }
 }
 

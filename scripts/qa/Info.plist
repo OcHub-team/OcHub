@@ -35,6 +35,16 @@
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
+    <!--
+      Keep the fixed QA bundle independent from a running production build.
+      This separates the instance lock, database, and every supported tool's
+      live configuration while preserving the same path between QA rebuilds.
+    -->
+    <key>LSEnvironment</key>
+    <dict>
+        <key>OCHUB_TEST_HOME</key>
+        <string>/tmp/OCHUB-QA-home</string>
+    </dict>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

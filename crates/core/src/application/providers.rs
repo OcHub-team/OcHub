@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::application::{
-    Application, ApplicationError, ApplicationResult, ProviderDetails, ProviderListItem,
-    ProviderSwitchPlan,
+    Application, ApplicationError, ApplicationResult, ConfigDiffFile, ProviderDetails,
+    ProviderListItem, ProviderSwitchPlan,
 };
 use crate::plugin::AppMode;
 use crate::provider_config::Severity;
 use crate::services::provider::{
-    DriftConflict, DriftResolution, LiveDrift, ProviderService, SwitchResult,
+    DriftConflict, LiveDrift, ProviderService, ProviderVersionResolution, SwitchResult,
 };
 use crate::{AppId, AppType, Provider};
 
@@ -16,8 +17,10 @@ use crate::{AppId, AppType, Provider};
 pub enum ProviderSwitchPolicy {
     #[default]
     Abort,
-    Preserve,
-    Discard,
+    #[serde(alias = "preserve")]
+    Save,
+    #[serde(alias = "discard")]
+    Revert,
 }
 
 impl Application {
@@ -296,7 +299,7 @@ impl Application {
 
     pub fn add_provider_to_live(&self, app: &AppId, id: &str) -> ApplicationResult<SwitchResult> {
         if AppType::from_app_id(app).is_some() {
-            return self.switch_provider(app, id, ProviderSwitchPolicy::Preserve);
+            return self.switch_provider(app, id, ProviderSwitchPolicy::Save);
         }
         let plugin = self.resolve_plugin(app)?;
         let mut provider = self
@@ -308,7 +311,7 @@ impl Application {
                 id: id.to_string(),
             })?;
         if plugin.mode() == AppMode::Switch {
-            return self.switch_provider(app, id, ProviderSwitchPolicy::Preserve);
+            return self.switch_provider(app, id, ProviderSwitchPolicy::Save);
         }
         plugin
             .live()
@@ -326,7 +329,7 @@ impl Application {
         app: &AppId,
         id: &str,
     ) -> ApplicationResult<ProviderSwitchPlan> {
-        let target = self
+        let _target = self
             .state
             .db
             .get_provider_by_id(id, app.as_str())?
@@ -336,14 +339,16 @@ impl Application {
             })?;
         if let Some(app_type) = AppType::from_app_id(app) {
             let current = ProviderService::current(&self.state, app_type)?;
-            let drift = ProviderService::preview_switch(&self.state, app_type, id)?;
+            let preview = ProviderService::preview_switch(&self.state, app_type, id)?;
+            let diff_files = config_diff_files(app_type, &preview.stored, &preview.live);
             return Ok(ProviderSwitchPlan {
                 app: app.to_string(),
                 provider_id: id.to_string(),
                 current_provider_id: (!current.is_empty()).then_some(current.clone()),
                 config_path: crate::services::provider::drift::live_config_label(&app_type),
-                would_change: current != id || !drift.is_empty(),
-                drift,
+                would_change: current != id || !preview.drift.is_empty(),
+                drift: preview.drift,
+                diff_files,
             });
         }
         let plugin = self.resolve_plugin(app)?;
@@ -367,21 +372,37 @@ impl Application {
             LiveDrift {
                 conflicts: vec![DriftConflict {
                     path: "$".to_string(),
-                    live,
-                    incoming: target.settings_config.clone(),
+                    live: live.clone(),
+                    incoming: current_provider
+                        .as_ref()
+                        .map(|provider| provider.settings_config.clone())
+                        .unwrap_or(Value::Null),
                 }],
                 ..Default::default()
             }
         } else {
             LiveDrift::default()
         };
+        let config_path = plugin.config_dir()?.to_string_lossy().into_owned();
+        let diff_files = current_provider
+            .as_ref()
+            .filter(|_| live_changed)
+            .map(|provider| {
+                vec![ConfigDiffFile {
+                    path: config_path.clone(),
+                    before: pretty_json(&provider.settings_config),
+                    after: pretty_json(&live),
+                }]
+            })
+            .unwrap_or_default();
         Ok(ProviderSwitchPlan {
             app: app.to_string(),
             provider_id: id.to_string(),
             current_provider_id: current.clone(),
-            config_path: plugin.config_dir()?.to_string_lossy().into_owned(),
+            config_path,
             would_change: current.as_deref() != Some(id) || !drift.is_empty(),
             drift,
+            diff_files,
         })
     }
 
@@ -401,10 +422,10 @@ impl Application {
         }
         if let Some(app_type) = AppType::from_app_id(app) {
             let resolution = match policy {
-                ProviderSwitchPolicy::Abort | ProviderSwitchPolicy::Preserve => {
-                    DriftResolution::Preserve
+                ProviderSwitchPolicy::Abort | ProviderSwitchPolicy::Save => {
+                    ProviderVersionResolution::Save
                 }
-                ProviderSwitchPolicy::Discard => DriftResolution::Discard,
+                ProviderSwitchPolicy::Revert => ProviderVersionResolution::Revert,
             };
             return Ok(ProviderService::switch_with(
                 &self.state,
@@ -413,14 +434,8 @@ impl Application {
                 resolution,
             )?);
         }
-        if policy == ProviderSwitchPolicy::Preserve && !plan.drift.is_empty() {
-            return Err(ApplicationError::CapabilityUnsupported {
-                app: app.to_string(),
-                capability: "provider.switch-preserve-drift",
-            });
-        }
         let plugin = self.resolve_plugin(app)?;
-        let provider = self
+        let mut provider = self
             .state
             .db
             .get_provider_by_id(id, app.as_str())?
@@ -428,6 +443,17 @@ impl Application {
                 kind: "provider",
                 id: id.to_string(),
             })?;
+        if policy == ProviderSwitchPolicy::Save
+            && !plan.drift.is_empty()
+            && let Some(current_id) = plan.current_provider_id.as_deref()
+            && let Some(mut current) = self.state.db.get_provider_by_id(current_id, app.as_str())?
+        {
+            current.settings_config = plugin.live().read_live()?;
+            self.state.db.save_provider(app.as_str(), &current)?;
+            if current.id == provider.id {
+                provider = current;
+            }
+        }
         plugin
             .live()
             .write_live(self.state.db.as_ref(), &provider)?;
@@ -485,6 +511,83 @@ impl Application {
     pub fn provider_drift(&self, app: &AppId, id: &str) -> ApplicationResult<LiveDrift> {
         Ok(self.preview_provider_switch(app, id)?.drift)
     }
+}
+
+fn pretty_json(value: &Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn pretty_toml_value(value: &Value) -> String {
+    toml::to_string_pretty(value).unwrap_or_else(|_| pretty_json(value))
+}
+
+fn config_diff_files(app_type: AppType, stored: &Value, live: &Value) -> Vec<ConfigDiffFile> {
+    if stored.is_null() || live.is_null() || stored == live {
+        return Vec::new();
+    }
+
+    let mut files = Vec::new();
+    let mut push = |path: std::path::PathBuf, before: String, after: String| {
+        if before != after {
+            files.push(ConfigDiffFile {
+                path: crate::paths::abbreviate_home(&path),
+                before,
+                after,
+            });
+        }
+    };
+
+    match app_type {
+        AppType::Codex => {
+            let auth_text = |value: &Value| {
+                value
+                    .get("authRaw")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| pretty_json(value.get("auth").unwrap_or(&Value::Null)))
+            };
+            push(
+                crate::apps::codex::get_codex_auth_path(),
+                auth_text(stored),
+                auth_text(live),
+            );
+            push(
+                crate::apps::codex::get_codex_config_path(),
+                stored
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                live.get("config")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
+        AppType::GrokBuild => push(
+            crate::apps::grokbuild::get_grok_config_path(),
+            stored
+                .get("config")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            live.get("config")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        AppType::KimiCode => push(
+            crate::apps::kimi_code::get_kimi_code_config_path(),
+            pretty_toml_value(stored),
+            pretty_toml_value(live),
+        ),
+        _ => push(
+            crate::paths::get_claude_settings_path(),
+            pretty_json(stored),
+            pretty_json(live),
+        ),
+    }
+    files
 }
 
 fn empty_live_config(value: &serde_json::Value) -> bool {

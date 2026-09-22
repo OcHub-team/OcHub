@@ -393,20 +393,12 @@ fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
             },
         ],
         AppType::Codex => {
-            let mut toggles = vec![
-                AppToggle {
-                    id: "app-set-codex-preserve-auth",
-                    path: "preserveCodexOfficialAuthOnSwitch",
-                    label: raw(k::APP_SETTINGS_CODEX_PRESERVE_AUTH_LABEL),
-                    get: |s| s.preserve_codex_official_auth_on_switch,
-                },
-                AppToggle {
-                    id: "app-set-codex-unify-history",
-                    path: "unifyCodexSessionHistory",
-                    label: raw(k::APP_SETTINGS_CODEX_UNIFY_HISTORY_LABEL),
-                    get: |s| s.unify_codex_session_history,
-                },
-            ];
+            let mut toggles = vec![AppToggle {
+                id: "app-set-codex-unify-history",
+                path: "unifyCodexSessionHistory",
+                label: raw(k::APP_SETTINGS_CODEX_UNIFY_HISTORY_LABEL),
+                get: |s| s.unify_codex_session_history,
+            }];
             if settings.unify_codex_session_history {
                 toggles.push(AppToggle {
                     id: "app-set-codex-migrate-history",

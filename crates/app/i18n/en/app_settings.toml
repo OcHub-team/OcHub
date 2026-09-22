@@ -7,7 +7,6 @@
 "app_settings.claude.onboarding.label" = "Skip Claude onboarding"
 "app_settings.claude.plugin.label" = "Claude plugin integration"
 "app_settings.codex.migrate_history.label" = "Import existing Codex sessions"
-"app_settings.codex.preserve_auth.label" = "Keep current OAuth for third parties"
 "app_settings.codex.unify_history.label" = "Unify Codex session history"
 "app_settings.config_dir.save" = "Save directory"
 "app_settings.config_dir.title" = "Config directory"

@@ -11,7 +11,6 @@
 "app_settings.claude.onboarding.label" = "跳过 Claude 引导"
 "app_settings.claude.plugin.label" = "Claude 插件集成"
 "app_settings.codex.migrate_history.label" = "迁入既有 Codex 会话"
-"app_settings.codex.preserve_auth.label" = "第三方连接保留当前 OAuth"
 "app_settings.codex.unify_history.label" = "统一 Codex 会话历史"
 "app_settings.config_dir.save" = "保存目录"
 "app_settings.config_dir.title" = "配置目录"

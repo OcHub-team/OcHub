@@ -79,7 +79,7 @@ Switch 模式的活动配置聚焦一个当前 Provider；Additive 模式允许�
 
 ### 2.4 已发现的架构缺口
 
-1. Provider 漂移预览与 `preserve/discard/abort` 决策仍由 GUI 流程主导。
+1. Provider 漂移预览与 `save/revert/abort` 决策仍由 GUI 流程主导。
 2. Provider 跨应用复制和转换仍包含 View 层逻辑。
 3. 主题持久化、cc-switch 手动迁移、部分定价目录操作仍需统一 Facade。
 4. 用户 Manifest 已使用 `AppId`，但 Provider 和 GUI 仍依赖封闭的 `AppType`。
@@ -532,8 +532,8 @@ Provider 切换和任何 managed live config 写入都必须支持：
 
 ```text
 abort       检测到漂移立即退出，默认值
-preserve    合并可保留的外部修改
-discard     使用 OcHub 计划覆盖 managed 范围
+save        把当前 live 配置保存为当前 Provider 的新版本，再切换
+revert      放弃当前 live 修改，使用 OcHub 中已保存的版本，再切换
 ```
 
 CLI 参数：
@@ -542,7 +542,7 @@ CLI 参数：
 ochcli provider switch <id> --app codex --on-drift abort
 ```
 
-交互终端可以在 `abort` 后提示用户重新执行，但 core 不负责提问。非交互模式绝不自动将 `abort` 提升为 `preserve` 或 `discard`。
+交互终端可以在 `abort` 后提示用户重新执行，但 core 不负责提问。非交互模式绝不自动将 `abort` 提升为 `save` 或 `revert`。`preserve` 和 `discard` 仅作为旧版输入兼容别名。
 
 ### 8.3 Operation Journal
 
@@ -1516,7 +1516,7 @@ import:ccswitch
 - `--prune`。
 - data-dir 切换。
 - Plugin purge。
-- `on-drift=discard`。
+- `on-drift=revert`。
 - 环境变量清理。
 
 `--yes` 只确认当前命令已经列出的目标；不能确认运行期间新增的未知目标。
@@ -1949,7 +1949,7 @@ Error [CONFIG_DRIFT]: Codex live config changed outside OcHub.
 
 Path: ~/.codex/config.toml
 Hint: inspect with `ochcli provider preview team-codex --app codex`
-Hint: rerun with `--on-drift preserve` after reviewing the diff
+Hint: rerun with `--on-drift save` after reviewing the diff
 ```
 
 ### 24.4 Headless Gateway

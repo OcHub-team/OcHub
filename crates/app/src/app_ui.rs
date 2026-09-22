@@ -13,10 +13,11 @@ use gpui::{
     App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton, ScrollHandle,
     SharedString, Window, WindowAppearance, WindowControlArea, div, prelude::*, px,
 };
+use ochub_core::application::{ConfigDiffFile, ProviderSwitchPolicy};
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
-use ochub_core::services::provider::{DriftConflict, DriftResolution, LiveDrift, ProviderService};
+use ochub_core::services::provider::{LiveDrift, ProviderService};
 use ochub_core::{AppState, AppType, Provider, UsageResult};
 
 use crate::about_view::AboutView;
@@ -381,9 +382,8 @@ struct ProviderDeleteTarget {
 struct PendingDrift {
     provider_id: String,
     provider_name: String,
-    /// The file the edits are in, abbreviated for display.
-    path: SharedString,
     drift: LiveDrift,
+    diff_files: Vec<ConfigDiffFile>,
 }
 
 enum ProviderGatewayConnectError {
@@ -1966,8 +1966,8 @@ impl AppRoot {
                     this.pending_drift = Some(PendingDrift {
                         provider_id: id,
                         provider_name: name,
-                        path: SharedString::from(plan.config_path.clone()),
                         drift: plan.drift.clone(),
+                        diff_files: plan.diff_files.clone(),
                     });
                     cx.notify();
                 }
@@ -2055,7 +2055,7 @@ impl AppRoot {
         &mut self,
         id: String,
         name: String,
-        resolution: DriftResolution,
+        policy: ProviderSwitchPolicy,
         cx: &mut Context<Self>,
     ) {
         let Some(backend) = self.workspace_backend(cx) else {
@@ -2069,10 +2069,6 @@ impl AppRoot {
         };
         self.provider_action_in_flight = true;
         let app_id = self.selected_app.app_id();
-        let policy = match resolution {
-            DriftResolution::Preserve => ochub_core::application::ProviderSwitchPolicy::Preserve,
-            DriftResolution::Discard => ochub_core::application::ProviderSwitchPolicy::Discard,
-        };
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let handle = backend
@@ -2257,10 +2253,6 @@ impl AppRoot {
         cx.notify();
     }
 
-    /// One side of a conflict as the text the diff compares.
-    ///
-    /// A deletion has no text at all rather than a placeholder: the empty column
-    /// beside the other version is what makes it read as a deletion.
     fn drift_value_text(value: &serde_json::Value) -> String {
         match value {
             serde_json::Value::Null => String::new(),
@@ -2271,109 +2263,69 @@ impl AppRoot {
         }
     }
 
-    /// `+N` for the entries a section does not have room for. Silently showing
-    /// the first few would read as "that's all of them".
-    fn drift_overflow(total: usize, shown: usize) -> Option<gpui::Div> {
-        (total > shown).then(|| {
-            div()
-                .text_color(theme::muted())
-                .text_xs()
-                .child(SharedString::from(format!("+{}", total - shown)))
-        })
-    }
-
-    /// A section that only needs to name the keys involved.
-    fn drift_path_section(tone: BadgeTone, heading: String, paths: &[String]) -> Option<gpui::Div> {
-        const SHOWN: usize = 6;
-        if paths.is_empty() {
-            return None;
-        }
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(components::badge(tone, heading))
-                .children(paths.iter().take(SHOWN).map(|path| {
-                    div()
-                        .text_color(theme::subtext())
-                        .text_xs()
-                        .child(SharedString::from(path.clone()))
-                }))
-                .children(Self::drift_overflow(paths.len(), SHOWN)),
-        )
-    }
-
-    /// One conflict, as the two versions side by side.
-    fn drift_conflict_diff(conflict: &DriftConflict) -> gpui::Div {
-        /// Enough to read a changed block; longer values say how much is left.
-        const ROWS: usize = 20;
-
-        let live = Self::drift_value_text(&conflict.live);
-        let incoming = Self::drift_value_text(&conflict.incoming);
-        let (rows, hidden) = diff_view::side_by_side(&live, &incoming, ROWS);
-
+    fn render_config_diff_file(file: &ConfigDiffFile, index: usize) -> impl IntoElement {
+        const MAX_ROWS: usize = 120;
+        let (rows, hidden) = diff_view::side_by_side(&file.before, &file.after, MAX_ROWS);
         div()
+            .id(("config-version-diff", index))
             .flex()
             .flex_col()
-            .gap_1()
+            .w_full()
+            .gap_2()
             .child(
                 div()
-                    .text_color(theme::text())
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(SharedString::from(conflict.path.clone())),
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .font_family("Menlo")
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme::text())
+                            .child(SharedString::from(file.path.clone())),
+                    )
+                    .child(components::badge(
+                        BadgeTone::Neutral,
+                        SharedString::from(tf!(k::SHELL_DRIFT_LINE_COUNT, count = rows.len())),
+                    )),
             )
             .child(diff_view::render(
                 &rows,
                 hidden,
                 Some(diff_view::header_row(
-                    t(k::SHELL_DRIFT_CONFLICT_YOURS),
                     t(k::SHELL_DRIFT_CONFLICT_INCOMING),
+                    t(k::SHELL_DRIFT_CONFLICT_YOURS),
                 )),
                 |count| SharedString::from(tf!(k::SHELL_DRIFT_DIFF_FOLDED, count = count)),
                 |count| SharedString::from(tf!(k::SHELL_DRIFT_DIFF_TRUNCATED, count = count)),
             ))
     }
 
-    /// The half the user actually has to rule on: both sides changed the same
-    /// key, so one of them is about to lose.
-    fn drift_conflict_section(conflicts: &[DriftConflict]) -> Option<gpui::Div> {
-        const SHOWN: usize = 4;
-        if conflicts.is_empty() {
-            return None;
-        }
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(components::badge(
-                    BadgeTone::Warning,
-                    tf!(k::SHELL_DRIFT_CONFLICT_HEADING, count = conflicts.len()),
-                ))
-                .children(conflicts.iter().take(SHOWN).map(Self::drift_conflict_diff))
-                .children(Self::drift_overflow(conflicts.len(), SHOWN)),
-        )
-    }
-
     fn render_drift_modal(&self, pending: PendingDrift, cx: &mut Context<Self>) -> gpui::Div {
         let PendingDrift {
             provider_id,
             provider_name,
-            path,
             drift,
+            mut diff_files,
         } = pending;
-        let body = SharedString::from(tf!(k::SHELL_DRIFT_BODY, path = path, name = provider_name));
-        let discard = (provider_id.clone(), provider_name.clone());
-        let preserve = (provider_id, provider_name);
+        if diff_files.is_empty() {
+            diff_files.extend(drift.conflicts.iter().map(|conflict| ConfigDiffFile {
+                path: conflict.path.clone(),
+                before: Self::drift_value_text(&conflict.incoming),
+                after: Self::drift_value_text(&conflict.live),
+            }));
+        }
+        let body = SharedString::from(tf!(k::SHELL_DRIFT_BODY, name = provider_name));
+        let revert = (provider_id.clone(), provider_name.clone());
+        let save = (provider_id, provider_name);
+        let file_count = diff_files.len();
 
         components::modal_overlay(
             components::modal_card()
-                // Wide enough for two columns of config text; a diff squeezed
-                // into one column is the thing this dialog exists to avoid.
-                .w(px(760.))
-                .max_h(px(600.))
+                .w(px(1020.))
+                .max_h(px(720.))
                 .child(components::modal_header(t(k::SHELL_DRIFT_TITLE)))
                 .child(
                     components::modal_body()
@@ -2381,20 +2333,51 @@ impl AppRoot {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
-                        .child(div().text_color(theme::subtext()).text_sm().child(body))
-                        // Conflicts first: everything below them is already
-                        // decided in the user's favour.
-                        .children(Self::drift_conflict_section(&drift.conflicts))
-                        .children(Self::drift_path_section(
-                            BadgeTone::Success,
-                            tf!(k::SHELL_DRIFT_KEPT_HEADING, count = drift.preserved.len()),
-                            &drift.preserved,
-                        ))
-                        .children(Self::drift_path_section(
-                            BadgeTone::Neutral,
-                            tf!(k::SHELL_DRIFT_REMOVED_HEADING, count = drift.removed.len()),
-                            &drift.removed,
-                        )),
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_start()
+                                .gap_3()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(theme::border())
+                                .bg(theme::inset())
+                                .p_3()
+                                .child(
+                                    div()
+                                        .mt(px(2.))
+                                        .size(px(8.))
+                                        .rounded_full()
+                                        .bg(theme::yellow()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_color(theme::text())
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(body),
+                                        )
+                                        .child(div().text_color(theme::subtext()).text_xs().child(
+                                            SharedString::from(tf!(
+                                                k::SHELL_DRIFT_FILE_COUNT,
+                                                count = file_count
+                                            )),
+                                        )),
+                                ),
+                        )
+                        .children(
+                            diff_files
+                                .iter()
+                                .enumerate()
+                                .map(|(index, file)| Self::render_config_diff_file(file, index)),
+                        ),
                 )
                 .child(components::modal_footer(vec![
                     components::button(
@@ -2409,27 +2392,27 @@ impl AppRoot {
                     }))
                     .into_any_element(),
                     components::button(
-                        "drift-discard",
+                        "drift-revert",
                         t(k::SHELL_DRIFT_ACTION_DISCARD),
                         ButtonTone::Neutral,
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.pending_drift = None;
-                        let (id, name) = discard.clone();
-                        this.apply_switch(id, name, DriftResolution::Discard, cx);
+                        let (id, name) = revert.clone();
+                        this.apply_switch(id, name, ProviderSwitchPolicy::Revert, cx);
                     }))
                     .into_any_element(),
                     components::button(
-                        "drift-preserve",
+                        "drift-save",
                         t(k::SHELL_DRIFT_ACTION_PRESERVE),
                         ButtonTone::Primary,
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.pending_drift = None;
-                        let (id, name) = preserve.clone();
-                        this.apply_switch(id, name, DriftResolution::Preserve, cx);
+                        let (id, name) = save.clone();
+                        this.apply_switch(id, name, ProviderSwitchPolicy::Save, cx);
                     }))
                     .into_any_element(),
                 ])),

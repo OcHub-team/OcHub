@@ -3465,8 +3465,11 @@ fn is_secret_key(key: &str) -> bool {
 fn validate_switch_params(params: &ochub_protocol::ProviderSwitchParams) -> Result<(), String> {
     validate_text(&params.app, "app")?;
     validate_text(&params.provider_id, "providerId")?;
-    if !matches!(params.on_drift.as_str(), "abort" | "preserve" | "discard") {
-        return Err("onDrift must be abort, preserve, or discard".to_string());
+    if !matches!(
+        params.on_drift.as_str(),
+        "abort" | "save" | "revert" | "preserve" | "discard"
+    ) {
+        return Err("onDrift must be abort, save, or revert".to_string());
     }
     Ok(())
 }

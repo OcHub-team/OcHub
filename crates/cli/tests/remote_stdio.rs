@@ -416,7 +416,7 @@ fn plan_and_idempotency_survive_ssh_session_reconnects() {
             "--app",
             "claude",
             "--on-drift",
-            "discard",
+            "revert",
         ])
         .output()
         .unwrap();
@@ -437,7 +437,7 @@ fn plan_and_idempotency_survive_ssh_session_reconnects() {
         serde_json::json!({
             "app": "claude",
             "providerId": "remote-second",
-            "onDrift": "discard"
+            "onDrift": "revert"
         }),
         (None, None),
     );

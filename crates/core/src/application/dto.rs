@@ -75,7 +75,19 @@ pub struct ProviderSwitchPlan {
     pub current_provider_id: Option<String>,
     pub config_path: String,
     pub drift: LiveDrift,
+    /// Full file-oriented comparison between the stored provider version and
+    /// the live version currently on disk.
+    #[serde(default)]
+    pub diff_files: Vec<ConfigDiffFile>,
     pub would_change: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigDiffFile {
+    pub path: String,
+    pub before: String,
+    pub after: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

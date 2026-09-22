@@ -1348,7 +1348,7 @@ impl ProviderEditor {
                     .plan_provider_switch(
                         &app,
                         &id,
-                        ochub_core::application::ProviderSwitchPolicy::Preserve,
+                        ochub_core::application::ProviderSwitchPolicy::Save,
                     )
                     .await?;
                 backend.apply_provider_switch(plan).await
