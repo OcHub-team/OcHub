@@ -2303,7 +2303,12 @@ impl AppRoot {
             ))
     }
 
-    fn render_drift_modal(&self, pending: PendingDrift, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_drift_modal(
+        &self,
+        pending: PendingDrift,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let PendingDrift {
             provider_id,
             provider_name,
@@ -2321,12 +2326,18 @@ impl AppRoot {
         let revert = (provider_id.clone(), provider_name.clone());
         let save = (provider_id, provider_name);
         let file_count = diff_files.len();
+        let viewport = window.viewport_size();
+        // Keep the dialog inside the smallest supported window. The vertical
+        // inset also clears the transparent macOS title bar and traffic lights.
+        let modal_width = (viewport.width - px(32.)).min(px(1020.));
+        let modal_height = (viewport.height - px(64.)).min(px(720.));
 
         components::modal_overlay(
             components::modal_card()
-                .w(px(1020.))
-                .max_h(px(720.))
-                .child(components::modal_header(t(k::SHELL_DRIFT_TITLE)))
+                .w(modal_width)
+                .h(modal_height)
+                .overflow_hidden()
+                .child(components::modal_header(t(k::SHELL_DRIFT_TITLE)).flex_none())
                 .child(
                     components::modal_body()
                         .id("drift-body")
@@ -2379,43 +2390,46 @@ impl AppRoot {
                                 .map(|(index, file)| Self::render_config_diff_file(file, index)),
                         ),
                 )
-                .child(components::modal_footer(vec![
-                    components::button(
-                        "drift-cancel",
-                        t(k::SHELL_DRIFT_ACTION_CANCEL),
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.pending_drift = None;
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-                    components::button(
-                        "drift-revert",
-                        t(k::SHELL_DRIFT_ACTION_DISCARD),
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.pending_drift = None;
-                        let (id, name) = revert.clone();
-                        this.apply_switch(id, name, ProviderSwitchPolicy::Revert, cx);
-                    }))
-                    .into_any_element(),
-                    components::button(
-                        "drift-save",
-                        t(k::SHELL_DRIFT_ACTION_PRESERVE),
-                        ButtonTone::Primary,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.pending_drift = None;
-                        let (id, name) = save.clone();
-                        this.apply_switch(id, name, ProviderSwitchPolicy::Save, cx);
-                    }))
-                    .into_any_element(),
-                ])),
+                .child(
+                    components::modal_footer(vec![
+                        components::button(
+                            "drift-cancel",
+                            t(k::SHELL_DRIFT_ACTION_CANCEL),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.pending_drift = None;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                        components::button(
+                            "drift-revert",
+                            t(k::SHELL_DRIFT_ACTION_DISCARD),
+                            ButtonTone::Neutral,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.pending_drift = None;
+                            let (id, name) = revert.clone();
+                            this.apply_switch(id, name, ProviderSwitchPolicy::Revert, cx);
+                        }))
+                        .into_any_element(),
+                        components::button(
+                            "drift-save",
+                            t(k::SHELL_DRIFT_ACTION_PRESERVE),
+                            ButtonTone::Primary,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.pending_drift = None;
+                            let (id, name) = save.clone();
+                            this.apply_switch(id, name, ProviderSwitchPolicy::Save, cx);
+                        }))
+                        .into_any_element(),
+                    ])
+                    .flex_none(),
+                ),
         )
     }
 
@@ -4203,7 +4217,7 @@ impl Render for AppRoot {
                 root.child(self.render_quota_detail(id, name, cx))
             })
             .when_some(self.pending_drift.clone(), |root, pending| {
-                root.child(self.render_drift_modal(pending, cx))
+                root.child(self.render_drift_modal(pending, window, cx))
             })
             .when(self.show_first_run_notice, |root| {
                 root.child(components::modal_overlay(
