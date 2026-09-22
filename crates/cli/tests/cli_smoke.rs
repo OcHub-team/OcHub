@@ -1,7 +1,7 @@
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn ochcli(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ochcli"))
@@ -316,28 +316,47 @@ fn daemon_rpc_executes_mutations_and_blocks_direct_bypass() {
     }
 
     let home = tempfile::tempdir().unwrap();
+    let daemon_log_path = home.path().join("daemon-test.log");
+    let daemon_log = std::fs::File::create(&daemon_log_path).expect("create daemon test log");
     let child = Command::new(env!("CARGO_BIN_EXE_ochcli"))
         .env("OCHUB_TEST_HOME", home.path())
         .args(["daemon", "run"])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(daemon_log))
         .spawn()
         .expect("spawn ochcli daemon");
     let mut child = ChildGuard(child);
 
-    let mut status = None;
-    for _ in 0..50 {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(exit_status) = child.0.try_wait().expect("poll ochcli daemon") {
+            let daemon_log = std::fs::read_to_string(&daemon_log_path).unwrap_or_default();
+            panic!(
+                "daemon exited before becoming ready: {exit_status}\ndaemon stderr:\n{daemon_log}"
+            );
+        }
+
         let output = ochcli(home.path(), &["--json", "daemon", "status"]);
         if output.status.success() {
             let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             if value["data"]["running"] == true {
-                status = Some(value);
                 break;
             }
         }
+
+        if Instant::now() >= deadline {
+            let daemon_log = std::fs::read_to_string(&daemon_log_path).unwrap_or_default();
+            panic!(
+                "daemon did not become ready within 30 seconds\nstatus={:?}\nstdout={}\nstderr={}\ndaemon stderr:\n{}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+                daemon_log
+            );
+        }
+
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert!(status.is_some(), "daemon did not become ready");
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let gateway_port = listener.local_addr().unwrap().port().to_string();
