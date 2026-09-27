@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "115668f43ea5f6ed5ce47ad9de0db2df0bf96ff1",
-    "generated_at": "2026-09-26T13:25:21Z",
+    "revision": "f4308bc124eebc783dfc51790ce8db27ed21ae00",
+    "generated_at": "2026-09-27T09:16:53Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4376,
-    "eligible_entries": 3190
+    "upstream_entries": 4391,
+    "eligible_entries": 3204
   },
   "entries": [
     {
@@ -3068,8 +3068,8 @@
       "model_key": "azure/gpt-4o-mini",
       "provider": "azure",
       "mode": "chat",
-      "input_cost_per_million": "0.165",
-      "output_cost_per_million": "0.66",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": "0.075",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
@@ -9899,6 +9899,20 @@
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
+      "model_key": "databricks/databricks-claude-opus-5-5",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "4.00001",
+      "output_cost_per_million": "19.99998",
+      "cache_read_cost_per_million": "0.19999",
+      "cache_creation_cost_per_million": "5.00003",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "8.00002",
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
       "model_key": "databricks/databricks-claude-sonnet-4",
       "provider": "databricks",
       "mode": "chat",
@@ -12990,16 +13004,16 @@
       "model_key": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
       "provider": "fireworks_ai",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": "0.006",
+      "input_cost_per_million": "0.22",
+      "output_cost_per_million": "0.66",
+      "cache_read_cost_per_million": "0.007",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://docs.fireworks.ai/serverless/pricing"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/accounts/fireworks/models/devstral-small-2505",
@@ -15339,16 +15353,16 @@
       "model_key": "fireworks_ai/deepseek-v4p1-flash",
       "provider": "fireworks_ai",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": "0.006",
+      "input_cost_per_million": "0.22",
+      "output_cost_per_million": "0.66",
+      "cache_read_cost_per_million": "0.007",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://docs.fireworks.ai/serverless/pricing"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/deepseek-v4p1-flash-us",
@@ -25076,7 +25090,7 @@
       "model_key": "openrouter/deepseek/deepseek-v4-flash-0731",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.022",
+      "input_cost_per_million": "0.021",
       "output_cost_per_million": "0.32",
       "cache_read_cost_per_million": "0.016",
       "cache_creation_cost_per_million": null,
@@ -25098,9 +25112,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-pro",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.45936",
-      "output_cost_per_million": "0.91872",
-      "cache_read_cost_per_million": "0.03828",
+      "input_cost_per_million": "0.348",
+      "output_cost_per_million": "0.696",
+      "cache_read_cost_per_million": "0.029",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25109,9 +25123,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-pro-0813",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.264",
-      "output_cost_per_million": "0.792",
-      "cache_read_cost_per_million": "0.0088",
+      "input_cost_per_million": "0.2476",
+      "output_cost_per_million": "3.5",
+      "cache_read_cost_per_million": "0.2475",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25120,9 +25134,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4.1-flash",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.14",
-      "output_cost_per_million": "0.42",
-      "cache_read_cost_per_million": "0.0042",
+      "input_cost_per_million": "0.035",
+      "output_cost_per_million": "0.29",
+      "cache_read_cost_per_million": "0.001",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26044,8 +26058,8 @@
       "model_key": "openrouter/minimax/minimax-m2",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
+      "input_cost_per_million": "0.255",
+      "output_cost_per_million": "1.02",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -26088,9 +26102,9 @@
       "model_key": "openrouter/minimax/minimax-m2.7",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": "0.06",
+      "input_cost_per_million": "0.21",
+      "output_cost_per_million": "0.84",
+      "cache_read_cost_per_million": "0.042",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -27837,7 +27851,7 @@
       "mode": "chat",
       "input_cost_per_million": "0.018",
       "output_cost_per_million": "0.09",
-      "cache_read_cost_per_million": "0.03",
+      "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -28279,8 +28293,8 @@
       "model_key": "openrouter/qwen/qwen3-30b-a3b",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.12",
-      "output_cost_per_million": "0.5",
+      "input_cost_per_million": "0.13",
+      "output_cost_per_million": "0.52",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -29582,9 +29596,9 @@
       "model_key": "openrouter/z-ai/glm-5.3",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "1.4",
-      "output_cost_per_million": "4.4",
-      "cache_read_cost_per_million": "0.26",
+      "input_cost_per_million": "0.238",
+      "output_cost_per_million": "0.748",
+      "cache_read_cost_per_million": "0.0391",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -29593,9 +29607,9 @@
       "model_key": "openrouter/z-ai/glm-5.3-flash",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.045",
-      "output_cost_per_million": "0.14",
-      "cache_read_cost_per_million": "0.01",
+      "input_cost_per_million": "0.04",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.015",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -31602,6 +31616,182 @@
       "special_pricing_fields": []
     },
     {
+      "model_key": "sail/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.09",
+      "output_cost_per_million": "0.18",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/deepseek-ai/DeepSeek-V4-Pro-0813",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.92",
+      "output_cost_per_million": "2.77",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/deepseek-ai/DeepSeek-V4.1-Flash",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/google/gemma-4-12B-it",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "2",
+      "cache_read_cost_per_million": "0.15",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/google/gemma-4-31B-it",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.4",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/moonshotai/Kimi-K2.6",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/moonshotai/Kimi-K3",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "2.5",
+      "output_cost_per_million": "12.5",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/nvidia/Gemma-4-31B-IT-NVFP4",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.4",
+      "cache_read_cost_per_million": "0.07",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/openai/gpt-oss-120b",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.06",
+      "output_cost_per_million": "0.4",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/Qwen/Qwen3.6-35B-A3B",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0.4",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/zai-org/GLM-5.3",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.98",
+      "output_cost_per_million": "3.08",
+      "cache_read_cost_per_million": "0.18",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
+      "model_key": "sail/zai-org/GLM-5.3-Flash",
+      "provider": "sail",
+      "mode": "chat",
+      "input_cost_per_million": "0.11",
+      "output_cost_per_million": "0.35",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://docs.sailresearch.com/models"
+    },
+    {
       "model_key": "sambanova/DeepSeek-R1",
       "provider": "sambanova",
       "mode": "chat",
@@ -32544,6 +32734,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://api.together.ai/v1/models"
+    },
+    {
+      "model_key": "together_ai/meta-llama/Meta-Llama-3.1-8B",
+      "provider": "together_ai",
+      "mode": "completion",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.2",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.together.xyz/v1/models"
     },
     {
       "model_key": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
