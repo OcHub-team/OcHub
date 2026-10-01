@@ -3,13 +3,13 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "6bc17f98d7d049d1e9b3fb6354654d1efe7f407e",
-    "generated_at": "2026-09-30T09:43:37Z",
+    "revision": "0980f756bd031993329eb0b8b2caa193047e6465",
+    "generated_at": "2026-10-01T10:09:54Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4436,
+    "upstream_entries": 4438,
     "eligible_entries": 3245
   },
   "entries": [
@@ -5058,7 +5058,8 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "2"
+      "cache_creation_1h_cost_per_million": "2",
+      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     {
       "model_key": "azure_ai/claude-opus-4-5",
@@ -5071,7 +5072,8 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "10"
+      "cache_creation_1h_cost_per_million": "10",
+      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     {
       "model_key": "azure_ai/claude-opus-4-6",
@@ -5149,7 +5151,8 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "6"
+      "cache_creation_1h_cost_per_million": "6",
+      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     {
       "model_key": "azure_ai/claude-sonnet-4-6",
@@ -13302,7 +13305,11 @@
       "output_cost_per_million": "15",
       "cache_read_cost_per_million": "0.3",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
@@ -13630,8 +13637,12 @@
       "output_cost_per_million": "4.05",
       "cache_read_cost_per_million": "0.17",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://fireworks.ai/models/fireworks/inkling"
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/accounts/fireworks/models/internvl3-38b",
@@ -14350,7 +14361,11 @@
       "output_cost_per_million": "2.4",
       "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
@@ -14361,7 +14376,11 @@
       "output_cost_per_million": "0.2",
       "cache_read_cost_per_million": "0.01",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
@@ -15460,7 +15479,11 @@
       "output_cost_per_million": "0.75",
       "cache_read_cost_per_million": "0.045",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
@@ -15471,7 +15494,11 @@
       "output_cost_per_million": "6.6",
       "cache_read_cost_per_million": "0.39",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
@@ -15727,7 +15754,11 @@
       "output_cost_per_million": "0.75",
       "cache_read_cost_per_million": "0.045",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
@@ -15738,7 +15769,11 @@
       "output_cost_per_million": "6.6",
       "cache_read_cost_per_million": "0.39",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
@@ -15920,7 +15955,11 @@
       "output_cost_per_million": "2.4",
       "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
@@ -15931,7 +15970,11 @@
       "output_cost_per_million": "0.2",
       "cache_read_cost_per_million": "0.01",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
@@ -25467,7 +25510,7 @@
       "model_key": "openrouter/deepseek/deepseek-v3.1-terminus",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.27",
+      "input_cost_per_million": "0.3",
       "output_cost_per_million": "1",
       "cache_read_cost_per_million": "0.135",
       "cache_creation_cost_per_million": null,
@@ -25500,9 +25543,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-flash",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.14",
-      "output_cost_per_million": "0.28",
-      "cache_read_cost_per_million": "0.028",
+      "input_cost_per_million": "0.07854",
+      "output_cost_per_million": "0.15708",
+      "cache_read_cost_per_million": "0.015708",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25511,9 +25554,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-flash-0731",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.018",
-      "output_cost_per_million": "0.32",
-      "cache_read_cost_per_million": "0.016",
+      "input_cost_per_million": "0.0089",
+      "output_cost_per_million": "1.28",
+      "cache_read_cost_per_million": "0.0089",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25533,9 +25576,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-pro",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.9483",
-      "output_cost_per_million": "1.8966",
-      "cache_read_cost_per_million": "0.079025",
+      "input_cost_per_million": "0.783",
+      "output_cost_per_million": "1.566",
+      "cache_read_cost_per_million": "0.06525",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25544,9 +25587,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-pro-0813",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.24298",
-      "output_cost_per_million": "4.2",
-      "cache_read_cost_per_million": "0.172",
+      "input_cost_per_million": "1.32",
+      "output_cost_per_million": "3.96",
+      "cache_read_cost_per_million": "0.044",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25555,9 +25598,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4.1-flash",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": "0.006",
+      "input_cost_per_million": "0.0198",
+      "output_cost_per_million": "0.396",
+      "cache_read_cost_per_million": "0.00291",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26040,9 +26083,9 @@
       "model_key": "openrouter/google/gemma-4-26b-a4b-it",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.0675",
-      "output_cost_per_million": "0.225",
-      "cache_read_cost_per_million": "0.0375",
+      "input_cost_per_million": "0.0765",
+      "output_cost_per_million": "0.255",
+      "cache_read_cost_per_million": "0.0425",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26369,8 +26412,8 @@
       "model_key": "openrouter/meta/muse-glimmer-30b",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
+      "input_cost_per_million": "0.35",
+      "output_cost_per_million": "1.5",
       "cache_read_cost_per_million": "0.04",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -26523,9 +26566,9 @@
       "model_key": "openrouter/minimax/minimax-m2.7",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": "0.06",
+      "input_cost_per_million": "0.21",
+      "output_cost_per_million": "0.84",
+      "cache_read_cost_per_million": "0.042",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26907,8 +26950,8 @@
       "model_key": "openrouter/moonshotai/kimi-k2.7-code",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.6562",
-      "output_cost_per_million": "3.3",
+      "input_cost_per_million": "0.6712",
+      "output_cost_per_million": "3.35",
       "cache_read_cost_per_million": "0.18",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -26918,9 +26961,9 @@
       "model_key": "openrouter/moonshotai/kimi-k3",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "3",
-      "output_cost_per_million": "15",
-      "cache_read_cost_per_million": "0.3",
+      "input_cost_per_million": "0.28",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.27",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -28312,9 +28355,9 @@
       "model_key": "openrouter/openai/gpt-oss-120b",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.15",
-      "output_cost_per_million": "0.6",
-      "cache_read_cost_per_million": "0.075",
+      "input_cost_per_million": "0.037",
+      "output_cost_per_million": "0.17",
+      "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -28789,8 +28832,8 @@
       "model_key": "openrouter/qwen/qwen3-30b-a3b-instruct-2507",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.1",
-      "output_cost_per_million": "0.3",
+      "input_cost_per_million": "0.04815",
+      "output_cost_per_million": "0.19305",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -30048,9 +30091,9 @@
       "model_key": "openrouter/z-ai/glm-5.1",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "1.4",
-      "output_cost_per_million": "4.4",
-      "cache_read_cost_per_million": "0.26",
+      "input_cost_per_million": "0.9646",
+      "output_cost_per_million": "3.0316",
+      "cache_read_cost_per_million": "0.17914",
       "cache_creation_cost_per_million": "0",
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -30059,9 +30102,9 @@
       "model_key": "openrouter/z-ai/glm-5.2",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.6496",
-      "output_cost_per_million": "2.0416",
-      "cache_read_cost_per_million": "0.12064",
+      "input_cost_per_million": "0.3249",
+      "output_cost_per_million": "3.99",
+      "cache_read_cost_per_million": "0.26",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -37593,7 +37636,7 @@
       "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://docs.wandb.ai/inference/models.md"
     },
     {
       "model_key": "watsonx/bigscience/mt0-xxl",
