@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "7be2983f11413caeff72cb8bba205b4d1917e988",
-    "generated_at": "2026-10-02T09:47:45Z",
+    "revision": "09313bcf1bddfc490b91bef328f34c3ce58b6bf2",
+    "generated_at": "2026-10-03T09:10:35Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4452,
-    "eligible_entries": 3249
+    "upstream_entries": 4459,
+    "eligible_entries": 3234
   },
   "entries": [
     {
@@ -914,11 +914,12 @@
       "model_key": "amazon.nova-2-pro-preview-20251202-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
-      "input_cost_per_million": "2.1875",
-      "output_cost_per_million": "17.5",
-      "cache_read_cost_per_million": "0.546875",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.3125",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://aws.amazon.com/nova/pricing/"
     },
     {
       "model_key": "amazon.nova-lite-v1:0",
@@ -1490,11 +1491,12 @@
       "model_key": "apac.amazon.nova-2-pro-preview-20251202-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
-      "input_cost_per_million": "2.1875",
-      "output_cost_per_million": "17.5",
-      "cache_read_cost_per_million": "0.546875",
+      "input_cost_per_million": "1.375",
+      "output_cost_per_million": "11",
+      "cache_read_cost_per_million": "0.34375",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://aws.amazon.com/nova/pricing/"
     },
     {
       "model_key": "apac.amazon.nova-lite-v1:0",
@@ -1893,17 +1895,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/eu/codex-mini",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.65",
-      "output_cost_per_million": "6.6",
-      "cache_read_cost_per_million": "0.413",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/eu/computer-use-preview",
       "provider": "azure",
       "mode": "chat",
@@ -2054,17 +2045,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/eu/gpt-5-codex",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.375",
-      "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.138",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/eu/gpt-5-mini",
       "provider": "azure",
       "mode": "chat",
@@ -2131,20 +2111,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/eu/gpt-5-pro",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "16.5",
-      "output_cost_per_million": "132",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/eu/gpt-5.1",
       "provider": "azure",
       "mode": "chat",
@@ -2164,17 +2130,6 @@
     },
     {
       "model_key": "azure/eu/gpt-5.1-chat",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.375",
-      "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.1375",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/eu/gpt-5.1-codex-max",
       "provider": "azure",
       "mode": "chat",
       "input_cost_per_million": "1.375",
@@ -2214,31 +2169,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/eu/gpt-5.2-codex",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.925",
-      "output_cost_per_million": "15.4",
-      "cache_read_cost_per_million": "0.1925",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/eu/gpt-5.2-pro",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "23.1",
-      "output_cost_per_million": "184.8",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/eu/gpt-5.3-chat",
       "provider": "azure",
       "mode": "chat",
@@ -2247,21 +2177,6 @@
       "cache_read_cost_per_million": "0.1925",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/eu/gpt-5.3-codex",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.925",
-      "output_cost_per_million": "15.4",
-      "cache_read_cost_per_million": "0.1925",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "cache_read_input_token_cost_priority",
-        "input_cost_per_token_priority",
-        "output_cost_per_token_priority"
-      ],
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
@@ -2341,24 +2256,6 @@
       "special_pricing_fields": [
         "cache_read_input_token_cost_batches",
         "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/eu/gpt-5.4-pro",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "33",
-      "output_cost_per_million": "198",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "input_cost_per_token_above_272k_tokens",
-        "input_cost_per_token_above_272k_tokens_batches",
-        "input_cost_per_token_batches",
-        "output_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens_batches",
         "output_cost_per_token_batches"
       ],
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -4171,17 +4068,6 @@
       "special_pricing_fields": []
     },
     {
-      "model_key": "azure/us/codex-mini",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.65",
-      "output_cost_per_million": "6.6",
-      "cache_read_cost_per_million": "0.413",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/us/computer-use-preview",
       "provider": "azure",
       "mode": "chat",
@@ -4380,17 +4266,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/us/gpt-5-codex",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.375",
-      "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.138",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/us/gpt-5-mini",
       "provider": "azure",
       "mode": "chat",
@@ -4457,20 +4332,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/us/gpt-5-pro",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "16.5",
-      "output_cost_per_million": "132",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/us/gpt-5.1",
       "provider": "azure",
       "mode": "chat",
@@ -4490,17 +4351,6 @@
     },
     {
       "model_key": "azure/us/gpt-5.1-chat",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.375",
-      "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.1375",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/us/gpt-5.1-codex-max",
       "provider": "azure",
       "mode": "chat",
       "input_cost_per_million": "1.375",
@@ -4540,31 +4390,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/us/gpt-5.2-codex",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.925",
-      "output_cost_per_million": "15.4",
-      "cache_read_cost_per_million": "0.1925",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/us/gpt-5.2-pro",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "23.1",
-      "output_cost_per_million": "184.8",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/us/gpt-5.3-chat",
       "provider": "azure",
       "mode": "chat",
@@ -4573,21 +4398,6 @@
       "cache_read_cost_per_million": "0.1925",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/us/gpt-5.3-codex",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "1.925",
-      "output_cost_per_million": "15.4",
-      "cache_read_cost_per_million": "0.1925",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "cache_read_input_token_cost_priority",
-        "input_cost_per_token_priority",
-        "output_cost_per_token_priority"
-      ],
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
@@ -4667,24 +4477,6 @@
       "special_pricing_fields": [
         "cache_read_input_token_cost_batches",
         "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/us/gpt-5.4-pro",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "33",
-      "output_cost_per_million": "198",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "input_cost_per_token_above_272k_tokens",
-        "input_cost_per_token_above_272k_tokens_batches",
-        "input_cost_per_token_batches",
-        "output_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens_batches",
         "output_cost_per_token_batches"
       ],
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -12301,11 +12093,12 @@
       "model_key": "eu.amazon.nova-2-pro-preview-20251202-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
-      "input_cost_per_million": "2.1875",
-      "output_cost_per_million": "17.5",
-      "cache_read_cost_per_million": "0.546875",
+      "input_cost_per_million": "1.375",
+      "output_cost_per_million": "11",
+      "cache_read_cost_per_million": "0.34375",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://aws.amazon.com/nova/pricing/"
     },
     {
       "model_key": "eu.amazon.nova-lite-v1:0",
@@ -25535,7 +25328,7 @@
       "model_key": "openrouter/deepseek/deepseek-v3.1-terminus",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
+      "input_cost_per_million": "0.27",
       "output_cost_per_million": "1",
       "cache_read_cost_per_million": "0.135",
       "cache_creation_cost_per_million": null,
@@ -25568,9 +25361,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-flash",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.04186",
-      "output_cost_per_million": "0.08372",
-      "cache_read_cost_per_million": "0.008372",
+      "input_cost_per_million": "0.028",
+      "output_cost_per_million": "0.056",
+      "cache_read_cost_per_million": "0.0056",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25579,9 +25372,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-flash-0731",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.0108",
+      "input_cost_per_million": "0.0051",
       "output_cost_per_million": "1.28",
-      "cache_read_cost_per_million": "0.0108",
+      "cache_read_cost_per_million": "0.0051",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25623,9 +25416,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4.1-flash",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.03",
-      "output_cost_per_million": "0.5",
-      "cache_read_cost_per_million": "0.01",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26108,9 +25901,9 @@
       "model_key": "openrouter/google/gemma-4-26b-a4b-it",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.0765",
-      "output_cost_per_million": "0.255",
-      "cache_read_cost_per_million": "0.0425",
+      "input_cost_per_million": "0.0675",
+      "output_cost_per_million": "0.225",
+      "cache_read_cost_per_million": "0.0375",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26218,9 +26011,9 @@
       "model_key": "openrouter/inclusionai/ling-3.0-flash-fin",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.06",
-      "output_cost_per_million": "0.18",
-      "cache_read_cost_per_million": "0.012",
+      "input_cost_per_million": "0.042",
+      "output_cost_per_million": "0.1232",
+      "cache_read_cost_per_million": "0.0084",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26260,6 +26053,17 @@
     },
     {
       "model_key": "openrouter/inclusionai/ling-3.0-flash-vl:free",
+      "provider": "openrouter",
+      "mode": "chat",
+      "input_cost_per_million": "0",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "model_key": "openrouter/inclusionai/ling-3.1-flash",
       "provider": "openrouter",
       "mode": "chat",
       "input_cost_per_million": "0",
@@ -26986,9 +26790,9 @@
       "model_key": "openrouter/moonshotai/kimi-k3",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.4357",
-      "output_cost_per_million": "10",
-      "cache_read_cost_per_million": "0.4357",
+      "input_cost_per_million": "2.7",
+      "output_cost_per_million": "13.5",
+      "cache_read_cost_per_million": "0.27",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -27151,9 +26955,9 @@
       "model_key": "openrouter/nvidia/nemotron-3-ultra-550b-a55b",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.6",
-      "output_cost_per_million": "2.4",
-      "cache_read_cost_per_million": "0.12",
+      "input_cost_per_million": "0.5",
+      "output_cost_per_million": "2.2",
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -28857,8 +28661,8 @@
       "model_key": "openrouter/qwen/qwen3-30b-a3b-instruct-2507",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.04815",
-      "output_cost_per_million": "0.19305",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.3",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -29131,9 +28935,9 @@
       "model_key": "openrouter/qwen/qwen3.5-35b-a3b",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.1625",
-      "output_cost_per_million": "1.3",
-      "cache_read_cost_per_million": "0.15625",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "1",
+      "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -29689,9 +29493,9 @@
       "model_key": "openrouter/thinkingmachines/inkling",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "1",
+      "input_cost_per_million": "0.95",
       "output_cost_per_million": "4.05",
-      "cache_read_cost_per_million": "0.17",
+      "cache_read_cost_per_million": "0.16",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -30127,9 +29931,9 @@
       "model_key": "openrouter/z-ai/glm-5.1",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.9646",
-      "output_cost_per_million": "3.0316",
-      "cache_read_cost_per_million": "0.17914",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
       "cache_creation_cost_per_million": "0",
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -30160,9 +29964,9 @@
       "model_key": "openrouter/z-ai/glm-5.3",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.2219",
-      "output_cost_per_million": "3.39",
-      "cache_read_cost_per_million": "0.1775",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.14",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -34115,11 +33919,12 @@
       "model_key": "us.amazon.nova-2-pro-preview-20251202-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
-      "input_cost_per_million": "2.1875",
-      "output_cost_per_million": "17.5",
-      "cache_read_cost_per_million": "0.546875",
+      "input_cost_per_million": "1.375",
+      "output_cost_per_million": "11",
+      "cache_read_cost_per_million": "0.34375",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://aws.amazon.com/nova/pricing/"
     },
     {
       "model_key": "us.amazon.nova-lite-v1:0",
