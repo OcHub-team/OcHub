@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "09313bcf1bddfc490b91bef328f34c3ce58b6bf2",
-    "generated_at": "2026-10-03T09:10:35Z",
+    "revision": "bb4f7211d71e0c757b6a3f16ba3885fc34376028",
+    "generated_at": "2026-10-04T09:49:55Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4459,
-    "eligible_entries": 3234
+    "upstream_entries": 4472,
+    "eligible_entries": 3235
   },
   "entries": [
     {
@@ -5760,6 +5760,17 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
+    },
+    {
+      "model_key": "azure_ai/kimi-k2-thinking",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "2.5",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/kimi/"
     },
     {
       "model_key": "azure_ai/kimi-k2.5",
@@ -25273,9 +25284,9 @@
       "model_key": "openrouter/deepseek/deepseek-chat-v3-0324",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.29",
-      "output_cost_per_million": "1.14",
-      "cache_read_cost_per_million": "0.11",
+      "input_cost_per_million": "0.25",
+      "output_cost_per_million": "1",
+      "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25372,9 +25383,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-flash-0731",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.0051",
+      "input_cost_per_million": "0.0152",
       "output_cost_per_million": "1.28",
-      "cache_read_cost_per_million": "0.0051",
+      "cache_read_cost_per_million": "0.0137",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -25405,9 +25416,9 @@
       "model_key": "openrouter/deepseek/deepseek-v4-pro-0813",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "1.32",
-      "output_cost_per_million": "3.96",
-      "cache_read_cost_per_million": "0.044",
+      "input_cost_per_million": "0.22",
+      "output_cost_per_million": "4.2",
+      "cache_read_cost_per_million": "0.14",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26197,9 +26208,9 @@
       "model_key": "openrouter/meta-llama/llama-3.3-70b-instruct",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.1",
-      "output_cost_per_million": "0.32",
-      "cache_read_cost_per_million": null,
+      "input_cost_per_million": "0.22",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.11",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26768,9 +26779,9 @@
       "model_key": "openrouter/moonshotai/kimi-k2.6",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.43415",
-      "output_cost_per_million": "1.828",
-      "cache_read_cost_per_million": "0.07312",
+      "input_cost_per_million": "0.95",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.16",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -26790,9 +26801,9 @@
       "model_key": "openrouter/moonshotai/kimi-k3",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "2.7",
-      "output_cost_per_million": "13.5",
-      "cache_read_cost_per_million": "0.27",
+      "input_cost_per_million": "0.499",
+      "output_cost_per_million": "13",
+      "cache_read_cost_per_million": "0.49",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://openrouter.ai/api/v1/models"
@@ -28661,8 +28672,8 @@
       "model_key": "openrouter/qwen/qwen3-30b-a3b-instruct-2507",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.1",
-      "output_cost_per_million": "0.3",
+      "input_cost_per_million": "0.04815",
+      "output_cost_per_million": "0.19305",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -29942,8 +29953,8 @@
       "model_key": "openrouter/z-ai/glm-5.2",
       "provider": "openrouter",
       "mode": "chat",
-      "input_cost_per_million": "0.41",
-      "output_cost_per_million": "3.99",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "3.49",
       "cache_read_cost_per_million": "0.26",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
