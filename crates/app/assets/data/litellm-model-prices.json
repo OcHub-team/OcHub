@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "254c2f6b3b1e75c4074e33ee416480e008632daf",
-    "generated_at": "2026-10-05T10:28:39Z",
+    "revision": "d4619c499a6052913c8fa548192966dd76c3fec9",
+    "generated_at": "2026-10-06T10:20:03Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4472,
-    "eligible_entries": 3235
+    "upstream_entries": 4479,
+    "eligible_entries": 3237
   },
   "entries": [
     {
@@ -3776,9 +3776,17 @@
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
         "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens"
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
       ],
       "source_url": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/"
     },
@@ -3792,9 +3800,17 @@
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
         "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens"
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
       ],
       "source_url": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/"
     },
@@ -4690,9 +4706,17 @@
       "cache_creation_cost_per_million": "2.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
         "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens"
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
       ],
       "source_url": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/"
     },
@@ -5759,7 +5783,8 @@
       "output_cost_per_million": "0.7",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     {
       "model_key": "azure_ai/kimi-k2-thinking",
@@ -8445,7 +8470,14 @@
       "output_cost_per_million": "2.5",
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
@@ -8456,7 +8488,14 @@
       "output_cost_per_million": "6.6",
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html"
     },
     {
@@ -17478,7 +17517,16 @@
       "output_cost_per_million": "15",
       "cache_read_cost_per_million": "0.3",
       "cache_creation_cost_per_million": "3.75",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
@@ -17631,7 +17679,14 @@
       "output_cost_per_million": "6",
       "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
@@ -17642,8 +17697,39 @@
       "output_cost_per_million": "6",
       "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
+    },
+    {
+      "model_key": "global.zai.glm-5.3",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "1.68",
+      "output_cost_per_million": "5.28",
+      "cache_read_cost_per_million": "0.312",
+      "cache_creation_cost_per_million": "2.1",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_batches",
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
       "model_key": "gmi/anthropic/claude-opus-4",
@@ -21378,7 +21464,16 @@
       "output_cost_per_million": "16.5",
       "cache_read_cost_per_million": "0.33",
       "cache_creation_cost_per_million": "4.125",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
     },
     {
@@ -34437,7 +34532,16 @@
       "output_cost_per_million": "16.5",
       "cache_read_cost_per_million": "0.33",
       "cache_creation_cost_per_million": "4.125",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
@@ -34612,7 +34716,14 @@
       "output_cost_per_million": "6.6",
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
@@ -34623,8 +34734,39 @@
       "output_cost_per_million": "6.6",
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
+    },
+    {
+      "model_key": "us.zai.glm-5.3",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "1.848",
+      "output_cost_per_million": "5.808",
+      "cache_read_cost_per_million": "0.3432",
+      "cache_creation_cost_per_million": "2.31",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_batches",
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
       "model_key": "v0/v0-1.0-md",
@@ -37854,7 +37996,14 @@
       "output_cost_per_million": "6",
       "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
     },
     {
