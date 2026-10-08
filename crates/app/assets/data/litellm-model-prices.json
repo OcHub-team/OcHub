@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "17a982d6df7e7f96547c902cb7bc6cb76efa404b",
-    "generated_at": "2026-10-07T10:17:25Z",
+    "revision": "0e26edfdb95c8288a610cba4746af2bc1f2fe312",
+    "generated_at": "2026-10-08T10:36:45Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4485,
-    "eligible_entries": 3243
+    "upstream_entries": 4503,
+    "eligible_entries": 3260
   },
   "entries": [
     {
@@ -1110,6 +1110,25 @@
       "source_url": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock"
     },
     {
+      "model_key": "anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "anthropic.claude-instant-v1",
       "provider": "bedrock",
       "mode": "chat",
@@ -1322,7 +1341,7 @@
       "mode": "chat",
       "input_cost_per_million": "2",
       "output_cost_per_million": "10",
-      "cache_read_cost_per_million": "0.2",
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
@@ -1557,6 +1576,25 @@
       "source_url": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock"
     },
     {
+      "model_key": "apac.anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.11",
+      "output_cost_per_million": "0.55",
+      "cache_read_cost_per_million": "0.011",
+      "cache_creation_cost_per_million": "0.1375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.22",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "apac.anthropic.claude-mythos-preview",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -1676,7 +1714,7 @@
       "mode": "chat",
       "input_cost_per_million": "2.2",
       "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.22",
+      "cache_read_cost_per_million": "0.11",
       "cache_creation_cost_per_million": "2.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
@@ -1713,6 +1751,25 @@
       ],
       "cache_creation_1h_cost_per_million": "2.2",
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    {
+      "model_key": "au.anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.11",
+      "output_cost_per_million": "0.55",
+      "cache_read_cost_per_million": "0.011",
+      "cache_creation_cost_per_million": "0.1375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.22",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "au.anthropic.claude-mythos-preview",
@@ -1853,13 +1910,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.2",
       "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.22",
+      "cache_read_cost_per_million": "0.11",
       "cache_creation_cost_per_million": "2.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4.4",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "azure/apac/gpt-6.1-sol",
@@ -4939,6 +4996,25 @@
       "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     {
+      "model_key": "azure_ai/claude-haiku-5-5",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
+      "source_url": "https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide"
+    },
+    {
       "model_key": "azure_ai/claude-opus-4-5",
       "provider": "azure_ai",
       "mode": "chat",
@@ -6675,7 +6751,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/ap-northeast-1/qwen.qwen3-next-80b-a3b",
@@ -6686,7 +6762,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html"
     },
     {
       "model_key": "bedrock/ap-south-1/deepseek.v3.2",
@@ -6771,7 +6847,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/ap-south-1/qwen.qwen3-next-80b-a3b",
@@ -6782,7 +6858,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html"
     },
     {
       "model_key": "bedrock/ap-southeast-2/minimax.minimax-m2.5",
@@ -6804,7 +6880,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html"
     },
     {
       "model_key": "bedrock/ap-southeast-3/deepseek.v3.2",
@@ -6859,7 +6935,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/ca-central-1/meta.llama3-70b-instruct-v1:0",
@@ -6942,7 +7018,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/eu-north-1/deepseek.v3.2",
@@ -7019,7 +7095,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/eu-west-1/meta.llama3-70b-instruct-v1:0",
@@ -7072,7 +7148,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/eu-west-1/qwen.qwen3-next-80b-a3b",
@@ -7083,7 +7159,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html"
     },
     {
       "model_key": "bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0",
@@ -7147,7 +7223,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/eu-west-2/qwen.qwen3-next-80b-a3b",
@@ -7158,7 +7234,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html"
     },
     {
       "model_key": "bedrock/eu-west-3/mistral.mistral-7b-instruct-v0:2",
@@ -7305,7 +7381,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/sa-east-1/qwen.qwen3-next-80b-a3b",
@@ -7316,7 +7392,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html"
     },
     {
       "model_key": "bedrock/us-east-1/anthropic.claude-instant-v1",
@@ -7462,7 +7538,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/us-east-1/zai.glm-5",
@@ -7538,7 +7614,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/us-gov-east-1/amazon.nova-pro-v1:0",
@@ -7606,6 +7682,25 @@
       ],
       "cache_creation_1h_cost_per_million": "2.4",
       "source_url": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock"
+    },
+    {
+      "model_key": "bedrock/us-gov-east-1/anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.12",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.012",
+      "cache_creation_cost_per_million": "0.15",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.24",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "bedrock/us-gov-east-1/anthropic.claude-opus-4-8",
@@ -7679,12 +7774,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.4",
       "output_cost_per_million": "12",
-      "cache_read_cost_per_million": "0.24",
+      "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": "3",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "4.8"
+      "cache_creation_1h_cost_per_million": "4.8",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0",
@@ -7869,6 +7965,25 @@
       "source_url": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock"
     },
     {
+      "model_key": "bedrock/us-gov-west-1/anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.12",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.012",
+      "cache_creation_cost_per_million": "0.15",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.24",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "bedrock/us-gov-west-1/anthropic.claude-opus-4-8",
       "provider": "bedrock",
       "mode": "chat",
@@ -7940,12 +8055,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.4",
       "output_cost_per_million": "12",
-      "cache_read_cost_per_million": "0.24",
+      "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": "3",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "4.8"
+      "cache_creation_1h_cost_per_million": "4.8",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0",
@@ -8186,7 +8302,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-next.html"
     },
     {
       "model_key": "bedrock/us-west-2/zai.glm-5",
@@ -8226,6 +8342,25 @@
       "source_url": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock"
     },
     {
+      "model_key": "bedrock_mantle/anthropic.claude-haiku-5-5",
+      "provider": "bedrock_mantle",
+      "mode": "chat",
+      "input_cost_per_million": "0.11",
+      "output_cost_per_million": "0.55",
+      "cache_read_cost_per_million": "0.011",
+      "cache_creation_cost_per_million": "0.1375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.22",
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
+    },
+    {
       "model_key": "bedrock_mantle/anthropic.claude-opus-5-5",
       "provider": "bedrock_mantle",
       "mode": "chat",
@@ -8245,13 +8380,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.2",
       "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.22",
+      "cache_read_cost_per_million": "0.11",
       "cache_creation_cost_per_million": "2.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4.4",
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "bedrock_mantle/deepseek.v3.1",
@@ -8442,6 +8577,25 @@
       "special_pricing_fields": []
     },
     {
+      "model_key": "bedrock_mantle/us-gov-west-1/anthropic.claude-haiku-5-5",
+      "provider": "bedrock_mantle",
+      "mode": "chat",
+      "input_cost_per_million": "0.12",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.012",
+      "cache_creation_cost_per_million": "0.15",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.24",
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
+    },
+    {
       "model_key": "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5",
       "provider": "bedrock_mantle",
       "mode": "chat",
@@ -8461,13 +8615,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.4",
       "output_cost_per_million": "12",
-      "cache_read_cost_per_million": "0.24",
+      "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": "3",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4.8",
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "bedrock_mantle/us-gov-west-1/google.gemma-4-26b-a4b",
@@ -8752,6 +8906,33 @@
         "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "2"
+    },
+    {
+      "model_key": "claude-haiku-5-5",
+      "provider": "anthropic",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_100k_tokens_batches",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
+      "source_url": "https://platform.claude.com/docs/en/models/haiku-5-5/overview"
     },
     {
       "model_key": "claude-mythos-5",
@@ -9078,7 +9259,7 @@
       "mode": "chat",
       "input_cost_per_million": "2",
       "output_cost_per_million": "10",
-      "cache_read_cost_per_million": "0.2",
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr",
@@ -9088,7 +9269,7 @@
         "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "4",
-      "source_url": "https://platform.claude.com/docs/en/models/sonnet-5-5/overview"
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     {
       "model_key": "cloudflare/@cf/aisingapore/gemma-sea-lion-v4-27b-it",
@@ -12082,7 +12263,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html"
     },
     {
       "model_key": "deepseek.v3-v1:0",
@@ -12368,6 +12549,25 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "eu.anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.11",
+      "output_cost_per_million": "0.55",
+      "cache_read_cost_per_million": "0.011",
+      "cache_creation_cost_per_million": "0.1375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.22",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "eu.anthropic.claude-opus-4-1-20250805-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -12542,13 +12742,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.2",
       "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.22",
+      "cache_read_cost_per_million": "0.11",
       "cache_creation_cost_per_million": "2.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4.4",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "eu.deepseek.v3.2",
@@ -17426,6 +17626,25 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "global.anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "global.anthropic.claude-mythos-5-1",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -17594,13 +17813,13 @@
       "mode": "chat",
       "input_cost_per_million": "2",
       "output_cost_per_million": "10",
-      "cache_read_cost_per_million": "0.2",
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "global.moonshotai.kimi-k3",
@@ -17710,11 +17929,15 @@
       "cache_creation_cost_per_million": "12.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast",
         "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast",
         "input_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens"
+        "input_cost_per_token_above_272k_tokens_ultrafast",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_ultrafast"
       ],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
     },
     {
       "model_key": "global.openai.gpt-6-luna",
@@ -19812,6 +20035,25 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "jp.anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.11",
+      "output_cost_per_million": "0.55",
+      "cache_read_cost_per_million": "0.011",
+      "cache_creation_cost_per_million": "0.1375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.22",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "jp.anthropic.claude-opus-4-7",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -19922,13 +20164,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.2",
       "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.22",
+      "cache_read_cost_per_million": "0.11",
       "cache_creation_cost_per_million": "2.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4.4",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "kimi-k2-thinking-251104",
@@ -24957,6 +25199,25 @@
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "1",
+      "source_url": "https://openrouter.ai/api/v1/models"
+    },
+    {
+      "model_key": "openrouter/anthropic/claude-haiku-5.5",
+      "provider": "openrouter",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
       "source_url": "https://openrouter.ai/api/v1/models"
     },
     {
@@ -31101,7 +31362,8 @@
       "special_pricing_fields": [
         "input_cost_per_token_batches",
         "output_cost_per_token_batches"
-      ]
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-235b-a22b-2507.html"
     },
     {
       "model_key": "qwen.qwen3-32b-v1:0",
@@ -31111,7 +31373,8 @@
       "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html"
     },
     {
       "model_key": "qwen.qwen3-coder-30b-a3b-v1:0",
@@ -31121,7 +31384,8 @@
       "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-30b-a3b-instruct.html"
     },
     {
       "model_key": "qwen.qwen3-coder-480b-a35b-v1:0",
@@ -31132,7 +31396,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-west-2/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html"
     },
     {
       "model_key": "qwen.qwen3-coder-next",
@@ -33942,6 +34206,25 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "us-gov.anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.12",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.012",
+      "cache_creation_cost_per_million": "0.15",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.24",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "us-gov.anthropic.claude-opus-4-8",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -34022,13 +34305,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.4",
       "output_cost_per_million": "12",
-      "cache_read_cost_per_million": "0.24",
+      "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": "3",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4.8",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "us-gov.nvidia.nemotron-nano-12b-v2",
@@ -34248,6 +34531,25 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "us.anthropic.claude-haiku-5-5",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.11",
+      "output_cost_per_million": "0.55",
+      "cache_read_cost_per_million": "0.011",
+      "cache_creation_cost_per_million": "0.1375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.22",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "us.anthropic.claude-mythos-5",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -34465,13 +34767,13 @@
       "mode": "chat",
       "input_cost_per_million": "2.2",
       "output_cost_per_million": "11",
-      "cache_read_cost_per_million": "0.22",
+      "cache_read_cost_per_million": "0.11",
       "cache_creation_cost_per_million": "2.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "4.4",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
       "model_key": "us.deepseek.r1-v1:0",
@@ -34482,7 +34784,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-r1.html"
     },
     {
       "model_key": "us.deepseek.v3.2",
@@ -34723,11 +35025,15 @@
       "cache_creation_cost_per_million": "13.75",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast",
         "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast",
         "input_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens"
+        "input_cost_per_token_above_272k_tokens_ultrafast",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_ultrafast"
       ],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
     },
     {
       "model_key": "us.openai.gpt-6-luna",
@@ -36033,6 +36339,52 @@
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     {
+      "model_key": "vertex_ai/claude-haiku-5-5",
+      "provider": "vertex_ai-anthropic_models",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_above_100k_tokens",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
+      "source_url": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    {
+      "model_key": "vertex_ai/claude-haiku-5-5@default",
+      "provider": "vertex_ai-anthropic_models",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_above_100k_tokens",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
+      "source_url": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    {
       "model_key": "vertex_ai/claude-opus-4-5",
       "provider": "vertex_ai-anthropic_models",
       "mode": "chat",
@@ -36352,7 +36704,7 @@
       "mode": "chat",
       "input_cost_per_million": "2",
       "output_cost_per_million": "10",
-      "cache_read_cost_per_million": "0.2",
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr",
@@ -36370,7 +36722,7 @@
       "mode": "chat",
       "input_cost_per_million": "2",
       "output_cost_per_million": "10",
-      "cache_read_cost_per_million": "0.2",
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr",
