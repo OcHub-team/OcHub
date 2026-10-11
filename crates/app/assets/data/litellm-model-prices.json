@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "7ff5010674348be45b96e9c7e0c8da3b657f08af",
-    "generated_at": "2026-10-10T09:52:07Z",
+    "revision": "2a01fe6e5ca2ed67472ca0ed2909e66811ff8d35",
+    "generated_at": "2026-10-11T10:01:57Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4034,
-    "eligible_entries": 2769
+    "upstream_entries": 4041,
+    "eligible_entries": 2775
   },
   "entries": [
     {
@@ -942,6 +942,16 @@
       "special_pricing_fields": []
     },
     {
+      "model_key": "amazon.nova-premier-v1:0",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "2.5",
+      "output_cost_per_million": "12.5",
+      "cache_read_cost_per_million": "0.625",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
+    },
+    {
       "model_key": "amazon.nova-pro-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -959,8 +969,8 @@
       "model_key": "amazon.titan-text-express-v1",
       "provider": "bedrock",
       "mode": "chat",
-      "input_cost_per_million": "1.3",
-      "output_cost_per_million": "1.7",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
@@ -969,8 +979,8 @@
       "model_key": "amazon.titan-text-lite-v1",
       "provider": "bedrock",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "0.4",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
@@ -1504,9 +1514,9 @@
       "model_key": "apac.amazon.nova-2-lite-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
-      "input_cost_per_million": "0.33",
-      "output_cost_per_million": "2.75",
-      "cache_read_cost_per_million": "0.0825",
+      "input_cost_per_million": "0.396",
+      "output_cost_per_million": "3.311",
+      "cache_read_cost_per_million": "0.099",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
     },
@@ -7396,26 +7406,29 @@
       "model_key": "bedrock/moonshotai.kimi-k2-thinking",
       "provider": "bedrock",
       "mode": "chat",
-      "input_cost_per_million": "0.73",
-      "output_cost_per_million": "3.03",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "2.5",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "input_cost_per_token_flex",
         "output_cost_per_token_flex"
       ],
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html"
+      "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
     },
     {
       "model_key": "bedrock/moonshotai.kimi-k2.5",
       "provider": "bedrock",
       "mode": "chat",
       "input_cost_per_million": "0.6",
-      "output_cost_per_million": "3.03",
+      "output_cost_per_million": "3",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html"
+      "special_pricing_fields": [
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
     },
     {
       "model_key": "bedrock/sa-east-1/deepseek.v3.2",
@@ -8091,8 +8104,8 @@
       "model_key": "bedrock/us-gov-west-1/amazon.titan-text-express-v1",
       "provider": "bedrock",
       "mode": "chat",
-      "input_cost_per_million": "1.3",
-      "output_cost_per_million": "1.7",
+      "input_cost_per_million": "0.8",
+      "output_cost_per_million": "1.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
@@ -12648,9 +12661,9 @@
       "model_key": "eu.amazon.nova-2-lite-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
-      "input_cost_per_million": "0.33",
-      "output_cost_per_million": "2.75",
-      "cache_read_cost_per_million": "0.0825",
+      "input_cost_per_million": "0.429",
+      "output_cost_per_million": "3.597",
+      "cache_read_cost_per_million": "0.10725",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
     },
@@ -27212,6 +27225,56 @@
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "0"
+    },
+    {
+      "model_key": "scaledown/classify",
+      "provider": "scaledown",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
+    },
+    {
+      "model_key": "scaledown/compress",
+      "provider": "scaledown",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
+    },
+    {
+      "model_key": "scaledown/decisions",
+      "provider": "scaledown",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
+    },
+    {
+      "model_key": "scaledown/extract",
+      "provider": "scaledown",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
+    },
+    {
+      "model_key": "scaledown/summarize",
+      "provider": "scaledown",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
     },
     {
       "model_key": "scaleway/deepseek-v4-flash-0731",
