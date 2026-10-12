@@ -382,16 +382,35 @@ fn codex_catalog_model_entry(
         return json!({});
     };
 
-    // An explicit per-model override wins; otherwise keep the template's own
-    // window, which carries the model's real limit.
-    let context_window = context_window
-        .or_else(|| entry_obj.get("context_window").and_then(Value::as_u64))
-        .unwrap_or(128_000);
     entry_obj.insert("slug".to_string(), json!(model));
     entry_obj.insert("display_name".to_string(), json!(display_name));
     entry_obj.insert("description".to_string(), json!(display_name));
-    entry_obj.insert("context_window".to_string(), json!(context_window));
-    entry_obj.insert("max_context_window".to_string(), json!(context_window));
+    // An explicit per-model override wins; otherwise keep the template's own
+    // context_window/max_context_window pair, which carries the model's real
+    // usable window and hard ceiling (they differ on recent GPT entries).
+    if let Some(context_window) = context_window {
+        entry_obj.insert("context_window".to_string(), json!(context_window));
+        entry_obj.insert("max_context_window".to_string(), json!(context_window));
+    } else {
+        if entry_obj
+            .get("context_window")
+            .and_then(Value::as_u64)
+            .is_none()
+        {
+            entry_obj.insert("context_window".to_string(), json!(128_000));
+        }
+        if entry_obj
+            .get("max_context_window")
+            .and_then(Value::as_u64)
+            .is_none()
+        {
+            let context_window = entry_obj
+                .get("context_window")
+                .and_then(Value::as_u64)
+                .unwrap_or(128_000);
+            entry_obj.insert("max_context_window".to_string(), json!(context_window));
+        }
+    }
     entry_obj.insert("priority".to_string(), json!(1000 + priority));
     // Exact Codex catalog entries carry product capabilities such as the
     // native Fast service tier. A gpt-5.5 fallback cloned for an unrelated
@@ -2320,7 +2339,7 @@ model = "gpt-4"
                 "target": "gpt-5.5"
             },
             "context_window": 272000,
-            "max_context_window": 272000
+            "max_context_window": 400000
         });
         let settings = json!({
             "modelCatalog": {
@@ -2374,6 +2393,20 @@ model = "gpt-4"
                 .and_then(|value| value.as_u64()),
             Some(272_000),
             "unset context_window should inherit the template's own window"
+        );
+        assert_eq!(
+            models[1]
+                .get("max_context_window")
+                .and_then(|value| value.as_u64()),
+            Some(400_000),
+            "unset max_context_window should keep the template's hard ceiling"
+        );
+        assert_eq!(
+            models[0]
+                .get("max_context_window")
+                .and_then(|value| value.as_u64()),
+            Some(64_000),
+            "an explicit context_window override flattens the pair"
         );
         assert!(
             models[0].get("model_messages").is_some(),
