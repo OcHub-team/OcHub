@@ -373,7 +373,7 @@ fn codex_catalog_model_entry(
     template: &Value,
     model: &str,
     display_name: &str,
-    context_window: u64,
+    context_window: Option<u64>,
     priority: usize,
     exact_template: bool,
 ) -> Value {
@@ -382,6 +382,11 @@ fn codex_catalog_model_entry(
         return json!({});
     };
 
+    // An explicit per-model override wins; otherwise keep the template's own
+    // window, which carries the model's real limit.
+    let context_window = context_window
+        .or_else(|| entry_obj.get("context_window").and_then(Value::as_u64))
+        .unwrap_or(128_000);
     entry_obj.insert("slug".to_string(), json!(model));
     entry_obj.insert("display_name".to_string(), json!(display_name));
     entry_obj.insert("description".to_string(), json!(display_name));
@@ -393,8 +398,7 @@ fn codex_catalog_model_entry(
     // third-party model must not inherit those capabilities. Known GPT-5.6
     // slugs are safe to enrich from their public Codex capability contract
     // even when an older local CLI does not have an exact template yet.
-    let known_capabilities = apply_known_codex_model_capabilities(entry_obj, model);
-    if !exact_template && !known_capabilities {
+    if !exact_template && !apply_known_codex_model_capabilities(entry_obj, model) {
         entry_obj.insert("additional_speed_tiers".to_string(), json!([]));
         entry_obj.insert("service_tiers".to_string(), json!([]));
     }
@@ -481,10 +485,10 @@ struct CodexCatalogModelSpec {
     use_responses_lite: bool,
     model: String,
     display_name: String,
-    context_window: u64,
+    context_window: Option<u64>,
 }
 
-fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCatalogModelSpec> {
+fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     let Some(models) = settings
         .get("modelCatalog")
         .and_then(|catalog| catalog.get("models"))
@@ -493,8 +497,6 @@ fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCa
         return Vec::new();
     };
 
-    let default_context_window =
-        extract_codex_top_level_u64(config_text, "model_context_window").unwrap_or(128_000);
     let mut seen = std::collections::HashSet::new();
     let mut specs = Vec::new();
 
@@ -523,8 +525,7 @@ fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCa
             model_config
                 .get("contextWindow")
                 .or_else(|| model_config.get("context_window")),
-        )
-        .unwrap_or(default_context_window);
+        );
 
         specs.push(CodexCatalogModelSpec {
             use_responses_lite: model_config
@@ -781,51 +782,56 @@ fn load_codex_model_template_static() -> Option<Value> {
     }
 }
 
-fn load_codex_model_catalog_template_source() -> Result<Value, AppError> {
-    // A cache written by Codex is the cheapest and best-matched source. Keep
-    // the complete catalog so each configured model can select an exact entry
-    // without spawning the CLI once per model.
-    if let Some(catalog) = load_codex_model_catalog_from_cache()?
-        && find_codex_model_template(&catalog, CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG).is_some()
-    {
-        return Ok(catalog);
+/// Load every available template catalog in preference order. Each configured
+/// model resolves its exact entry per slug across all of them, so a stale
+/// source can no longer push every model onto the fallback template.
+///
+/// Order:
+/// 1. The installed CLI's bundled catalog — version-locked to the binary that
+///    will consume the generated file.
+/// 2. `models_cache.json` — a remote catalog Codex cached earlier; it may carry
+///    entries the bundled build predates, but may also be written by an older
+///    client version, so it only fills slugs the bundled catalog lacks.
+/// 3. The static template compiled into OcHub.
+fn load_codex_model_catalog_template_sources() -> Vec<Value> {
+    let mut sources = Vec::new();
+    if let Ok(Some(catalog)) = load_codex_model_catalog_from_bundled() {
+        sources.push(catalog);
     }
-    if let Some(catalog) = load_codex_model_catalog_from_bundled()?
-        && find_codex_model_template(&catalog, CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG).is_some()
-    {
-        return Ok(catalog);
+    if let Ok(Some(catalog)) = load_codex_model_catalog_from_cache() {
+        sources.push(catalog);
     }
     if let Some(template) = load_codex_model_template_static() {
-        return Ok(json!({ "models": [template] }));
+        sources.push(json!({ "models": [template] }));
     }
-
-    Err(AppError::Message(format!(
-        "Codex model catalog template `{CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG}` not found. Please start Codex once so models_cache.json is available, or ensure the `codex` CLI is on PATH."
-    )))
+    sources
 }
 
-fn codex_model_catalog_from_settings(
-    settings: &Value,
-    config_text: &str,
-) -> Result<Option<Value>, AppError> {
-    let specs = codex_catalog_model_specs(settings, config_text);
+fn find_codex_model_template_in(sources: &[Value], slug: &str) -> Option<Value> {
+    sources
+        .iter()
+        .find_map(|catalog| find_codex_model_template(catalog, slug))
+}
+
+fn codex_model_catalog_from_settings(settings: &Value) -> Result<Option<Value>, AppError> {
+    let specs = codex_catalog_model_specs(settings);
     if specs.is_empty() {
         return Ok(None);
     }
 
-    let template_source = load_codex_model_catalog_template_source()?;
-    let fallback_template = find_codex_model_template(
-        &template_source,
+    let template_sources = load_codex_model_catalog_template_sources();
+    let fallback_template = find_codex_model_template_in(
+        &template_sources,
         CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG,
     )
     .ok_or_else(|| {
         AppError::Message(format!(
-            "Codex model catalog template `{CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG}` is missing from the selected source"
+            "Codex model catalog template `{CODEX_MODEL_CATALOG_FALLBACK_TEMPLATE_SLUG}` not found. Please start Codex once so models_cache.json is available, or ensure the `codex` CLI is on PATH."
         ))
     })?;
     let mut entries = Vec::with_capacity(specs.len());
     for (index, spec) in specs.iter().enumerate() {
-        let exact_template = find_codex_model_template(&template_source, &spec.model);
+        let exact_template = find_codex_model_template_in(&template_sources, &spec.model);
         let template = exact_template.as_ref().unwrap_or(&fallback_template);
         let mut entry = codex_catalog_model_entry(
             template,
@@ -881,7 +887,7 @@ pub fn prepare_codex_config_text_with_model_catalog(
 ) -> Result<String, AppError> {
     let catalog_path = get_codex_model_catalog_path();
 
-    if let Some(catalog) = codex_model_catalog_from_settings(settings, config_text)? {
+    if let Some(catalog) = codex_model_catalog_from_settings(settings)? {
         let config_text = set_codex_model_catalog_json_field(config_text, Some(&catalog_path))?;
         write_json_file(&catalog_path, &catalog)?;
         Ok(config_text)
@@ -905,7 +911,9 @@ pub fn prepare_codex_config_text_with_model_catalog(
 /// `displayName` and `contextWindow` are omitted from the returned entry when
 /// the on-disk value matches the fallback that
 /// `codex_model_catalog_from_settings` injects for unset inputs (slug for
-/// display_name, `model_context_window` or 128_000 for context_window). This
+/// display_name, `model_context_window` or 128_000 for context_window — note
+/// generated entries now inherit the template's own window when unset, so
+/// read-back may surface that inherited value as an explicit contextWindow). This
 /// preserves the "user left it blank" intent across round-trip; an unavoidable
 /// edge case is that a user-typed value that happens to equal the fallback
 /// will also collapse to blank, but the next save writes the same fallback so
@@ -2329,7 +2337,7 @@ model = "gpt-4"
                 ]
             }
         });
-        let specs = codex_catalog_model_specs(&settings, r#"model_context_window = 128000"#);
+        let specs = codex_catalog_model_specs(&settings);
         let catalog = json!({
             "models": specs
                 .iter()
@@ -2364,7 +2372,8 @@ model = "gpt-4"
             models[1]
                 .get("context_window")
                 .and_then(|value| value.as_u64()),
-            Some(128_000)
+            Some(272_000),
+            "unset context_window should inherit the template's own window"
         );
         assert!(
             models[0].get("model_messages").is_some(),
@@ -2397,10 +2406,22 @@ model = "gpt-4"
     #[test]
     fn known_gpt56_models_expose_native_fast_max_and_ultra_capabilities() {
         let template = load_codex_model_template_static().expect("static template");
-        let sol =
-            codex_catalog_model_entry(&template, "gpt-5.6-sol", "GPT-5.6-Sol", 272_000, 0, false);
-        let luna =
-            codex_catalog_model_entry(&template, "gpt-5.6-luna", "GPT-5.6-Luna", 272_000, 1, false);
+        let sol = codex_catalog_model_entry(
+            &template,
+            "gpt-5.6-sol",
+            "GPT-5.6-Sol",
+            Some(272_000),
+            0,
+            false,
+        );
+        let luna = codex_catalog_model_entry(
+            &template,
+            "gpt-5.6-luna",
+            "GPT-5.6-Luna",
+            Some(272_000),
+            1,
+            false,
+        );
 
         let sol_efforts = sol["supported_reasoning_levels"]
             .as_array()
