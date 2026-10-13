@@ -165,6 +165,7 @@ async fn serve_stdio(cli: &Cli, ephemeral: bool) -> Result<(), CliError> {
             node,
             runtime,
             capabilities: capabilities(&policy),
+            features: vec!["editor-drafts-v1".into(), "overview-v1".into()],
             max_frame_size: MAX_FRAME_SIZE,
         }),
     )
@@ -690,6 +691,24 @@ impl RemoteSession {
                 json!({ "method": request.method, "capability": required }),
             );
         }
+        if request.method == methods::OVERVIEW_READ
+            && [
+                Capability::ProviderRead,
+                Capability::GatewayRead,
+                Capability::UsageRead,
+            ]
+            .iter()
+            .any(|capability| !capabilities(&self.policy).contains(capability))
+        {
+            return error_response(
+                self.protocol_version,
+                request.request_id,
+                "PERMISSION_DENIED",
+                "Overview requires provider, gateway, and usage read access",
+                false,
+                Value::Null,
+            );
+        }
         if request.method == methods::PROVIDER_SWITCH_PLAN {
             return self.plan_provider_switch(request).await;
         }
@@ -708,6 +727,7 @@ impl RemoteSession {
             request.method.as_str(),
             methods::PROVIDER_CREATE
                 | methods::PROVIDER_UPDATE
+                | methods::EDITOR_DRAFT_SAVE
                 | methods::PROVIDER_COMMON_SET
                 | methods::MCP_UPSERT
                 | methods::SKILL_INSTALL
@@ -789,6 +809,48 @@ impl RemoteSession {
 
     async fn execute_payload_request(&self, request: RequestFrame) -> ResponseFrame {
         let (payload, argv) = match request.method.as_str() {
+            methods::EDITOR_DRAFT_SAVE => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Params {
+                    app: String,
+                    id: String,
+                    expected_revision: Option<u64>,
+                    input: Value,
+                }
+                let params = match serde_json::from_value::<Params>(request.params.clone()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return invalid_params_response(
+                            self.protocol_version,
+                            request.request_id,
+                            "editor.draft.save",
+                            error,
+                        );
+                    }
+                };
+                if let Err(error) =
+                    validate_text(&params.app, "app").and_then(|_| validate_text(&params.id, "id"))
+                {
+                    return invalid_argument_response(
+                        self.protocol_version,
+                        request.request_id,
+                        error,
+                    );
+                }
+                let mut argv = vec![
+                    "editor".into(),
+                    "save".into(),
+                    params.id,
+                    "--app".into(),
+                    params.app,
+                ];
+                if let Some(revision) = params.expected_revision {
+                    argv.extend(["--expected-revision".into(), revision.to_string()]);
+                }
+                argv.push("--from".into());
+                (Payload::Json(params.input), argv)
+            }
             methods::PROVIDER_CREATE => {
                 let mut params =
                     match serde_json::from_value::<ProviderCreateParams>(request.params.clone()) {
@@ -1773,11 +1835,21 @@ impl RemoteSession {
         }));
         match cached_remote_mutation(idempotency_key) {
             Ok(Some(cached)) if cached.request_hash.as_deref() == Some(request_hash.as_str()) => {
+                let data = match restore_cached_editor_result(&request.method, cached.data) {
+                    Ok(data) => data,
+                    Err(error) => {
+                        return cli_error_response(
+                            self.protocol_version,
+                            request.request_id,
+                            error,
+                        );
+                    }
+                };
                 return ResponseFrame {
                     protocol_version: self.protocol_version,
                     request_id: request.request_id,
                     ok: true,
-                    data: cached.data,
+                    data,
                     warnings: cached.warnings,
                     error: None,
                     revision: cached.revision,
@@ -1807,7 +1879,7 @@ impl RemoteSession {
                 return cli_error_response(self.protocol_version, request.request_id, error);
             }
         };
-        let data = remote_success_value(&result.data);
+        let data = remote_mutation_value(&request.method, &result.data);
         let revision = Some(revision_for(&data));
         let response = ResponseFrame {
             protocol_version: self.protocol_version,
@@ -1818,8 +1890,18 @@ impl RemoteSession {
             error: None,
             revision: revision.clone(),
         };
+        // External confirmation has made no local commit and has no protected
+        // receipt to rehydrate. Repeating the same draft revision is read-only.
+        if request.method == methods::EDITOR_DRAFT_APPLY && data["state"] == "externalConfirmation"
+        {
+            return response;
+        }
+        let mut cached_data = data;
+        if request.method == methods::EDITOR_DRAFT_APPLY {
+            cached_data["provider"] = Value::Null;
+        }
         let cached = CachedMutation {
-            data,
+            data: cached_data,
             warnings: result.warnings,
             revision,
             request_hash: Some(request_hash),
@@ -1830,6 +1912,44 @@ impl RemoteSession {
         }
         response
     }
+}
+
+fn restore_cached_editor_result(method: &str, mut value: Value) -> Result<Value, CliError> {
+    if method == methods::EDITOR_DRAFT_APPLY
+        && value["state"] == "applied"
+        && value["provider"].is_null()
+    {
+        let receipt = value["receiptId"]
+            .as_str()
+            .ok_or_else(|| CliError::InvalidInput("Cached application has no receipt".into()))?;
+        let transaction =
+            ochub_core::services::config_commit::FileCommitTransaction::load(receipt)?;
+        let context = transaction.context();
+        let provider = context["afterProviders"]
+            .as_array()
+            .and_then(|providers| {
+                providers
+                    .iter()
+                    .find(|provider| provider["id"] == context["providerId"])
+            })
+            .ok_or_else(|| {
+                CliError::InvalidInput("Application receipt has no prepared provider".into())
+            })?;
+        value["provider"] = json!({"app":context["app"],"provider":provider});
+    }
+    Ok(value)
+}
+
+fn remote_mutation_value(method: &str, value: &Value) -> Value {
+    let mut value = remote_success_value(value);
+    if method == methods::EDITOR_DRAFT_SAVE {
+        // The requester already has the exact input. Do not duplicate arbitrary
+        // raw configuration in the retry cache outside the protected draft store.
+        if let Some(object) = value.as_object_mut() {
+            object.remove("input");
+        }
+    }
+    value
 }
 
 fn remote_execution_flags(request: &RequestFrame) -> Vec<String> {
@@ -2013,7 +2133,11 @@ fn cache_remote_mutation(idempotency_key: String, cached: CachedMutation) -> Res
 fn is_direct_mutation(method: &str) -> bool {
     matches!(
         method,
-        methods::PROVIDER_CREATE
+        methods::EDITOR_DRAFT_SAVE
+            | methods::EDITOR_DRAFT_DELETE
+            | methods::EDITOR_DRAFT_APPLY
+            | methods::CONFIG_APPLY_UNDO
+            | methods::PROVIDER_CREATE
             | methods::PROVIDER_UPDATE
             | methods::PROVIDER_DELETE
             | methods::PROVIDER_DUPLICATE
@@ -2087,6 +2211,82 @@ fn is_direct_mutation(method: &str) -> bool {
 
 fn argv_for_request(request: &RequestFrame) -> Result<Vec<String>, String> {
     match request.method.as_str() {
+        methods::OVERVIEW_READ => {
+            #[derive(Deserialize, Default)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                from: Option<i64>,
+                to: Option<i64>,
+            }
+            let params: Params = params_or_default(&request.params)?;
+            let mut argv = vec!["overview".into()];
+            if let Some(value) = params.from {
+                argv.extend(["--from".into(), value.to_string()]);
+            }
+            if let Some(value) = params.to {
+                argv.extend(["--to".into(), value.to_string()]);
+            }
+            Ok(argv)
+        }
+        methods::EDITOR_DRAFT_LIST => {
+            let params = app_params(&request.params, "editor.draft.list")?;
+            Ok(vec![
+                "editor".into(),
+                "list".into(),
+                "--app".into(),
+                params.app,
+            ])
+        }
+        methods::EDITOR_DRAFT_GET | methods::EDITOR_DRAFT_DELETE | methods::EDITOR_DRAFT_APPLY => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                app: String,
+                id: String,
+                revision: Option<u64>,
+                on_drift: Option<String>,
+            }
+            let params: Params =
+                serde_json::from_value(request.params.clone()).map_err(|e| e.to_string())?;
+            validate_text(&params.app, "app")?;
+            validate_text(&params.id, "id")?;
+            let operation = match request.method.as_str() {
+                methods::EDITOR_DRAFT_GET => "get",
+                methods::EDITOR_DRAFT_DELETE => "delete",
+                _ => "apply",
+            };
+            let mut argv = Vec::new();
+            argv.extend([
+                "editor".into(),
+                operation.into(),
+                params.id,
+                "--app".into(),
+                params.app,
+            ]);
+            if operation != "get" {
+                let revision = params.revision.ok_or("revision is required")?;
+                argv.extend(["--revision".into(), revision.to_string()]);
+            }
+            if operation == "apply" {
+                let policy = params.on_drift.unwrap_or_else(|| "abort".into());
+                if !matches!(policy.as_str(), "abort" | "save" | "revert") {
+                    return Err("invalid onDrift".into());
+                }
+                argv.extend(["--on-drift".into(), policy]);
+            }
+            Ok(argv)
+        }
+        methods::CONFIG_APPLY_UNDO => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Params {
+                receipt_id: String,
+            }
+            let params: Params =
+                serde_json::from_value(request.params.clone()).map_err(|e| e.to_string())?;
+            validate_text(&params.receipt_id, "receiptId")?;
+            Ok(vec!["editor".into(), "undo".into(), params.receipt_id])
+        }
         methods::STATUS_READ => expect_empty_params(&request.params).map(|_| vec!["status".into()]),
         methods::DOCTOR_RUN => {
             #[derive(Deserialize, Default)]
@@ -3476,6 +3676,15 @@ fn validate_switch_params(params: &ochub_protocol::ProviderSwitchParams) -> Resu
 
 fn required_capability(method: &str) -> Option<Capability> {
     match method {
+        methods::OVERVIEW_READ => Some(Capability::ProviderRead),
+        methods::EDITOR_DRAFT_LIST => Some(Capability::ProviderRead),
+        // A draft body can contain raw secrets, so restoring it requires the
+        // same permission as editing; list summaries remain read-only.
+        methods::EDITOR_DRAFT_GET
+        | methods::EDITOR_DRAFT_SAVE
+        | methods::EDITOR_DRAFT_DELETE
+        | methods::EDITOR_DRAFT_APPLY
+        | methods::CONFIG_APPLY_UNDO => Some(Capability::ProviderWrite),
         methods::STATUS_READ => Some(Capability::StatusRead),
         methods::DOCTOR_RUN => Some(Capability::DoctorRun),
         methods::APP_LIST | methods::APP_GET | methods::APP_SCHEMA => Some(Capability::AppRead),

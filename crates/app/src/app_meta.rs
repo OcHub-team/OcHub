@@ -8,15 +8,58 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use gpui::SharedString;
-use ochub_core::AppType;
+use ochub_core::application::{AppModeDto, AppSummary};
 use ochub_core::plugin::{self, AppPlugin};
+use ochub_core::{AppId, AppType};
 
 use crate::icons::IconName;
 
 #[derive(Clone)]
+pub struct ManagedApp {
+    pub id: AppId,
+    pub label: SharedString,
+    pub accent: u32,
+    pub icon: IconName,
+    pub mode: AppModeDto,
+    pub supports_editor: bool,
+}
+
+impl ManagedApp {
+    pub fn from_plugin(plugin: &dyn AppPlugin) -> Self {
+        Self {
+            id: plugin.id().clone(),
+            label: plugin.display_name().to_string().into(),
+            accent: plugin.accent_color(),
+            icon: builtin_icon(plugin.icon_id()).unwrap_or(IconName::Blocks),
+            mode: match plugin.mode() {
+                plugin::AppMode::Switch => AppModeDto::Switch,
+                plugin::AppMode::Additive => AppModeDto::Additive,
+            },
+            supports_editor: plugin.provider_config().is_some(),
+        }
+    }
+
+    pub fn from_remote(summary: AppSummary) -> Option<Self> {
+        let id = AppId::parse(&summary.id).ok()?;
+        let builtin = AppType::from_app_id(&id);
+        Some(Self {
+            id,
+            label: summary.display_name.into(),
+            accent: summary.accent,
+            icon: builtin_icon(&summary.icon_id)
+                .or_else(|| builtin.and_then(icon))
+                .unwrap_or(IconName::Blocks),
+            mode: summary.mode,
+            // APP_SCHEMA does not carry codec semantics; do not substitute a
+            // local plugin for an unknown plugin installed on another machine.
+            supports_editor: summary.supports_provider && builtin.is_some(),
+        })
+    }
+}
+
+#[derive(Clone)]
 struct BuiltinMeta {
     label: SharedString,
-    accent: u32,
     icon: Option<IconName>,
 }
 
@@ -29,12 +72,10 @@ static BUILTIN_META: LazyLock<HashMap<AppType, BuiltinMeta>> = LazyLock::new(|| 
             let metadata = plugin::get_plugin(&app.app_id())
                 .map(|plugin| BuiltinMeta {
                     label: SharedString::from(plugin.display_name().to_string()),
-                    accent: plugin.accent_color(),
                     icon: builtin_icon(plugin.icon_id()),
                 })
                 .unwrap_or_else(|| BuiltinMeta {
                     label: SharedString::new_static(app.as_str()),
-                    accent: 0x888888,
                     icon: None,
                 });
             (app, metadata)
@@ -74,14 +115,6 @@ pub fn label(app: AppType) -> SharedString {
         .get(&app)
         .map(|metadata| metadata.label.clone())
         .unwrap_or_else(|| SharedString::new_static(app.as_str()))
-}
-
-/// Accent color from the registry.
-pub fn accent(app: AppType) -> u32 {
-    BUILTIN_META
-        .get(&app)
-        .map(|metadata| metadata.accent)
-        .unwrap_or(0x888888)
 }
 
 /// Map a plugin icon key to a bundled icon; `None` = render a letter avatar.

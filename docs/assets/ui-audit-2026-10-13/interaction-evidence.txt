@@ -1,0 +1,311 @@
+OcHub UI audit: original AX output (some snapshots are incremental diffs).
+Date: 2026-10-13
+All values refer to synthetic fixture data.
+
+===== 01-claude-min-dark.txt =====
+Window: "OcHub", App: OcHub QA.
+0 standard window OcHub, Secondary Actions: Raise
+	1 container
+		2 pop up button 本地配置
+		3 button 打开 Claude Code
+		4 button 打开 Claude Desktop
+		5 button 打开 Codex
+		6 button 打开 Cherry Studio
+		7 button 打开 Grok Build
+		8 button 打开 Kimi Code
+		9 button 打开 OpenCode
+		10 button 打开 OpenClaw
+		11 button 打开 Hermes
+		12 button 打开 MCP 服务器
+		13 button 打开 技能
+		14 button 打开 用量
+		15 button 打开 会话
+		16 button 打开 高级工具
+		17 button 打开 模型供应商
+		18 button 打开 网络代理
+		19 button 打开 远程节点
+		20 button 打开 主题
+		21 button 打开 设置
+		22 button 打开 关于
+		23 button 添加连接
+		24 button 打开应用设置
+		25 button 编辑 audit-beta-edited
+		26 button 拖动排序 Claude Official，当前位置 1 / 2, Help: 按住并拖动到其他连接上以调整顺序
+		27 button 刷新 Claude Official 的额度
+		28 button 刷新 Claude Official 的额度
+		29 button 编辑 Claude Official
+		30 button 复制 Claude Official
+		31 button 删除 Claude Official
+		32 button 切换 Claude Official
+		33 button 拖动排序 audit-alpha，当前位置 2 / 2, Help: 按住并拖动到其他连接上以调整顺序
+		34 button 编辑 audit-alpha
+		35 button 复制 audit-alpha
+		36 button 删除 audit-alpha
+		37 button 切换 audit-alpha
+	38 close button
+	39 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	40 minimize button
+41 menu bar
+	42 OcHub QA
+	43 文件
+	44 编辑
+
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 03-codex-editor-min-dark.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 23-24
+~		45 button 检查配置
+~		46 button 保存并启用
+~		47 button 文档
+~		48 button 复制到应用
+~		49 button 保存
+~		50 button 取消
+~		51 button editor-presets 选项 OpenAI 官方
++		52 button editor-presets 选项 DeepSeek
++		53 button editor-presets 选项 OpenRouter
++		54 button editor-presets 选项 Azure OpenAI
++		55 button provider-source 选项 官方
++		56 button provider-source 选项 模型供应商
++		57 button provider-source 选项 直接连接
++		58 text field (settable) 连接名称
++		59 button 高级设置
++		60 text field (settable) https://api.example.com/v1
++		61 button codex-account 选项 不使用账号
++		62 button codex-account 选项 ChatGPT
++		63 text field (settable) sk-...
++		64 button 显示
++		65 button 展开写入文件预览
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 04-codex-expanded-preview-min.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 65
+~		58 text field (settable) 连接名称, Value: UI focus test
+~		60 button ~/.codex/config.toml
+~		61 button ~/.codex/auth.json
+~		62 button 编辑
+~		63 button 刷新
+~		64 button 收起
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 05-codex-raw-modal-min.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
++		65 button 关闭
++		66 text field
++		67 button 取消
++		68 button 应用
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 06-raw-modal-after-typing.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+~		58 text field (settable) 连接名称, Value: UI focus test-MODAL-FOCUS-PROBE
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 08-preview-collapsed.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+~		60 text field (settable) https://api.example.com/v1
+~		61 button codex-account 选项 不使用账号
+~		62 button codex-account 选项 ChatGPT
+~		63 text field (settable) sk-...
+~		64 button 显示
++		65 button 展开写入文件预览
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 09-workspace-dropdown-editor.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
++		66 list
++			67 text (selected) 本地配置, Secondary Actions: Pick
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 10-workspace-dropdown-escape.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 45-65
++		68 button 启动 Codex
++		69 button 添加连接
++		70 button 打开应用设置
++		71 button 刷新 OpenAI Official 的额度
++		72 button 刷新 OpenAI Official 的额度
++		73 button 编辑 OpenAI Official
++		74 button 复制 OpenAI Official
++		75 button 删除 OpenAI Official
++		76 button 切换 OpenAI Official
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 11-keyboard-start.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 66-67
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 11-tab-1.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 11-tab-2.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 11-tab-3.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 11-tab-4.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 11-tab-5.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 12-keyboard-after-tab-return.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 14-claude-app-settings.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 69-83
++		45 button ← 返回
++		46 text field (settable) ~/.claude
++		47 button 保存目录
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 26-remote-add-modal-min.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
++		46 button 取消
++		47 list
++		48 button 手动添加
++		49 button 取消
++		50 button 添加
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 27-remote-modal-after-escape.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 31-settings-min.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 47-50
+~		45 text field (settable) 搜索设置
+~		46 语言：简体中文
++			47 button general-language-options 选项 跟随系统
++			48 button general-language-options 选项 简体中文
++			49 button general-language-options 选项 English
++			50 button general-language-options 选项 日本語
+~		51 pop up button 自动
+~		52 switch (settable, boolean) 开机启动, Value: off
+~		53 switch (settable, boolean) 启动时不显示窗口, Value: off
++		54 switch (settable, boolean) 关闭窗口后继续运行, Value: off
++		55 switch (settable, boolean) 后台托盘驻留, Value: off
++		56 switch (settable, boolean) 系统菜单快捷切换, Value: off
++		57 button 管理应用，打开子页面
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 33-claude-long-min-en-light.txt =====
+Window: "OcHub", App: OcHub QA.
+0 standard window OcHub, Secondary Actions: Raise
+	1 container
+		2 pop up button Local configuration
+		3 button Open Claude Code
+		4 button Open Claude Desktop
+		5 button Open Codex
+		6 button Open Cherry Studio
+		7 button Open Grok Build
+		8 button Open Kimi Code
+		9 button Open OpenCode
+		10 button Open OpenClaw
+		11 button Open Hermes
+		12 button Open MCP servers
+		13 button Open Skills
+		14 button Open Usage
+		15 button Open Sessions
+		16 button Open Advanced tools
+		17 button Open Model providers
+		18 button Open Network proxy
+		19 button Open Remote nodes
+		20 button Open Themes
+		21 button Open Settings
+		22 button Open About
+		23 button Add a connection
+		24 button Open app settings
+		25 button Edit audit-beta-edited
+		26 button Reorder Claude Official, position 1 of 2, Help: Hold and drag onto another connection to change the order
+		27 button Refresh quota for Claude Official
+		28 button Refresh quota for Claude Official
+		29 button Edit Claude Official
+		30 button Duplicate Claude Official
+		31 button Delete Claude Official
+		32 button Switch to Claude Official
+		33 button Help: Hold and drag onto another connection to change the order, Reorder UI audit regional development and staging provider with a very long descriptive connection name, position 2 of 2
+		34 button Edit UI audit regional development and staging provider with a very long descriptive connection name
+		35 button Duplicate UI audit regional development and staging provider with a very long descriptive connection name
+		36 button Delete UI audit regional development and staging provider with a very long descriptive connection name
+		37 button Switch to UI audit regional development and staging provider with a very long descriptive connection name
+	38 close button
+	39 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	40 minimize button
+41 menu bar
+	42 OcHub QA
+	43 File
+	44 Edit
+
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 40-pricing-form-en.txt =====
+There has been no change in the accessibility tree for Window: "OcHub".
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 42-kimi-editor-min-top.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 56-58
+~		45 button Docs
+~		46 button Copy to app
+~		47 button Save
+~		48 button Cancel
+~		49 button editor-presets option 自定义
+~		50 button editor-presets option 官方订阅
+~		51 text field (settable) Connection name, Value: UI audit Kimi model
+~		52 text field (settable) https://example.com
+~		53 text field (settable) aggregator / official / third_party
+~		54 text field (settable) Notes
+~		55 button Expand the preview of the files to be written
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 44-kimi-stacked-fields-min.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
++		70 text field (settable) my-provider, Value: managed:audit
++		71 pop up button OpenAI Chat Completions
++		72 text field (settable) https://api.example.com/v1, Value: https://regional-gateway-for-development-and-staging.example.invalid/tenant/team-with-a-long-identifier/api/compatibility/anthropic/v1
++		73 text field (settable) sk-..., Value: ••••••••••••••••••••••
++		74 button Show
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 45-kimi-preview-long-min.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 55
++		75 button Edit
++		76 button Refresh
++		77 button Collapse
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+
+===== 60-kimi-edit-action-recheck.txt =====
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 23-24
+~		45 button Docs
+~		46 button Copy to app
+~		47 button Save
+~		48 button Cancel
+~		49 button editor-presets option 自定义
+~		50 button editor-presets option 官方订阅
+~		51 text field (settable) Connection name, Value: UI audit Kimi model
+~		52 text field (settable) https://example.com
+~		53 text field (settable) aggregator / official / third_party
+~		54 text field (settable) Notes
+~		55 text field (settable) my-provider, Value: managed:audit
+~		56 pop up button OpenAI Chat Completions
++		57 text field (settable) https://api.example.com/v1, Value: https://regional-gateway-for-development-and-staging.example.invalid/tenant/team-with-a-long-identifier/api/compatibility/anthropic/v1
++		58 text field (settable) sk-..., Value: ••••••••••••••••••••••
++		59 button Show
++		60 button Edit
++		61 button Refresh
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise
+

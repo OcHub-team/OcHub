@@ -25,6 +25,7 @@
 
 use serde_json::{Map, Value, json};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
     GridColumn, Language, PreviewFile, SelectOption, bool_val, set_bool, set_str, str_val,
@@ -91,8 +92,9 @@ impl AppConfig for ClaudeConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "端点与鉴权",
+            FormSection::identified(
+                "endpoint_auth",
+                tr(TextKey::EndpointAuthSection),
                 vec![
                     FormField::new(
                         "base_url",
@@ -101,21 +103,21 @@ impl AppConfig for ClaudeConfig {
                             placeholder: "https://api.anthropic.com".into(),
                         },
                     )
-                    .help("写入 env.ANTHROPIC_BASE_URL；Claude Code 会在其后拼接 /v1/messages。")
+                    .help(tr(TextKey::ClaudeBaseUrlHelp))
                     .required(),
                     FormField::new(
                         "auth_field",
-                        "鉴权变量",
+                        tr(TextKey::AuthVariable),
                         FieldKind::Select {
                             options: vec![
                                 SelectOption::new(AUTH_TOKEN_KEY, "ANTHROPIC_AUTH_TOKEN（Bearer）")
-                                    .with_hint("第三方服务默认；走 Authorization: Bearer"),
+                                    .with_hint(tr(TextKey::AuthBearerHint)),
                                 SelectOption::new(AUTH_API_KEY, "ANTHROPIC_API_KEY（x-api-key）")
-                                    .with_hint("Anthropic 官方密钥；走 x-api-key"),
+                                    .with_hint(tr(TextKey::AuthApiKeyHint)),
                             ],
                         },
                     )
-                    .help("决定密钥写入哪个 env 变量；二者互斥，所选项同时记入 meta.apiKeyField。"),
+                    .help(tr(TextKey::ClaudeAuthHelp)),
                     FormField::new(
                         "api_key",
                         "API Key",
@@ -123,72 +125,74 @@ impl AppConfig for ClaudeConfig {
                             placeholder: "sk-ant-...".into(),
                         },
                     )
-                    .help("写入上方所选的鉴权变量。"),
+                    .help(tr(TextKey::ClaudeApiKeyHelp)),
                 ],
             ),
-            FormSection::new(
-                "模型",
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
                 vec![
                     FormField::new(
                         "model",
-                        "默认模型 (ANTHROPIC_MODEL)",
+                        tr(TextKey::ClaudeDefaultModel),
                         FieldKind::Text {
                             placeholder: "claude-sonnet-4-6".into(),
                         },
                     )
-                    .help("各角色未单独配置时的回退模型。"),
+                    .help(tr(TextKey::ClaudeDefaultModelHelp)),
                     FormField::new(
                         "roles",
-                        "角色模型映射",
+                        tr(TextKey::RoleModelMapping),
                         FieldKind::ModelGrid {
                             columns: vec![
-                                GridColumn::text("role", "角色", "sonnet"),
-                                GridColumn::text("model", "模型 ID", "claude-sonnet-4-6"),
-                                GridColumn::text("name", "显示名", "Sonnet 4.6"),
-                                GridColumn::toggle("one_m", "1M 上下文"),
+                                GridColumn::text("role", tr(TextKey::RoleColumn), "sonnet"),
+                                GridColumn::text(
+                                    "model",
+                                    tr(TextKey::ModelIdColumn),
+                                    "claude-sonnet-4-6",
+                                ),
+                                GridColumn::text("name", tr(TextKey::DisplayName), "Sonnet 4.6"),
+                                GridColumn::toggle("one_m", tr(TextKey::OneMillionContext)),
                             ],
                         },
                     )
-                    .help(
-                        "sonnet/opus/haiku/fable 对应 ANTHROPIC_DEFAULT_*_MODEL 与 *_MODEL_NAME；\
-                         开启 1M 会给模型 ID 追加 [1M] 标记（haiku 不支持）。",
-                    ),
+                    .help(tr(TextKey::ClaudeRolesHelp)),
                 ],
             ),
-            FormSection::new(
-                "高级",
+            FormSection::identified(
+                "advanced",
+                tr(TextKey::AdvancedSection),
                 vec![
                     FormField::new(
                         "api_format",
-                        "API 格式 (meta)",
+                        tr(TextKey::ApiFormat),
                         FieldKind::Select {
                             options: vec![
-                                SelectOption::new(API_FORMAT_ANTHROPIC, "anthropic（原生）")
-                                    .with_hint("默认；不做请求体转换"),
+                                SelectOption::new(
+                                    API_FORMAT_ANTHROPIC,
+                                    tr(TextKey::AnthropicNative),
+                                )
+                                .with_hint(tr(TextKey::NativeFormatHint)),
                                 SelectOption::new("openai_chat", "openai_chat")
-                                    .with_hint("OpenAI Chat Completions 上游"),
+                                    .with_hint(tr(TextKey::OpenAiChatUpstream)),
                                 SelectOption::new("openai_responses", "openai_responses")
-                                    .with_hint("OpenAI Responses 上游"),
+                                    .with_hint(tr(TextKey::OpenAiResponsesUpstream)),
                                 SelectOption::new("gemini_native", "gemini_native")
-                                    .with_hint("Gemini 原生上游"),
+                                    .with_hint(tr(TextKey::GeminiNativeUpstream)),
                             ],
                         },
                     )
-                    .help("仅存于 meta.apiFormat，绝不写入 settings.json；用于网关协议转换。"),
+                    .help(tr(TextKey::ClaudeApiFormatHelp)),
                     FormField::new(
                         "custom_user_agent",
-                        "自定义 User-Agent (meta)",
+                        tr(TextKey::CustomUserAgent),
                         FieldKind::Text {
                             placeholder: "claude-cli/1.0".into(),
                         },
                     )
-                    .help("存于 meta.customUserAgent；留空则使用默认 UA。"),
-                    FormField::new(
-                        "is_full_url",
-                        "Base URL 为完整地址 (meta)",
-                        FieldKind::Toggle,
-                    )
-                    .help("存于 meta.isFullUrl；上游已是完整端点、网关不再追加路径时开启。"),
+                    .help(tr(TextKey::CustomUserAgentHelp)),
+                    FormField::new("is_full_url", tr(TextKey::FullBaseUrl), FieldKind::Toggle)
+                        .help(tr(TextKey::FullBaseUrlHelp)),
                 ],
             )
             .advanced(),
@@ -355,7 +359,8 @@ impl AppConfig for ClaudeConfig {
 
     fn parse_files(&self, contents: &[String]) -> Result<Value, String> {
         let text = contents.first().map(String::as_str).unwrap_or("{}");
-        serde_json::from_str::<Value>(text).map_err(|e| format!("settings.json 解析失败: {e}"))
+        serde_json::from_str::<Value>(text)
+            .map_err(|e| localized::format(TextKey::SettingsJsonParseFailed, &[("e", &(e))]))
     }
 
     fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
@@ -371,30 +376,25 @@ impl AppConfig for ClaudeConfig {
         let mut issues = Vec::new();
 
         if str_val(values, "base_url").trim().is_empty() {
-            issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
+            issues.push(ConfigIssue::error(tr(TextKey::BaseUrlRequired)).for_field("base_url"));
         }
 
         if str_val(values, "api_key").trim().is_empty() {
-            issues.push(ConfigIssue::warning("尚未填写 API Key。").for_field("api_key"));
+            issues.push(ConfigIssue::warning(tr(TextKey::ApiKeyMissing)).for_field("api_key"));
         }
 
         let auth_field = chosen_auth_field(values);
         if auth_field == AUTH_API_KEY {
-            issues.push(
-                ConfigIssue::info(
-                    "已选 ANTHROPIC_API_KEY（x-api-key）；多数第三方服务需改用 ANTHROPIC_AUTH_TOKEN（Bearer）。",
-                )
-                .for_field("auth_field"),
-            );
+            issues.push(ConfigIssue::info(tr(TextKey::ClaudeAuthWarning)).for_field("auth_field"));
         }
 
         // 1M on haiku is unsupported and will be ignored.
         for role in ROLES.iter().filter(|r| !r.supports_one_m) {
             let row = role_row(values, role.id);
             if row_bool(row.as_ref(), "one_m") {
-                issues.push(ConfigIssue::warning(format!(
-                    "{} 不支持 1M 上下文，[1M] 标记将被忽略。",
-                    role.id
+                issues.push(ConfigIssue::warning(localized::format(
+                    TextKey::OneMillionUnsupported,
+                    &[("role", &(role.id))],
                 )));
             }
         }

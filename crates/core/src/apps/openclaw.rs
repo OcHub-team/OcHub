@@ -662,6 +662,60 @@ pub fn set_provider(id: &str, provider_config: Value) -> Result<OpenClawWriteOut
     write_root_section("models", &models_value)
 }
 
+pub(crate) fn prepare_provider_file(
+    provider: &crate::Provider,
+) -> Result<crate::services::config_commit::PreparedFileWrite, AppError> {
+    use crate::services::config_commit::PreparedFileWrite;
+    let mut document = OpenClawConfigDocument::load()?;
+    let source = document
+        .original_source
+        .clone()
+        .unwrap_or_else(|| OPENCLAW_DEFAULT_SOURCE.into());
+    let mut full: Value = json5::from_str(&source).map_err(|e| AppError::Config(e.to_string()))?;
+    let root = ensure_object(&mut full);
+    let models = root
+        .entry("models")
+        .or_insert_with(|| json!({"mode":"merge","providers":{}}));
+    let providers = ensure_object(models)
+        .entry("providers")
+        .or_insert_with(|| json!({}));
+    ensure_object(providers).insert(provider.id.clone(), provider.settings_config.clone());
+    document.set_root_section("models", root.get("models").expect("models inserted"))?;
+    let has_default = root
+        .get("agents")
+        .and_then(|a| a.get("defaults"))
+        .and_then(|d| d.get("model"))
+        .and_then(|m| m.get("primary"))
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty());
+    if !has_default
+        && let Some(id) = provider
+            .settings_config
+            .get("models")
+            .and_then(Value::as_array)
+            .and_then(|m| m.first())
+            .and_then(|m| m.get("id"))
+            .and_then(Value::as_str)
+    {
+        let agents = root.entry("agents").or_insert_with(|| json!({}));
+        let defaults = ensure_object(agents)
+            .entry("defaults")
+            .or_insert_with(|| json!({}));
+        ensure_object(defaults).insert(
+            "model".into(),
+            json!({"primary":format!("{}/{id}",provider.id),"fallbacks":[]}),
+        );
+        document.set_root_section("agents", root.get("agents").expect("agents inserted"))?;
+    }
+    Ok(PreparedFileWrite {
+        path: document.path,
+        before: document.original_source.map(String::into_bytes),
+        after: Some(document.text.to_string().into_bytes()),
+        file_mode: None,
+        dir_mode: None,
+    })
+}
+
 /// 删除供应商配置
 pub fn remove_provider(id: &str) -> Result<OpenClawWriteOutcome, AppError> {
     let mut config = read_openclaw_config()?;

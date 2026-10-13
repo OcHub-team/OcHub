@@ -1,0 +1,7 @@
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+~		46 checkbox (settable, boolean) Unify Codex session history, Value: on
++		49 checkbox (settable, boolean) Import existing Codex sessions, Value: off
+~		47 text field (settable) ~/.codex, Value: /tmp/codex-directory-draft
++		50 button 复制通知内容
++		51 button 关闭通知
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise

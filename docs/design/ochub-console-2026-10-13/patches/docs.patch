@@ -1,0 +1,521 @@
+diff --git a/src/content/docs/developer/index.mdx b/src/content/docs/developer/index.mdx
+--- a/src/content/docs/developer/index.mdx
++++ b/src/content/docs/developer/index.mdx
+@@ -21,6 +21,39 @@
+ 
+ Deep Links are configuration transport, not authentication. If a payload
+ contains an API key, protect the complete URL as a secret.
++
++## Read an Overview snapshot
++
++`ochcli overview` reads the environment in which the command runs. For example,
++run the second command through your existing SSH alias to read a remote node:
++
++```sh
++ochcli overview --json
++ssh devbox ochcli overview --json
++```
++
++Without bounds, the window is the previous 24 hours. `--from` and `--to` accept UTC
++Unix timestamps in **seconds**, with a positive span of no more than 366 days:
++
++```sh
++ochcli overview --from 1791763200 --to 1791849600 --json
++```
++
++The result contains `generatedAt`, `window`, and the sections `gateway`, `routing`,
++`apps`, `usage`, `trend`, `performance`, and `recentRequests`. Each section has
++`data` or `error`. A successful command may contain a failed section, so inspect
++these fields before interpreting a missing value. Invalid bounds fail the command.
++Sections are sampled separately, not in one atomic cross-process transaction.
++
++The command does not probe upstreams, import sessions, or write target
++configuration. `performance` is a preview of at most 20 provider/source groups;
++`recentRequests` contains at most ten retained details. Do not sum the performance
++preview as a full-source total or treat route configuration as a request trace.
++
++The desktop's remote protocol uses `overview-v1` and requires `provider.read`,
++`gateway.read`, and `usage.read`. These protocol capabilities do not turn an
++unrestricted SSH account into a read-only account. See the
++[Overview guide](/guides/overview) for the meaning of displayed data.
+ 
+ ## Editing drafts and explicit application
+ 
+diff --git a/src/content/docs/guides/index.mdx b/src/content/docs/guides/index.mdx
+--- a/src/content/docs/guides/index.mdx
++++ b/src/content/docs/guides/index.mdx
+@@ -15,6 +15,7 @@
+ 
+ | I want to… | Start here |
+ | --- | --- |
++| Inspect configured routes, app selections, and recent records | [Overview dashboard](/guides/overview) |
+ | Switch connections on WSL or a development machine | [Control remote nodes over SSH](/guides/remote-nodes) |
+ | Change the API used by one app | [Manage connections](/guides/providers) |
+ | Give several apps the same MCP server or skill | [MCP and skills](/guides/mcp-skills) |
+diff --git a/src/content/docs/guides/overview.mdx b/src/content/docs/guides/overview.mdx
+new file mode 100644
+--- /dev/null
++++ b/src/content/docs/guides/overview.mdx
+@@ -0,0 +1,74 @@
++---
++title: Overview dashboard
++description: Inspect the selected environment's configured routes, app connections, and recorded usage.
++audience: human
++sidebar:
++  order: 0
++---
++
++Open **Overview** in the sidebar to inspect one environment without changing its
++configuration. Choose this computer or a connected remote node in the workspace
++selector above the navigation. Use **Refresh** after changes; Overview reads
++stored data and the current Gateway state, without probing upstreams or importing
++new sessions.
++
++## Read configured paths
++
++**Configured paths** lists Gateway routes, enabled candidate counts, and model-rule
++counts. Search by route or upstream, then choose **Inspect** to show the route's
++associated apps and upstream interfaces. Choose **Manage routes** to edit the
++configuration on the existing providers and routes page.
++
++These relationships describe the current configuration, not the path taken by a
++past request. A route with no explicit interface list can use all enabled
++interfaces, subject to its model and protocol rules. Missing referenced interfaces
++are shown so you can correct the route. Preview limits are stated on the page;
++open the corresponding detail page for the full list.
++
++The Gateway banner reports whether the listener is running. Interface reachability
++comes from cached results without an observation timestamp. A reachable address
++can still reject credentials or fail to serve a model; HTTP 401 and 403 can count
++as reachable. Use the existing connection or upstream diagnostics when you need
++a fresh test.
++
++## Check app connections and drafts
++
++**App connections** shows saved connections, the selected connection or entries
++marked as added to a tool, and the number of saved editing drafts. Choose **Open**
++to continue on that app's page.
++
++These are OcHub's records, not confirmation that the client process loaded the
++configuration. A connection without a Gateway relationship is not automatically
++classified as direct: inspect its details to confirm how it connects. A stale
++selection also needs review on the app page.
++
++## Interpret usage and recent records
++
++Choose **24 hours**, **7 days**, or **30 days**. **Recorded usage** shows the record
++count, estimated USD cost, processed tokens including cache, and a count trend.
++Use **Show values** to read the time buckets as a table. The trend uses the serving
++node's time zone. It includes captured Gateway/proxy
++records and imported sessions under the existing deduplication rules; activity
++that was never collected is absent. Estimated cost is not the provider's invoice.
++
++**Recent records** previews up to ten retained details in the chosen window.
++Source labels distinguish captures from session imports. Imported sessions have
++no reliable per-request timing. A warning about recent failures counts only that
++preview, not all failures in the time window.
++
++Open **View usage**, **All records**, or **Open sessions** for the corresponding
++full page. When a section cannot be read, it shows an error independently; missing
++data is not converted to zero. An offline environment clears the snapshot, and
++refreshing never falls back to this computer.
++
++## Use Overview with remote nodes
++
++A node needs Overview support (`overview-v1`) and permission to read providers,
++Gateway state, and usage. Upgrade and reconnect an older node if the page cannot
++load; missing capability does not trigger a local substitute.
++
++Overview is a snapshot of separately read sections, not an atomic audit of every
++process. Use [Remote nodes](/guides/remote-nodes) for connection diagnostics and
++[Routing recipes](/advanced/routing-recipes) to change routing behavior. The
++[`ochcli overview` command](/developer#read-an-overview-snapshot) exposes the same
++read-only information for automation.
+diff --git a/src/content/docs/guides/remote-nodes.mdx b/src/content/docs/guides/remote-nodes.mdx
+--- a/src/content/docs/guides/remote-nodes.mdx
++++ b/src/content/docs/guides/remote-nodes.mdx
+@@ -69,6 +69,7 @@
+ 
+ | Area | Available remotely |
+ | --- | --- |
++| Overview | Configured routes and app connections, Gateway state, and recorded usage; requires Overview support and provider, Gateway, and usage read access |
+ | Node | Live status, hostname, OS, architecture, node ID, `ochcli` version, owner process, and enabled apps |
+ | Connections | List existing remote connections, show the current one, preview a switch, and apply it |
+ | Providers | List, create, edit, delete, duplicate, reorder, switch, and run endpoint/network diagnostics in the normal app page |
+diff --git a/src/content/docs/guides/settings-themes.mdx b/src/content/docs/guides/settings-themes.mdx
+--- a/src/content/docs/guides/settings-themes.mdx
++++ b/src/content/docs/guides/settings-themes.mdx
+@@ -9,6 +9,29 @@
+ Device-wide options live under Settings, while interface colors live under
+ Theme. **App settings** in the upper-right corner of an app page affects
+ only that AI tool.
++
++## Find pages in the sidebar
++
++The top navigation contains **Overview**, **Providers & routes**, **Usage**, and
++**Sessions**. Expand **App connections** to open a managed app; collapsing this
++list only hides its navigation entries and does not disable management.
++**Extensions** groups MCP and Skills. Proxy, remote nodes, and maintenance tools
++are under **Environment**. Notifications and the Themes, Settings, and About icons
++stay at the bottom even when the navigation list scrolls.
++
++## Read notifications
++
++Brief notifications appear in the upper-right area. Long diagnostics stay behind
++**Details** instead of expanding the toast over the page. Hovering or focusing a
++notification pauses its automatic dismissal. Closing the toast leaves its entry
++in **Notifications**, accessible at the bottom of the sidebar.
++
++The center retains up to 64 recent notifications from this app launch. Open an
++entry to read its detail and choose **Copy details** when needed. **Mark all read**
++and **Clear read** manage this list; closing or reading a notification does not
++resolve the underlying issue. History is not saved across app restarts and is not
++an operation audit log. Field errors and connection draft/application results
++remain in their editor, where you can act on them.
+ 
+ ## General settings
+ 
+diff --git a/src/content/docs/overview.mdx b/src/content/docs/overview.mdx
+--- a/src/content/docs/overview.mdx
++++ b/src/content/docs/overview.mdx
+@@ -28,6 +28,7 @@
+ 
+ | Area | Capabilities |
+ | --- | --- |
++| [Overview dashboard](/guides/overview) | Read configured routes, app connections, and recorded usage for one environment |
+ | Connections | Discover, import, edit, switch, and test direct API connections |
+ | Model providers | Route supported clients through a local gateway with model aliases, reasoning mapping, interface-candidate retry, backup-provider switching, health checks, and usage accounting |
+ | Shared tools | Manage MCP servers and reusable skills across supported clients |
+diff --git a/src/content/docs-ja/developer/index.mdx b/src/content/docs-ja/developer/index.mdx
+--- a/src/content/docs-ja/developer/index.mdx
++++ b/src/content/docs-ja/developer/index.mdx
+@@ -21,6 +21,39 @@
+ 
+ Deep Link は設定の転送手段であり、認証ではありません。Payload に API キーが含まれる
+ 場合は、URL 全体を秘密情報として保護してください。
++
++## 概要スナップショットを読む
++
++`ochcli overview` はコマンドの実行環境を読み取ります。既存の SSH エイリアスを使って
++2 行目を実行すると、リモートノードの情報を取得できます。
++
++```sh
++ochcli overview --json
++ssh devbox ochcli overview --json
++```
++
++範囲を指定しない場合は直近 24 時間です。`--from` と `--to` には**秒**単位の UTC Unix
++タイムスタンプを指定します。期間は 0 より長く、366 日以内である必要があります。
++
++```sh
++ochcli overview --from 1791763200 --to 1791849600 --json
++```
++
++結果には `generatedAt`、`window` と、`gateway`、`routing`、`apps`、`usage`、`trend`、
++`performance`、`recentRequests` の各セクションがあります。各セクションは `data` または
++`error` を含みます。コマンドが成功しても一部の読み取りが失敗している場合があるため、
++欠損値を解釈する前に確認してください。不正な期間ではコマンド自体が失敗します。
++各セクションは個別に取得され、プロセス間の原子的なトランザクションではありません。
++
++上流への検査、セッションの取り込み、対象設定への書き込みは行いません。
++`performance` はプロバイダー／取得元グループを最大 20 件、`recentRequests` は保持された
++詳細を最大 10 件含みます。性能プレビューの合計を取得元全体の合計にせず、ルート設定を
++実リクエストの追跡として扱わないでください。
++
++デスクトップのリモートプロトコルでは `overview-v1` に加え、`provider.read`、`gateway.read`、
++`usage.read` が必要です。これらのプロトコル権限によって、制限のない SSH アカウントが
++読み取り専用になるわけではありません。表示データの意味は[概要ガイド](/ja/guides/overview)を
++参照してください。
+ 
+ ## 編集下書きと明示的な適用
+ 
+diff --git a/src/content/docs-ja/guides/index.mdx b/src/content/docs-ja/guides/index.mdx
+--- a/src/content/docs-ja/guides/index.mdx
++++ b/src/content/docs-ja/guides/index.mdx
+@@ -14,6 +14,7 @@
+ 
+ | 目的 | 最初に読むページ |
+ | --- | --- |
++| ルート設定、アプリの選択、最近の記録を確認する | [概要ダッシュボード](/ja/guides/overview) |
+ | WSL や開発マシンの接続を切り替える | [SSH でリモートノードを操作する](/ja/guides/remote-nodes) |
+ | 1 つのアプリで使用する API を変更する | [接続を管理する](/ja/guides/providers) |
+ | 複数アプリで MCP サーバーやスキルを共有する | [MCP とスキル](/ja/guides/mcp-skills) |
+diff --git a/src/content/docs-ja/guides/overview.mdx b/src/content/docs-ja/guides/overview.mdx
+new file mode 100644
+--- /dev/null
++++ b/src/content/docs-ja/guides/overview.mdx
+@@ -0,0 +1,65 @@
++---
++title: 概要ダッシュボード
++description: 選択した環境のルート設定、アプリ接続、記録済み使用量を確認します。
++audience: human
++sidebar:
++  order: 0
++---
++
++サイドバーの**概要**から、設定を変更せずに 1 つの環境を確認できます。ナビゲーション上部の
++ワークスペース選択で、本機または接続済みのリモートノードを選びます。変更後は**更新**を
++押してください。概要は保存済みデータと現在の Gateway 状態を読み取ります。上流への検査や
++新しいセッションの取り込みは実行しません。
++
++## 設定上の経路を読む
++
++**設定上の経路**には Gateway ルート、有効な候補数、モデルルール数が表示されます。
++ルートや上流で検索し、**詳細**から関連アプリと上流インターフェースを確認します。
++設定を変更するには**ルート管理**から既存のプロバイダーとルートのページへ進みます。
++
++表示されるのは現在の設定上の関連であり、過去のリクエストが実際に通った経路ではありません。
++インターフェースを明示しないルートでは、モデルとプロトコルのルールに従って、すべての有効な
++インターフェースを候補にできます。参照先が存在しない場合は修正のための注意が表示されます。
++プレビューの件数制限はページ上で確認でき、全件は対応する詳細ページで表示できます。
++
++Gateway の表示は待ち受けプロセスの稼働状態です。インターフェースの到達性は観測時刻を持たない
++キャッシュ値です。到達可能でも認証に失敗したり、モデルを利用できなかったりします。
++HTTP 401、403 も到達可能と扱われる場合があります。最新の結果が必要なら、接続または上流の
++詳細ページから既存の診断を実行してください。
++
++## アプリの接続と下書きを確認する
++
++**アプリの接続**には保存済み接続、現在の選択またはツールに追加済みと記録された項目、
++保存済みの編集下書き数が表示されます。**開く**からそのアプリのページへ進みます。
++
++これは OcHub の記録であり、クライアントプロセスが設定を読み込んだ確認ではありません。
++Gateway の関連がない接続も自動的に直接接続と判断されません。接続方法は詳細で確認します。
++選択情報が古くなっている場合もアプリのページで確認してください。
++
++## 使用量と最近の記録を理解する
++
++**24 時間**、**7 日**、**30 日**を選べます。**記録済み使用量**には記録数、推定費用（USD）、
++キャッシュを含む処理 token、記録数の推移が表示されます。**数値を表示**で各期間の値を表として
++確認できます。推移にはデータを提供するノードの
++時刻帯を使います。既存の重複排除ルールに基づき、Gateway／proxy の収集記録と取り込み済み
++セッションを含みます。未収集の活動は含まれず、推定費用はプロバイダーの請求額ではありません。
++
++**最近の記録**は、指定期間に保持されている詳細を最大 10 件表示します。取得元ラベルで収集と
++セッション取り込みを区別します。取り込みセッションには信頼できるリクエスト所要時間がありません。
++最近の失敗に関する注意はこのプレビューだけの件数であり、期間全体の失敗総数ではありません。
++
++**使用量を表示**、**全記録**、**セッションを開く**から対応するページへ進めます。一部の読み取りが
++失敗した場合、その部分だけにエラーが表示されます。欠損データを 0 には変換しません。
++環境がオフラインになるとスナップショットを消去し、更新処理を本機へ切り替えることもありません。
++
++## リモートノードの概要
++
++ノードが概要（`overview-v1`）に対応し、接続、Gateway 状態、使用量の読み取りを許可している
++必要があります。古いノードで読み込めない場合は更新して再接続してください。
++機能が利用できなくても本機で代わりに処理することはありません。
++
++概要は各セクションを個別に読み取ったスナップショットであり、全プロセスの原子的な監査ではありません。
++接続診断は[リモートノード](/ja/guides/remote-nodes)、ルート変更は
++[ルーティングレシピ](/ja/advanced/routing-recipes)を参照してください。
++自動化には、同じ読み取り専用情報を返す
++[`ochcli overview` コマンド](/ja/developer#概要スナップショットを読む)を利用できます。
+diff --git a/src/content/docs-ja/guides/remote-nodes.mdx b/src/content/docs-ja/guides/remote-nodes.mdx
+--- a/src/content/docs-ja/guides/remote-nodes.mdx
++++ b/src/content/docs-ja/guides/remote-nodes.mdx
+@@ -59,6 +59,7 @@
+ 
+ | 領域 | リモートで利用できる機能 |
+ | --- | --- |
++| 概要 | ルート設定、アプリ接続、Gateway 状態、記録済み使用量。概要への対応と接続・Gateway・使用量の読み取り権限が必要 |
+ | ノード | 状態、ホスト名、OS、アーキテクチャ、Node ID、`ochcli` バージョン、Owner、アプリ |
+ | 接続 | 既存接続の一覧、現在値、切り替えプレビュー、適用 |
+ | Provider | 通常のアプリ画面で一覧、作成、編集、削除、複製、並べ替え、切り替え、診断 |
+diff --git a/src/content/docs-ja/guides/settings-themes.mdx b/src/content/docs-ja/guides/settings-themes.mdx
+--- a/src/content/docs-ja/guides/settings-themes.mdx
++++ b/src/content/docs-ja/guides/settings-themes.mdx
+@@ -8,6 +8,26 @@
+ 
+ デバイス全体の項目は「設定」、画面の配色は「テーマ」にあります。アプリページ
+ 右上の**アプリ設定**は、その AI ツールだけに作用します。
++
++## サイドバーでページを探す
++
++上部には**概要**、**プロバイダーとルート**、**使用量**、**セッション**があります。
++**アプリ接続**を展開すると管理対象アプリを開けます。折りたたんでもナビゲーションの項目が
++隠れるだけで、管理は無効になりません。**拡張機能**には MCP とスキル、**環境と保守**には
++プロキシ、リモートノード、保守ツールがあります。通知センターとテーマ・設定・情報の
++アイコンは下部に固定され、ナビゲーションをスクロールしても表示されます。
++
++## 通知を読む
++
++短い通知は右上に表示されます。長い診断は**詳細**にまとめられ、通知がページを大きく覆うことは
++ありません。マウスを重ねるかキーボードでフォーカスすると自動消去が一時停止します。
++通知を閉じても、サイドバー下部の**通知センター**から同じ項目を確認できます。
++
++通知センターには今回の起動中の最近の通知を最大 64 件保持します。項目を開いて内容を読み、
++必要なら**詳細をコピー**します。**すべて既読にする**と**既読を削除**はリストの管理用です。
++閉じたり読んだりしても、元の問題が解決したことにはなりません。履歴はアプリ再起動後には保持されず、
++操作の監査ログでもありません。フィールドのエラーや接続の下書き保存・適用結果はエディター内に
++表示され、その場で対応できます。
+ 
+ ## 一般設定
+ 
+diff --git a/src/content/docs-ja/overview.mdx b/src/content/docs-ja/overview.mdx
+--- a/src/content/docs-ja/overview.mdx
++++ b/src/content/docs-ja/overview.mdx
+@@ -27,6 +27,7 @@
+ 
+ | 領域 | 機能 |
+ | --- | --- |
++| [概要ダッシュボード](/ja/guides/overview) | 1 つの環境のルート設定、アプリ接続、記録済み使用量を確認 |
+ | 接続 | 直接 API 接続の検出、インポート、編集、切り替え、テスト |
+ | モデルプロバイダー | 対応クライアントをローカルゲートウェイ経由でルーティング。モデルエイリアス、推論マッピング、インターフェース候補の再試行、予備のモデルプロバイダー切り替え、ヘルスチェック、使用量集計に対応 |
+ | 共有ツール | 対応クライアント間で MCP サーバーと再利用可能なスキルを管理 |
+diff --git a/src/content/docs-zh/developer/index.mdx b/src/content/docs-zh/developer/index.mdx
+--- a/src/content/docs-zh/developer/index.mdx
++++ b/src/content/docs-zh/developer/index.mdx
+@@ -20,6 +20,34 @@
+ 
+ Deep Link 只负责传输配置，不是身份认证机制。Payload 如果包含 API Key，必须将完整 URL
+ 按密钥管理。
++
++## 读取总览快照
++
++`ochcli overview` 读取命令执行所在的环境。例如，用已有 SSH 别名执行第二条命令，读取远程节点：
++
++```sh
++ochcli overview --json
++ssh devbox ochcli overview --json
++```
++
++未指定范围时读取最近 24 小时。`--from` 与 `--to` 接受以**秒**为单位的 UTC Unix 时间戳，
++时间跨度必须大于零且不超过 366 天：
++
++```sh
++ochcli overview --from 1791763200 --to 1791849600 --json
++```
++
++结果包含 `generatedAt`、`window`，以及 `gateway`、`routing`、`apps`、`usage`、`trend`、
++`performance`、`recentRequests` 分区。每个分区包含 `data` 或 `error`。命令整体成功时仍可能
++有个别分区读取失败，解释缺失值前必须检查对应字段；无效时间范围会让命令失败。
++各分区分别采样，不是跨进程的原子事务。
++
++命令不会探测上游、导入会话或写入目标配置。`performance` 最多预览 20 个供应商与来源分组，
++`recentRequests` 最多包含十条保留明细。不能把性能预览重新加总为完整来源统计，也不能把
++路由配置当成实际请求轨迹。
++
++桌面远程协议使用 `overview-v1`，并要求 `provider.read`、`gateway.read` 与 `usage.read`。
++这些协议权限不会将普通 SSH 账户变成只读账户。显示数据的含义参见[总览教程](/zh/guides/overview)。
+ 
+ ## 编辑草稿与明确应用
+ 
+diff --git a/src/content/docs-zh/guides/index.mdx b/src/content/docs-zh/guides/index.mdx
+--- a/src/content/docs-zh/guides/index.mdx
++++ b/src/content/docs-zh/guides/index.mdx
+@@ -14,6 +14,7 @@
+ 
+ | 我想要…… | 从这里开始 |
+ | --- | --- |
++| 查看配置路由、应用选择与最近记录 | [总览看板](/zh/guides/overview) |
+ | 切换 WSL 或开发机上的连接 | [通过 SSH 控制远程节点](/zh/guides/remote-nodes) |
+ | 修改某个应用使用的 API | [管理连接](/zh/guides/providers) |
+ | 让多个应用共用 MCP 服务器或技能 | [MCP 与技能](/zh/guides/mcp-skills) |
+diff --git a/src/content/docs-zh/guides/overview.mdx b/src/content/docs-zh/guides/overview.mdx
+new file mode 100644
+--- /dev/null
++++ b/src/content/docs-zh/guides/overview.mdx
+@@ -0,0 +1,53 @@
++---
++title: 总览看板
++description: 查看所选环境的配置路由、应用连接和已记录用量。
++audience: human
++sidebar:
++  order: 0
++---
++
++从侧栏打开**总览**，查看一个环境的状态而不修改配置。先用导航上方的工作区选择器切换到
++本机或已连接的远程节点。配置变更后可点击**刷新**；总览读取已保存数据和当前网关状态，
++不会主动探测上游，也不会导入新会话。
++
++## 查看配置路径
++
++**配置路径**列出网关路由、启用候选数量和模型规则数量。按路由或上游搜索，再点击**查看**，
++展开该路由关联的应用与上游接口。点击**管理路由**，进入现有的供应商与路由页面修改配置。
++
++这里展示当前配置中的关联，不是某次历史请求走过的路径。没有指定接口列表的路由可以使用
++全部启用接口，但仍受模型和协议规则约束。引用了已不存在的接口时，页面会明确提示，便于修正。
++预览数量有限时会显示说明；完整列表请进入对应详情页查看。
++
++网关横幅只说明监听服务是否运行。接口可达性来自没有采样时间的缓存结果；地址可达仍可能出现
++凭据错误或模型不可用，HTTP 401、403 也可能计为可达。需要最新结果时，在连接或上游详情中
++执行已有的诊断操作。
++
++## 核对应用连接与草稿
++
++**应用连接**展示已保存连接、当前选择或标记为已加入工具的条目，以及已保存的编辑草稿数量。
++点击**打开**，进入该应用页面继续操作。
++
++这些是 OcHub 的记录，不代表客户端进程已经读取配置。没有网关关联的连接也不会自动被认定为
++直连；请进入详情确认接入方式。当前选择已失效时，同样需要进入应用页核对。
++
++## 理解用量与最近记录
++
++可以选择**24 小时**、**7 天**或**30 天**。**已记录用量**展示记录数量、估算美元费用、
++包含缓存的处理 token，以及记录数量趋势。点击**查看数值**可以用表格读取各时段数据。趋势按提供数据的节点时区显示，包含已有去重规则
++处理后的网关或代理采集记录与已导入会话；未采集活动不在统计内。估算费用不是服务商账单。
++
++**最近记录**最多预览所选范围内仍保留的十条明细。来源标签区分采集与会话导入；导入会话
++没有可靠的逐请求耗时。最近失败提示只统计这份预览，不代表整个时间范围的失败总数。
++
++点击**查看用量**、**全部记录**或**打开会话**进入对应完整页面。某个分区读取失败时，
++该分区独立显示错误，不会把缺失数据记为零。环境离线后会清除快照，刷新也不会回退到本机。
++
++## 远程节点的总览
++
++节点需要支持总览（`overview-v1`），并允许读取连接、网关状态和用量。如果旧节点无法加载，
++请升级后重新连接；能力缺失不会触发本机替代操作。
++
++总览由多个分区分别读取组成，不是对所有进程的原子审计。连接诊断参见
++[远程节点](/zh/guides/remote-nodes)，修改路由参见[路由配方](/zh/advanced/routing-recipes)。
++自动化可使用提供同类只读信息的 [`ochcli overview` 命令](/zh/developer#读取总览快照)。
+diff --git a/src/content/docs-zh/guides/remote-nodes.mdx b/src/content/docs-zh/guides/remote-nodes.mdx
+--- a/src/content/docs-zh/guides/remote-nodes.mdx
++++ b/src/content/docs-zh/guides/remote-nodes.mdx
+@@ -54,6 +54,7 @@
+ 
+ | 领域 | 可远程管理的内容 |
+ | --- | --- |
++| 总览 | 配置路由、应用连接、网关状态与已记录用量；需要总览支持以及连接、网关和用量读取权限 |
+ | 节点 | 实时状态、主机名、系统、架构、节点 ID、`ochcli` 版本、Owner 进程和已启用应用 |
+ | 连接 | 列出现有远端连接、查看当前连接、预览切换并确认应用 |
+ | Provider | 在正常应用页面中列出、创建、编辑、删除、复制、排序、切换，并执行端点和网络诊断 |
+diff --git a/src/content/docs-zh/guides/settings-themes.mdx b/src/content/docs-zh/guides/settings-themes.mdx
+--- a/src/content/docs-zh/guides/settings-themes.mdx
++++ b/src/content/docs-zh/guides/settings-themes.mdx
+@@ -8,6 +8,24 @@
+ 
+ 设备级选项集中在“设置”，界面配色集中在“主题”。应用页右上角的“应用设置”只影响
+ 当前 AI 工具，不要和设备级设置混淆。
++
++## 在侧栏中查找页面
++
++上方导航包含**总览**、**供应商与路由**、**用量**和**会话**。展开**应用连接**即可进入受管
++应用；折叠列表只隐藏导航入口，不会停用管理。**扩展**分组包含 MCP 与技能，代理、远程节点
++和维护工具位于**环境与维护**。通知中心以及主题、设置、关于图标固定在底部，不会随着导航
++列表滚出窗口。
++
++## 查看通知
++
++简短通知显示在右上区域，较长的诊断内容放在**详情**中，不会让浮层覆盖大片页面。
++鼠标悬停或键盘焦点进入通知时会暂停自动关闭。关闭浮层后，仍可在侧栏底部的**通知中心**
++找到对应条目。
++
++通知中心最多保留本次启动中的 64 条最近通知。打开条目查看完整说明，需要时点击**复制详情**。
++**全部标为已读**和**清除已读**只管理列表；关闭或阅读通知不代表原问题已经解决。
++历史不会跨应用重启保存，也不是操作审计日志。字段错误、连接草稿保存与应用结果仍显示在
++编辑器内，便于在原位置继续处理。
+ 
+ ## 通用设置
+ 
+diff --git a/src/content/docs-zh/overview.mdx b/src/content/docs-zh/overview.mdx
+--- a/src/content/docs-zh/overview.mdx
++++ b/src/content/docs-zh/overview.mdx
+@@ -26,6 +26,7 @@
+ 
+ | 领域 | 能力 |
+ | --- | --- |
++| [总览看板](/zh/guides/overview) | 查看一个环境的配置路由、应用连接与已记录用量 |
+ | 连接 | 发现、导入、编辑、切换和测试直连 API |
+ | 模型供应商 | 让受支持的客户端经由本地网关路由，支持模型别名、推理映射、接口候选重试、备用模型供应商切换、健康检查和用量统计 |
+ | 共享工具 | 跨受支持客户端管理 MCP 服务器和可复用技能 |

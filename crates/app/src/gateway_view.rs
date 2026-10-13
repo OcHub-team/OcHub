@@ -445,6 +445,8 @@ pub struct GatewayView {
     import_candidates: Vec<ImportCandidate>,
     installed_station_apps: HashSet<(AppType, String)>,
     editor: Option<StationEditor>,
+    editor_baseline: Option<serde_json::Value>,
+    editor_backend: Option<WorkspaceBackend>,
     show_imports: bool,
     mutation_in_flight: bool,
     confirm_delete: Option<(String, String)>,
@@ -467,8 +469,53 @@ pub struct GatewayView {
 }
 
 impl EventEmitter<GatewayEvent> for GatewayView {}
+impl EventEmitter<crate::interaction::DiscardForm> for GatewayView {}
 
 impl GatewayView {
+    fn editor_values(&self, cx: &gpui::App) -> Option<serde_json::Value> {
+        let editor = self.editor.as_ref()?;
+        let text = |input: &Entity<TextInput>| input.read(cx).content().to_string();
+        let mut dialects = editor
+            .enabled_dialects
+            .iter()
+            .map(|d| format!("{d:?}"))
+            .collect::<Vec<_>>();
+        dialects.sort();
+        Some(serde_json::json!({
+            "fields": ([&editor.name, &editor.website_url, &editor.api_key, &editor.default_model,
+                &editor.low_budget, &editor.medium_budget, &editor.high_budget, &editor.max_budget,
+                &editor.models.manual_input].map(text)),
+            "keys": editor.backup_keys.iter().map(|key| (&key.id, text(&key.api_key))).collect::<Vec<_>>(),
+            "endpoints": editor.endpoints.iter().map(|e| (&e.id, text(&e.base_url))).collect::<Vec<_>>(),
+            "rules": editor.rules.iter().map(|r| (text(&r.client_model), text(&r.station_model), r.dialect)).collect::<Vec<_>>(),
+            "dialects": dialects, "models": editor.models.selected,
+            "reasoning": editor.reasoning_mode, "websocket": editor.websocket_enabled,
+            "enabled": editor.enabled, "quota": editor.quota_api,
+            "apply": editor.apply_targets.iter().map(|t| (t.app, t.enabled, text(&t.preferred_model))).collect::<Vec<_>>()
+        }))
+    }
+
+    pub(crate) fn leave_state(&self, cx: &gpui::App) -> crate::interaction::LeaveState {
+        crate::interaction::LeaveState::new(
+            self.editor.is_some()
+                && (self.editor_values(cx) != self.editor_baseline
+                    || self.editor.as_ref().is_some_and(|e| e.is_deeplink_import)),
+            self.mutation_in_flight,
+        )
+    }
+
+    pub(crate) fn discard_changes(&mut self, cx: &mut Context<Self>) {
+        // The shell already owns the destination. Emitting ImportCancelled
+        // here would navigate a second time after it has resumed that target.
+        self.editor = None;
+        self.editor_baseline = None;
+        self.editor_backend = None;
+        self.confirm_delete = None;
+        self.delete_blocked = None;
+        self.rebuild_rows();
+        cx.notify();
+    }
+
     /// Re-apply the current locale to state that a repaint cannot reach.
     ///
     /// `refresh_windows` re-runs `render`, which covers every label the page
@@ -555,6 +602,8 @@ impl GatewayView {
             import_candidates: Vec::new(),
             installed_station_apps: HashSet::new(),
             editor: None,
+            editor_baseline: None,
+            editor_backend: None,
             show_imports: false,
             mutation_in_flight: false,
             confirm_delete: None,
@@ -593,22 +642,10 @@ impl GatewayView {
             cx.notify();
             return;
         }
-        let cancelled_deeplink = self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| editor.is_deeplink_import);
-        let closed_editor = self.editor.take().is_some();
-        if self.delete_blocked.take().is_some()
-            || self.confirm_delete.take().is_some()
-            || closed_editor
-        {
-            if closed_editor {
-                self.rebuild_rows();
-            }
+        if self.delete_blocked.take().is_some() || self.confirm_delete.take().is_some() {
             cx.notify();
-            if cancelled_deeplink {
-                cx.emit(GatewayEvent::ImportCancelled);
-            }
+        } else if self.editor.is_some() {
+            self.close_editor(cx);
         } else {
             window.play_system_bell();
         }
@@ -670,6 +707,17 @@ impl GatewayView {
     }
 
     pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        if self
+            .backend
+            .as_ref()
+            .or(self.editor_backend.as_ref())
+            .is_some_and(|current| current.same_workspace(&backend))
+        {
+            self.backend = Some(backend);
+            self.workspace_available = true;
+            self.reload(cx);
+            return;
+        }
         self.backend = Some(backend);
         self.workspace_available = true;
         self.editor = None;
@@ -692,7 +740,6 @@ impl GatewayView {
     pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
         self.backend = None;
         self.workspace_available = false;
-        self.editor = None;
         self.show_imports = false;
         self.show_connection = false;
         self.connection_loading = false;
@@ -803,6 +850,16 @@ impl GatewayView {
     }
 
     fn close_editor(&mut self, cx: &mut Context<Self>) {
+        match self.leave_state(cx) {
+            crate::interaction::LeaveState::Busy => {}
+            crate::interaction::LeaveState::Dirty => cx.emit(crate::interaction::DiscardForm(
+                crate::interaction::FormOwner::Gateway,
+            )),
+            crate::interaction::LeaveState::Clean => self.close_editor_unchecked(cx),
+        }
+    }
+
+    fn close_editor_unchecked(&mut self, cx: &mut Context<Self>) {
         let cancelled_deeplink = self
             .editor
             .as_ref()
@@ -1021,6 +1078,8 @@ impl GatewayView {
             import_contains_key: false,
             apply_targets: Vec::new(),
         });
+        self.editor_baseline = self.editor_values(cx);
+        self.editor_backend = self.backend.clone();
         // The editor renders pinned above the list; jump there so clicking
         // Edit on a card far down the page visibly responds.
         self.rebuild_rows();

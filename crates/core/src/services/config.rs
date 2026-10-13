@@ -43,8 +43,13 @@ impl ConfigService {
 
         match app_type {
             "claude" | "omo" | "omo-slim" => {
-                serde_json::from_str::<serde_json::Value>(snippet)
+                let value = serde_json::from_str::<serde_json::Value>(snippet)
                     .map_err(|e| AppError::Config(format!("无效的 JSON 格式: {e}")))?;
+                if !value.is_object() {
+                    return Err(AppError::Config(
+                        "Shared JSON configuration must be an object".into(),
+                    ));
+                }
             }
             "codex" => {
                 snippet
@@ -81,6 +86,29 @@ impl ConfigService {
         let old_snippet = state.db.get_config_snippet(app_type)?;
 
         Self::validate_common_config_snippet(app_type, &snippet)?;
+
+        if matches!(app_type, "claude" | "codex") {
+            let app = app_type.parse::<AppType>()?;
+            if let Some(id) = crate::settings::get_effective_current_provider(&state.db, &app)?
+                && let Some(provider) = state.db.get_provider_by_id(&id, app_type)?
+            {
+                let application =
+                    crate::application::Application::from_state(std::sync::Arc::new(state.clone()));
+                application
+                    .apply_provider_candidate_with_common(
+                        &app.app_id(),
+                        Some(&provider),
+                        provider.clone(),
+                        crate::application::ProviderSwitchPolicy::Abort,
+                        Some(crate::application::EditorCommonConfig {
+                            snippet,
+                            base_snippet: old_snippet,
+                        }),
+                    )
+                    .map_err(|e| AppError::Message(e.to_string()))?;
+                return Ok(());
+            }
+        }
 
         let value = if is_cleared { None } else { Some(snippet) };
 

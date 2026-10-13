@@ -1,8 +1,7 @@
 //! Per-app settings panel.
 //!
-//! Settings that affect exactly one managed tool — Claude Code's plugin
-//! integration / onboarding skip, Codex's official-OAuth preservation and
-//! session-history unification, and each CLI's config directory — used to be
+//! Settings that affect exactly one managed tool — Codex's session-history
+//! unification and each CLI's config directory — used to be
 //! dumped into the single global Settings page. They belong with the app they
 //! configure, so this panel renders just the selected app's settings and is
 //! opened from a gear in that app's provider-list header. The values still live
@@ -13,7 +12,7 @@ use std::sync::Arc;
 
 use gpui::{Context, Entity, ScrollHandle, SharedString, Window, div, prelude::*};
 use ochub_core::settings::{self, AppSettings};
-use ochub_core::{AppState, AppType};
+use ochub_core::{AppId, AppState, AppType};
 use serde_json::Value;
 
 use crate::components::{self, ButtonSize, ButtonTone};
@@ -23,7 +22,6 @@ use crate::notifications::NotificationLevel;
 use crate::remote::{WorkspaceBackend, WorkspaceBackendError};
 use crate::text_input::TextInput;
 use crate::tf;
-use crate::theme;
 
 /// Emitted when the user dismisses the panel (back to the provider list).
 pub enum AppSettingsEvent {
@@ -35,7 +33,8 @@ impl gpui::EventEmitter<AppSettingsEvent> for AppSettingsView {}
 pub struct AppSettingsView {
     backend: WorkspaceBackend,
     workspace_available: bool,
-    app_type: AppType,
+    app_id: AppId,
+    app_type: Option<AppType>,
     settings: AppSettings,
     /// The app's config-dir override input (None for apps without one).
     config_dir: Option<Entity<TextInput>>,
@@ -47,11 +46,44 @@ pub struct AppSettingsView {
 }
 
 /// Whether an app has any app-scoped settings worth a gear button.
-pub fn app_has_settings(app: AppType) -> bool {
-    config_dir_placeholder(app).is_some() || matches!(app, AppType::Claude | AppType::Codex)
+pub fn app_has_settings(app: &AppId) -> bool {
+    match AppType::from_app_id(app) {
+        Some(builtin) => builtin_config_dir_placeholder(builtin).is_some(),
+        None => ochub_core::plugin::get_plugin(app)
+            .is_some_and(|plugin| plugin.provider_config().is_some()),
+    }
+}
+
+enum SettingsMutation {
+    Setting(&'static str, Value),
+    ConfigDirectory(AppId, Option<String>),
 }
 
 impl AppSettingsView {
+    pub(crate) fn leave_state(&self, cx: &gpui::App) -> crate::interaction::LeaveState {
+        crate::interaction::LeaveState::new(
+            self.config_dir.as_ref().is_some_and(|input| {
+                input.read(cx).content().trim()
+                    != read_config_dir(&self.settings, &self.app_id)
+                        .unwrap_or_default()
+                        .trim()
+            }),
+            self.saving,
+        )
+    }
+
+    pub(crate) fn discard_changes(&mut self, cx: &mut Context<Self>) {
+        if let Some(input) = self.config_dir.as_ref() {
+            input.update(cx, |input, cx| {
+                input.set_content(
+                    read_config_dir(&self.settings, &self.app_id).unwrap_or_default(),
+                    cx,
+                )
+            });
+        }
+        cx.notify();
+    }
+
     pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.config_dir.is_some() && self.workspace_available {
             self.save_config_dir(cx);
@@ -64,12 +96,14 @@ impl AppSettingsView {
         cx.emit(AppSettingsEvent::Close);
     }
 
-    pub fn new(app: Arc<AppState>, app_type: AppType, cx: &mut Context<Self>) -> Self {
+    pub fn new(app: Arc<AppState>, app_id: AppId, cx: &mut Context<Self>) -> Self {
         let settings = settings::get_settings();
-        let config_dir = Self::make_config_dir_input(app_type, &settings, cx);
+        let config_dir = Self::make_config_dir_input(&app_id, &settings, false, cx);
+        let app_type = AppType::from_app_id(&app_id);
         Self {
             backend: WorkspaceBackend::local(app),
             workspace_available: true,
+            app_id,
             app_type,
             settings,
             config_dir,
@@ -82,20 +116,36 @@ impl AppSettingsView {
     }
 
     /// Re-point the panel at a different app (called when the gear is opened).
-    pub fn reload_for(&mut self, app_type: AppType, cx: &mut Context<Self>) {
+    pub fn reload_for(&mut self, app_id: AppId, cx: &mut Context<Self>) {
+        if app_id == self.app_id {
+            self.load_settings(cx);
+            return;
+        }
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
-        self.app_type = app_type;
+        self.app_type = AppType::from_app_id(&app_id);
+        self.app_id = app_id;
+        self.saving = false;
+        self.config_dir =
+            Self::make_config_dir_input(&self.app_id, &self.settings, self.backend.is_remote(), cx);
         self.status = None;
         self.status_level = None;
         self.load_settings(cx);
     }
 
     pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        if self.backend.same_workspace(&backend) {
+            self.workspace_generation = self.workspace_generation.wrapping_add(1);
+            self.backend = backend;
+            self.workspace_available = true;
+            self.load_settings(cx);
+            return;
+        }
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.backend = backend;
         self.workspace_available = true;
         self.settings = AppSettings::default();
-        self.config_dir = Self::make_config_dir_input(self.app_type, &self.settings, cx);
+        self.config_dir =
+            Self::make_config_dir_input(&self.app_id, &self.settings, self.backend.is_remote(), cx);
         self.saving = false;
         cx.notify();
     }
@@ -103,8 +153,6 @@ impl AppSettingsView {
     pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.workspace_available = false;
-        self.settings = AppSettings::default();
-        self.config_dir = Self::make_config_dir_input(self.app_type, &self.settings, cx);
         self.saving = false;
         cx.notify();
     }
@@ -115,6 +163,11 @@ impl AppSettingsView {
         }
         let backend = self.backend.clone();
         let generation = self.workspace_generation;
+        let initial_dir = self
+            .config_dir
+            .as_ref()
+            .map(|input| input.read(cx).content());
+        let was_dirty = self.leave_state(cx) == crate::interaction::LeaveState::Dirty;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let settings = backend.settings().await?;
@@ -129,13 +182,18 @@ impl AppSettingsView {
                 match result {
                     Ok(settings) => {
                         this.settings = settings;
-                        this.config_dir =
-                            Self::make_config_dir_input(this.app_type, &this.settings, cx);
+                        // A delayed initial read must not replace text typed
+                        // while it was in flight or recreate the focused input.
+                        if !was_dirty
+                            && let Some(input) = this.config_dir.as_ref()
+                            && initial_dir.as_ref() == Some(&input.read(cx).content())
+                        {
+                            let stored =
+                                read_config_dir(&this.settings, &this.app_id).unwrap_or_default();
+                            input.update(cx, |input, cx| input.set_content(stored, cx));
+                        }
                     }
                     Err(error) => {
-                        this.settings = AppSettings::default();
-                        this.config_dir =
-                            Self::make_config_dir_input(this.app_type, &this.settings, cx);
                         this.set_status(
                             NotificationLevel::Error,
                             tf!(k::APP_SETTINGS_STATUS_SAVE_FAILED, error = error),
@@ -150,17 +208,28 @@ impl AppSettingsView {
     }
 
     fn make_config_dir_input(
-        app_type: AppType,
+        app_id: &AppId,
         settings: &AppSettings,
+        remote: bool,
         cx: &mut Context<Self>,
     ) -> Option<Entity<TextInput>> {
-        let placeholder = config_dir_placeholder(app_type)?;
-        let current = read_config_dir(settings, app_type).unwrap_or_default();
+        let placeholder = config_dir_placeholder(app_id, remote)?;
+        let current = read_config_dir(settings, app_id).unwrap_or_default();
         Some(cx.new(|cx| {
             let mut input = TextInput::new(cx, placeholder);
             input.set_content(current, cx);
             input
         }))
+    }
+
+    pub fn relocalize(&mut self, cx: &mut Context<Self>) {
+        if let Some(input) = self.config_dir.as_ref()
+            && let Some(placeholder) =
+                config_dir_placeholder(&self.app_id, self.backend.is_remote())
+        {
+            input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        }
+        cx.notify();
     }
 
     /// Every toast carries its severity explicitly; leaving the level unset
@@ -173,8 +242,7 @@ impl AppSettingsView {
 
     fn persist_mutation(
         &mut self,
-        path: &'static str,
-        value: Value,
+        mutation: SettingsMutation,
         success: SharedString,
         cx: &mut Context<Self>,
     ) {
@@ -182,12 +250,21 @@ impl AppSettingsView {
             return;
         }
         let backend = self.backend.clone();
+        // Saving supersedes an initial settings read for the same panel.
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
         let generation = self.workspace_generation;
         self.saving = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
-                backend.set_setting(path, value).await?;
+                match mutation {
+                    SettingsMutation::Setting(path, value) => {
+                        backend.set_setting(path, value).await?;
+                    }
+                    SettingsMutation::ConfigDirectory(app, path) => {
+                        backend.set_app_config_dir(&app, path).await?;
+                    }
+                }
                 let settings = backend.settings().await?;
                 serde_json::from_value::<AppSettings>(settings).map_err(WorkspaceBackendError::from)
             })
@@ -201,8 +278,9 @@ impl AppSettingsView {
                 match result {
                     Ok(stored) => {
                         this.settings = stored;
-                        this.config_dir =
-                            Self::make_config_dir_input(this.app_type, &this.settings, cx);
+                        // The input is the user's draft. This applies both to
+                        // unrelated toggle saves and typing after a directory
+                        // save was submitted: neither may overwrite it.
                         this.set_status(NotificationLevel::Success, success);
                     }
                     Err(error) => this.set_status(
@@ -223,8 +301,7 @@ impl AppSettingsView {
         }
         let current = (toggle.get)(&self.settings);
         self.persist_mutation(
-            toggle.path,
-            Value::Bool(!current),
+            SettingsMutation::Setting(toggle.path, Value::Bool(!current)),
             t(k::APP_SETTINGS_STATUS_SAVED),
             cx,
         );
@@ -240,9 +317,15 @@ impl AppSettingsView {
         } else {
             Some(entered)
         };
+        let mutation = match self.app_type {
+            Some(app) => SettingsMutation::Setting(
+                config_dir_path(app),
+                serde_json::to_value(value).unwrap_or(Value::Null),
+            ),
+            None => SettingsMutation::ConfigDirectory(self.app_id.clone(), value),
+        };
         self.persist_mutation(
-            config_dir_path(self.app_type),
-            serde_json::to_value(value).unwrap_or(Value::Null),
+            mutation,
             // Restart is a recommendation, not a caveat that makes this a
             // warning.
             t(k::APP_SETTINGS_STATUS_DIR_SAVED),
@@ -256,15 +339,14 @@ impl AppSettingsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let on = (toggle.get)(&self.settings);
-        layout::row()
-            .id(toggle.id)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme::surface_hover()))
-            .child(layout::row_label(toggle.label, None))
-            .child(layout::toggle(on))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.toggle(toggle, cx);
-            }))
+        let activate = cx.listener(move |this, _: &(), _window, cx| this.toggle(toggle, cx));
+        components::checkbox(
+            toggle.id,
+            toggle.label,
+            on,
+            self.saving || !self.workspace_available,
+            move |window, cx| activate(&(), window, cx),
+        )
     }
 
     fn render_config_dir(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -322,11 +404,16 @@ impl AppSettingsView {
 
 impl Render for AppSettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let app_type = self.app_type;
-        let toggles = app_toggles(app_type, &self.settings);
+        let toggles = self
+            .app_type
+            .map(|app| app_toggles(app, &self.settings))
+            .unwrap_or_default();
 
         let header = layout::page_header(
-            SharedString::from(tf!(k::APP_SETTINGS_HEADER_TITLE, app = app_label(app_type))),
+            SharedString::from(tf!(
+                k::APP_SETTINGS_HEADER_TITLE,
+                app = app_label(&self.app_id)
+            )),
             None,
         )
         .child(
@@ -355,6 +442,10 @@ impl Render for AppSettingsView {
         }
         if let Some(dir) = self.render_config_dir(cx) {
             column = column.child(dir);
+        } else if self.app_type.is_none() && self.backend.is_remote() {
+            column = column.child(components::field_error(t(
+                k::APP_SETTINGS_CONFIG_DIR_REMOTE_UNSUPPORTED,
+            )));
         }
 
         layout::page().child(header).child(layout::scroll_body(
@@ -378,20 +469,9 @@ struct AppToggle {
 
 fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
     match app {
-        AppType::Claude => vec![
-            AppToggle {
-                id: "app-set-claude-plugin",
-                path: "enableClaudePluginIntegration",
-                label: raw(k::APP_SETTINGS_CLAUDE_PLUGIN_LABEL),
-                get: |s| s.enable_claude_plugin_integration,
-            },
-            AppToggle {
-                id: "app-set-claude-onboarding",
-                path: "skipClaudeOnboarding",
-                label: raw(k::APP_SETTINGS_CLAUDE_ONBOARDING_LABEL),
-                get: |s| s.skip_claude_onboarding,
-            },
-        ],
+        // Legacy Claude booleans remain readable in AppSettings for config
+        // compatibility. No runtime behavior consumes them, so they are not
+        // offered as controls that would appear to perform an action.
         AppType::Codex => {
             let mut toggles = vec![AppToggle {
                 id: "app-set-codex-unify-history",
@@ -414,7 +494,7 @@ fn app_toggles(app: AppType, settings: &AppSettings) -> Vec<AppToggle> {
 }
 
 /// The placeholder + description for an app's config-dir override, or `None`.
-fn config_dir_placeholder(app: AppType) -> Option<&'static str> {
+fn builtin_config_dir_placeholder(app: AppType) -> Option<&'static str> {
     match app {
         AppType::Claude => Some("~/.claude"),
         AppType::Codex => Some("~/.codex"),
@@ -427,16 +507,31 @@ fn config_dir_placeholder(app: AppType) -> Option<&'static str> {
     }
 }
 
-fn read_config_dir(settings: &AppSettings, app: AppType) -> Option<String> {
-    match app {
-        AppType::Claude => settings.claude_config_dir.clone(),
-        AppType::Codex => settings.codex_config_dir.clone(),
-        AppType::GrokBuild => settings.grokbuild_config_dir.clone(),
-        AppType::KimiCode => settings.kimi_code_config_dir.clone(),
-        AppType::OpenCode => settings.opencode_config_dir.clone(),
-        AppType::OpenClaw => settings.openclaw_config_dir.clone(),
-        AppType::Hermes => settings.hermes_config_dir.clone(),
-        AppType::ClaudeDesktop | AppType::CherryStudio => None,
+fn config_dir_placeholder(app: &AppId, remote: bool) -> Option<SharedString> {
+    match AppType::from_app_id(app) {
+        Some(builtin) => builtin_config_dir_placeholder(builtin).map(SharedString::new_static),
+        None if !remote && app_has_settings(app) => {
+            Some(t(k::APP_SETTINGS_CONFIG_DIR_PLUGIN_DEFAULT))
+        }
+        None => None,
+    }
+}
+
+fn read_config_dir(settings: &AppSettings, app: &AppId) -> Option<String> {
+    match AppType::from_app_id(app) {
+        Some(AppType::Claude) => settings.claude_config_dir.clone(),
+        Some(AppType::Codex) => settings.codex_config_dir.clone(),
+        Some(AppType::GrokBuild) => settings.grokbuild_config_dir.clone(),
+        Some(AppType::KimiCode) => settings.kimi_code_config_dir.clone(),
+        Some(AppType::OpenCode) => settings.opencode_config_dir.clone(),
+        Some(AppType::OpenClaw) => settings.openclaw_config_dir.clone(),
+        Some(AppType::Hermes) => settings.hermes_config_dir.clone(),
+        Some(AppType::ClaudeDesktop | AppType::CherryStudio) => None,
+        None => settings
+            .app_config_dirs
+            .as_ref()
+            .and_then(|dirs| dirs.get(app.as_str()))
+            .cloned(),
     }
 }
 
@@ -455,8 +550,10 @@ fn config_dir_path(app: AppType) -> &'static str {
     }
 }
 
-fn app_label(app: AppType) -> gpui::SharedString {
-    crate::app_meta::label(app)
+fn app_label(app: &AppId) -> gpui::SharedString {
+    ochub_core::plugin::get_plugin(app)
+        .map(|plugin| SharedString::from(plugin.display_name().to_string()))
+        .unwrap_or_else(|| SharedString::from(app.to_string()))
 }
 
 crate::notifications::impl_status_toasts_leveled!(AppSettingsView);

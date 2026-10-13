@@ -1,0 +1,5 @@
+"interaction.leave.title" = "有未保存的修改"
+"interaction.leave.message" = "此表单的修改尚未保存。请返回表单保存，或放弃修改后继续。"
+"interaction.leave.discard" = "放弃修改并继续"
+"interaction.leave.return" = "返回编辑"
+"interaction.offline_draft" = "重新连接后可保存。输入内容已保留在当前窗口。"

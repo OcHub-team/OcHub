@@ -49,6 +49,10 @@ pub struct HelloAckFrame {
     pub node: NodeDescriptor,
     pub runtime: RuntimeDescriptor,
     pub capabilities: Vec<Capability>,
+    /// Additive feature negotiation. Unknown feature strings are ignored by
+    /// older peers rather than extending the permission enum.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
     pub max_frame_size: usize,
 }
 

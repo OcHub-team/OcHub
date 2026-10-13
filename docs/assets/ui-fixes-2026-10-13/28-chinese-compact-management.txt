@@ -1,0 +1,14 @@
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 32-35, 41-55
+~		30 button 返回
+~		31 button Claude Code：停用管理, Help: 内置适配 · 管理已启用
++		32 button Claude Desktop：停用管理, Help: 内置适配 · 管理已启用
++		33 button Codex：停用管理, Help: 内置适配 · 管理已启用
++		34 button Cherry Studio：停用管理, Help: 内置适配 · 管理已启用
++		35 button Grok Build：停用管理, Help: 内置适配 · 管理已启用
+~		36 button Kimi Code：停用管理, Help: 内置适配 · 管理已启用
+~		37 button OpenCode：停用管理, Help: 内置适配 · 管理已启用
+~		38 button OpenClaw：停用管理, Help: 内置适配 · 管理已启用
+~		39 button Hermes：停用管理, Help: 内置适配 · 管理已启用
+~		40 button Audit audit-app：停用管理, Help: 用户插件 · 管理已启用 · CLI 可用 · 暂无桌面页面
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise

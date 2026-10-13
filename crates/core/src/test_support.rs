@@ -39,3 +39,47 @@ pub(crate) fn set_var(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
 pub(crate) fn remove_var(key: impl AsRef<OsStr>) {
     unsafe { std::env::remove_var(key) };
 }
+
+/// Disposable paths for integration-style unit tests. Restores the prior
+/// environment and settings cache even if a test assertion panics.
+pub(crate) struct TestHome {
+    dir: tempfile::TempDir,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    _guard: MutexGuard<'static, ()>,
+}
+
+impl TestHome {
+    pub(crate) fn new() -> Self {
+        let guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = ["OCHUB_TEST_HOME", "XDG_DATA_HOME", "OCHUB_DATA_DIR"]
+            .into_iter()
+            .map(|name| (name, std::env::var_os(name)))
+            .collect();
+        set_var("OCHUB_TEST_HOME", dir.path());
+        set_var("XDG_DATA_HOME", dir.path().join(".local/share"));
+        remove_var("OCHUB_DATA_DIR");
+        crate::settings::reload_settings().unwrap();
+        Self {
+            dir,
+            previous,
+            _guard: guard,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        self.dir.path()
+    }
+}
+
+impl Drop for TestHome {
+    fn drop(&mut self) {
+        for (name, value) in &self.previous {
+            match value {
+                Some(value) => set_var(name, value),
+                None => remove_var(name),
+            }
+        }
+        let _ = crate::settings::reload_settings();
+    }
+}

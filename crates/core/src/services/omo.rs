@@ -70,6 +70,56 @@ pub const SLIM: OmoVariant = OmoVariant {
 pub struct OmoService;
 
 impl OmoService {
+    pub(crate) fn prepared_target_paths() -> Vec<PathBuf> {
+        let base = get_opencode_dir();
+        let mut paths = Self::config_candidates(&STANDARD, &base);
+        paths.extend(Self::config_candidates(&SLIM, &base));
+        paths.push(crate::apps::opencode::get_opencode_config_path());
+        paths
+    }
+    pub(crate) fn prepare_provider_files(
+        provider: &Provider,
+    ) -> Result<crate::services::config_commit::PreparedConfigWrite, AppError> {
+        use crate::services::config_commit::{
+            PreparedConfigWrite, PreparedFileWrite, read_optional,
+        };
+        let (enable, disable) = if provider.category.as_deref() == Some("omo-slim") {
+            (&SLIM, &STANDARD)
+        } else {
+            (&STANDARD, &SLIM)
+        };
+        let profile = Self::build_config(
+            enable,
+            Some(&Self::profile_data_from_provider(provider, enable)),
+        );
+        let mut files = vec![
+            PreparedFileWrite::replace(
+                Self::config_path(enable),
+                serde_json::to_vec_pretty(&profile)
+                    .map_err(|source| AppError::JsonSerialize { source })?,
+            )?,
+            PreparedFileWrite::replace(
+                crate::apps::opencode::get_opencode_config_path(),
+                serde_json::to_vec_pretty(&crate::apps::opencode::prepared_plugin_config(
+                    enable.plugin_name,
+                )?)
+                .map_err(|source| AppError::JsonSerialize { source })?,
+            )?,
+        ];
+        for path in Self::config_candidates(disable, &get_opencode_dir()) {
+            let before = read_optional(&path)?;
+            if before.is_some() {
+                files.push(PreparedFileWrite {
+                    path,
+                    before,
+                    after: None,
+                    file_mode: None,
+                    dir_mode: None,
+                });
+            }
+        }
+        Ok(PreparedConfigWrite { files })
+    }
     // ── Path helpers ────────────────────────────────────────
 
     fn config_candidates(v: &OmoVariant, base_dir: &Path) -> Vec<PathBuf> {

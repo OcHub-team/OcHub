@@ -33,6 +33,7 @@
 
 use serde_json::{Map, Value};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
     GridColumn, Language, PreviewFile, SelectOption, set_str, str_val,
@@ -61,16 +62,17 @@ impl AppConfig for HermesConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "供应商",
+            FormSection::identified(
+                "provider",
+                tr(TextKey::ProviderSection),
                 vec![
                     FormField::new(
                         "api_mode",
-                        "API 模式 (api_mode)",
+                        tr(TextKey::ApiMode),
                         FieldKind::Select {
                             options: vec![
                                 SelectOption::new(MODE_CHAT_COMPLETIONS, "Chat Completions")
-                                    .with_hint("OpenAI 兼容 /chat/completions"),
+                                    .with_hint(tr(TextKey::OpenAiCompatibleHint)),
                                 SelectOption::new(MODE_ANTHROPIC_MESSAGES, "Anthropic Messages")
                                     .with_hint("Claude /v1/messages"),
                                 SelectOption::new(MODE_CODEX_RESPONSES, "Codex Responses")
@@ -80,7 +82,7 @@ impl AppConfig for HermesConfig {
                             ],
                         },
                     )
-                    .help("必填：决定 Hermes 用哪种协议请求该供应商；缺省会被当作 chat_completions，会让 Anthropic/Codex/Bedrock 供应商失效。")
+                    .help(tr(TextKey::HermesApiModeHelp))
                     .required(),
                     FormField::new(
                         "base_url",
@@ -99,31 +101,49 @@ impl AppConfig for HermesConfig {
                     ),
                 ],
             ),
-            FormSection::new(
-                "模型",
-                vec![FormField::new(
-                    "models",
-                    "模型列表",
-                    FieldKind::ModelGrid {
-                        columns: vec![
-                            GridColumn::text("id", "模型 ID", "anthropic/claude-opus-4-8"),
-                            GridColumn::text("name", "显示名", "Claude Opus 4.8"),
-                            GridColumn::text("context_length", "上下文长度", "200000"),
-                        ],
-                    },
-                )
-                .help("首行的模型 ID 会写入单数 model: 字段，供 Hermes 运行时与 /model 选择器作为默认模型。")],
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
+                vec![
+                    FormField::new(
+                        "models",
+                        tr(TextKey::ModelList),
+                        FieldKind::ModelGrid {
+                            columns: vec![
+                                GridColumn::text(
+                                    "id",
+                                    tr(TextKey::ModelIdColumn),
+                                    "anthropic/claude-opus-4-8",
+                                ),
+                                GridColumn::text(
+                                    "name",
+                                    tr(TextKey::DisplayName),
+                                    "Claude Opus 4.8",
+                                ),
+                                GridColumn::text(
+                                    "context_length",
+                                    tr(TextKey::ContextLength),
+                                    "200000",
+                                ),
+                            ],
+                        },
+                    )
+                    .help(tr(TextKey::HermesModelsHelp)),
+                ],
             ),
-            FormSection::new(
-                "高级",
-                vec![FormField::new(
-                    "rate_limit_delay",
-                    "限流延迟 (rate_limit_delay)",
-                    FieldKind::Text {
-                        placeholder: "0".into(),
-                    },
-                )
-                .help("每次请求之间的间隔秒数（浮点）；留空表示不限流。")],
+            FormSection::identified(
+                "advanced",
+                tr(TextKey::AdvancedSection),
+                vec![
+                    FormField::new(
+                        "rate_limit_delay",
+                        tr(TextKey::RateLimitDelay),
+                        FieldKind::Text {
+                            placeholder: "0".into(),
+                        },
+                    )
+                    .help(tr(TextKey::RateLimitDelayHelp)),
+                ],
             )
             .advanced(),
         ]
@@ -241,12 +261,12 @@ impl AppConfig for HermesConfig {
     fn parse_files(&self, contents: &[String]) -> Result<Value, String> {
         let text = contents.first().map(String::as_str).unwrap_or("");
         let parsed = serde_norway::from_str::<Value>(text)
-            .map_err(|e| format!("config.yaml 解析失败: {e}"))?;
+            .map_err(|e| localized::format(TextKey::ConfigYamlParseFailed, &[("e", &(e))]))?;
         parsed
             .get("custom_providers")
             .and_then(Value::as_array)
             .and_then(|a| a.first().cloned())
-            .ok_or_else(|| "缺少 custom_providers 条目".to_string())
+            .ok_or_else(|| tr(TextKey::CustomProvidersMissing).to_string())
     }
 
     fn preview(&self, values: &FormValues, _prior: &Value) -> Vec<PreviewFile> {
@@ -277,36 +297,30 @@ impl AppConfig for HermesConfig {
 
         let api_mode = str_val(values, "api_mode");
         if api_mode.trim().is_empty() {
-            issues.push(
-                ConfigIssue::error(
-                    "api_mode 为必填；缺省会被当作 chat_completions，将使 Anthropic/Codex/Bedrock 供应商失效。",
-                )
-                .for_field("api_mode"),
-            );
+            issues
+                .push(ConfigIssue::error(tr(TextKey::HermesApiModeRequired)).for_field("api_mode"));
         } else if !API_MODES.contains(&api_mode) {
             issues.push(
-                ConfigIssue::error(format!(
-                    "未知的 api_mode \"{api_mode}\"；必须是 chat_completions / anthropic_messages / codex_responses / bedrock_converse 之一。"
+                ConfigIssue::error(localized::format(
+                    TextKey::HermesApiModeInvalid,
+                    &[("api_mode", &(api_mode))],
                 ))
                 .for_field("api_mode"),
             );
         }
 
         if str_val(values, "base_url").trim().is_empty() {
-            issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
+            issues.push(ConfigIssue::error(tr(TextKey::BaseUrlRequired)).for_field("base_url"));
         }
 
         if str_val(values, "api_key").trim().is_empty() {
-            issues.push(ConfigIssue::warning("尚未填写 API Key。").for_field("api_key"));
+            issues.push(ConfigIssue::warning(tr(TextKey::ApiKeyMissing)).for_field("api_key"));
         }
 
         let rows = encode_models(values);
         let row_count = rows.as_array().map(|a| a.len()).unwrap_or(0);
         if row_count == 0 {
-            issues.push(
-                ConfigIssue::warning("未配置任何模型；切换到该供应商时 model.default 不会被更新。")
-                    .for_field("models"),
-            );
+            issues.push(ConfigIssue::warning(tr(TextKey::HermesModelsMissing)).for_field("models"));
         }
 
         // Per-row context_length must be a positive integer if present. Inspect
@@ -321,9 +335,15 @@ impl AppConfig for HermesConfig {
                     .trim();
                 if !ctx.is_empty() && ctx.parse::<u64>().is_err() {
                     issues.push(
-                        ConfigIssue::warning(format!(
-                            "模型 \"{}\" 的上下文长度 \"{ctx}\" 不是正整数，将被忽略。",
-                            row.get("id").and_then(Value::as_str).unwrap_or("?")
+                        ConfigIssue::warning(localized::format(
+                            TextKey::HermesContextInvalid,
+                            &[
+                                (
+                                    "model",
+                                    &(row.get("id").and_then(Value::as_str).unwrap_or("?")),
+                                ),
+                                ("ctx", &(ctx)),
+                            ],
                         ))
                         .for_field("models"),
                     );
@@ -334,7 +354,7 @@ impl AppConfig for HermesConfig {
         let delay = str_val(values, "rate_limit_delay").trim();
         if !delay.is_empty() && delay.parse::<f64>().is_err() {
             issues.push(
-                ConfigIssue::warning("限流延迟必须是数字（秒），将被忽略。")
+                ConfigIssue::warning(tr(TextKey::RateLimitDelayInvalid))
                     .for_field("rate_limit_delay"),
             );
         }

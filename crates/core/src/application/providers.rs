@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::application::{
     Application, ApplicationError, ApplicationResult, ConfigDiffFile, ProviderDetails,
-    ProviderListItem, ProviderSwitchPlan,
+    ProviderListItem, ProviderSnapshot, ProviderSwitchPlan,
 };
 use crate::plugin::AppMode;
 use crate::provider_config::Severity;
@@ -41,7 +41,10 @@ impl Application {
         })
     }
 
-    pub fn list_providers(&self, app: &AppId) -> ApplicationResult<Vec<ProviderListItem>> {
+    fn provider_list_state(
+        &self,
+        app: &AppId,
+    ) -> ApplicationResult<(Option<AppType>, Option<String>)> {
         let plugin = self.resolve_plugin(app)?;
         let builtin = AppType::from_app_id(app);
         let current = if plugin.mode() == AppMode::Switch {
@@ -55,6 +58,11 @@ impl Application {
         } else {
             None
         };
+        Ok((builtin, current))
+    }
+
+    pub fn list_providers(&self, app: &AppId) -> ApplicationResult<Vec<ProviderListItem>> {
+        let (builtin, current) = self.provider_list_state(app)?;
         let mut providers = self
             .state
             .db
@@ -89,6 +97,37 @@ impl Application {
         Ok(providers)
     }
 
+    /// Load the local provider page in one batch instead of listing then fetching
+    /// each record again. URL resolution precedes the usual secret redaction.
+    pub fn provider_snapshot(&self, app: &AppId) -> ApplicationResult<ProviderSnapshot> {
+        let (builtin, current) = self.provider_list_state(app)?;
+        let mut providers = self
+            .state
+            .db
+            .get_all_providers(app.as_str())?
+            .into_values()
+            .collect::<Vec<_>>();
+        providers.sort_by(|left, right| {
+            left.sort_index
+                .unwrap_or(usize::MAX)
+                .cmp(&right.sort_index.unwrap_or(usize::MAX))
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let mut base_urls = std::collections::BTreeMap::new();
+        for provider in &mut providers {
+            let base_url = builtin
+                .map(|app_type| provider.resolve_usage_base_url(&app_type))
+                .unwrap_or_default();
+            base_urls.insert(provider.id.clone(), base_url);
+            redact_provider(app, provider);
+        }
+        Ok(ProviderSnapshot {
+            providers,
+            base_urls,
+            current,
+        })
+    }
+
     pub fn get_provider(
         &self,
         app: &AppId,
@@ -105,13 +144,7 @@ impl Application {
                 id: id.to_string(),
             })?;
         if !show_secrets {
-            provider.settings_config = redact_json(&provider.settings_config);
-            if let Some(meta) = provider.meta.as_mut()
-                && let Some(script) = meta.usage_script.as_mut()
-            {
-                script.api_key = script.api_key.as_ref().map(|_| "******".to_string());
-                script.access_token = script.access_token.as_ref().map(|_| "******".to_string());
-            }
+            redact_provider(app, &mut provider);
         }
         Ok(ProviderDetails {
             app: app.to_string(),
@@ -138,6 +171,24 @@ impl Application {
             });
         }
         validate_provider_with_plugin(plugin.as_ref(), &provider)?;
+        // The explicit application path commits files before publishing the new record.
+        let builtin = AppType::from_app_id(app);
+        let legacy_special = builtin == Some(AppType::CherryStudio)
+            || (builtin == Some(AppType::OpenCode)
+                && matches!(provider.category.as_deref(), Some("omo" | "omo-slim")));
+        let should_apply = add_to_live
+            && (plugin.mode() == AppMode::Additive
+                || builtin.is_none()
+                || self.state.db.get_current_provider(app.as_str())?.is_none());
+        if should_apply && !legacy_special {
+            self.apply_provider_candidate(
+                app,
+                None,
+                provider.clone(),
+                ProviderSwitchPolicy::Revert,
+            )?;
+            return self.get_provider(app, &provider.id, false);
+        }
         if let Some(app_type) = AppType::from_app_id(app) {
             ProviderService::add(&self.state, app_type, provider.clone(), add_to_live)?;
         } else {
@@ -200,7 +251,64 @@ impl Application {
                 id: provider.id,
             });
         }
+        let mut provider = provider;
+        super::config_commits::restore_provider_input_secrets(
+            AppType::from_app_id(app),
+            plugin.as_ref(),
+            &mut provider,
+            &existing,
+        );
         validate_provider_with_plugin(plugin.as_ref(), &provider)?;
+        let builtin = AppType::from_app_id(app);
+        let legacy_special = builtin == Some(AppType::CherryStudio);
+        let current = if let Some(app_type) = builtin {
+            crate::settings::get_effective_current_provider(&self.state.db, &app_type)?
+        } else {
+            self.state.db.get_current_provider(app.as_str())?
+        };
+        let omo = builtin == Some(AppType::OpenCode)
+            && matches!(provider.category.as_deref(), Some("omo" | "omo-slim"));
+        let managed = if let Some(builtin) = builtin {
+            ProviderService::is_managed_in_live(&self.state, builtin, &existing)?
+        } else if plugin.mode() == AppMode::Switch {
+            current.as_deref() == Some(original_id)
+        } else if omo {
+            self.state.db.is_omo_provider_current(
+                app.as_str(),
+                original_id,
+                provider.category.as_deref().unwrap_or_default(),
+            )?
+        } else {
+            existing
+                .meta
+                .as_ref()
+                .and_then(|m| m.live_config_managed)
+                .unwrap_or(false)
+        };
+        if managed && !legacy_special {
+            if let Some(builtin) = builtin.filter(|_| plugin.mode() == AppMode::Switch) {
+                // Existing update callers expect unrelated live edits to survive.
+                let (merged, _, _) = crate::services::provider::live::resolve_live_write(
+                    &self.state.db,
+                    &builtin,
+                    Some(&existing),
+                    &provider,
+                )?;
+                provider.settings_config = merged;
+                crate::services::provider::live::normalize_provider_common_config_for_storage(
+                    &self.state.db,
+                    &builtin,
+                    &mut provider,
+                )?;
+            }
+            self.apply_provider_candidate(
+                app,
+                Some(&existing),
+                provider.clone(),
+                ProviderSwitchPolicy::Save,
+            )?;
+            return self.get_provider(app, &provider.id, false);
+        }
         if let Some(app_type) = AppType::from_app_id(app) {
             ProviderService::update(&self.state, app_type, Some(original_id), provider.clone())?;
         } else {
@@ -302,7 +410,7 @@ impl Application {
             return self.switch_provider(app, id, ProviderSwitchPolicy::Save);
         }
         let plugin = self.resolve_plugin(app)?;
-        let mut provider = self
+        let provider = self
             .state
             .db
             .get_provider_by_id(id, app.as_str())?
@@ -313,15 +421,12 @@ impl Application {
         if plugin.mode() == AppMode::Switch {
             return self.switch_provider(app, id, ProviderSwitchPolicy::Save);
         }
-        plugin
-            .live()
-            .write_live(self.state.db.as_ref(), &provider)?;
-        provider
-            .meta
-            .get_or_insert_with(Default::default)
-            .live_config_managed = Some(true);
-        self.state.db.save_provider(app.as_str(), &provider)?;
-        Ok(SwitchResult::default())
+        self.apply_provider_candidate(
+            app,
+            Some(&provider),
+            provider.clone(),
+            ProviderSwitchPolicy::Save,
+        )
     }
 
     pub fn preview_provider_switch(
@@ -420,6 +525,40 @@ impl Application {
                 drift: Box::new(plan.drift),
             });
         }
+        let provider = self
+            .state
+            .db
+            .get_provider_by_id(id, app.as_str())?
+            .ok_or_else(|| ApplicationError::NotFound {
+                kind: "provider",
+                id: id.into(),
+            })?;
+        let builtin = AppType::from_app_id(app);
+        let legacy_special = builtin == Some(AppType::CherryStudio);
+        if !legacy_special {
+            let mut target = provider.clone();
+            if policy == ProviderSwitchPolicy::Save
+                && plan.current_provider_id.as_deref() == Some(id)
+                && !plan.drift.is_empty()
+            {
+                target.settings_config = if let Some(builtin) = builtin {
+                    crate::services::provider::live::read_live_settings(builtin)?
+                } else {
+                    self.resolve_plugin(app)?.live().read_live()?
+                };
+                if let Some(builtin) = builtin {
+                    crate::services::provider::live::normalize_provider_common_config_for_storage(
+                        &self.state.db,
+                        &builtin,
+                        &mut target,
+                    )?;
+                }
+            }
+            let mut result =
+                self.apply_stored_provider_candidate(app, &provider, target, policy)?;
+            result.drift = (!plan.drift.is_empty()).then_some(plan.drift);
+            return Ok(result);
+        }
         if let Some(app_type) = AppType::from_app_id(app) {
             let resolution = match policy {
                 ProviderSwitchPolicy::Abort | ProviderSwitchPolicy::Save => {
@@ -513,6 +652,30 @@ impl Application {
     }
 }
 
+fn redact_provider(app: &AppId, provider: &mut Provider) {
+    provider.settings_config = redact_json(&provider.settings_config);
+    if let Some(codec) = crate::plugin::get_plugin(app).and_then(|plugin| plugin.provider_config())
+    {
+        for path in codec.secret_paths() {
+            let pointer = path
+                .iter()
+                .map(|s| format!("/{}", s.replace('~', "~0").replace('/', "~1")))
+                .collect::<String>();
+            if let Some(value) = provider.settings_config.pointer_mut(&pointer)
+                && !value.is_null()
+            {
+                *value = Value::String("******".into());
+            }
+        }
+    }
+    if let Some(meta) = provider.meta.as_mut()
+        && let Some(script) = meta.usage_script.as_mut()
+    {
+        script.api_key = script.api_key.as_ref().map(|_| "******".to_string());
+        script.access_token = script.access_token.as_ref().map(|_| "******".to_string());
+    }
+}
+
 fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
@@ -590,17 +753,17 @@ fn config_diff_files(app_type: AppType, stored: &Value, live: &Value) -> Vec<Con
     files
 }
 
-fn empty_live_config(value: &serde_json::Value) -> bool {
+pub(crate) fn empty_live_config(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => true,
-        serde_json::Value::Object(map) => map.is_empty(),
+        serde_json::Value::Object(map) => map.values().all(empty_live_config),
         serde_json::Value::Array(items) => items.is_empty(),
         serde_json::Value::String(value) => value.trim().is_empty(),
         _ => false,
     }
 }
 
-fn validate_provider_with_plugin(
+pub(crate) fn validate_provider_with_plugin(
     plugin: &dyn crate::plugin::AppPlugin,
     provider: &Provider,
 ) -> ApplicationResult<()> {
@@ -707,6 +870,112 @@ pub fn redact_json(value: &serde_json::Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::redact_json;
+
+    #[test]
+    fn provider_snapshot_preserves_order_current_urls_and_redacts_without_mutating_storage() {
+        use crate::application::Application;
+        use crate::{AppId, AppState, Database, Provider};
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let _home = crate::test_support::TestHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        for (id, name, sort) in [
+            ("z", "Zulu", Some(0)),
+            ("a", "Alpha", Some(0)),
+            ("n", "No sort", None),
+        ] {
+            let mut provider = Provider::with_id(
+                id.into(),
+                name.into(),
+                json!({
+                    "env": {"ANTHROPIC_AUTH_TOKEN":"fixture-secret", "ANTHROPIC_BASE_URL":"https://example.invalid"}
+                }),
+                None,
+            );
+            provider.sort_index = sort;
+            provider.meta = Some(crate::ProviderMeta {
+                usage_script: Some(serde_json::from_value(json!({
+                    "enabled":false, "language":"javascript", "code":"", "apiKey":"fixture-script-key", "accessToken":"fixture-access-token"
+                })).unwrap()),
+                ..Default::default()
+            });
+            db.save_provider("claude", &provider).unwrap();
+        }
+        db.set_current_provider("claude", "z").unwrap();
+        crate::settings::set_current_provider(&crate::AppType::Claude, Some("a")).unwrap();
+        let application = Application::from_state(Arc::new(AppState::new(db.clone())));
+        let app = AppId::parse("claude").unwrap();
+        let snapshot = application.provider_snapshot(&app).unwrap();
+        let listed = application.list_providers(&app).unwrap();
+        assert_eq!(
+            snapshot
+                .providers
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "z", "n"]
+        );
+        assert_eq!(
+            snapshot.providers.iter().map(|p| &p.id).collect::<Vec<_>>(),
+            listed.iter().map(|p| &p.id).collect::<Vec<_>>()
+        );
+        assert_eq!(snapshot.current.as_deref(), Some("a"));
+        assert_eq!(snapshot.base_urls["a"], "https://example.invalid");
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        for secret in [
+            "fixture-secret",
+            "fixture-script-key",
+            "fixture-access-token",
+        ] {
+            assert!(!serialized.contains(secret));
+        }
+        assert_eq!(
+            snapshot.providers[0].settings_config["env"]["ANTHROPIC_AUTH_TOKEN"],
+            "******"
+        );
+        assert_eq!(
+            application
+                .get_provider(&app, "a", true)
+                .unwrap()
+                .provider
+                .settings_config["env"]["ANTHROPIC_AUTH_TOKEN"],
+            "fixture-secret"
+        );
+        assert_eq!(
+            db.get_provider_by_id("a", "claude")
+                .unwrap()
+                .unwrap()
+                .meta
+                .unwrap()
+                .usage_script
+                .unwrap()
+                .api_key
+                .as_deref(),
+            Some("fixture-script-key")
+        );
+
+        // A stale local selection must still be cleared and fall back to the DB.
+        crate::settings::set_current_provider(&crate::AppType::Claude, Some("missing")).unwrap();
+        assert_eq!(
+            application
+                .provider_snapshot(&app)
+                .unwrap()
+                .current
+                .as_deref(),
+            Some("z")
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&crate::AppType::Claude),
+            None
+        );
+        let empty = application
+            .provider_snapshot(&AppId::parse("opencode").unwrap())
+            .unwrap();
+        assert!(
+            empty.providers.is_empty() && empty.base_urls.is_empty() && empty.current.is_none()
+        );
+    }
 
     #[test]
     fn redacts_nested_secret_values_without_hiding_regular_fields() {

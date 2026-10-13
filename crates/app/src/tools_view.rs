@@ -41,19 +41,31 @@ struct BackupRow {
 }
 
 struct ToolsBasicLoad {
-    config_rows: Vec<ConfigRow>,
+    config_rows: Result<Vec<ConfigRow>, String>,
     auto_launch: Option<bool>,
-    db_backups: Vec<BackupRow>,
+    db_backups: Result<Vec<BackupRow>, String>,
+}
+
+/// A failed section keeps its last successful contents; a successful empty
+/// result is authoritative and clears them.
+fn apply_refreshed_section<T>(current: &mut T, result: Result<T, String>) -> Option<String> {
+    match result {
+        Ok(value) => {
+            *current = value;
+            None
+        }
+        Err(error) => Some(error),
+    }
 }
 
 struct ToolsAdvancedLoad {
-    openclaw_default_model: String,
-    openclaw_env: String,
-    openclaw_tools: String,
-    hermes_model: String,
-    hermes_memory: String,
-    hermes_user: String,
-    hermes_limits: Option<hermes::HermesMemoryLimits>,
+    openclaw_default_model: Result<String, String>,
+    openclaw_env: Result<String, String>,
+    openclaw_tools: Result<String, String>,
+    hermes_model: Result<String, String>,
+    hermes_memory: Result<String, String>,
+    hermes_user: Result<String, String>,
+    hermes_limits: Result<Option<hermes::HermesMemoryLimits>, String>,
 }
 
 /// A destructive action awaiting confirmation: delete or restore a database
@@ -102,6 +114,7 @@ pub struct ToolsView {
     hermes_model_json: Entity<TextInput>,
     hermes_memory_content: Entity<TextInput>,
     hermes_user_memory_content: Entity<TextInput>,
+    advanced_baselines: [SharedString; 6],
     hermes_limits: Option<hermes::HermesMemoryLimits>,
     /// The destructive action awaiting confirmation; `Some` shows the modal.
     confirm: Option<ConfirmAction>,
@@ -112,9 +125,45 @@ pub struct ToolsView {
     list_state: ListState,
     reload_generation: u64,
     advanced_reload_generation: u64,
+    workspace_generation: u64,
+    loading: bool,
+    load_error: Option<SharedString>,
+    advanced_loading: bool,
+    advanced_load_error: Option<SharedString>,
+    full_refresh: bool,
+    refresh_feedback: bool,
 }
 
 impl ToolsView {
+    fn advanced_inputs(&self) -> [&Entity<TextInput>; 6] {
+        [
+            &self.openclaw_default_model_json,
+            &self.openclaw_env_json,
+            &self.openclaw_tools_json,
+            &self.hermes_model_json,
+            &self.hermes_memory_content,
+            &self.hermes_user_memory_content,
+        ]
+    }
+
+    pub(crate) fn leave_state(&self, cx: &App) -> crate::interaction::LeaveState {
+        crate::interaction::LeaveState::new(
+            self.advanced_inputs()
+                .iter()
+                .zip(&self.advanced_baselines)
+                .any(|(input, baseline)| input.read(cx).content() != *baseline),
+            self.io_busy || self.tool_busy,
+        )
+    }
+
+    pub(crate) fn discard_changes(&mut self, cx: &mut Context<Self>) {
+        for (input, baseline) in self.advanced_inputs().iter().zip(&self.advanced_baselines) {
+            input.update(cx, |input, cx| input.set_content(baseline.clone(), cx));
+        }
+        self.confirm = None;
+        cx.notify();
+    }
+
     /// Re-apply the current locale to state that a repaint cannot reach.
     ///
     /// `refresh_windows` re-runs `render`, but gpui's virtualized lists cache
@@ -214,6 +263,7 @@ impl ToolsView {
             hermes_model_json,
             hermes_memory_content,
             hermes_user_memory_content,
+            advanced_baselines: std::array::from_fn(|_| SharedString::default()),
             hermes_limits: None,
             confirm: None,
             status: None,
@@ -221,44 +271,66 @@ impl ToolsView {
             list_state: ListState::new(TOOLS_BLOCK_COUNT, ListAlignment::Top, px(600.)),
             reload_generation: 0,
             advanced_reload_generation: 0,
+            workspace_generation: 0,
+            loading: false,
+            load_error: None,
+            advanced_loading: false,
+            advanced_load_error: None,
+            full_refresh: false,
+            refresh_feedback: false,
         }
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reload_with_feedback(false, cx);
+    }
+
+    fn reload_with_feedback(&mut self, feedback: bool, cx: &mut Context<Self>) {
+        self.reload_generation = self.reload_generation.wrapping_add(1);
         if !self.workspace_available {
             self.clear_workspace_data(cx);
+            self.loading = false;
+            self.load_error = Some(t(k::TOOLS_STATUS_WORKSPACE_UNAVAILABLE));
             cx.notify();
             return;
         }
-        self.reload_generation = self.reload_generation.wrapping_add(1);
         let generation = self.reload_generation;
         let backend = self.backend.clone();
         let remote = self.workspace_remote;
+        self.loading = true;
+        self.load_error = None;
+        self.full_refresh = true;
+        self.refresh_feedback = feedback;
+        self.list_state.remeasure();
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let data = crate::core_async::run(async move {
-                let apps = backend.list_apps().await.unwrap_or_default();
-                let backups = backend.list_backups().await.unwrap_or_default();
+                let (apps, backups) = tokio::join!(backend.list_apps(), backend.list_backups());
                 let config_rows = apps
-                    .iter()
-                    .filter(|app| app.enabled)
-                    .filter_map(|summary| {
-                        let app_type = summary.id.parse::<AppType>().ok()?;
-                        Some((app_type, crate::app_meta::label(app_type), summary))
+                    .map(|apps| {
+                        apps.iter()
+                            .filter(|app| app.enabled)
+                            .filter_map(|summary| {
+                                let app_type = summary.id.parse::<AppType>().ok()?;
+                                Some((app_type, crate::app_meta::label(app_type), summary))
+                            })
+                            .map(|(app_type, label, summary)| {
+                                let path = summary
+                                    .config_dir
+                                    .clone()
+                                    .or_else(|| summary.config_error.clone())
+                                    .unwrap_or_default();
+                                ConfigRow {
+                                    app: app_type,
+                                    label,
+                                    exists: summary.config_dir.is_some()
+                                        && summary.config_error.is_none(),
+                                    path,
+                                }
+                            })
+                            .collect()
                     })
-                    .map(|(app_type, label, summary)| {
-                        let path = summary
-                            .config_dir
-                            .clone()
-                            .or_else(|| summary.config_error.clone())
-                            .unwrap_or_default();
-                        ConfigRow {
-                            app: app_type,
-                            label,
-                            exists: summary.config_dir.is_some() && summary.config_error.is_none(),
-                            path,
-                        }
-                    })
-                    .collect();
+                    .map_err(|error| tf!(k::TOOLS_STATUS_CONFIG_LOAD_FAILED, error = error));
                 ToolsBasicLoad {
                     config_rows,
                     auto_launch: if remote {
@@ -267,13 +339,8 @@ impl ToolsView {
                         ochub_core::autostart::is_enabled().ok()
                     },
                     db_backups: backups
-                        .into_iter()
-                        .map(|entry| BackupRow {
-                            filename: entry.filename,
-                            size_bytes: entry.size_bytes,
-                            created_at: entry.created_at,
-                        })
-                        .collect(),
+                        .map(backup_rows)
+                        .map_err(|error| tf!(k::TOOLS_DB_BACKUPS_REFRESH_FAILED, error = error)),
                 }
             })
             .await;
@@ -281,9 +348,18 @@ impl ToolsView {
                 if generation != this.reload_generation {
                     return;
                 }
-                this.config_rows = data.config_rows;
+                this.loading = false;
+                let errors = [
+                    apply_refreshed_section(&mut this.config_rows, data.config_rows),
+                    apply_refreshed_section(&mut this.db_backups, data.db_backups),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
                 this.auto_launch = data.auto_launch;
-                this.db_backups = data.db_backups;
+                this.load_error =
+                    (!errors.is_empty()).then(|| SharedString::from(errors.join("\n")));
+                this.finish_full_refresh(cx);
                 this.list_state.remeasure();
                 cx.notify();
             })
@@ -294,6 +370,16 @@ impl ToolsView {
     }
 
     pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        if self.backend.same_workspace(&backend) {
+            if !self.backend.same_target(&backend) {
+                self.workspace_generation = self.workspace_generation.wrapping_add(1);
+            }
+            self.backend = backend;
+            self.workspace_available = true;
+            self.reload(cx);
+            return;
+        }
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.workspace_remote = backend.is_remote();
         self.backend = backend;
         self.workspace_available = true;
@@ -305,6 +391,7 @@ impl ToolsView {
     }
 
     pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.reload_generation = self.reload_generation.wrapping_add(1);
         self.advanced_reload_generation = self.advanced_reload_generation.wrapping_add(1);
         self.workspace_remote = true;
@@ -312,10 +399,16 @@ impl ToolsView {
         self.io_busy = false;
         self.tool_busy = false;
         self.confirm = None;
-        self.reload(cx);
+        cx.notify();
     }
 
     fn clear_workspace_data(&mut self, cx: &mut Context<Self>) {
+        self.loading = false;
+        self.load_error = None;
+        self.advanced_loading = false;
+        self.advanced_load_error = None;
+        self.full_refresh = false;
+        self.refresh_feedback = false;
         self.config_rows.clear();
         self.auto_launch = None;
         self.db_backups.clear();
@@ -327,6 +420,7 @@ impl ToolsView {
     }
 
     fn clear_advanced_configs(&mut self, cx: &mut Context<Self>) {
+        self.advanced_baselines = std::array::from_fn(|_| SharedString::default());
         for input in [
             &self.openclaw_default_model_json,
             &self.openclaw_env_json,
@@ -341,54 +435,58 @@ impl ToolsView {
     }
 
     fn refresh_advanced_configs(&mut self, cx: &mut Context<Self>) {
+        self.refresh_advanced_configs_with_feedback(false, cx);
+    }
+
+    fn refresh_advanced_configs_with_feedback(&mut self, feedback: bool, cx: &mut Context<Self>) {
+        self.advanced_reload_generation = self.advanced_reload_generation.wrapping_add(1);
         if !self.workspace_available {
             self.clear_advanced_configs(cx);
             return;
         }
-        self.advanced_reload_generation = self.advanced_reload_generation.wrapping_add(1);
         let generation = self.advanced_reload_generation;
         let backend = self.backend.clone();
         let remote = self.workspace_remote;
+        self.advanced_loading = true;
+        self.advanced_load_error = None;
+        let inputs = [
+            self.openclaw_default_model_json.clone(),
+            self.openclaw_env_json.clone(),
+            self.openclaw_tools_json.clone(),
+            self.hermes_model_json.clone(),
+            self.hermes_memory_content.clone(),
+            self.hermes_user_memory_content.clone(),
+        ];
+        let drafts = inputs.each_ref().map(|input| input.read(cx).content());
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let data = if remote {
                 crate::core_async::run(async move {
-                    let default_model = backend
-                        .advanced_tool_read("openclaw.defaultModel", Value::Null)
-                        .await
-                        .unwrap_or(Value::Null);
-                    let env = backend
-                        .advanced_tool_read("openclaw.env", Value::Null)
-                        .await
-                        .unwrap_or_else(|_| Value::Object(Default::default()));
-                    let tools = backend
-                        .advanced_tool_read("openclaw.tools", Value::Null)
-                        .await
-                        .unwrap_or_else(|_| Value::Object(Default::default()));
-                    let model = backend
-                        .advanced_tool_read("hermes.models", Value::Null)
-                        .await
-                        .unwrap_or(Value::Null);
-                    let memory = backend
-                        .advanced_tool_read("hermes.memory.read", Value::Null)
-                        .await
-                        .unwrap_or(Value::Null);
-                    let user = backend
-                        .advanced_tool_read("hermes.user.read", Value::Null)
-                        .await
-                        .unwrap_or(Value::Null);
-                    let limits = backend
-                        .advanced_tool_read("hermes.memory.limits", Value::Null)
-                        .await
-                        .ok()
-                        .and_then(|value| serde_json::from_value(value).ok());
+                    let (default_model, env, tools, model, memory, user, limits) = tokio::join!(
+                        backend.advanced_tool_read("openclaw.defaultModel", Value::Null),
+                        backend.advanced_tool_read("openclaw.env", Value::Null),
+                        backend.advanced_tool_read("openclaw.tools", Value::Null),
+                        backend.advanced_tool_read("hermes.models", Value::Null),
+                        backend.advanced_tool_read("hermes.memory.read", Value::Null),
+                        backend.advanced_tool_read("hermes.user.read", Value::Null),
+                        backend.advanced_tool_read("hermes.memory.limits", Value::Null),
+                    );
                     ToolsAdvancedLoad {
-                        openclaw_default_model: pretty_or_empty(default_model),
-                        openclaw_env: pretty_or_empty(env.get("vars").cloned().unwrap_or(env)),
-                        openclaw_tools: pretty_or_empty(tools),
-                        hermes_model: pretty_or_empty(model),
-                        hermes_memory: memory["content"].as_str().unwrap_or_default().to_string(),
-                        hermes_user: user["content"].as_str().unwrap_or_default().to_string(),
-                        hermes_limits: limits,
+                        openclaw_default_model: default_model
+                            .map(pretty_or_empty)
+                            .map_err(|e| e.to_string()),
+                        openclaw_env: env
+                            .map(|env| pretty_or_empty(env.get("vars").cloned().unwrap_or(env)))
+                            .map_err(|e| e.to_string()),
+                        openclaw_tools: tools.map(pretty_or_empty).map_err(|e| e.to_string()),
+                        hermes_model: model.map(pretty_or_empty).map_err(|e| e.to_string()),
+                        hermes_memory: memory.map_err(|e| e.to_string()).and_then(memory_content),
+                        hermes_user: user.map_err(|e| e.to_string()).and_then(memory_content),
+                        hermes_limits: limits.map_err(|e| e.to_string()).and_then(|value| {
+                            serde_json::from_value(value)
+                                .map(Some)
+                                .map_err(|e| e.to_string())
+                        }),
                     }
                 })
                 .await
@@ -396,28 +494,28 @@ impl ToolsView {
                 cx.background_spawn(async move {
                     ToolsAdvancedLoad {
                         openclaw_default_model: openclaw::get_default_model()
-                            .ok()
-                            .flatten()
-                            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-                            .unwrap_or_else(|| "{}".to_string()),
+                            .map_err(|e| e.to_string())
+                            .and_then(pretty_optional),
                         openclaw_env: openclaw::get_env_config()
-                            .ok()
-                            .and_then(|value| serde_json::to_string_pretty(&value.vars).ok())
-                            .unwrap_or_else(|| "{}".to_string()),
+                            .map_err(|e| e.to_string())
+                            .and_then(|value| {
+                                serde_json::to_string_pretty(&value.vars).map_err(|e| e.to_string())
+                            }),
                         openclaw_tools: openclaw::get_tools_config()
-                            .ok()
-                            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-                            .unwrap_or_else(|| "{}".to_string()),
+                            .map_err(|e| e.to_string())
+                            .and_then(|value| {
+                                serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+                            }),
                         hermes_model: hermes::get_model_config()
-                            .ok()
-                            .flatten()
-                            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-                            .unwrap_or_else(|| "{}".to_string()),
+                            .map_err(|e| e.to_string())
+                            .and_then(pretty_optional),
                         hermes_memory: hermes::read_memory(hermes::MemoryKind::Memory)
-                            .unwrap_or_default(),
+                            .map_err(|e| e.to_string()),
                         hermes_user: hermes::read_memory(hermes::MemoryKind::User)
-                            .unwrap_or_default(),
-                        hermes_limits: hermes::read_memory_limits().ok(),
+                            .map_err(|e| e.to_string()),
+                        hermes_limits: hermes::read_memory_limits()
+                            .map(Some)
+                            .map_err(|e| e.to_string()),
                     }
                 })
                 .await
@@ -426,25 +524,89 @@ impl ToolsView {
                 if generation != this.advanced_reload_generation {
                     return;
                 }
-                this.openclaw_default_model_json.update(cx, |input, cx| {
-                    input.set_content(data.openclaw_default_model, cx)
+                this.advanced_loading = false;
+                let mut errors = Vec::new();
+                for (index, (((input, initial), result), label)) in inputs
+                    .into_iter()
+                    .zip(drafts)
+                    .zip([
+                        data.openclaw_default_model,
+                        data.openclaw_env,
+                        data.openclaw_tools,
+                        data.hermes_model,
+                        data.hermes_memory,
+                        data.hermes_user,
+                    ])
+                    .zip([
+                        raw(k::TOOLS_ADVANCED_OPENCLAW_DEFAULT_MODEL_LABEL),
+                        raw(k::TOOLS_ADVANCED_OPENCLAW_ENV_LABEL),
+                        raw(k::TOOLS_ADVANCED_OPENCLAW_TOOLS_LABEL),
+                        raw(k::TOOLS_ADVANCED_HERMES_MODEL_LABEL),
+                        "MEMORY",
+                        "USER",
+                    ])
+                    .enumerate()
+                {
+                    match result {
+                        // Typing during a refresh creates a new draft. It is
+                        // not replaced by the response for the earlier text.
+                        Ok(value) => {
+                            if initial == this.advanced_baselines[index]
+                                && input.read(cx).content() == initial
+                            {
+                                input.update(cx, |input, cx| input.set_content(value.clone(), cx));
+                            }
+                            this.advanced_baselines[index] = value.into();
+                        }
+                        Err(error) => errors.push(format!("{label}: {error}")),
+                    }
+                }
+                if let Some(error) =
+                    apply_refreshed_section(&mut this.hermes_limits, data.hermes_limits)
+                {
+                    errors.push(format!("Hermes: {error}"));
+                }
+                this.advanced_load_error = (!errors.is_empty()).then(|| {
+                    SharedString::from(tf!(
+                        k::TOOLS_ADVANCED_READ_FAILED,
+                        error = errors.join("\n")
+                    ))
                 });
-                this.openclaw_env_json
-                    .update(cx, |input, cx| input.set_content(data.openclaw_env, cx));
-                this.openclaw_tools_json
-                    .update(cx, |input, cx| input.set_content(data.openclaw_tools, cx));
-                this.hermes_model_json
-                    .update(cx, |input, cx| input.set_content(data.hermes_model, cx));
-                this.hermes_memory_content
-                    .update(cx, |input, cx| input.set_content(data.hermes_memory, cx));
-                this.hermes_user_memory_content
-                    .update(cx, |input, cx| input.set_content(data.hermes_user, cx));
-                this.hermes_limits = data.hermes_limits;
+                if this.full_refresh {
+                    this.finish_full_refresh(cx);
+                } else if let Some(error) = this.advanced_load_error.clone() {
+                    this.set_status(NotificationLevel::Error, error, cx);
+                } else if feedback {
+                    this.set_status(
+                        NotificationLevel::Success,
+                        t(k::TOOLS_ADVANCED_RELOADED),
+                        cx,
+                    );
+                }
+                this.list_state.remeasure();
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn finish_full_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.full_refresh || self.loading || self.advanced_loading {
+            return;
+        }
+        self.full_refresh = false;
+        let feedback = std::mem::take(&mut self.refresh_feedback);
+        let errors = [self.load_error.as_ref(), self.advanced_load_error.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|error| error.as_ref())
+            .collect::<Vec<&str>>();
+        if !errors.is_empty() {
+            self.set_status(NotificationLevel::Error, errors.join("\n"), cx);
+        } else if feedback {
+            self.set_status(NotificationLevel::Success, t(k::TOOLS_STATUS_REFRESHED), cx);
+        }
     }
 
     /// Run filesystem/database work without blocking GPUI's event loop. Tools
@@ -460,10 +622,14 @@ impl ToolsView {
             return;
         }
         self.io_busy = true;
+        let generation = self.workspace_generation;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { work() }).await;
             this.update(cx, move |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 apply(this, result, cx);
                 cx.notify();
@@ -488,6 +654,7 @@ impl ToolsView {
         }
         self.io_busy = true;
         let backend = self.backend.clone();
+        let generation = self.workspace_generation;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
@@ -500,6 +667,9 @@ impl ToolsView {
             .await
             .map_err(|error| error.to_string());
             this.update(cx, move |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 apply(this, result, cx);
                 cx.notify();
@@ -560,6 +730,7 @@ impl ToolsView {
             chrono::Local::now().format("%Y%m%d-%H%M%S")
         );
         let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let path = match receiver.await {
                 Ok(Ok(Some(path))) => Some(path),
@@ -567,6 +738,9 @@ impl ToolsView {
             };
             let Some(path) = path else {
                 this.update(cx, |this, cx| {
+                    if workspace_generation != this.workspace_generation {
+                        return;
+                    }
                     this.io_busy = false;
                     cx.notify();
                 })
@@ -578,6 +752,9 @@ impl ToolsView {
                 .background_spawn(async move { crate::diagnostics::export_bundle(&path) })
                 .await;
             this.update(cx, move |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok(()) => {
@@ -649,11 +826,15 @@ impl ToolsView {
         );
 
         let backend = self.backend.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move { backend.tool_versions(None).await })
                 .await
                 .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.tool_busy = false;
                 match result {
                     Ok(versions) => {
@@ -683,6 +864,7 @@ impl ToolsView {
         }
         self.tool_busy = true;
         let backend = self.backend.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let mut reports = Vec::new();
@@ -693,6 +875,9 @@ impl ToolsView {
             })
             .await;
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.tool_busy = false;
                 match result {
                     Ok(reports) => {
@@ -741,6 +926,7 @@ impl ToolsView {
         );
 
         let backend = self.backend.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 for tool in cli_tool_ids() {
@@ -750,6 +936,9 @@ impl ToolsView {
             })
             .await;
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.tool_busy = false;
                 match result {
                     Ok(()) => this.set_status(
@@ -887,6 +1076,7 @@ impl ToolsView {
             }
             self.io_busy = true;
             cx.notify();
+            let workspace_generation = self.workspace_generation;
             cx.spawn(async move |this, cx| {
                 let result = crate::core_async::run(async move {
                     let mut backup = None;
@@ -901,6 +1091,9 @@ impl ToolsView {
                 })
                 .await;
                 this.update(cx, |this, cx| {
+                    if workspace_generation != this.workspace_generation {
+                        return;
+                    }
                     this.io_busy = false;
                     match result {
                         Ok((count, backup)) => {
@@ -1022,12 +1215,16 @@ impl ToolsView {
         }
         self.io_busy = true;
         let backend = self.backend.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move { backend.list_backups().await })
                 .await
                 .map(backup_rows)
                 .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok(backups) => {
@@ -1057,6 +1254,7 @@ impl ToolsView {
         }
         self.io_busy = true;
         let backend = self.backend.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let filename = backend.create_backup(None).await?;
@@ -1066,6 +1264,9 @@ impl ToolsView {
             .await
             .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok((filename, backups)) => {
@@ -1095,6 +1296,7 @@ impl ToolsView {
         self.io_busy = true;
         let backend = self.backend.clone();
         let filename_for_request = filename.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let restored = backend.restore_backup(&filename_for_request).await?;
@@ -1104,6 +1306,9 @@ impl ToolsView {
             .await
             .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok((restored, backups)) => {
@@ -1146,6 +1351,7 @@ impl ToolsView {
         }
         self.io_busy = true;
         let backend = self.backend.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let renamed = backend.rename_backup(&filename, &new_name).await?;
@@ -1155,6 +1361,9 @@ impl ToolsView {
             .await
             .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok((renamed, backups)) => {
@@ -1184,6 +1393,7 @@ impl ToolsView {
         self.io_busy = true;
         let backend = self.backend.clone();
         let filename_for_request = filename.clone();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend.delete_backup(&filename_for_request).await?;
@@ -1194,6 +1404,9 @@ impl ToolsView {
             .await
             .map_err(|error| error.to_string());
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok(backups) => {
@@ -1241,10 +1454,14 @@ impl ToolsView {
         let backend = self.backend.clone();
         let display_path = path.clone();
         cx.notify();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result =
                 crate::core_async::run(async move { backend.export_sql(&path).await }).await;
             this.update(cx, move |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok(_) => this.set_status(
@@ -1289,6 +1506,7 @@ impl ToolsView {
         self.io_busy = true;
         let backend = self.backend.clone();
         cx.notify();
+        let workspace_generation = self.workspace_generation;
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let imported = backend.import_sql(&path).await?;
@@ -1297,6 +1515,9 @@ impl ToolsView {
             })
             .await;
             this.update(cx, |this, cx| {
+                if workspace_generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 match result {
                     Ok((imported, backups)) => {
@@ -1839,11 +2060,15 @@ impl ToolsView {
             let backend = self.backend.clone();
             let provider = if s3 { "s3" } else { "webdav" };
             cx.notify();
+            let workspace_generation = self.workspace_generation;
             cx.spawn(async move |this, cx| {
                 let result =
                     crate::core_async::run(async move { backend.sync_status(provider).await })
                         .await;
                 this.update(cx, |this, cx| {
+                    if workspace_generation != this.workspace_generation {
+                        return;
+                    }
                     this.io_busy = false;
                     match result {
                         Ok(value) if value["configured"].as_bool() == Some(true) => {
@@ -2834,6 +3059,25 @@ impl ToolsView {
                 let env_conflict_count = self.env_conflicts.len();
                 let env_app_name = env_app_label(self.env_app);
                 block
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .when_some(self.load_error.clone(), |block, error| {
+                        block.child(
+                            components::card()
+                                .text_sm()
+                                .text_color(theme::red())
+                                .child(error),
+                        )
+                    })
+                    .when_some(self.advanced_load_error.clone(), |block, error| {
+                        block.child(
+                            components::card()
+                                .text_sm()
+                                .text_color(theme::red())
+                                .child(error),
+                        )
+                    })
                     .child(
                         div()
                             .grid()
@@ -3647,11 +3891,8 @@ impl ToolsView {
                                         )
                                         .on_click(
                                             cx.listener(|this, _event, _window, cx| {
-                                                this.refresh_advanced_configs(cx);
-                                                this.set_status(
-                                                    NotificationLevel::Success,
-                                                    t(k::TOOLS_ADVANCED_RELOADED),
-                                                    cx,
+                                                this.refresh_advanced_configs_with_feedback(
+                                                    true, cx,
                                                 );
                                             }),
                                         ),
@@ -3873,31 +4114,41 @@ impl Render for ToolsView {
         // `render_block`.
         let env_conflict_count = self.env_conflicts.len();
         let env_app_name = env_app_label(self.env_app);
+        let refresh = if self.loading || self.advanced_loading {
+            components::busy_button(
+                "tools-refresh",
+                t(k::TOOLS_ACTION_REFRESHING),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+                false,
+            )
+            .into_any_element()
+        } else if !self.workspace_available {
+            components::disabled_button(
+                "tools-refresh",
+                t(k::TOOLS_ACTION_REFRESH),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+                true,
+            )
+            .into_any_element()
+        } else {
+            components::icon_button_tone(
+                "tools-refresh",
+                t(k::TOOLS_ACTION_REFRESH),
+                IconName::Refresh,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.reload_with_feedback(true, cx);
+            }))
+            .into_any_element()
+        };
 
         layout::page()
             .relative()
-            .child(
-                layout::page_header(t(k::TOOLS_PAGE_TITLE), None).child(
-                    components::icon_button_tone(
-                        "tools-refresh",
-                        t(k::TOOLS_ACTION_REFRESH),
-                        IconName::Refresh,
-                        ButtonTone::Neutral,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        if !this.workspace_available {
-                            return;
-                        }
-                        this.reload(cx);
-                        this.set_status(
-                            NotificationLevel::Success,
-                            t(k::TOOLS_STATUS_REFRESHED),
-                            cx,
-                        );
-                    })),
-                ),
-            )
+            .child(layout::page_header(t(k::TOOLS_PAGE_TITLE), None).child(refresh))
             .child(layout::wide_virtual_body(
                 "tools-body",
                 gpui::list(
@@ -4001,6 +4252,21 @@ impl Render for ToolsView {
                 ))
             })
     }
+}
+
+fn pretty_optional<T: serde::Serialize>(value: Option<T>) -> Result<String, String> {
+    value.map_or_else(
+        || Ok("{}".to_string()),
+        |value| serde_json::to_string_pretty(&value).map_err(|error| error.to_string()),
+    )
+}
+
+fn memory_content(value: Value) -> Result<String, String> {
+    value
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "invalid memory response: expected a string content field".to_string())
 }
 
 fn config_dir(app: AppType) -> Result<PathBuf, AppError> {
@@ -4179,3 +4445,42 @@ fn open_path(path: &Path) -> Result<(), AppError> {
 }
 
 crate::notifications::impl_status_toasts_leveled!(ToolsView);
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::{apply_refreshed_section, memory_content};
+
+    #[test]
+    fn partial_refresh_preserves_only_the_failed_section() {
+        let mut configs = vec!["old config"];
+        let mut backups = vec!["old backup"];
+        let errors = [
+            apply_refreshed_section(&mut configs, Ok(vec!["new config"])),
+            apply_refreshed_section(&mut backups, Err("backup service offline".into())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert_eq!(configs, vec!["new config"]);
+        assert_eq!(backups, vec!["old backup"]);
+        assert_eq!(errors, vec!["backup service offline"]);
+    }
+
+    #[test]
+    fn a_successful_empty_refresh_clears_previous_data() {
+        let mut backups = vec!["removed backup"];
+        assert!(apply_refreshed_section(&mut backups, Ok(Vec::new())).is_none());
+        assert!(backups.is_empty());
+    }
+
+    #[test]
+    fn malformed_memory_reply_preserves_previous_content_but_empty_memory_clears_it() {
+        let mut memory = "previous memory".to_string();
+        let invalid = memory_content(serde_json::json!({"content": null}));
+        assert!(apply_refreshed_section(&mut memory, invalid).is_some());
+        assert_eq!(memory, "previous memory");
+        let empty = memory_content(serde_json::json!({"content": ""}));
+        assert!(apply_refreshed_section(&mut memory, empty).is_none());
+        assert!(memory.is_empty());
+    }
+}

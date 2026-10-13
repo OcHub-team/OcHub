@@ -4,7 +4,6 @@
 
 use std::fs;
 #[cfg(unix)]
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
@@ -766,25 +765,21 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
 
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| AppError::io(&path, e))?;
-        file.write_all(json.as_bytes())
-            .map_err(|e| AppError::io(&path, e))?;
+    match fs::read(&path) {
+        Ok(original) if serde_json::from_slice::<AppSettings>(&original).is_err() => {
+            let backup =
+                path.with_file_name(format!("settings.corrupt.{}.json", uuid::Uuid::new_v4()));
+            crate::paths::atomic_write_with_mode(&backup, &original, Some(0o600))?;
+            log::warn!(
+                "Preserved unreadable settings at {} before writing repaired settings",
+                backup.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(AppError::io(&path, error)),
     }
-    #[cfg(not(unix))]
-    {
-        fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
-    }
-    Ok(())
+    crate::paths::atomic_write_with_mode(&path, json.as_bytes(), Some(0o600))
 }
 
 static SETTINGS_STORE: OnceLock<RwLock<AppSettings>> = OnceLock::new();
@@ -896,11 +891,11 @@ pub fn get_settings_for_frontend() -> AppSettings {
 
 pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
     new_settings.normalize_paths();
-    save_settings_file(&new_settings)?;
     let mut guard = settings_store().write().unwrap_or_else(|e| {
         log::warn!("设置锁已毒化，使用恢复值: {e}");
         e.into_inner()
     });
+    save_settings_file(&new_settings)?;
     let proxy_changed = guard.proxy != new_settings.proxy;
     *guard = new_settings;
     drop(guard);
@@ -1045,8 +1040,7 @@ pub fn get_effective_current_provider(
     // 1. Read from local settings
     if let Some(local_id) = get_current_provider(app_type) {
         // 2. Validate it exists in the database
-        let providers = db.get_all_providers(app_type.as_str())?;
-        if providers.contains_key(&local_id) {
+        if db.provider_exists(app_type.as_str(), &local_id)? {
             return Ok(Some(local_id));
         }
 
@@ -1056,7 +1050,11 @@ pub fn get_effective_current_provider(
             local_id,
             app_type.as_str()
         );
-        let _ = set_current_provider(app_type, None);
+        if crate::services::config_commit::pending_receipts()
+            .is_ok_and(|pending| pending.is_empty())
+        {
+            let _ = set_current_provider(app_type, None);
+        }
     }
 
     // Fallback to the database is_current flag

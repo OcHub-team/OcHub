@@ -21,6 +21,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
     GridColumn, Language, PreviewFile, SelectOption, str_val,
@@ -48,20 +49,21 @@ impl AppConfig for OpenClawConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "供应商",
+            FormSection::identified(
+                "provider",
+                tr(TextKey::ProviderSection),
                 vec![
                     FormField::new(
                         "api",
-                        "API 协议",
+                        tr(TextKey::ApiProtocol),
                         FieldKind::Select {
                             options: vec![
                                 SelectOption::new("openai-completions", "OpenAI Completions")
-                                    .with_hint("/chat/completions 风格"),
+                                    .with_hint(tr(TextKey::ChatCompletionsHint)),
                                 SelectOption::new("openai-responses", "OpenAI Responses")
-                                    .with_hint("/responses 风格"),
+                                    .with_hint(tr(TextKey::ResponsesHint)),
                                 SelectOption::new("anthropic-messages", "Anthropic Messages")
-                                    .with_hint("/v1/messages 风格"),
+                                    .with_hint(tr(TextKey::MessagesHint)),
                                 SelectOption::new("google-generative-ai", "Google Generative AI")
                                     .with_hint("Gemini generateContent"),
                                 SelectOption::new(
@@ -72,7 +74,7 @@ impl AppConfig for OpenClawConfig {
                             ],
                         },
                     )
-                    .help("OpenClaw 用此枚举决定请求协议；必填，默认 openai-completions。")
+                    .help(tr(TextKey::OpenClawProtocolHelp))
                     .required(),
                     FormField::new(
                         "base_url",
@@ -81,7 +83,7 @@ impl AppConfig for OpenClawConfig {
                             placeholder: "https://api.example.com/v1".into(),
                         },
                     )
-                    .help("写入 baseUrl；OpenClaw 按所选协议在其后拼接路径。"),
+                    .help(tr(TextKey::OpenClawBaseUrlHelp)),
                     FormField::new(
                         "api_key",
                         "API Key",
@@ -89,39 +91,41 @@ impl AppConfig for OpenClawConfig {
                             placeholder: "sk-...".into(),
                         },
                     )
-                    .help("写入 apiKey。"),
+                    .help(tr(TextKey::OpenClawApiKeyHelp)),
                 ],
             ),
-            FormSection::new(
-                "模型",
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
                 vec![
                     FormField::new(
                         "models",
-                        "模型列表",
+                        tr(TextKey::ModelList),
                         FieldKind::ModelGrid {
                             columns: vec![
-                                GridColumn::text("id", "模型 ID", "gpt-4o"),
-                                GridColumn::text("name", "显示名", "GPT-4o"),
-                                GridColumn::text("context", "上下文窗口", "128000"),
-                                GridColumn::toggle("reasoning", "推理"),
+                                GridColumn::text("id", tr(TextKey::ModelIdColumn), "gpt-4o"),
+                                GridColumn::text("name", tr(TextKey::DisplayName), "GPT-4o"),
+                                GridColumn::text("context", tr(TextKey::ContextWindow), "128000"),
+                                GridColumn::toggle("reasoning", tr(TextKey::Reasoning)),
                             ],
                         },
                     )
-                    .help("provider.models[]，每行一个模型；全部保留，非破坏式回写。"),
+                    .help(tr(TextKey::OpenClawModelsHelp)),
                 ],
             ),
-            FormSection::new(
-                "高级",
+            FormSection::identified(
+                "advanced",
+                tr(TextKey::AdvancedSection),
                 vec![
                     FormField::new(
                         "headers",
-                        "自定义请求头",
+                        tr(TextKey::CustomHeaders),
                         FieldKind::KeyValue {
                             key_placeholder: "X-Header".into(),
                             value_placeholder: "value".into(),
                         },
                     )
-                    .help("写入 headers{}，附加到每次请求。"),
+                    .help(tr(TextKey::OpenClawHeadersHelp)),
                 ],
             )
             .advanced(),
@@ -274,12 +278,12 @@ impl AppConfig for OpenClawConfig {
     fn parse_files(&self, contents: &[String]) -> Result<Value, String> {
         let text = contents.first().map(String::as_str).unwrap_or("{}");
         let parsed = serde_json::from_str::<Value>(text)
-            .map_err(|e| format!("openclaw.json 解析失败: {e}"))?;
+            .map_err(|e| localized::format(TextKey::OpenClawJsonParseFailed, &[("e", &(e))]))?;
         parsed
             .pointer("/models/providers")
             .and_then(Value::as_object)
             .and_then(|m| m.values().next().cloned())
-            .ok_or_else(|| "缺少 models.providers.<id> 配置".to_string())
+            .ok_or_else(|| tr(TextKey::OpenClawProviderMissing).to_string())
     }
 
     fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
@@ -306,21 +310,22 @@ impl AppConfig for OpenClawConfig {
 
         let api = str_val(values, "api").trim();
         if api.is_empty() {
-            issues.push(ConfigIssue::error("API 协议为必填项。").for_field("api"));
+            issues.push(ConfigIssue::error(tr(TextKey::ApiProtocolRequired)).for_field("api"));
         } else if !API_PROTOCOLS.contains(&api) {
             issues.push(
-                ConfigIssue::error(format!(
-                    "api = \"{api}\" 不是合法协议；必须是 openai-completions / openai-responses / anthropic-messages / google-generative-ai / bedrock-converse-stream 之一。"
+                ConfigIssue::error(localized::format(
+                    TextKey::OpenClawProtocolInvalid,
+                    &[("api", &(api))],
                 ))
                 .for_field("api"),
             );
         }
 
         if str_val(values, "base_url").trim().is_empty() {
-            issues.push(ConfigIssue::warning("尚未填写 Base URL。").for_field("base_url"));
+            issues.push(ConfigIssue::warning(tr(TextKey::BaseUrlMissing)).for_field("base_url"));
         }
         if str_val(values, "api_key").trim().is_empty() {
-            issues.push(ConfigIssue::warning("尚未填写 API Key。").for_field("api_key"));
+            issues.push(ConfigIssue::warning(tr(TextKey::ApiKeyMissing)).for_field("api_key"));
         }
 
         // Model-grid sanity: warn on blank/duplicate ids.
@@ -337,16 +342,20 @@ impl AppConfig for OpenClawConfig {
                 non_empty_rows += 1;
                 if seen.insert(id.to_string(), ()).is_some() {
                     issues.push(
-                        ConfigIssue::warning(format!("模型 ID \"{id}\" 重复。"))
-                            .for_field("models"),
+                        ConfigIssue::warning(localized::format(
+                            TextKey::DuplicateModelId,
+                            &[("id", &(id))],
+                        ))
+                        .for_field("models"),
                     );
                 }
                 if !row_str(row, "context").trim().is_empty()
                     && row_str(row, "context").trim().parse::<u32>().is_err()
                 {
                     issues.push(
-                        ConfigIssue::warning(format!(
-                            "模型 \"{id}\" 的上下文窗口不是有效整数，将被忽略。"
+                        ConfigIssue::warning(localized::format(
+                            TextKey::OpenClawContextInvalid,
+                            &[("id", &(id))],
                         ))
                         .for_field("models"),
                     );
@@ -354,7 +363,7 @@ impl AppConfig for OpenClawConfig {
             }
         }
         if non_empty_rows == 0 {
-            issues.push(ConfigIssue::info("尚未配置任何模型。").for_field("models"));
+            issues.push(ConfigIssue::info(tr(TextKey::ModelsMissing)).for_field("models"));
         }
 
         issues

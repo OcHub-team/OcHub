@@ -66,6 +66,30 @@ impl PluginRegistry {
         self.plugins.get(id).cloned()
     }
 
+    /// Validate a complete candidate set before replacing any live entry.
+    /// Editors holding an Arc keep their original adapter while new lookups
+    /// observe the replacement snapshot, never a partly unloaded registry.
+    fn replace_user_plugins(&mut self, plugins: Vec<Arc<dyn AppPlugin>>) -> Result<(), AppError> {
+        let mut candidate = self
+            .plugins
+            .iter()
+            .filter(|(_, plugin)| !plugin.is_user_manifest())
+            .map(|(id, plugin)| (id.clone(), plugin.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for plugin in plugins {
+            if !plugin.is_user_manifest() || candidate.contains_key(plugin.id()) {
+                return Err(AppError::InvalidInput(format!(
+                    "应用 ID 冲突: {} 已被注册",
+                    plugin.id()
+                )));
+            }
+            candidate.insert(plugin.id().clone(), plugin);
+        }
+        self.plugins = candidate;
+        self.rebuild_sorted();
+        Ok(())
+    }
+
     fn rebuild_sorted(&mut self) {
         let mut all: Vec<_> = self.plugins.values().cloned().collect();
         all.sort_by(|a, b| {
@@ -162,6 +186,13 @@ pub fn unregister_plugin(id: &AppId) -> Result<(), AppError> {
         .write()
         .map_err(|e| AppError::Lock(e.to_string()))?
         .unregister(id)
+}
+
+pub(crate) fn replace_user_plugins(plugins: Vec<Arc<dyn AppPlugin>>) -> Result<(), AppError> {
+    REGISTRY
+        .write()
+        .map_err(|error| AppError::Lock(error.to_string()))?
+        .replace_user_plugins(plugins)
 }
 
 #[cfg(test)]

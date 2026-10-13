@@ -15,6 +15,7 @@ impl Database {
 
     /// 在指定连接上创建表（供迁移和测试使用）
     pub(crate) fn create_tables_on_conn(conn: &Connection) -> Result<(), AppError> {
+        super::dao::editor_drafts::create_tables(conn)?;
         // 1. Providers 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS providers (
@@ -723,6 +724,10 @@ impl Database {
                                 .map_err(|e| AppError::Database(e.to_string()))?;
                         }
                         Self::set_user_version(conn, 13)?;
+                    }
+                    13 => {
+                        super::dao::editor_drafts::create_tables(conn)?;
+                        Self::set_user_version(conn, 14)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(

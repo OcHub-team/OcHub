@@ -12,6 +12,7 @@
 //! [`super::plugin_manifest`].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path};
 
 use serde::Deserialize;
 
@@ -75,7 +76,8 @@ pub struct AppMeta {
     /// `#RRGGBB`, parsed to a `0xRRGGBB` u32 in [`AppManifest::check`].
     pub accent: String,
     pub sort_order: i32,
-    /// `"switch"` | `"additive"`.
+    /// `"switch"`. Additive manifests require provider-key operations that v1
+    /// does not implement and are rejected during validation.
     pub mode: String,
     #[serde(default = "default_true")]
     pub enabled_by_default: bool,
@@ -468,9 +470,9 @@ impl AppManifest {
                 self.app.accent
             )));
         }
-        if !matches!(self.app.mode.as_str(), "switch" | "additive") {
+        if self.app.mode != "switch" {
             return Err(ManifestError::check(format!(
-                "mode 必须是 switch 或 additive: {}",
+                "manifest v1 仅支持 switch 模式；additive 需要尚未实现的逐供应商写入与移除能力: {}",
                 self.app.mode
             )));
         }
@@ -490,9 +492,22 @@ impl AppManifest {
 
         // --- files: unique ids ---
         let mut file_ids = BTreeSet::new();
+        let mut file_paths = BTreeSet::new();
+        let mut store_keys = BTreeSet::new();
         for f in &self.files {
-            if !file_ids.insert(f.id.as_str()) {
+            if f.id.trim().is_empty() || !file_ids.insert(f.id.as_str()) {
                 return Err(ManifestError::check(format!("重复的文件 id: {}", f.id)));
+            }
+            validate_file_path(&f.path)?;
+            let normalized_path = f.path.to_lowercase();
+            if !file_paths.insert(normalized_path.clone()) {
+                return Err(ManifestError::check(format!("重复的文件路径: {}", f.path)));
+            }
+            if f.store_key.trim().is_empty() || !store_keys.insert(f.store_key.as_str()) {
+                return Err(ManifestError::check(format!(
+                    "文件 store_key 必须非空且唯一: {}",
+                    f.store_key
+                )));
             }
             if let Some(m) = &f.dir_mode
                 && parse_octal(m).is_none()
@@ -503,6 +518,16 @@ impl AppManifest {
                 && parse_octal(m).is_none()
             {
                 return Err(ManifestError::check(format!("无效的 file_mode: {m}")));
+            }
+        }
+        for path in &file_paths {
+            if file_paths
+                .iter()
+                .any(|other| other.starts_with(&format!("{path}/")))
+            {
+                return Err(ManifestError::check(format!(
+                    "文件路径不能同时作为另一文件的目录: {path}"
+                )));
             }
         }
 
@@ -524,16 +549,30 @@ impl AppManifest {
             }
         };
 
+        for file in &self.files {
+            if let Some(condition) = &file.clear_when {
+                check_field_ref(&condition.field, "clear_when")?;
+            }
+        }
+
         // --- per-field checks ---
+        let mut owned_paths: BTreeMap<&str, Vec<Vec<String>>> = BTreeMap::new();
+        let mut rest_files = BTreeSet::new();
         for field in self.fields() {
             if let Some(cond) = &field.visible_when {
                 check_field_ref(&cond.field, "visible_when")?;
             }
             if let Some(map) = &field.map {
-                if self.file(&map.file).is_none() {
+                let Some(file) = self.file(&map.file) else {
                     return Err(ManifestError::check(format!(
                         "字段 {} 的 map.file 引用了不存在的文件: {}",
                         field.id, map.file
+                    )));
+                };
+                if file.passthrough {
+                    return Err(ManifestError::check(format!(
+                        "passthrough 文件不能同时映射表单字段: {}",
+                        file.id
                     )));
                 }
                 let target_count = [
@@ -561,6 +600,80 @@ impl AppManifest {
                 }
                 if let Some(cond) = &map.emit_when {
                     check_field_ref(&cond.field, "emit_when")?;
+                }
+                let path = match map.target() {
+                    MapTarget::EnvKey(key) => {
+                        if key.is_empty()
+                            || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            return Err(ManifestError::check(format!("无效的 env_key: {key}")));
+                        }
+                        if matches!(
+                            field.kind,
+                            FieldKindSpec::KeyValue | FieldKindSpec::ModelGrid
+                        ) {
+                            return Err(ManifestError::check(format!(
+                                "env_key 不支持结构化字段: {}",
+                                field.id
+                            )));
+                        }
+                        Some(vec![key.to_string()])
+                    }
+                    MapTarget::Pointer(pointer) => {
+                        if !valid_pointer(pointer) {
+                            return Err(ManifestError::check(format!(
+                                "无效的 JSON pointer: {pointer}"
+                            )));
+                        }
+                        Some(
+                            pointer
+                                .split('/')
+                                .skip(1)
+                                .map(|part| part.replace("~1", "/").replace("~0", "~"))
+                                .collect::<Vec<_>>(),
+                        )
+                    }
+                    MapTarget::TomlPath(path) => {
+                        if path
+                            .split('.')
+                            .any(|part| part.trim().is_empty() || part != part.trim())
+                        {
+                            return Err(ManifestError::check(format!("无效的 toml_path: {path}")));
+                        }
+                        Some(path.split('.').map(str::to_string).collect::<Vec<_>>())
+                    }
+                    MapTarget::Rest => {
+                        if field.kind != FieldKindSpec::KeyValue
+                            || !rest_files.insert(map.file.as_str())
+                        {
+                            return Err(ManifestError::check(format!(
+                                "每个文件仅支持一个 keyvalue rest 字段: {}",
+                                file.id
+                            )));
+                        }
+                        None
+                    }
+                };
+                if file.format == FileFormat::Env
+                    && !matches!(map.target(), MapTarget::EnvKey(_) | MapTarget::Rest)
+                {
+                    return Err(ManifestError::check(format!(
+                        "env 文件仅支持 env_key 或 rest 映射: {}",
+                        field.id
+                    )));
+                }
+                if let Some(path) = path {
+                    let existing = owned_paths.entry(map.file.as_str()).or_default();
+                    if existing
+                        .iter()
+                        .any(|other| path.starts_with(other) || other.starts_with(&path))
+                    {
+                        return Err(ManifestError::check(format!(
+                            "字段映射路径重叠: {}",
+                            field.id
+                        )));
+                    }
+                    existing.push(path);
                 }
             }
             if let Some(dec) = &field.decode {
@@ -612,19 +725,17 @@ impl AppManifest {
         }
 
         // --- hooks exist in registry ---
+        if !self.hooks.post_write.is_empty() {
+            return Err(ManifestError::check(
+                "manifest v1 不支持不可回退的 post_write 副作用；所有写入必须包含在文件计划中",
+            ));
+        }
         if let Some(name) = &self.hooks.live_validate
             && !hooks.has_live_validate(name)
         {
             return Err(ManifestError::check(format!(
                 "未知的 live_validate hook: {name}"
             )));
-        }
-        for name in &self.hooks.post_write {
-            if !hooks.has_post_write(name) {
-                return Err(ManifestError::check(format!(
-                    "未知的 post_write hook: {name}"
-                )));
-            }
         }
         if let Some(name) = &self.hooks.decode
             && !hooks.has_decode(name)
@@ -634,4 +745,53 @@ impl AppManifest {
 
         Ok(())
     }
+}
+
+/// Manifest paths use portable relative `/`-separated components. In
+/// particular, a manifest checked on Unix must not become an absolute Windows
+/// path after it is copied to another desktop.
+pub(crate) fn validate_file_path(path: &str) -> Result<(), ManifestError> {
+    let invalid = path.is_empty()
+        || path.contains(['\\', ':', '\0'])
+        || path.split('/').any(|part| {
+            part.is_empty()
+                || matches!(part, "." | "..")
+                || part != part.trim()
+                || part.ends_with('.')
+                || windows_device_component(part)
+        })
+        || Path::new(path)
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)));
+    if invalid {
+        return Err(ManifestError::check(format!(
+            "文件路径必须是配置目录内的相对路径，不允许父目录或平台绝对路径: {path}"
+        )));
+    }
+    Ok(())
+}
+
+fn windows_device_component(component: &str) -> bool {
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+}
+
+fn valid_pointer(pointer: &str) -> bool {
+    if !pointer.starts_with('/') {
+        return false;
+    }
+    let mut chars = pointer.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
+            return false;
+        }
+    }
+    true
 }

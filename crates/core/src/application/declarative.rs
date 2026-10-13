@@ -8,9 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::application::{Application, ApplicationError, ApplicationResult, ProviderSwitchPolicy};
 use crate::db::{McpApps, McpServer};
-use crate::plugin::AppMode;
 use crate::provider_config::Severity;
-use crate::{AppId, AppType, Provider};
+use crate::{AppId, Provider};
 
 const MAX_DECLARATIVE_BYTES: u64 = 1024 * 1024;
 const OWNERSHIP_KEY: &str = "cli_managed_resources_v1";
@@ -365,7 +364,6 @@ impl Application {
                 continue;
             }
             let provider = self.build_desired_provider(desired, current.as_ref(), true)?;
-            self.state().db.save_provider(app.as_str(), &provider)?;
             if desired.live.as_ref().and_then(|live| live.state.as_deref()) == Some("active") {
                 let policy = match desired
                     .live
@@ -377,21 +375,10 @@ impl Application {
                     "revert" | "discard" => ProviderSwitchPolicy::Revert,
                     _ => ProviderSwitchPolicy::Abort,
                 };
-                let plugin =
-                    crate::plugin::get_plugin(&app).ok_or_else(|| ApplicationError::NotFound {
-                        kind: "app",
-                        id: app.to_string(),
-                    })?;
-                match (plugin.mode(), AppType::from_app_id(&app)) {
-                    (AppMode::Switch, Some(_)) => {
-                        self.switch_provider(&app, &desired.id, policy)?;
-                    }
-                    (AppMode::Switch, None) | (AppMode::Additive, _) => {
-                        plugin
-                            .live()
-                            .write_live(self.state().db.as_ref(), &provider)?;
-                    }
-                }
+                self.apply_provider_candidate(&app, current.as_ref(), provider, policy)?;
+            } else {
+                // Explicit DB-only declarative resources remain definitions, not GUI editor drafts.
+                self.state().db.save_provider(app.as_str(), &provider)?;
             }
             own(&mut ownership, key, &manager, &loaded, now);
         }

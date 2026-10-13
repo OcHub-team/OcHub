@@ -22,6 +22,7 @@
 
 use serde_json::{Map, Value, json};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
     GridColumn, Language, PreviewFile, SelectOption, set_str, str_val,
@@ -49,8 +50,9 @@ impl AppConfig for OpenCodeConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "供应商",
+            FormSection::identified(
+                "provider",
+                tr(TextKey::ProviderSection),
                 vec![
                     FormField::new(
                         "provider_id",
@@ -59,40 +61,44 @@ impl AppConfig for OpenCodeConfig {
                             placeholder: "myprovider".into(),
                         },
                     )
-                    .help("opencode.json 中 provider.<id> 的键，也是 OpenCode 内引用该供应商的标识。")
+                    .help(tr(TextKey::OpenCodeProviderIdHelp))
                     .required(),
                     FormField::new(
                         "npm",
-                        "AI SDK 包 (npm)",
+                        tr(TextKey::AiSdkPackage),
                         FieldKind::Select {
                             options: vec![
-                                SelectOption::new(NPM_OPENAI_COMPATIBLE, "@ai-sdk/openai-compatible")
-                                    .with_hint("OpenAI 兼容的第三方端点（最常用）"),
+                                SelectOption::new(
+                                    NPM_OPENAI_COMPATIBLE,
+                                    "@ai-sdk/openai-compatible",
+                                )
+                                .with_hint(tr(TextKey::OpenCodeCompatibleHint)),
                                 SelectOption::new(NPM_OPENAI, "@ai-sdk/openai")
-                                    .with_hint("官方 OpenAI"),
+                                    .with_hint(tr(TextKey::OfficialOpenAiHint)),
                                 SelectOption::new(NPM_ANTHROPIC, "@ai-sdk/anthropic")
                                     .with_hint("Anthropic / Claude"),
                                 SelectOption::new(NPM_BEDROCK, "@ai-sdk/amazon-bedrock")
-                                    .with_hint("Amazon Bedrock（鉴权经选项扩展）"),
+                                    .with_hint(tr(TextKey::BedrockHint)),
                                 SelectOption::new(NPM_GOOGLE, "@ai-sdk/google")
                                     .with_hint("Google Gemini"),
                             ],
                         },
                     )
-                    .help("决定 OpenCode 加载哪个 AI SDK 适配器；必填，请按上游真实协议选择。")
+                    .help(tr(TextKey::OpenCodePackageHelp))
                     .required(),
                     FormField::new(
                         "name",
-                        "显示名",
+                        tr(TextKey::DisplayName),
                         FieldKind::Text {
                             placeholder: "My Provider".into(),
                         },
                     )
-                    .help("OpenCode UI 中展示的名称；留空则回退到 Provider ID。"),
+                    .help(tr(TextKey::OpenCodeNameHelp)),
                 ],
             ),
-            FormSection::new(
-                "端点",
+            FormSection::identified(
+                "endpoint",
+                tr(TextKey::EndpointSection),
                 vec![
                     FormField::new(
                         "base_url",
@@ -101,7 +107,7 @@ impl AppConfig for OpenCodeConfig {
                             placeholder: "https://api.example.com/v1".into(),
                         },
                     )
-                    .help("OpenAI 兼容端点通常以 /v1 结尾；官方包可留空使用默认地址。"),
+                    .help(tr(TextKey::OpenCodeBaseUrlHelp)),
                     FormField::new(
                         "api_key",
                         "API Key (options.apiKey)",
@@ -109,47 +115,51 @@ impl AppConfig for OpenCodeConfig {
                             placeholder: "sk-...".into(),
                         },
                     )
-                    .help("写入 options.apiKey；Bedrock 等需要其它鉴权字段时请改用下方“选项扩展”。"),
+                    .help(tr(TextKey::OpenCodeApiKeyHelp)),
                 ],
             ),
-            FormSection::new(
-                "选项",
+            FormSection::identified(
+                "options",
+                tr(TextKey::OptionsSection),
                 vec![
                     FormField::new(
                         "options_extra",
-                        "选项扩展 (options.*)",
+                        tr(TextKey::AdditionalOptions),
                         FieldKind::KeyValue {
                             key_placeholder: "setCacheKey".into(),
                             value_placeholder: "true".into(),
                         },
                     )
-                    .help("写入 options 下的额外字段（如 setCacheKey、region/accessKeyId/secretAccessKey 等 Bedrock 鉴权）。布尔/数字会按字面量解析。"),
+                    .help(tr(TextKey::AdditionalOptionsHelp)),
                     FormField::new(
                         "headers",
-                        "请求头 (options.headers)",
+                        tr(TextKey::OptionHeaders),
                         FieldKind::KeyValue {
                             key_placeholder: "X-Header".into(),
                             value_placeholder: "value".into(),
                         },
                     )
-                    .help("附加到每次请求的 HTTP 头。"),
+                    .help(tr(TextKey::OptionHeadersHelp)),
                 ],
             ),
-            FormSection::new(
-                "模型",
-                vec![FormField::new(
-                    "models",
-                    "模型列表",
-                    FieldKind::ModelGrid {
-                        columns: vec![
-                            GridColumn::text("id", "模型 ID", "gpt-4o"),
-                            GridColumn::text("name", "显示名", "GPT-4o"),
-                            GridColumn::text("context", "上下文窗口", "128000"),
-                            GridColumn::text("output", "最大输出", "16384"),
-                        ],
-                    },
-                )
-                .help("可配置多个模型；模型 ID 是 OpenCode 内部键，显示名是 UI 文本，两者相互独立。上下文/最大输出为可选数字（token）。")],
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
+                vec![
+                    FormField::new(
+                        "models",
+                        tr(TextKey::ModelList),
+                        FieldKind::ModelGrid {
+                            columns: vec![
+                                GridColumn::text("id", tr(TextKey::ModelIdColumn), "gpt-4o"),
+                                GridColumn::text("name", tr(TextKey::DisplayName), "GPT-4o"),
+                                GridColumn::text("context", tr(TextKey::ContextWindow), "128000"),
+                                GridColumn::text("output", tr(TextKey::MaximumOutput), "16384"),
+                            ],
+                        },
+                    )
+                    .help(tr(TextKey::OpenCodeModelsHelp)),
+                ],
             ),
         ]
     }
@@ -407,12 +417,12 @@ impl AppConfig for OpenCodeConfig {
     fn parse_files(&self, contents: &[String]) -> Result<Value, String> {
         let text = contents.first().map(String::as_str).unwrap_or("{}");
         let parsed = serde_json::from_str::<Value>(text)
-            .map_err(|e| format!("opencode.json 解析失败: {e}"))?;
+            .map_err(|e| localized::format(TextKey::OpenCodeJsonParseFailed, &[("e", &(e))]))?;
         parsed
             .get("provider")
             .and_then(Value::as_object)
             .and_then(|m| m.values().next().cloned())
-            .ok_or_else(|| "缺少 provider.<id> 配置".to_string())
+            .ok_or_else(|| tr(TextKey::OpenCodeProviderMissing).to_string())
     }
 
     fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
@@ -445,7 +455,8 @@ impl AppConfig for OpenCodeConfig {
         let mut issues = Vec::new();
 
         if str_val(values, "provider_id").trim().is_empty() {
-            issues.push(ConfigIssue::error("Provider ID 不能为空。").for_field("provider_id"));
+            issues
+                .push(ConfigIssue::error(tr(TextKey::ProviderIdRequired)).for_field("provider_id"));
         }
 
         let npm = str_val(values, "npm");
@@ -457,11 +468,14 @@ impl AppConfig for OpenCodeConfig {
             NPM_GOOGLE,
         ];
         if npm.trim().is_empty() {
-            issues.push(ConfigIssue::error("必须选择 AI SDK 包 (npm)。").for_field("npm"));
+            issues.push(ConfigIssue::error(tr(TextKey::AiSdkPackageRequired)).for_field("npm"));
         } else if !KNOWN_NPM.contains(&npm) {
             issues.push(
-                ConfigIssue::warning(format!("未知的 npm 包 \"{npm}\"，OpenCode 可能无法加载。"))
-                    .for_field("npm"),
+                ConfigIssue::warning(localized::format(
+                    TextKey::AiSdkPackageUnknown,
+                    &[("npm", &(npm))],
+                ))
+                .for_field("npm"),
             );
         }
 
@@ -471,16 +485,13 @@ impl AppConfig for OpenCodeConfig {
             let has_region = extra.map(|m| m.contains_key("region")).unwrap_or(false);
             if !has_region {
                 issues.push(
-                    ConfigIssue::info(
-                        "Bedrock 通常需要 region / accessKeyId / secretAccessKey，请在“选项扩展”中填写。",
-                    )
-                    .for_field("options_extra"),
+                    ConfigIssue::info(tr(TextKey::BedrockCredentialsHint))
+                        .for_field("options_extra"),
                 );
             }
         } else if str_val(values, "base_url").trim().is_empty() && npm == NPM_OPENAI_COMPATIBLE {
             issues.push(
-                ConfigIssue::warning("openai-compatible 端点通常需要填写 Base URL。")
-                    .for_field("base_url"),
+                ConfigIssue::warning(tr(TextKey::OpenCodeBaseUrlMissing)).for_field("base_url"),
             );
         }
 
@@ -503,15 +514,18 @@ impl AppConfig for OpenCodeConfig {
                         .unwrap_or(false);
                     if has_name {
                         issues.push(
-                            ConfigIssue::error("模型缺少 ID（ID 与显示名不同，必须填写）。")
-                                .for_field("models"),
+                            ConfigIssue::error(tr(TextKey::ModelIdRequired)).for_field("models"),
                         );
                     }
                     continue;
                 }
                 if seen.contains(&id) {
                     issues.push(
-                        ConfigIssue::error(format!("模型 ID \"{id}\" 重复。")).for_field("models"),
+                        ConfigIssue::error(localized::format(
+                            TextKey::DuplicateModelId,
+                            &[("id", &(id))],
+                        ))
+                        .for_field("models"),
                     );
                 } else {
                     seen.push(id);
@@ -824,27 +838,20 @@ mod tests {
 
     #[test]
     fn validate_flags_duplicate_and_missing_model_ids() {
-        let mut v = sample_values();
-        v.insert(
-            "models".into(),
+        for models in [
             json!([
                 { "id": "dup", "name": "A" },
                 { "id": "dup", "name": "B" },
-                { "id": "", "name": "no-id" },
             ]),
-        );
-        let issues = OpenCodeConfig.validate(&v);
-        assert!(
-            issues
-                .iter()
-                .any(|i| i.severity == super::super::Severity::Error && i.message.contains("重复"))
-        );
-        assert!(
-            issues
-                .iter()
-                .any(|i| i.severity == super::super::Severity::Error
-                    && i.message.contains("缺少 ID"))
-        );
+            json!([{ "id": "", "name": "no-id" }]),
+        ] {
+            let mut values = sample_values();
+            values.insert("models".into(), models);
+            let issues = OpenCodeConfig.validate(&values);
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].severity, super::super::Severity::Error);
+            assert_eq!(issues[0].field.as_deref(), Some("models"));
+        }
     }
 
     #[test]

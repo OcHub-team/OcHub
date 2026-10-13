@@ -204,6 +204,10 @@ pub fn remove_mcp_server(id: &str) -> Result<(), AppError> {
 }
 
 pub fn add_plugin(plugin_name: &str) -> Result<(), AppError> {
+    write_opencode_config(&prepared_plugin_config(plugin_name)?)
+}
+
+pub(crate) fn prepared_plugin_config(plugin_name: &str) -> Result<Value, AppError> {
     let mut config = read_opencode_config()?;
     let normalized_plugin_name = canonicalize_plugin_name(plugin_name);
 
@@ -245,7 +249,7 @@ pub fn add_plugin(plugin_name: &str) -> Result<(), AppError> {
         }
     }
 
-    write_opencode_config(&config)
+    Ok(config)
 }
 
 pub fn remove_plugins_by_prefixes(prefixes: &[&str]) -> Result<(), AppError> {

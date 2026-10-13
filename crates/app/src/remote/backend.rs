@@ -4,9 +4,10 @@ use ochub_core::AppId;
 use ochub_core::AppType;
 use ochub_core::Provider;
 use ochub_core::application::{
-    AppSummary, Application, ApplicationError, ConfigSchemaDto, DoctorReport, GatewayStation,
-    PricingDefault, ProviderDetails, ProviderListItem, ProviderSwitchPlan, ProviderSwitchPolicy,
-    StatusSummary, UsageFilter,
+    AppSummary, Application, ApplicationError, ConfigApplyReceipt, ConfigSchemaDto, DoctorReport,
+    EditorDraft, EditorDraftApplyResult, EditorDraftInput, EditorDraftSummary, GatewayStation,
+    PricingDefault, ProviderDetails, ProviderListItem, ProviderSnapshot, ProviderSwitchPlan,
+    ProviderSwitchPolicy, StatusSummary, UsageFilter,
 };
 use ochub_core::db::import_ccswitch::{DetectedSource, ImportReport};
 use ochub_core::db::{BackupEntry, InstalledSkill, McpServer, SkillRepo};
@@ -128,6 +129,61 @@ impl ProviderSwitchHandle {
 
 #[allow(dead_code)]
 impl WorkspaceBackend {
+    /// Identity of the live target, independent of the short-lived wrapper
+    /// rebuilt when a page is selected. Reconnection is a new remote session.
+    pub(crate) fn same_target(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Local(a), Self::Local(b)) => Arc::ptr_eq(a.state(), b.state()),
+            (Self::Remote(a), Self::Remote(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    /// Draft ownership survives reconnecting to the same verified node, but
+    /// never follows a user selecting another connection or another node.
+    pub(crate) fn same_workspace(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Remote(a), Self::Remote(b)) => {
+                a.host().id == b.host().id && a.handshake().node.id == b.handshake().node.id
+            }
+            _ => self.same_target(other),
+        }
+    }
+
+    pub(crate) async fn overview_snapshot(
+        &self,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<ochub_core::application::OverviewSnapshot, WorkspaceBackendError> {
+        match self {
+            Self::Local(application) => Ok(application.overview_snapshot(from, to).await?),
+            Self::Remote(client) => {
+                if !client
+                    .handshake()
+                    .features
+                    .iter()
+                    .any(|feature| feature == "overview-v1")
+                {
+                    return Err(RemoteClientError::Capability("overview-v1".into()).into());
+                }
+                for capability in [
+                    Capability::ProviderRead,
+                    Capability::GatewayRead,
+                    Capability::UsageRead,
+                ] {
+                    client.require_capability(capability)?;
+                }
+                let response = client
+                    .request(
+                        methods::OVERVIEW_READ,
+                        json!({"from":from,"to":to}),
+                        Default::default(),
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
+    }
     #[allow(dead_code)]
     pub(crate) fn local(state: Arc<ochub_core::AppState>) -> Self {
         Self::Local(Arc::new(Application::from_state(state)))
@@ -140,6 +196,190 @@ impl WorkspaceBackend {
     #[allow(dead_code)]
     pub(crate) fn is_remote(&self) -> bool {
         matches!(self, Self::Remote(_))
+    }
+
+    pub(crate) async fn set_app_config_dir(
+        &self,
+        app: &AppId,
+        path: Option<String>,
+    ) -> Result<(), WorkspaceBackendError> {
+        match self {
+            Self::Local(application) => application
+                .set_app_config_dir(app, path)
+                .map(|_| ())
+                .map_err(Into::into),
+            Self::Remote(_) => Err(ApplicationError::CapabilityUnsupported {
+                app: app.to_string(),
+                capability: "app.config-dir-override",
+            }
+            .into()),
+        }
+    }
+
+    pub(crate) fn supports_editor_drafts(&self) -> bool {
+        match self {
+            Self::Local(_) => true,
+            Self::Remote(client) => {
+                client
+                    .handshake()
+                    .features
+                    .iter()
+                    .any(|feature| feature == "editor-drafts-v1")
+                    && client
+                        .handshake()
+                        .capabilities
+                        .contains(&Capability::ProviderWrite)
+            }
+        }
+    }
+
+    fn require_editor_drafts(&self) -> Result<(), WorkspaceBackendError> {
+        if self.supports_editor_drafts() {
+            Ok(())
+        } else {
+            Err(RemoteClientError::Capability("editor-drafts-v1".into()).into())
+        }
+    }
+
+    pub(crate) async fn list_editor_drafts(
+        &self,
+        app: &AppId,
+    ) -> Result<Vec<EditorDraftSummary>, WorkspaceBackendError> {
+        match self {
+            Self::Local(application) => Ok(application.list_editor_drafts(app)?),
+            Self::Remote(client) => {
+                if !self.supports_editor_drafts() {
+                    return Ok(Vec::new());
+                }
+                let response = client
+                    .request(
+                        methods::EDITOR_DRAFT_LIST,
+                        json!({"app":app.as_str()}),
+                        Default::default(),
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
+    }
+
+    pub(crate) async fn get_editor_draft(
+        &self,
+        app: &AppId,
+        id: &str,
+    ) -> Result<Option<EditorDraft>, WorkspaceBackendError> {
+        self.require_editor_drafts()?;
+        match self {
+            Self::Local(application) => Ok(application.get_editor_draft(app, id)?),
+            Self::Remote(client) => {
+                let response = client
+                    .request(
+                        methods::EDITOR_DRAFT_GET,
+                        json!({"app":app.as_str(),"id":id}),
+                        Default::default(),
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
+    }
+
+    pub(crate) async fn upsert_editor_draft(
+        &self,
+        app: &AppId,
+        id: &str,
+        expected_revision: Option<u64>,
+        input: EditorDraftInput,
+    ) -> Result<EditorDraft, WorkspaceBackendError> {
+        self.require_editor_drafts()?;
+        match self {
+            Self::Local(application) => {
+                Ok(application.upsert_editor_draft(app, id, expected_revision, input)?)
+            }
+            Self::Remote(client) => {
+                let response = client.request(methods::EDITOR_DRAFT_SAVE, json!({"app":app.as_str(),"id":id,"expectedRevision":expected_revision,"input":input}), mutation_options()).await?;
+                let mut data = response.data;
+                // Mutation responses are cached by the node, so arbitrary raw
+                // editor text is omitted there. We already own this payload.
+                data["input"] = serde_json::to_value(input)?;
+                Ok(serde_json::from_value(data)?)
+            }
+        }
+    }
+
+    pub(crate) async fn delete_editor_draft(
+        &self,
+        app: &AppId,
+        id: &str,
+        revision: u64,
+    ) -> Result<(), WorkspaceBackendError> {
+        self.require_editor_drafts()?;
+        match self {
+            Self::Local(application) => Ok(application.delete_editor_draft(app, id, revision)?),
+            Self::Remote(client) => {
+                client
+                    .request(
+                        methods::EDITOR_DRAFT_DELETE,
+                        json!({"app":app.as_str(),"id":id,"revision":revision}),
+                        mutation_options(),
+                    )
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) async fn apply_editor_draft(
+        &self,
+        app: &AppId,
+        id: &str,
+        revision: u64,
+        policy: ProviderSwitchPolicy,
+    ) -> Result<EditorDraftApplyResult, WorkspaceBackendError> {
+        self.require_editor_drafts()?;
+        match self {
+            Self::Local(application) => {
+                Ok(application.apply_editor_draft(app, id, revision, policy)?)
+            }
+            Self::Remote(client) => {
+                match client
+                    .request(
+                        methods::EDITOR_DRAFT_APPLY,
+                        json!({"app":app.as_str(),"id":id,"revision":revision,"onDrift":policy}),
+                        mutation_options(),
+                    )
+                    .await
+                {
+                    Ok(response) => Ok(serde_json::from_value(response.data)?),
+                    Err(RemoteClientError::Remote { code, details, .. })
+                        if code == "CONFIG_APPLY_FAILED" =>
+                    {
+                        Ok(serde_json::from_value(details)?)
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn undo_config_apply(
+        &self,
+        receipt_id: &str,
+    ) -> Result<ConfigApplyReceipt, WorkspaceBackendError> {
+        self.require_editor_drafts()?;
+        match self {
+            Self::Local(application) => Ok(application.undo_config_apply(receipt_id)?),
+            Self::Remote(client) => {
+                let response = client
+                    .request(
+                        methods::CONFIG_APPLY_UNDO,
+                        json!({"receiptId":receipt_id}),
+                        mutation_options(),
+                    )
+                    .await?;
+                Ok(serde_json::from_value(response.data)?)
+            }
+        }
     }
 
     pub(crate) async fn status(&self) -> Result<StatusSummary, WorkspaceBackendError> {
@@ -1100,6 +1340,37 @@ impl WorkspaceBackend {
                 Ok(serde_json::from_value(response.data)?)
             }
         }
+    }
+
+    /// The local page can read its whole snapshot without a list + N detail reads.
+    /// Remote nodes keep the existing wire operations, including older servers.
+    pub(crate) async fn provider_snapshot(
+        &self,
+        app: &AppId,
+    ) -> Result<ProviderSnapshot, WorkspaceBackendError> {
+        if let Self::Local(application) = self {
+            return Ok(application.provider_snapshot(app)?);
+        }
+        let listed = self.list_providers(app).await?;
+        let current = listed
+            .iter()
+            .find(|provider| provider.current)
+            .map(|provider| provider.id.clone());
+        let base_urls = listed
+            .iter()
+            .map(|provider| (provider.id.clone(), provider.base_url.clone()))
+            .collect();
+        let providers = futures::future::try_join_all(listed.iter().map(|provider| async move {
+            self.get_provider(app, &provider.id)
+                .await
+                .map(|details| details.provider)
+        }))
+        .await?;
+        Ok(ProviderSnapshot {
+            providers,
+            base_urls,
+            current,
+        })
     }
 
     pub(crate) async fn list_providers(

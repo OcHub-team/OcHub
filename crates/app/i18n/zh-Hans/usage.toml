@@ -33,6 +33,7 @@
 "usage.detail.cache_write" = "缓存写入（5 分钟）"
 "usage.detail.cache_write_1h" = "缓存写入（1 小时）"
 "usage.detail.cache_write_cost" = "缓存写入成本"
+"usage.detail.copy" = "复制{label}"
 "usage.detail.tps" = "输出速度"
 "usage.detail.error" = "错误信息: {error}"
 "usage.detail.first_token" = "首 Token"

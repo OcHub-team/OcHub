@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 
+use super::localized::{TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues, Language,
     PreviewFile, SelectOption, set_str, str_val,
@@ -18,12 +19,13 @@ impl AppConfig for CherryStudioConfig {
     }
 
     fn schema(&self) -> Vec<FormSection> {
-        vec![FormSection::new(
-            "Cherry Studio 导入参数",
+        vec![FormSection::identified(
+            "import",
+            tr(TextKey::CherryImportSection),
             vec![
                 FormField::new(
                     "type",
-                    "协议类型",
+                    tr(TextKey::ProtocolType),
                     FieldKind::Select {
                         options: vec![
                             SelectOption::new("openai", "OpenAI Chat Completions"),
@@ -36,7 +38,7 @@ impl AppConfig for CherryStudioConfig {
                         ],
                     },
                 )
-                .help("决定 Cherry Studio 为此连接使用的请求协议。")
+                .help(tr(TextKey::CherryProtocolHelp))
                 .required(),
                 FormField::new(
                     "base_url",
@@ -45,7 +47,7 @@ impl AppConfig for CherryStudioConfig {
                         placeholder: "https://api.example.com/v1".into(),
                     },
                 )
-                .help("点击导入时作为 baseUrl 传给 Cherry Studio。")
+                .help(tr(TextKey::CherryBaseUrlHelp))
                 .required(),
                 FormField::new(
                     "api_key",
@@ -54,7 +56,7 @@ impl AppConfig for CherryStudioConfig {
                         placeholder: "sk-...".into(),
                     },
                 )
-                .help("API Key 会编码进本机 Deep Link，并由 Cherry Studio 显示确认。")
+                .help(tr(TextKey::CherryApiKeyHelp))
                 .required(),
             ],
         )]
@@ -113,7 +115,7 @@ impl AppConfig for CherryStudioConfig {
             "type": settings.get("type").and_then(Value::as_str).unwrap_or(DEFAULT_PROVIDER_TYPE),
         });
         vec![PreviewFile {
-            filename: "cherrystudio://providers/api-keys（导入参数）".into(),
+            filename: tr(TextKey::CherryPreviewName).into(),
             language: Language::Json,
             content: serde_json::to_string_pretty(&payload).unwrap_or_default(),
         }]
@@ -123,24 +125,19 @@ impl AppConfig for CherryStudioConfig {
         let mut issues = Vec::new();
         let provider_type = str_val(values, "type").trim();
         if !SUPPORTED_PROVIDER_TYPES.contains(&provider_type) {
-            issues.push(
-                ConfigIssue::error("请选择 Cherry Studio 支持的协议类型。").for_field("type"),
-            );
+            issues.push(ConfigIssue::error(tr(TextKey::CherryProtocolRequired)).for_field("type"));
         }
         let base_url = str_val(values, "base_url").trim();
         if base_url.is_empty() {
-            issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
+            issues.push(ConfigIssue::error(tr(TextKey::BaseUrlRequired)).for_field("base_url"));
         } else if url::Url::parse(base_url)
             .ok()
             .is_none_or(|url| !matches!(url.scheme(), "http" | "https"))
         {
-            issues.push(
-                ConfigIssue::error("Base URL 必须是有效的 http:// 或 https:// 地址。")
-                    .for_field("base_url"),
-            );
+            issues.push(ConfigIssue::error(tr(TextKey::BaseUrlInvalid)).for_field("base_url"));
         }
         if str_val(values, "api_key").trim().is_empty() {
-            issues.push(ConfigIssue::error("API Key 不能为空。").for_field("api_key"));
+            issues.push(ConfigIssue::error(tr(TextKey::ApiKeyRequired)).for_field("api_key"));
         }
         issues
     }

@@ -13,6 +13,7 @@
 use serde_json::{Map, Value, json};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues, Language,
     PreviewFile, SelectOption, bool_val, set_bool, set_str, str_val,
@@ -40,8 +41,9 @@ impl AppConfig for CodexConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "供应商",
+            FormSection::identified(
+                "provider",
+                tr(TextKey::ProviderSection),
                 vec![
                     FormField::new(
                         "provider_id",
@@ -50,22 +52,27 @@ impl AppConfig for CodexConfig {
                             placeholder: "custom".into(),
                         },
                     )
-                    .help("config.toml 中 [model_providers.<id>] 的键，也是 model_provider 的值。")
+                    .help(tr(TextKey::CodexProviderIdHelp))
                     .required(),
                     FormField::new(
                         "name",
-                        "普通 Provider 名称",
+                        tr(TextKey::CodexProviderName),
                         FieldKind::Text {
                             placeholder: "Custom".into(),
                         },
                     )
-                    .help("这是 config.toml 中的 provider name，不是 OcHub 列表名称；开启远程压缩时会强制写为 OpenAI。"),
-                    FormField::new("remote_compaction", "远程压缩", FieldKind::Toggle)
-                        .help("Codex 仅在 provider name 精确为 OpenAI 时开启远程压缩。请确认上游完整支持 Responses 远程压缩。"),
+                    .help(tr(TextKey::CodexProviderNameHelp)),
+                    FormField::new(
+                        "remote_compaction",
+                        tr(TextKey::RemoteCompaction),
+                        FieldKind::Toggle,
+                    )
+                    .help(tr(TextKey::RemoteCompactionHelp)),
                 ],
             ),
-            FormSection::new(
-                "端点与鉴权",
+            FormSection::identified(
+                "endpoint_auth",
+                tr(TextKey::EndpointAuthSection),
                 vec![
                     FormField::new(
                         "base_url",
@@ -74,53 +81,52 @@ impl AppConfig for CodexConfig {
                             placeholder: "https://api.example.com/v1".into(),
                         },
                     )
-                    .help("第三方 API 模式必须填写，通常以 /v1 结尾；仅账号登录时可留空使用 Codex 官方端点。"),
+                    .help(tr(TextKey::CodexBaseUrlHelp)),
                     FormField::new(
                         "auth_mode",
-                        "鉴权方式",
+                        tr(TextKey::AuthMethod),
                         FieldKind::Select {
                             options: vec![
-                                SelectOption::new(AUTH_API_KEY, "仅第三方 API")
+                                SelectOption::new(AUTH_API_KEY, tr(TextKey::ThirdPartyApiOnly))
                                     .with_hint("experimental_bearer_token"),
-                                SelectOption::new(AUTH_OPENAI_LOGIN, "仅 ChatGPT 账号登录")
+                                SelectOption::new(AUTH_OPENAI_LOGIN, tr(TextKey::ChatGptLoginOnly))
                                     .with_hint("requires_openai_auth=true"),
                                 SelectOption::new(
                                     AUTH_OPENAI_LOGIN_WITH_API_KEY,
-                                    "ChatGPT 登录 + 第三方 API",
+                                    tr(TextKey::ChatGptAndApi),
                                 )
-                                .with_hint(
-                                    "auth.json 保留登录态，请求使用 experimental_bearer_token",
-                                ),
+                                .with_hint(tr(TextKey::CombinedAuthHint)),
                             ],
                         },
                     )
-                    .help("组合模式不会把第三方密钥伪装成 HTTP 头：账号仍由 auth.json 管理，模型请求的 Authorization 由 experimental_bearer_token 提供。"),
+                    .help(tr(TextKey::CombinedAuthHelp)),
                     FormField::new(
                         "api_key",
-                        "第三方 API Key",
+                        tr(TextKey::ThirdPartyApiKey),
                         FieldKind::Secret {
                             placeholder: "sk-...".into(),
                         },
                     )
-                    .help("仅两种第三方 API 模式使用；保存后写入当前 provider 的 experimental_bearer_token。"),
+                    .help(tr(TextKey::ThirdPartyApiKeyHelp)),
                 ],
             ),
-            FormSection::new(
-                "模型",
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
                 vec![
                     FormField::new(
                         "model",
-                        "模型",
+                        tr(TextKey::ModelLabel),
                         FieldKind::Text {
                             placeholder: "gpt-5.5".into(),
                         },
                     ),
                     FormField::new(
                         "reasoning_effort",
-                        "推理强度 (model_reasoning_effort)",
+                        tr(TextKey::ReasoningEffort),
                         FieldKind::Select {
                             options: vec![
-                                SelectOption::new("", "（不设置）"),
+                                SelectOption::new("", tr(TextKey::NotSet)),
                                 SelectOption::new("minimal", "minimal"),
                                 SelectOption::new("low", "low"),
                                 SelectOption::new("medium", "medium"),
@@ -129,41 +135,48 @@ impl AppConfig for CodexConfig {
                             ],
                         },
                     )
-                    .help("仅 Responses API 且依模型而定。"),
+                    .help(tr(TextKey::ReasoningEffortHelp)),
                 ],
             ),
-            FormSection::new(
-                "高级",
+            FormSection::identified(
+                "advanced",
+                tr(TextKey::AdvancedSection),
                 vec![
                     FormField::new(
                         "wire_api",
                         "wire_api",
                         FieldKind::Select {
-                            options: vec![SelectOption::new("responses", "responses")
-                                .with_hint("当前 Codex 仅支持 responses")],
+                            options: vec![
+                                SelectOption::new("responses", "responses")
+                                    .with_hint(tr(TextKey::ResponsesOnlyHint)),
+                            ],
                         },
                     )
-                    .help("chat 已被 Codex 移除；chat-only 上游需经网关翻译。"),
-                    FormField::new("disable_response_storage", "禁用响应存储", FieldKind::Toggle)
-                        .help("disable_response_storage = true（ZDR / 不支持存储的上游）。"),
+                    .help(tr(TextKey::CodexWireApiHelp)),
                     FormField::new(
-                        "supports_websockets",
-                        "支持 Responses WebSocket",
+                        "disable_response_storage",
+                        tr(TextKey::DisableResponseStorage),
                         FieldKind::Toggle,
                     )
-                    .help("直连时可手动声明；模型供应商模式由所选供应商的 WebSocket 能力决定，不可单独覆盖。"),
+                    .help(tr(TextKey::DisableResponseStorageHelp)),
+                    FormField::new(
+                        "supports_websockets",
+                        tr(TextKey::SupportsWebSockets),
+                        FieldKind::Toggle,
+                    )
+                    .help(tr(TextKey::SupportsWebSocketsHelp)),
                     FormField::new(
                         "query_params",
-                        "Query 参数",
+                        tr(TextKey::QueryParameters),
                         FieldKind::KeyValue {
                             key_placeholder: "api-version".into(),
                             value_placeholder: "2025-04-01-preview".into(),
                         },
                     )
-                    .help("追加到每次请求 URL（如 Azure 的 api-version）。"),
+                    .help(tr(TextKey::QueryParametersHelp)),
                     FormField::new(
                         "http_headers",
-                        "HTTP 头",
+                        tr(TextKey::HttpHeaders),
                         FieldKind::KeyValue {
                             key_placeholder: "X-Header".into(),
                             value_placeholder: "value".into(),
@@ -342,11 +355,10 @@ impl AppConfig for CodexConfig {
         let config = contents.first().cloned().unwrap_or_default();
         config
             .parse::<DocumentMut>()
-            .map_err(|e| format!("config.toml 解析失败: {e}"))?;
+            .map_err(|e| localized::format(TextKey::ConfigTomlParseFailed, &[("e", &(e))]))?;
         let auth = match contents.get(1) {
-            Some(s) if !s.trim().is_empty() => {
-                serde_json::from_str::<Value>(s).map_err(|e| format!("auth.json 解析失败: {e}"))?
-            }
+            Some(s) if !s.trim().is_empty() => serde_json::from_str::<Value>(s)
+                .map_err(|e| localized::format(TextKey::AuthJsonParseFailed, &[("e", &(e))]))?,
             _ => json!({}),
         };
         Ok(json!({ "auth": auth, "config": config }))
@@ -379,12 +391,7 @@ impl AppConfig for CodexConfig {
 
         let wire_api = str_val(values, "wire_api");
         if wire_api == "chat" {
-            issues.push(
-                ConfigIssue::error(
-                    "wire_api = \"chat\" 已被 Codex 移除（约 2026-02）。请改用 responses；纯 chat-completions 上游需经网关翻译。",
-                )
-                .for_field("wire_api"),
-            );
+            issues.push(ConfigIssue::error(tr(TextKey::CodexChatRemoved)).for_field("wire_api"));
         }
 
         let auth_mode = str_val(values, "auth_mode");
@@ -392,17 +399,12 @@ impl AppConfig for CodexConfig {
         let uses_login = auth_mode_uses_login(auth_mode);
 
         if uses_relay && str_val(values, "base_url").trim().is_empty() {
-            issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
+            issues.push(ConfigIssue::error(tr(TextKey::BaseUrlRequired)).for_field("base_url"));
         } else if !str_val(values, "base_url").trim().is_empty() {
             let base = str_val(values, "base_url").trim_end_matches('/');
             if !base.ends_with("/v1") && !base.contains("127.0.0.1") && !base.contains("localhost")
             {
-                issues.push(
-                    ConfigIssue::info(
-                        "Base URL 通常应以 /v1 结尾（Codex 会在其后拼接 /responses）。",
-                    )
-                    .for_field("base_url"),
-                );
+                issues.push(ConfigIssue::info(tr(TextKey::CodexBaseUrlHint)).for_field("base_url"));
             }
         }
 
@@ -410,20 +412,13 @@ impl AppConfig for CodexConfig {
             && str_val(values, "api_key").trim().is_empty()
             && str_val(values, LEGACY_ENV_KEY).trim().is_empty()
         {
-            issues.push(
-                ConfigIssue::warning("第三方 API 模式尚未填写 API Key。").for_field("api_key"),
-            );
+            issues.push(ConfigIssue::warning(tr(TextKey::CodexApiKeyMissing)).for_field("api_key"));
         }
         if !uses_relay && !str_val(values, "api_key").trim().is_empty() {
-            issues.push(
-                ConfigIssue::info("仅账号登录模式不会使用该第三方 API Key，保存时将移除。")
-                    .for_field("api_key"),
-            );
+            issues.push(ConfigIssue::info(tr(TextKey::CodexUnusedApiKey)).for_field("api_key"));
         }
         if uses_login && !bool_val(values, HAS_OPENAI_LOGIN) {
-            issues.push(ConfigIssue::warning(
-                "此供应商尚未保存 ChatGPT 登录态；应用时会沿用当前 auth.json，请先在 Codex 完成登录。",
-            ));
+            issues.push(ConfigIssue::warning(tr(TextKey::CodexLoginMissing)));
         }
 
         issues
@@ -449,7 +444,7 @@ impl AppConfig for CodexConfig {
     fn presets(&self) -> Vec<super::Preset> {
         vec![
             codex_preset(
-                "OpenAI 官方",
+                tr(TextKey::OpenAiOfficial),
                 "openai-account",
                 "OpenAI",
                 "",

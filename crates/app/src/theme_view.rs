@@ -90,6 +90,7 @@ impl ThemeVariantInputs {
 }
 
 struct ThemeEditor {
+    baseline: ThemeFamily,
     family: ThemeFamily,
     variant: EditorVariant,
     name: Entity<TextInput>,
@@ -122,6 +123,8 @@ const THEME_EDITOR_BLOCKS: &[ThemeEditorBlock] = &[
     ThemeEditorBlock::TokenGroup("效果"),
 ];
 
+impl gpui::EventEmitter<crate::interaction::DiscardForm> for ThemeView {}
+
 pub struct ThemeView {
     registry: Arc<theme::ThemeRegistry>,
     selected_family: String,
@@ -136,6 +139,58 @@ pub struct ThemeView {
 }
 
 impl ThemeView {
+    pub(crate) fn leave_state(&self, cx: &gpui::App) -> crate::interaction::LeaveState {
+        let dirty =
+            self.editor.as_ref().is_some_and(|e| {
+                let palette = e.variant.palette(&e.baseline);
+                e.family != e.baseline
+                    || e.name.read(cx).content().as_ref() != e.baseline.name
+                    || e.author.read(cx).content().as_ref() != e.baseline.author
+                    || e.description.read(cx).content().as_ref() != e.baseline.description
+                    || [
+                        (
+                            &e.variant_inputs.effects.sidebar_opacity,
+                            palette.effects.sidebar_opacity,
+                        ),
+                        (
+                            &e.variant_inputs.effects.content_opacity,
+                            palette.effects.content_opacity,
+                        ),
+                    ]
+                    .iter()
+                    .any(|(input, value)| {
+                        input.as_ref().is_some_and(|input| {
+                            input
+                                .read(cx)
+                                .content()
+                                .trim()
+                                .trim_end_matches('%')
+                                .trim()
+                                .parse::<u8>()
+                                .ok()
+                                != Some(*value)
+                        })
+                    })
+                    || e.variant_inputs.colors.iter().zip(THEME_TOKENS.iter()).any(
+                        |(input, token)| {
+                            input.as_ref().is_some_and(|input| {
+                                ThemeColor::parse(input.read(cx).content().trim()).ok()
+                                    != Some(palette.color(token.token))
+                            })
+                        },
+                    )
+            });
+        crate::interaction::LeaveState::new(dirty, self.io_busy)
+    }
+
+    pub(crate) fn discard_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor = None;
+        self.confirm_delete = None;
+        self.restore_saved_theme(window, cx);
+        self.clear_status();
+        cx.notify();
+    }
+
     /// Re-apply the current locale to state that a repaint cannot reach.
     ///
     /// `refresh_windows` re-runs `render`, but gpui's virtualized lists cache
@@ -380,6 +435,7 @@ impl ThemeView {
             family.description.clone(),
         );
         ThemeEditor {
+            baseline: family.clone(),
             family,
             variant,
             name,
@@ -606,10 +662,13 @@ impl ThemeView {
     }
 
     fn cancel_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor = None;
-        self.restore_saved_theme(window, cx);
-        self.clear_status();
-        cx.notify();
+        match self.leave_state(cx) {
+            crate::interaction::LeaveState::Busy => {}
+            crate::interaction::LeaveState::Dirty => cx.emit(crate::interaction::DiscardForm(
+                crate::interaction::FormOwner::Themes,
+            )),
+            crate::interaction::LeaveState::Clean => self.discard_changes(window, cx),
+        }
     }
 
     fn save_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {

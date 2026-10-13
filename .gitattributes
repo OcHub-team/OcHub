@@ -1,0 +1,3 @@
+# Historical patches and captured interaction transcripts preserve literal whitespace.
+docs/design/**/*.patch -whitespace
+docs/assets/**/*.txt -whitespace

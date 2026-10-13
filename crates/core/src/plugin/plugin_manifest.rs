@@ -2,21 +2,23 @@
 //!
 //! Turns a manifest into a live plugin: metadata/capabilities read straight off
 //! the manifest, the provider codec is the generic [`ManifestCodec`], and the
-//! live-config surface writes each declared file (honoring `replace` /
-//! `merge_shallow`, `clear_when`-emptied stores, per-file modes, and
-//! `absent_preserves`) then runs the manifest's post-write hooks.
+//! live-config surface prepares all declared files (honoring `replace` /
+//! `merge_shallow`, per-file modes, and `absent_preserves`) for the host's
+//! recoverable writer. Preview and execution consume the same prepared bytes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::app_id::AppId;
 use crate::db::Database;
 use crate::error::AppError;
 use crate::model::Provider;
 use crate::provider_config::AppConfig;
+use crate::services::config_commit::{PreparedConfigWrite, PreparedFileWrite, execute_files};
 
 use super::capabilities::LiveConfigOps;
 use super::hooks::HookRegistry;
@@ -39,6 +41,7 @@ pub struct ManifestPlugin {
     hooks: Arc<HookRegistry>,
     source: ManifestSource,
     id: AppId,
+    configuration_revision: String,
 }
 
 impl ManifestPlugin {
@@ -50,11 +53,18 @@ impl ManifestPlugin {
     ) -> Result<Arc<Self>, ManifestError> {
         manifest.check(&hooks)?;
         let id = manifest.app_id()?;
+        // The checked structure, rather than file mtime or path, identifies
+        // the adapter. Cosmetic comments do not invalidate an editing session.
+        let configuration_revision = Sha256::digest(format!("{manifest:?}").as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         Ok(Arc::new(Self {
             manifest: Arc::new(manifest),
             hooks,
             source,
             id,
+            configuration_revision,
         }))
     }
 
@@ -73,6 +83,7 @@ impl ManifestPlugin {
     /// The provider-editor codec for this manifest.
     pub fn codec(&self) -> ManifestCodec {
         ManifestCodec::new(self.manifest.clone(), self.hooks.clone())
+            .with_preview_root(self.resolve_config_dir())
     }
 
     /// Resolve the config dir: settings override for this id, else the manifest
@@ -115,6 +126,14 @@ impl AppPlugin for ManifestPlugin {
         matches!(self.source, ManifestSource::User(_))
     }
 
+    fn manifest_path(&self) -> Option<&Path> {
+        self.source_path()
+    }
+
+    fn configuration_revision(&self) -> Option<&str> {
+        Some(&self.configuration_revision)
+    }
+
     fn mode(&self) -> AppMode {
         self.manifest.mode()
     }
@@ -143,34 +162,19 @@ impl AppPlugin for ManifestPlugin {
 }
 
 impl LiveConfigOps for ManifestPlugin {
+    fn prepare_write(
+        &self,
+        _db: &Database,
+        provider: &Provider,
+    ) -> Result<Option<PreparedConfigWrite>, AppError> {
+        self.prepare_config_write(provider).map(Some)
+    }
+
     fn write_live(&self, _db: &Database, provider: &Provider) -> Result<(), AppError> {
-        // 1. live_validate precondition.
-        if let Some(name) = &self.manifest.hooks.live_validate
-            && let Some(hook) = self.hooks.live_validate(name)
-        {
-            hook(provider)?;
-        }
-
-        let config_dir = self.resolve_config_dir();
-
-        // 2. Write each declared file in order.
-        for file in &self.manifest.files {
-            self.write_file(&config_dir, file, provider)?;
-        }
-
-        // 3. post_write side effects, in declared order.
-        for name in &self.manifest.hooks.post_write {
-            if let Some(hook) = self.hooks.post_write(name) {
-                hook(provider, &config_dir)?;
-            }
-        }
-
-        Ok(())
+        execute_files(&self.prepare_config_write(provider)?)
     }
 
     fn remove_from_live(&self, _provider_id: &str) -> Result<(), AppError> {
-        // Additive removal is not supported for v1 manifest apps; switch-mode
-        // apps never remove a single provider (same as the built-ins).
         Err(AppError::InvalidInput(format!(
             "应用 {} 不支持从 live 配置中移除单个供应商",
             self.id
@@ -181,13 +185,11 @@ impl LiveConfigOps for ManifestPlugin {
         let config_dir = self.resolve_config_dir();
         let mut result = Map::new();
         for file in &self.manifest.files {
-            let path = config_dir.join(&file.path);
-            if !path.exists() {
+            let path = checked_file_path(&config_dir, file)?;
+            let Some(content) = read_file_bytes(&path)? else {
                 continue;
-            }
-            let content = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
-            let value = super::format::parse(file.format, &content, &file.id)
-                .map_err(AppError::InvalidInput)?;
+            };
+            let value = parse_file_bytes(file, &content)?;
             result.insert(file.store_key.clone(), value);
         }
         Ok(Value::Object(result))
@@ -195,111 +197,142 @@ impl LiveConfigOps for ManifestPlugin {
 }
 
 impl ManifestPlugin {
-    fn write_file(
-        &self,
-        config_dir: &Path,
-        file: &FileSpec,
-        provider: &Provider,
-    ) -> Result<(), AppError> {
-        let path = config_dir.join(&file.path);
-        let store = provider.settings_config.get(&file.store_key);
-
-        match file.write {
-            WriteMode::Replace => {
-                // The store already reflects form-level clear_when (encode emptied
-                // it), so live write simply serializes whatever is stored — an
-                // empty store yields an empty file (Gemini's OAuth `.env`).
-                let store_value = store.cloned().unwrap_or_else(|| Value::Object(Map::new()));
-                let content = super::format::serialize(file.format, &store_value)
-                    .map_err(AppError::InvalidInput)?;
-                write_leaf(
-                    &path,
-                    content.as_bytes(),
-                    file.dir_mode_u32(),
-                    file.file_mode_u32(),
-                    file.atomic,
-                )
-            }
-            WriteMode::MergeShallow => {
-                // absent_preserves: a missing/null store leaves the file untouched.
-                if file.absent_preserves && matches!(store, None | Some(Value::Null)) {
-                    return Ok(());
-                }
-                let store_obj = store.and_then(Value::as_object);
-
-                let mut merged = read_existing(&path, file)?;
-                let merged_obj = merged.as_object_mut().ok_or_else(|| {
-                    AppError::InvalidInput(format!("文件 {} 的现有内容不是对象", file.id))
-                })?;
-                if let Some(obj) = store_obj {
-                    for (k, v) in obj {
-                        merged_obj.insert(k.clone(), v.clone());
-                    }
-                }
-
-                if matches!(file.format, super::manifest::FileFormat::Json) {
-                    // Match the native codec's canonical (sorted, atomic) JSON write.
-                    crate::paths::write_json_file(&path, &merged)
-                } else {
-                    let content = super::format::serialize(file.format, &merged)
-                        .map_err(AppError::InvalidInput)?;
-                    write_leaf(
-                        &path,
-                        content.as_bytes(),
-                        file.dir_mode_u32(),
-                        file.file_mode_u32(),
-                        file.atomic,
-                    )
-                }
-            }
+    fn prepare_config_write(&self, provider: &Provider) -> Result<PreparedConfigWrite, AppError> {
+        if let Some(name) = &self.manifest.hooks.live_validate
+            && let Some(hook) = self.hooks.live_validate(name)
+        {
+            hook(provider)?;
         }
+        let config_dir = self.resolve_config_dir();
+        let mut files = Vec::with_capacity(self.manifest.files.len());
+        for file in &self.manifest.files {
+            let path = checked_file_path(&config_dir, file)?;
+            let store = provider.settings_config.get(&file.store_key);
+            // Skipped files have no operation, including permission changes.
+            // The same missing-store rule applies to replace and merge modes.
+            if file.absent_preserves && matches!(store, None | Some(Value::Null)) {
+                continue;
+            }
+            let before = read_file_bytes(&path)?;
+            let value = match file.write {
+                WriteMode::Replace => store.cloned().unwrap_or_else(|| Value::Object(Map::new())),
+                WriteMode::MergeShallow => {
+                    let mut merged = match before.as_deref() {
+                        Some(bytes) => parse_file_bytes(file, bytes)?,
+                        None => Value::Object(Map::new()),
+                    };
+                    let merged_obj = merged.as_object_mut().ok_or_else(|| {
+                        AppError::InvalidInput(format!("文件 {} 的现有内容不是对象", file.id))
+                    })?;
+                    if let Some(store) = store.filter(|value| !value.is_null()) {
+                        let store_obj = store.as_object().ok_or_else(|| {
+                            AppError::InvalidInput(format!("文件 {} 的候选内容不是对象", file.id))
+                        })?;
+                        merged_obj.extend(
+                            store_obj
+                                .iter()
+                                .map(|(key, value)| (key.clone(), value.clone())),
+                        );
+                    }
+                    merged
+                }
+            };
+            let after = super::format::serialize(file.format, &value)
+                .map_err(AppError::InvalidInput)?
+                .into_bytes();
+            files.push(PreparedFileWrite {
+                path,
+                before,
+                after: Some(after),
+                file_mode: file.file_mode_u32(),
+                dir_mode: file.dir_mode_u32(),
+            });
+        }
+        Ok(PreparedConfigWrite { files })
     }
 }
 
-/// Read the existing file as a Value (default empty object when absent).
-fn read_existing(path: &Path, file: &FileSpec) -> Result<Value, AppError> {
-    if !path.exists() {
-        return Ok(Value::Object(Map::new()));
+fn read_file_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(AppError::io(path, error)),
     }
-    let content = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+}
+
+fn parse_file_bytes(file: &FileSpec, bytes: &[u8]) -> Result<Value, AppError> {
+    let content = std::str::from_utf8(bytes)
+        .map_err(|_| AppError::InvalidInput(format!("文件 {} 不是 UTF-8 文本", file.id)))?;
     if content.trim().is_empty() {
         return Ok(Value::Object(Map::new()));
     }
-    super::format::parse(file.format, &content, &file.id).map_err(AppError::InvalidInput)
+    super::format::parse(file.format, content, &file.id).map_err(AppError::InvalidInput)
 }
 
-/// Write a leaf file, creating the parent dir and applying unix modes.
-fn write_leaf(
-    path: &Path,
-    bytes: &[u8],
-    _dir_mode: Option<u32>,
-    _file_mode: Option<u32>,
-    atomic: bool,
-) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-        #[cfg(unix)]
-        if let Some(mode) = _dir_mode {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(mode);
-            fs::set_permissions(parent, perms).map_err(|e| AppError::io(parent, e))?;
+/// A root may itself be a user-selected symlink. Symlinks below that root are
+/// refused so declared files cannot be redirected outside the selected scope.
+fn checked_file_path(config_dir: &Path, file: &FileSpec) -> Result<PathBuf, AppError> {
+    super::manifest::validate_file_path(&file.path)
+        .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+    let mut path = absolute_root(config_dir)?;
+    let components = Path::new(&file.path).components().collect::<Vec<_>>();
+    for (index, component) in components.iter().enumerate() {
+        path.push(component.as_os_str());
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(AppError::InvalidInput(format!(
+                        "插件配置路径不能经过符号链接: {}",
+                        path.display()
+                    )));
+                }
+                let last = index + 1 == components.len();
+                if (!last && !metadata.is_dir()) || (last && !metadata.is_file()) {
+                    return Err(AppError::InvalidInput(format!(
+                        "插件配置目标的文件类型不匹配: {}",
+                        path.display()
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(AppError::io(&path, error)),
         }
     }
+    Ok(path)
+}
 
-    if atomic {
-        crate::paths::atomic_write(path, bytes)?;
+fn absolute_root(root: &Path) -> Result<PathBuf, AppError> {
+    let absolute = if root.is_absolute() {
+        root.to_path_buf()
     } else {
-        fs::write(path, bytes).map_err(|e| AppError::io(path, e))?;
+        std::env::current_dir()
+            .map_err(|error| AppError::io(root, error))?
+            .join(root)
+    };
+    // Canonicalize the existing prefix without creating directories during
+    // preview. Resolve a user-selected symlink root before adding file paths.
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match fs::canonicalize(existing) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = existing
+                    .file_name()
+                    .ok_or_else(|| AppError::io(existing, error))?;
+                missing.push(name.to_owned());
+                existing = existing
+                    .parent()
+                    .ok_or_else(|| AppError::InvalidInput("配置目录没有可解析的父目录".into()))?;
+            }
+            Err(error) => return Err(AppError::io(existing, error)),
+        }
     }
-
-    #[cfg(unix)]
-    if let Some(mode) = _file_mode {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(mode);
-        fs::set_permissions(path, perms).map_err(|e| AppError::io(path, e))?;
-    }
-
-    Ok(())
 }
 
 /// Expand a leading `~/` (or bare `~`) against the resolved home dir.

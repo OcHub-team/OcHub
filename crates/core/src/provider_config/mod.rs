@@ -18,6 +18,7 @@ use serde_json::Value;
 
 use crate::AppType;
 use crate::model::ProviderMeta;
+use localized::{TextKey, text as tr};
 
 mod cherry_studio;
 mod claude;
@@ -26,6 +27,7 @@ mod codex;
 mod grokbuild;
 mod hermes;
 mod kimi_code;
+mod localized;
 mod openclaw;
 mod opencode;
 pub mod sponsors;
@@ -184,6 +186,9 @@ impl FormField {
 /// A titled group of fields. `advanced` sections can render collapsed.
 #[derive(Debug, Clone)]
 pub struct FormSection {
+    /// Stable identity for behavior; translated titles are presentation only.
+    /// External schemas using `new` can leave this empty.
+    pub id: String,
     pub title: String,
     pub fields: Vec<FormField>,
     pub advanced: bool,
@@ -192,6 +197,20 @@ pub struct FormSection {
 impl FormSection {
     pub fn new(title: impl Into<String>, fields: Vec<FormField>) -> Self {
         Self {
+            id: String::new(),
+            title: title.into(),
+            fields,
+            advanced: false,
+        }
+    }
+
+    pub fn identified(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        fields: Vec<FormField>,
+    ) -> Self {
+        Self {
+            id: id.into(),
             title: title.into(),
             fields,
             advanced: false,
@@ -323,6 +342,13 @@ pub trait AppConfig {
     /// user-defined manifest apps (which have no `AppType`) can implement it.
     fn app_id(&self) -> crate::app_id::AppId;
 
+    /// Explicit secret locations in the persisted settings document. Each
+    /// path is a sequence of object keys, not a guessed credential key name.
+    /// Declarative adapters supply these for arbitrary native field names.
+    fn secret_paths(&self) -> Vec<Vec<String>> {
+        Vec::new()
+    }
+
     /// The structured fields, grouped into sections.
     fn schema(&self) -> Vec<FormSection>;
 
@@ -375,7 +401,7 @@ pub trait AppConfig {
     /// order `preview` emits them. Powers direct file editing in the editor.
     /// Returns `Err` for apps whose config can't round-trip through files.
     fn parse_files(&self, _contents: &[String]) -> Result<Value, String> {
-        Err("此应用暂不支持直接编辑文件，请使用上方表单。".to_string())
+        Err(tr(TextKey::RawEditingUnsupported).to_string())
     }
 }
 
@@ -493,15 +519,11 @@ pub fn station_hidden_options(app: AppType, field_id: &str) -> &'static [&'stati
 /// editor shows it disabled with the reason.
 pub fn station_field_help(app: AppType, field_id: &str, supported: bool) -> Option<&'static str> {
     match (app, field_id) {
-        (AppType::Codex, "auth_mode") => Some(
-            "模型供应商模式下 Authorization 一律由网关签发的密钥承担；选择组合模式可在此之上保留 auth.json 里的 ChatGPT 登录态。",
-        ),
-        (AppType::Codex, "remote_compaction") if supported => Some(
-            "远程压缩请求会转发到该模型供应商的 Responses 上游；开启后 config.toml 里的 provider name 会强制写为 OpenAI。",
-        ),
-        (AppType::Codex, "remote_compaction") => {
-            Some("该模型供应商没有启用中的 Responses 上游，网关无法转发远程压缩请求。")
+        (AppType::Codex, "auth_mode") => Some(tr(TextKey::StationAuthHelp)),
+        (AppType::Codex, "remote_compaction") if supported => {
+            Some(tr(TextKey::StationCompactionHelp))
         }
+        (AppType::Codex, "remote_compaction") => Some(tr(TextKey::StationCompactionUnavailable)),
         _ => None,
     }
 }

@@ -152,7 +152,7 @@ pub fn install(app: Arc<AppState>, cx: &mut App) {
         cx.defer(crate::close_main_window);
     });
     cx.on_action(|_: &QuitApp, cx| {
-        cx.quit();
+        cx.defer(crate::request_main_quit);
     });
 
     install_system_tray(app.clone(), cx);

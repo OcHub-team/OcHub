@@ -91,6 +91,15 @@ pub(crate) fn restore_masked_secrets(
     restored
 }
 
+pub(crate) fn restore_generic_masked_secrets(incoming: &mut Provider, existing: &Provider) -> bool {
+    restore_json(
+        &mut incoming.settings_config,
+        Some(&existing.settings_config),
+        &[],
+        "",
+    )
+}
+
 fn join_path(prefix: &str, key: &str) -> String {
     if prefix.is_empty() {
         key.to_string()

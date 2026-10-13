@@ -1,0 +1,69 @@
+diff --git a/src/content/docs-ja/guides/settings-themes.mdx b/src/content/docs-ja/guides/settings-themes.mdx
+index b806915..5bbf754 100644
+--- a/src/content/docs-ja/guides/settings-themes.mdx
++++ b/src/content/docs-ja/guides/settings-themes.mdx
+@@ -17,6 +17,14 @@ sidebar:
+ プロキシ、リモートノード、保守ツールがあります。通知センターとテーマ・設定・情報の
+ アイコンは下部に固定され、ナビゲーションをスクロールしても表示されます。
+ 
++## フォームから安全に移動する
++
++接続、同期、プロキシ、MCP、ルート、テーマ、アプリのディレクトリ、高度な設定の未保存の変更は、ページや管理対象の環境の切り替え、ウィンドウを閉じる前に確認されます。書き込み中は完了を待ちます。通常のフォームでは**編集に戻る**を選び、そのページの保存ボタンで保存するか、**破棄して続行**を選びます。接続の下書きには専用の**下書きを保存**操作があります。
++
++接続が切れても、入力中のフォームはメモリに残ります。同じ検証済みノードへ再接続すると編集を続けられ、別のノードには送信されません。通常のフォームはアプリの再起動後には復元されないため、終了前に保存してください。更新後の再起動にも同じ確認が適用されます。
++
++ドロップダウンでは**上下キー**と **Home/End** で移動し、**Enter/Space** で選択、**Escape** で取り消します。**Tab** はリストを閉じて次の項目へ移動します。開いているボタンをもう一度クリックすると閉じ、別のダイアログが開くと古いリストは閉じます。通知センターを開いている間、保存ショートカットは背後のフォームを送信しません。
++
+ ## 通知を読む
+ 
+ 短い通知は右上に表示されます。長い診断は**詳細**にまとめられ、通知がページを大きく覆うことは
+diff --git a/src/content/docs-zh/guides/settings-themes.mdx b/src/content/docs-zh/guides/settings-themes.mdx
+index 4d1fe25..5c69c22 100644
+--- a/src/content/docs-zh/guides/settings-themes.mdx
++++ b/src/content/docs-zh/guides/settings-themes.mdx
+@@ -16,6 +16,14 @@ sidebar:
+ 和维护工具位于**环境与维护**。通知中心以及主题、设置、关于图标固定在底部，不会随着导航
+ 列表滚出窗口。
+ 
++## 安全离开表单
++
++连接、同步、代理、MCP、中转站、主题、应用目录和高级配置表单中的未保存修改，会在切换页面、切换管理环境或关闭窗口前检查。正在进行的写入须先完成。普通表单可选择**返回编辑**，使用原页面的保存按钮保存；也可选择**放弃修改并继续**。连接草稿仍使用独立的**保存草稿**流程。
++
++连接中断时，已输入的表单保留在内存中。重新连接同一已验证节点后可继续编辑，不会提交到其他节点。这些普通表单不会跨应用重启保存，请在退出前保存。更新准备重启应用时，也会经过相同的离开检查。
++
++下拉列表支持**上/下方向键**和 **Home/End** 移动，**Enter/空格**选择，**Escape** 取消。**Tab** 关闭列表并继续移动焦点。再次点击已打开的触发按钮会收起列表；打开其他弹窗会关闭旧下拉列表。通知中心打开时，保存快捷键不会提交背后的表单。
++
+ ## 查看通知
+ 
+ 简短通知显示在右上区域，较长的诊断内容放在**详情**中，不会让浮层覆盖大片页面。
+diff --git a/src/content/docs/guides/settings-themes.mdx b/src/content/docs/guides/settings-themes.mdx
+index 7e8ca56..a362ee9 100644
+--- a/src/content/docs/guides/settings-themes.mdx
++++ b/src/content/docs/guides/settings-themes.mdx
+@@ -19,6 +19,26 @@ list only hides its navigation entries and does not disable management.
+ are under **Environment**. Notifications and the Themes, Settings, and About icons
+ stay at the bottom even when the navigation list scrolls.
+ 
++## Leave a form safely
++
++Unsaved changes in connection, sync, proxy, MCP, route, theme, app-directory,
++and advanced configuration forms are checked before navigation, changing the
++managed environment, or closing the window. A running write must finish first.
++For ordinary forms, choose **Return to form** to save using that page's controls,
++or **Discard and continue**. Connection drafts retain their separate **Save draft**
++workflow.
++
++An interrupted connection keeps the typed form in memory. Reconnecting to the
++same verified node can resume it; it is never submitted to a different node.
++These ordinary forms are not saved across an application restart. Save before
++quitting. When an update is ready to restart the app, the same leave checks apply.
++
++In dropdowns, use **Up/Down** and **Home/End** to move, **Enter/Space** to select,
++and **Escape** to cancel. **Tab** closes the list and continues through the form.
++Clicking the open trigger closes its list. Opening another dialog retires the
++older dropdown. While the notification center is open, the Save shortcut does
++not submit the form behind it.
++
+ ## Read notifications
+ 
+ Brief notifications appear in the upper-right area. Long diagnostics stay behind

@@ -2,6 +2,10 @@
 //! can show the provider list, a provider editor, the settings panel, or the
 //! gateway panel, all wired to live `ochub-core` data via an in-process `AppState`.
 
+mod navigation;
+use crate::interaction::{FormOwner, LeaveState};
+use navigation::PendingNavigation;
+
 use std::{
     collections::HashMap,
     process::Command,
@@ -13,12 +17,14 @@ use gpui::{
     App, Context, Entity, FontWeight, ListAlignment, ListState, MouseButton, ScrollHandle,
     SharedString, Window, WindowAppearance, WindowControlArea, div, prelude::*, px,
 };
-use ochub_core::application::{ConfigDiffFile, ProviderSwitchPolicy};
+use ochub_core::application::{
+    AppModeDto, ConfigDiffFile, EditorDraftSummary, ProviderSwitchPolicy,
+};
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::gateway::apply;
 use ochub_core::gateway::types::{GatewayKey, GatewayRoute};
 use ochub_core::services::provider::{LiveDrift, ProviderService};
-use ochub_core::{AppState, AppType, Provider, UsageResult};
+use ochub_core::{AppId, AppState, AppType, Provider, UsageResult};
 
 use crate::about_view::AboutView;
 use crate::anim::{PaintOffsetY, ease_out_quint, linear_progress};
@@ -33,6 +39,7 @@ use crate::layout;
 use crate::mcp_view::McpView;
 use crate::network_view::NetworkView;
 use crate::notifications::{NotificationHost, NotificationLevel, ToastSource};
+use crate::overview_view::{OverviewEvent, OverviewView};
 use crate::product_ui::{providers as provider_screens, shell as shell_screen};
 use crate::provider_editor::{EditorEvent, ProviderEditor};
 use crate::remote::{ProviderSwitchHandle, WorkspaceBackend};
@@ -97,10 +104,7 @@ pub(crate) fn open_deeplink_in_roots(cx: &mut App, uri: &str) {
         match manifest.clone() {
             Ok(manifest) => {
                 let _ = root.update(cx, |root, _window, cx| {
-                    root.select_section(Section::Gateway, cx);
-                    root.gateway_view.update(cx, |view, cx| {
-                        view.open_model_provider_import(manifest, cx);
-                    });
+                    root.open_model_provider_import(manifest, cx);
                 });
             }
             Err(error) => {
@@ -124,7 +128,7 @@ pub(crate) fn open_deeplink_in_roots(cx: &mut App, uri: &str) {
     }
 }
 
-fn open_cherry_studio_deeplink(deeplink: &str) -> Result<(), String> {
+pub(crate) fn open_cherry_studio_deeplink(deeplink: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let status = Command::new("open").arg(deeplink).status();
 
@@ -150,6 +154,7 @@ fn open_cherry_studio_deeplink(deeplink: &str) -> Result<(), String> {
 /// Which top-level section the main panel renders.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
+    Overview,
     Providers,
     About,
     Mcp,
@@ -185,19 +190,28 @@ impl Section {
             "remote" | "nodes" => Self::Remote,
             "gallery" => Self::Gallery,
             "about" => Self::About,
-            _ => Self::Providers,
+            "providers" => Self::Providers,
+            _ if std::env::var_os("MS_START_APP").is_some() => Self::Providers,
+            _ => Self::Overview,
         }
     }
 }
 
 pub struct AppRoot {
+    overview_view: Entity<OverviewView>,
+    applications_expanded: bool,
     app: Arc<AppState>,
-    selected_app: AppType,
+    selected_app: AppId,
+    managed_apps: HashMap<AppId, crate::app_meta::ManagedApp>,
     /// Enabled builtin apps in registry order. Refreshed only when settings
     /// emit `AppsChanged`; sidebar frames never clone global settings.
-    visible_apps: Arc<[AppType]>,
+    visible_apps: Arc<[AppId]>,
     section: Section,
     providers: Vec<Provider>,
+    editor_drafts: Vec<EditorDraftSummary>,
+    pending_navigation: Option<PendingNavigation>,
+    pending_form_leave: Option<FormOwner>,
+    navigation_focus: ochub_ui::modal::ModalFocusState,
     /// Render-only provider data. Rebuilt when provider data changes so a
     /// scroll/animation frame never parses tool configuration or allocates
     /// display strings.
@@ -211,7 +225,7 @@ pub struct AppRoot {
     provider_sortable_slots: Arc<[usize]>,
     provider_sortable_rows: Arc<[usize]>,
     provider_sortable_positions: HashMap<String, usize>,
-    provider_loaded_app: Option<AppType>,
+    provider_loaded_app: Option<AppId>,
     provider_loaded_scope: Option<String>,
     provider_reload_generation: u64,
     provider_action_in_flight: bool,
@@ -231,6 +245,7 @@ pub struct AppRoot {
     gateway_routes: Vec<GatewayRoute>,
     gateway_keys: Vec<GatewayKey>,
     notifications: Entity<NotificationHost>,
+    modal_focus: ochub_ui::modal::ModalFocusState,
     /// Active provider editor (add or edit); when `Some`, replaces the list.
     editor: Option<Entity<ProviderEditor>>,
     /// Provider pending deletion confirmation; when `Some`, a modal is shown.
@@ -286,6 +301,7 @@ pub struct AppRoot {
 /// provider/current state changes; `Card` stores an index into `providers`.
 #[derive(Clone, Copy)]
 enum ProviderRow {
+    Drafts,
     Hero,
     DirectLabel,
     EmptyState,
@@ -300,6 +316,7 @@ struct ProviderPresentation {
 
 struct ProviderPageLoad {
     providers: Result<Vec<Provider>, String>,
+    drafts: Result<Vec<EditorDraftSummary>, String>,
     base_urls: HashMap<String, String>,
     current: String,
     gateway_routes: Vec<GatewayRoute>,
@@ -307,53 +324,30 @@ struct ProviderPageLoad {
 }
 
 impl ProviderPageLoad {
-    async fn load(app: Arc<AppState>, backend: WorkspaceBackend, app_type: AppType) -> Self {
-        let app_id = app_type.app_id();
+    async fn load(app: Arc<AppState>, backend: WorkspaceBackend, app_id: AppId) -> Self {
         if !backend.is_remote()
             && let Err(err) = backend.import_live_providers(&app_id).await
         {
             log::debug!(
                 "automatic provider discovery skipped for {}: {err}",
-                app_type.as_str()
+                app_id.as_str()
             );
         }
 
-        let listed = backend.list_providers(&app_id).await;
-        let current = listed
-            .as_ref()
-            .ok()
-            .and_then(|providers| providers.iter().find(|provider| provider.current))
-            .map(|provider| provider.id.clone())
-            .unwrap_or_default();
-        let base_urls = listed
-            .as_ref()
-            .map(|providers| {
-                providers
-                    .iter()
-                    .map(|provider| (provider.id.clone(), provider.base_url.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let providers = match listed {
-            Ok(items) => {
-                let requests = items.into_iter().map(|item| {
-                    let backend = backend.clone();
-                    let app_id = app_id.clone();
-                    async move {
-                        backend
-                            .get_provider(&app_id, &item.id)
-                            .await
-                            .map(|details| details.provider)
-                    }
-                });
-                futures::future::try_join_all(requests)
-                    .await
-                    .map_err(|error| error.to_string())
-            }
-            Err(error) => Err(error.to_string()),
+        let (providers, base_urls, current) = match backend.provider_snapshot(&app_id).await {
+            Ok(snapshot) => (
+                Ok(snapshot.providers),
+                snapshot.base_urls.into_iter().collect(),
+                snapshot.current.unwrap_or_default(),
+            ),
+            Err(error) => (Err(error.to_string()), HashMap::new(), String::new()),
         };
 
         Self {
+            drafts: backend
+                .list_editor_drafts(&app_id)
+                .await
+                .map_err(|e| e.to_string()),
             providers,
             base_urls,
             current,
@@ -620,97 +614,6 @@ fn move_items_between_slots<T: Clone>(
 }
 
 impl AppRoot {
-    fn save_active(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        if self.confirm_delete.is_some() || self.pending_drift.is_some() {
-            window.play_system_bell();
-            return;
-        }
-        if self.show_first_run_notice {
-            window.play_system_bell();
-            return;
-        }
-        match self.section {
-            Section::Providers if self.showing_app_settings => {
-                self.app_settings_view
-                    .update(cx, |view, cx| view.shortcut_save(window, cx));
-            }
-            Section::Providers => {
-                if let Some(editor) = &self.editor {
-                    editor.update(cx, |editor, cx| editor.shortcut_save(cx));
-                } else {
-                    window.play_system_bell();
-                }
-            }
-            Section::Gateway => self
-                .gateway_view
-                .update(cx, |view, cx| view.shortcut_save(window, cx)),
-            Section::Mcp => self
-                .mcp_view
-                .update(cx, |view, cx| view.shortcut_save(window, cx)),
-            Section::Tools => self
-                .tools_view
-                .update(cx, |view, cx| view.shortcut_save(window, cx)),
-            Section::Themes => self
-                .theme_view
-                .update(cx, |view, cx| view.shortcut_save(window, cx)),
-            Section::Settings => self
-                .settings_view
-                .update(cx, |view, cx| view.shortcut_save(window, cx)),
-            _ => window.play_system_bell(),
-        }
-    }
-
-    fn cancel_active(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
-        if cx.stop_active_drag(window) {
-            self.provider_drag_state = None;
-            cx.notify();
-            return;
-        }
-        if self.confirm_delete.take().is_some() {
-            cx.notify();
-            return;
-        }
-        // Read-only, so it closes before anything with unsaved state below it.
-        if self.provider_quota_detail.take().is_some() {
-            cx.notify();
-            return;
-        }
-        // Escape leaves the file exactly as the user left it.
-        if self.pending_drift.take().is_some() {
-            cx.notify();
-            return;
-        }
-        match self.section {
-            Section::Providers if self.showing_app_settings => {
-                self.app_settings_view
-                    .update(cx, |view, cx| view.shortcut_cancel(cx));
-            }
-            Section::Providers => {
-                if let Some(editor) = &self.editor {
-                    editor.update(cx, |editor, cx| editor.shortcut_cancel(cx));
-                } else {
-                    window.play_system_bell();
-                }
-            }
-            Section::Gateway => self
-                .gateway_view
-                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
-            Section::Mcp => self
-                .mcp_view
-                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
-            Section::Tools => self
-                .tools_view
-                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
-            Section::Themes => self
-                .theme_view
-                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
-            Section::Settings => self
-                .settings_view
-                .update(cx, |view, cx| view.shortcut_cancel(window, cx)),
-            _ => window.play_system_bell(),
-        }
-    }
-
     /// The badge state to start with, before this process has checked anything.
     ///
     /// Checks are gated to one a day, so a launch usually performs none at all —
@@ -873,7 +776,9 @@ impl AppRoot {
         .detach();
     }
 
-    pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
+    pub fn new(app: Arc<AppState>, recovery_error: Option<String>, cx: &mut Context<Self>) -> Self {
+        let overview_view =
+            cx.new(|cx| OverviewView::new(WorkspaceBackend::local(app.clone()), cx));
         let settings_view = cx.new(|cx| SettingsView::new(app.clone(), cx));
         let gateway_view = cx.new(|cx| GatewayView::new(app.clone(), cx));
         let network_view = cx.new(|cx| NetworkView::new(app.clone(), cx));
@@ -892,17 +797,25 @@ impl AppRoot {
         let enabled = Self::load_visible_apps();
         let initial_app = std::env::var("MS_START_APP")
             .ok()
-            .and_then(|value| value.parse::<AppType>().ok())
+            .and_then(|value| AppId::parse(&value).ok())
             .filter(|app| enabled.contains(app))
-            .or_else(|| enabled.first().copied())
-            .unwrap_or(AppType::Claude);
-        let app_settings_view = cx.new(|cx| AppSettingsView::new(app.clone(), initial_app, cx));
+            .or_else(|| enabled.first().cloned())
+            .unwrap_or_else(|| AppType::Claude.app_id());
+        let app_settings_view =
+            cx.new(|cx| AppSettingsView::new(app.clone(), initial_app.clone(), cx));
         let mut this = Self {
+            overview_view,
+            applications_expanded: initial_section == Section::Providers,
             app,
             selected_app: initial_app,
+            managed_apps: Self::load_app_metadata(),
             visible_apps: enabled.into(),
             section: initial_section,
             providers: Vec::new(),
+            editor_drafts: Vec::new(),
+            pending_navigation: None,
+            pending_form_leave: None,
+            navigation_focus: ochub_ui::modal::ModalFocusState::new(cx),
             provider_presentations: HashMap::new(),
             provider_rows: Vec::new().into(),
             provider_sortable_slots: Vec::new().into(),
@@ -920,6 +833,7 @@ impl AppRoot {
             gateway_routes: Vec::new(),
             gateway_keys: Vec::new(),
             notifications,
+            modal_focus: ochub_ui::modal::ModalFocusState::new(cx),
             editor: None,
             confirm_delete: None,
             pending_drift: None,
@@ -955,13 +869,25 @@ impl AppRoot {
             &this.app_settings_view,
             |this, _view, event, cx| match event {
                 AppSettingsEvent::Close => {
-                    this.showing_app_settings = false;
+                    match this.app_settings_view.read(cx).leave_state(cx) {
+                        LeaveState::Clean => this.showing_app_settings = false,
+                        LeaveState::Dirty => this.request_form_discard(FormOwner::AppSettings, cx),
+                        LeaveState::Busy => this.notify_info(t(k::WORKBENCH_BUSY), cx),
+                    }
                     cx.notify();
                 }
             },
         )
         .detach();
-        cx.subscribe(&this.remote_view, |this, view, event, cx| {
+        cx.subscribe(&this.overview_view, |this, _, event, cx| match event {
+            OverviewEvent::App(app) => this.select_app(app.clone(), cx),
+            OverviewEvent::Routes => this.select_section(Section::Gateway, cx),
+            OverviewEvent::Usage => this.select_section(Section::Usage, cx),
+            OverviewEvent::Sessions => this.select_section(Section::Sessions, cx),
+            OverviewEvent::Remote => this.select_section(Section::Remote, cx),
+        })
+        .detach();
+        cx.subscribe(&this.remote_view, |this, _view, event, cx| {
             if let RemoteEvent::ManageRequested { id } = event {
                 this.select_remote_scope(id.clone(), cx);
                 return;
@@ -972,15 +898,15 @@ impl AppRoot {
             if this.active_remote_scope.as_deref() != Some(id.as_str()) {
                 return;
             }
-            this.editor = None;
             this.provider_loaded_scope = None;
+            if this.section == Section::Overview {
+                this.reload_overview_workspace(cx);
+            }
             if *connected {
-                let enabled = view.read(cx).enabled_builtin_apps();
-                if !enabled.is_empty() {
-                    this.visible_apps = enabled.into();
-                    if !this.visible_apps.contains(&this.selected_app) {
-                        this.selected_app = this.visible_apps[0];
-                    }
+                this.reload_visible_workspace_apps(cx);
+                if let Some(editor) = this.editor.clone() {
+                    let backend = this.workspace_backend(cx);
+                    editor.update(cx, |editor, cx| editor.set_workspace_backend(backend, cx));
                 }
                 this.reload(cx);
                 if this.section == Section::Mcp {
@@ -1010,10 +936,17 @@ impl AppRoot {
                 if this.section == Section::About {
                     this.reload_about_workspace(cx);
                 }
-                if this.section == Section::Providers && this.showing_app_settings {
-                    this.open_app_settings(cx);
+                if this.section == Section::Providers
+                    && this.showing_app_settings
+                    && let Some(backend) = this.workspace_backend(cx)
+                {
+                    this.app_settings_view
+                        .update(cx, |view, cx| view.set_workspace(backend, cx));
                 }
             } else {
+                if let Some(editor) = this.editor.clone() {
+                    editor.update(cx, |editor, cx| editor.set_workspace_backend(None, cx));
+                }
                 this.clear_provider_page();
                 if this.section == Section::Mcp {
                     this.reload_mcp_workspace(cx);
@@ -1056,6 +989,7 @@ impl AppRoot {
                     this.reload_visible_workspace_apps(cx);
                 } else {
                     this.visible_apps = Self::load_visible_apps().into();
+                    this.managed_apps = Self::load_app_metadata();
                     this.skills_view
                         .update(cx, |view, cx| view.refresh_apps(cx));
                     this.ensure_valid_selection(cx);
@@ -1086,14 +1020,14 @@ impl AppRoot {
         .detach();
         cx.subscribe(&this.gateway_view, |this, _view, event, cx| match event {
             crate::gateway_view::GatewayEvent::OpenProviders(app) => {
-                this.selected_app = *app;
-                this.select_section(Section::Providers, cx);
+                this.select_app(app.app_id(), cx);
             }
             crate::gateway_view::GatewayEvent::ImportFinished(app) => {
-                if let Some(app) = app.filter(|app| this.visible_apps.contains(app)) {
-                    this.selected_app = app;
+                if let Some(app) = app.filter(|app| this.visible_apps.contains(&app.app_id())) {
+                    this.select_app(app.app_id(), cx);
+                } else {
+                    this.select_section(Section::Providers, cx);
                 }
-                this.select_section(Section::Providers, cx);
                 this.reload(cx);
             }
             crate::gateway_view::GatewayEvent::ImportCancelled => {
@@ -1101,7 +1035,47 @@ impl AppRoot {
             }
         })
         .detach();
+        cx.subscribe(
+            &this.mcp_view,
+            |this, _, event: &crate::interaction::DiscardForm, cx| {
+                this.request_form_discard(event.0, cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &this.gateway_view,
+            |this, _, event: &crate::interaction::DiscardForm, cx| {
+                this.request_form_discard(event.0, cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &this.theme_view,
+            |this, _, event: &crate::interaction::DiscardForm, cx| {
+                this.request_form_discard(event.0, cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &this.remote_view,
+            |this, _, event: &crate::interaction::DiscardForm, cx| {
+                this.request_form_discard(event.0, cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &this.settings_view,
+            |this, _, event: &crate::interaction::DiscardForm, cx| {
+                this.request_form_discard(event.0, cx);
+            },
+        )
+        .detach();
+        cx.observe(&this.notifications, |_, _, cx| cx.notify())
+            .detach();
         this.connect_toast_sources(cx);
+        if let Some(error) = recovery_error {
+            this.notify_error(t(k::WORKBENCH_RECOVERY_REQUIRED), error, cx);
+        }
         this.observe_about_update_checks(cx);
         this.reload(cx);
         if show_first_run_notice {
@@ -1123,6 +1097,7 @@ impl AppRoot {
             this.open_app_settings(cx);
         }
         match initial_section {
+            Section::Overview => this.reload_overview_workspace(cx),
             Section::Mcp => this.mcp_view.update(cx, |v, cx| v.reload(cx)),
             Section::Skills => this.reload_skills_workspace(cx),
             Section::Gateway => this.reload_gateway_workspace(cx),
@@ -1212,27 +1187,52 @@ impl AppRoot {
             Section::Tools => Self::forward_toast(&self.tools_view, &self.notifications, cx),
             Section::Themes => Self::forward_toast(&self.theme_view, &self.notifications, cx),
             Section::About => Self::forward_toast(&self.about_view, &self.notifications, cx),
-            Section::Providers | Section::Gallery => {}
+            Section::Providers | Section::Overview | Section::Gallery => {}
         }
     }
 
-    fn load_visible_apps() -> Vec<AppType> {
+    fn load_visible_apps() -> Vec<AppId> {
         ochub_core::plugin::enabled_plugins()
             .iter()
-            .filter_map(|plugin| AppType::from_app_id(plugin.id()))
+            .map(|plugin| plugin.id().clone())
             .collect()
     }
 
-    fn app_label(app: AppType) -> SharedString {
-        crate::app_meta::label(app)
+    fn load_app_metadata() -> HashMap<AppId, crate::app_meta::ManagedApp> {
+        ochub_core::plugin::all_plugins()
+            .iter()
+            .map(|plugin| {
+                let descriptor = crate::app_meta::ManagedApp::from_plugin(plugin.as_ref());
+                (descriptor.id.clone(), descriptor)
+            })
+            .collect()
     }
 
-    fn app_accent(app: AppType) -> u32 {
-        crate::app_meta::accent(app)
+    fn app_label(&self, app: &AppId) -> SharedString {
+        self.managed_apps
+            .get(app)
+            .map(|app| app.label.clone())
+            .unwrap_or_else(|| app.to_string().into())
     }
 
-    fn app_icon(app: AppType) -> IconName {
-        crate::app_meta::icon(app).unwrap_or(IconName::AgentClaudeCode)
+    fn app_accent(&self, app: &AppId) -> u32 {
+        self.managed_apps
+            .get(app)
+            .map(|app| app.accent)
+            .unwrap_or(0x6b6a64)
+    }
+
+    fn app_icon(&self, app: &AppId) -> IconName {
+        self.managed_apps
+            .get(app)
+            .map(|app| app.icon)
+            .unwrap_or(IconName::Blocks)
+    }
+
+    fn is_additive_app(&self, app: &AppId) -> bool {
+        self.managed_apps
+            .get(app)
+            .is_some_and(|app| app.mode == AppModeDto::Additive)
     }
 
     fn notify_success(&self, title: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -1283,7 +1283,7 @@ impl AppRoot {
         message: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        if app_type == Some(self.selected_app) {
+        if app_type == AppType::from_app_id(&self.selected_app) {
             self.reload(cx);
         }
         match level {
@@ -1305,6 +1305,7 @@ impl AppRoot {
 
     fn section_icon(section: Section) -> IconName {
         match section {
+            Section::Overview => IconName::Layers,
             Section::Mcp => IconName::Blocks,
             Section::Skills => IconName::Wrench,
             Section::Usage => IconName::Chart,
@@ -1323,12 +1324,12 @@ impl AppRoot {
 
     /// (Re)load providers + current id for the selected app from the store.
     fn reload(&mut self, cx: &mut Context<Self>) {
-        let app_type = self.selected_app;
+        let app_type = self.selected_app.clone();
         let scope = self
             .active_remote_scope
             .clone()
             .unwrap_or_else(|| "local".to_string());
-        if self.provider_loaded_app != Some(app_type)
+        if self.provider_loaded_app.as_ref() != Some(&app_type)
             || self.provider_loaded_scope.as_deref() != Some(scope.as_str())
         {
             self.clear_provider_page();
@@ -1343,7 +1344,9 @@ impl AppRoot {
         };
         let loaded_scope = scope.clone();
         cx.spawn(async move |this, cx| {
-            let data = crate::core_async::run(ProviderPageLoad::load(app, backend, app_type)).await;
+            let data =
+                crate::core_async::run(ProviderPageLoad::load(app, backend, app_type.clone()))
+                    .await;
             this.update(cx, |this, cx| {
                 let active_scope = this.active_remote_scope.as_deref().unwrap_or("local");
                 if generation != this.provider_reload_generation
@@ -1358,6 +1361,10 @@ impl AppRoot {
                         this.providers.clear();
                         this.notify_error(t(k::SHELL_PROVIDER_LOAD_FAILED), error, cx);
                     }
+                }
+                match data.drafts {
+                    Ok(drafts) => this.editor_drafts = drafts,
+                    Err(error) => this.notify_error(t(k::WORKBENCH_DRAFTS_LOAD_FAILED), error, cx),
                 }
                 this.current = data.current;
                 this.gateway_routes = data.gateway_routes;
@@ -1376,6 +1383,7 @@ impl AppRoot {
 
     fn clear_provider_page(&mut self) {
         self.providers.clear();
+        self.editor_drafts.clear();
         self.provider_presentations.clear();
         self.provider_rows = Vec::new().into();
         self.provider_sortable_slots = Vec::new().into();
@@ -1400,7 +1408,7 @@ impl AppRoot {
         let apps = self
             .visible_apps
             .iter()
-            .copied()
+            .filter_map(AppType::from_app_id)
             .filter(|app| {
                 matches!(
                     app,
@@ -1425,7 +1433,7 @@ impl AppRoot {
         let apps = self
             .visible_apps
             .iter()
-            .copied()
+            .filter_map(AppType::from_app_id)
             .filter(|app| {
                 matches!(
                     app,
@@ -1449,6 +1457,29 @@ impl AppRoot {
         } else {
             self.usage_view
                 .update(cx, |view, cx| view.set_workspace_unavailable(cx));
+        }
+    }
+
+    fn reload_overview_workspace(&mut self, cx: &mut Context<Self>) {
+        let label = self
+            .active_remote_scope
+            .as_deref()
+            .and_then(|id| {
+                self.remote_view
+                    .read(cx)
+                    .scope_items()
+                    .into_iter()
+                    .find(|item| item.id == id)
+                    .map(|item| item.name)
+            })
+            .unwrap_or_else(|| t(k::SHELL_SIDEBAR_SCOPE_LOCAL).to_string());
+        if let Some(backend) = self.workspace_backend(cx) {
+            self.overview_view
+                .update(cx, |view, cx| view.set_workspace(backend, label.into(), cx));
+        } else {
+            self.overview_view.update(cx, |view, cx| {
+                view.set_workspace_unavailable(label.into(), cx)
+            });
         }
     }
 
@@ -1525,18 +1556,34 @@ impl AppRoot {
         let Some(backend) = self.workspace_backend(cx) else {
             return;
         };
+        let scope = self.active_remote_scope.clone();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move { backend.list_apps().await }).await;
             this.update(cx, |this, cx| {
-                if let Ok(apps) = result {
-                    let enabled = apps
-                        .into_iter()
-                        .filter(|app| app.enabled)
-                        .filter_map(|app| app.id.parse::<AppType>().ok())
-                        .collect::<Vec<_>>();
-                    if !enabled.is_empty() {
-                        this.visible_apps = enabled.into();
+                if this.active_remote_scope != scope {
+                    return;
+                }
+                match result {
+                    Ok(apps) => {
+                        let enabled = apps
+                            .into_iter()
+                            .filter(|app| app.enabled)
+                            .filter_map(crate::app_meta::ManagedApp::from_remote)
+                            .collect::<Vec<_>>();
+                        this.visible_apps = enabled
+                            .iter()
+                            .map(|app| app.id.clone())
+                            .collect::<Vec<_>>()
+                            .into();
+                        this.managed_apps = enabled
+                            .into_iter()
+                            .map(|app| (app.id.clone(), app))
+                            .collect();
                         this.ensure_valid_selection(cx);
+                        this.reload(cx);
+                    }
+                    Err(error) => {
+                        this.notify_error(t(k::WORKBENCH_APPS_LOAD_FAILED), error.to_string(), cx)
                     }
                 }
                 cx.notify();
@@ -1555,9 +1602,13 @@ impl AppRoot {
     /// bar and Dock menu, which live outside the window tree, nor the memoized
     /// item heights inside each virtualized list.
     fn relocalize(&mut self, cx: &mut Context<Self>) {
+        self.overview_view
+            .update(cx, |view, cx| view.relocalize(cx));
         crate::shell_menu::refresh(&self.app, cx);
         self.provider_list_state.remeasure();
         self.settings_view
+            .update(cx, |view, cx| view.relocalize(cx));
+        self.app_settings_view
             .update(cx, |view, cx| view.relocalize(cx));
         self.tools_view.update(cx, |view, cx| view.relocalize(cx));
         self.theme_view.update(cx, |view, cx| view.relocalize(cx));
@@ -1580,23 +1631,28 @@ impl AppRoot {
         if self.visible_apps.contains(&self.selected_app) {
             return;
         }
-        let Some(first) = self.visible_apps.first().copied() else {
+        let Some(first) = self.visible_apps.first().cloned() else {
             return;
         };
-        self.selected_app = first;
-        self.editor = None;
-        self.showing_app_settings = false;
-        self.reload(cx);
-        cx.notify();
+        if self.section == Section::Providers {
+            self.select_app(first, cx);
+        } else {
+            self.selected_app = first;
+            cx.notify();
+        }
     }
 
-    fn select_app(&mut self, app: AppType, cx: &mut Context<Self>) {
+    fn select_app(&mut self, app: AppId, cx: &mut Context<Self>) {
         if !self.visible_apps.contains(&app) {
             return;
         }
         let changed = self.selected_app != app || self.section != Section::Providers;
         if changed || self.showing_app_settings {
+            if !self.allow_navigation(PendingNavigation::App(app.clone()), cx) {
+                return;
+            }
             self.selected_app = app;
+            self.applications_expanded = true;
             self.section = Section::Providers;
             self.editor = None;
             // Quota results are keyed by app, so a dialog left open would be
@@ -1608,15 +1664,15 @@ impl AppRoot {
         }
     }
 
-    fn official_quota_key(app: AppType, provider_id: &str) -> String {
+    fn official_quota_key(app: &AppId, provider_id: &str) -> String {
         format!("{}:{provider_id}", app.as_str())
     }
 
-    fn is_official_quota_provider(app: AppType, provider: &Provider) -> bool {
+    fn is_official_quota_provider(app: &AppId, provider: &Provider) -> bool {
         provider.category.as_deref() == Some("official")
             && matches!(
-                app,
-                AppType::Claude | AppType::Codex | AppType::KimiCode | AppType::GrokBuild
+                AppType::from_app_id(app),
+                Some(AppType::Claude | AppType::Codex | AppType::KimiCode | AppType::GrokBuild)
             )
     }
 
@@ -1632,7 +1688,7 @@ impl AppRoot {
         name: &SharedString,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let key = Self::official_quota_key(self.selected_app, provider_id);
+        let key = Self::official_quota_key(&self.selected_app, provider_id);
         let entries = self
             .provider_quota_results
             .get(&key)
@@ -1668,9 +1724,10 @@ impl AppRoot {
         &self,
         provider_id: String,
         name: String,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let key = Self::official_quota_key(self.selected_app, &provider_id);
+        let key = Self::official_quota_key(&self.selected_app, &provider_id);
         let entries = self
             .provider_quota_results
             .get(&key)
@@ -1678,11 +1735,14 @@ impl AppRoot {
             .unwrap_or_default();
         let loading = self.provider_quota_in_flight.as_deref() == Some(key.as_str());
         let refresh_name = name.clone();
-        components::modal_overlay(
-            components::modal_card()
+        ochub_ui::modal::overlay(
+            "quota-modal",
+            t(k::QUOTA_DETAIL_TITLE),
+            &self.modal_focus,
+            ochub_ui::modal::card(window, px(520.))
                 .child(components::modal_header(t(k::QUOTA_DETAIL_TITLE)))
                 .child(
-                    components::modal_body()
+                    ochub_ui::modal::body("quota-modal-body")
                         .child(
                             div()
                                 .text_color(theme::muted())
@@ -1737,7 +1797,7 @@ impl AppRoot {
         provider_name: String,
         cx: &mut Context<Self>,
     ) {
-        let key = Self::official_quota_key(self.selected_app, &provider_id);
+        let key = Self::official_quota_key(&self.selected_app, &provider_id);
         if self.provider_quota_in_flight.is_some() {
             return;
         }
@@ -1752,7 +1812,7 @@ impl AppRoot {
 
         // No "querying…" notification: the card's own line says so, in place.
         self.provider_quota_in_flight = Some(key.clone());
-        let app_id = self.selected_app.app_id();
+        let app_id = self.selected_app.clone();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
@@ -1798,7 +1858,10 @@ impl AppRoot {
     }
 
     fn open_app_settings(&mut self, cx: &mut Context<Self>) {
-        let app = self.selected_app;
+        if !self.allow_navigation(PendingNavigation::AppSettings, cx) {
+            return;
+        }
+        let app = self.selected_app.clone();
         if let Some(backend) = self.workspace_backend(cx) {
             self.app_settings_view.update(cx, |view, cx| {
                 view.set_workspace(backend, cx);
@@ -1844,11 +1907,15 @@ impl AppRoot {
 
     fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
         if self.section != section || self.showing_app_settings {
+            if !self.allow_navigation(PendingNavigation::Section(section), cx) {
+                return;
+            }
             self.section = section;
             self.editor = None;
             self.showing_app_settings = false;
             // Reload the destination view's data so it reflects current state.
             match section {
+                Section::Overview => self.reload_overview_workspace(cx),
                 Section::Mcp => {
                     self.reload_mcp_workspace(cx);
                 }
@@ -1869,37 +1936,57 @@ impl AppRoot {
     }
 
     fn select_local_scope(&mut self, cx: &mut Context<Self>) {
+        if !self.allow_navigation(PendingNavigation::Local, cx) {
+            return;
+        }
         if self.active_remote_scope.take().is_some() {
             self.editor = None;
             self.showing_app_settings = false;
             self.clear_provider_page();
             self.visible_apps = Self::load_visible_apps().into();
+            self.managed_apps = Self::load_app_metadata();
             if !self.visible_apps.contains(&self.selected_app)
-                && let Some(first) = self.visible_apps.first().copied()
+                && let Some(first) = self.visible_apps.first().cloned()
             {
                 self.selected_app = first;
             }
         }
-        self.select_section(Section::Providers, cx);
+        if self.section == Section::Overview {
+            self.reload_overview_workspace(cx);
+        } else {
+            self.select_section(Section::Providers, cx);
+        }
         self.reload(cx);
     }
 
     fn select_remote_scope(&mut self, id: String, cx: &mut Context<Self>) {
+        if !self.allow_navigation(PendingNavigation::Remote(id.clone()), cx) {
+            return;
+        }
         if self.active_remote_scope.as_deref() != Some(id.as_str()) {
             self.active_remote_scope = Some(id.clone());
             self.editor = None;
             self.showing_app_settings = false;
             self.clear_provider_page();
+            self.visible_apps = Vec::new().into();
+            self.managed_apps.clear();
         }
-        self.section = Section::Providers;
+        let overview = self.section == Section::Overview;
+        if !overview {
+            self.section = Section::Providers;
+        }
         self.remote_view
             .update(cx, |view, cx| view.activate_scope(id, cx));
+        self.reload_visible_workspace_apps(cx);
+        if overview {
+            self.reload_overview_workspace(cx);
+        }
         self.reload(cx);
         cx.notify();
     }
 
     fn do_switch(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.selected_app == AppType::CherryStudio {
+        if AppType::from_app_id(&self.selected_app) == Some(AppType::CherryStudio) {
             self.do_cherry_studio_import(id, cx);
             return;
         }
@@ -1944,8 +2031,11 @@ impl AppRoot {
             return;
         };
         self.provider_action_in_flight = true;
-        let app_id = self.selected_app.app_id();
+        let app_id = self.selected_app.clone();
         let preview_id = id.clone();
+        let preview_app = app_id.clone();
+        let scope = self.active_remote_scope.clone();
+        let apply_backend = backend.clone();
         cx.spawn(async move |this, cx| {
             let preview = crate::core_async::run(async move {
                 backend
@@ -1957,25 +2047,36 @@ impl AppRoot {
                     .await
             })
             .await;
-            this.update(cx, |this, cx| match preview {
-                // Something outside OcHub edited the file. Write nothing until
-                // the user has seen it and said what to do.
-                Ok(handle) if !handle.plan().drift.is_empty() => {
+            this.update(cx, |this, cx| {
+                if this.selected_app != preview_app || this.active_remote_scope != scope {
                     this.provider_action_in_flight = false;
-                    let plan = handle.plan();
-                    this.pending_drift = Some(PendingDrift {
-                        provider_id: id,
-                        provider_name: name,
-                        drift: plan.drift.clone(),
-                        diff_files: plan.diff_files.clone(),
-                    });
                     cx.notify();
+                    return;
                 }
-                Ok(handle) => this.apply_switch_handle(handle, name, cx),
-                Err(error) => {
-                    this.provider_action_in_flight = false;
-                    this.notify_error(t(k::SHELL_PROVIDER_SWITCH_FAILED), error.to_string(), cx);
-                    cx.notify();
+                match preview {
+                    // Something outside OcHub edited the file. Write nothing until
+                    // the user has seen it and said what to do.
+                    Ok(handle) if !handle.plan().drift.is_empty() => {
+                        this.provider_action_in_flight = false;
+                        let plan = handle.plan();
+                        this.pending_drift = Some(PendingDrift {
+                            provider_id: id,
+                            provider_name: name,
+                            drift: plan.drift.clone(),
+                            diff_files: plan.diff_files.clone(),
+                        });
+                        cx.notify();
+                    }
+                    Ok(handle) => this.apply_switch_handle(apply_backend, handle, name, cx),
+                    Err(error) => {
+                        this.provider_action_in_flight = false;
+                        this.notify_error(
+                            t(k::SHELL_PROVIDER_SWITCH_FAILED),
+                            error.to_string(),
+                            cx,
+                        );
+                        cx.notify();
+                    }
                 }
             })
             .ok();
@@ -2068,7 +2169,7 @@ impl AppRoot {
             return;
         };
         self.provider_action_in_flight = true;
-        let app_id = self.selected_app.app_id();
+        let app_id = self.selected_app.clone();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 let handle = backend
@@ -2114,14 +2215,11 @@ impl AppRoot {
 
     fn apply_switch_handle(
         &mut self,
+        backend: WorkspaceBackend,
         handle: ProviderSwitchHandle,
         name: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(backend) = self.workspace_backend(cx) else {
-            self.provider_action_in_flight = false;
-            return;
-        };
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
@@ -2175,7 +2273,10 @@ impl AppRoot {
         self.provider_action_in_flight = true;
         self.notify_info(t(k::SHELL_GATEWAY_SWITCHING), cx);
         let app = self.app.clone();
-        let app_type = self.selected_app;
+        let Some(app_type) = AppType::from_app_id(&self.selected_app) else {
+            self.provider_action_in_flight = false;
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let prepare_app = app.clone();
             let prepare = cx
@@ -2280,7 +2381,7 @@ impl AppRoot {
                     .justify_between()
                     .child(
                         div()
-                            .font_family("Menlo")
+                            .font_family(ochub_ui::assets::monospace_font_family())
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme::text())
@@ -2308,7 +2409,7 @@ impl AppRoot {
         pending: PendingDrift,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui::Stateful<gpui::Div> {
         let PendingDrift {
             provider_id,
             provider_name,
@@ -2332,9 +2433,11 @@ impl AppRoot {
         let modal_width = (viewport.width - px(32.)).min(px(1020.));
         let modal_height = (viewport.height - px(64.)).min(px(720.));
 
-        components::modal_overlay(
-            components::modal_card()
-                .w(modal_width)
+        ochub_ui::modal::overlay(
+            "drift-modal",
+            t(k::SHELL_DRIFT_TITLE),
+            &self.modal_focus,
+            ochub_ui::modal::card(window, modal_width)
                 .h(modal_height)
                 .overflow_hidden()
                 .child(components::modal_header(t(k::SHELL_DRIFT_TITLE)).flex_none())
@@ -2513,7 +2616,10 @@ impl AppRoot {
         self.provider_action_in_flight = true;
         self.notify_info(t(k::SHELL_GATEWAY_SWITCHING), cx);
         let app = self.app.clone();
-        let app_type = self.selected_app;
+        let Some(app_type) = AppType::from_app_id(&self.selected_app) else {
+            self.provider_action_in_flight = false;
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let prepare_app = app.clone();
             let prepare = cx
@@ -2589,7 +2695,7 @@ impl AppRoot {
             self.provider_action_in_flight = false;
             return;
         };
-        let app_id = self.selected_app.app_id();
+        let app_id = self.selected_app.clone();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
@@ -2624,8 +2730,8 @@ impl AppRoot {
     /// Rebuild all provider-list structure in one pass. This is deliberately
     /// called only after data/current-order changes, never from `render`.
     fn rebuild_provider_structure_cache(&mut self) {
-        let is_import = self.selected_app == AppType::CherryStudio;
-        let is_switch = !self.selected_app.is_additive_mode() && !is_import;
+        let is_import = AppType::from_app_id(&self.selected_app) == Some(AppType::CherryStudio);
+        let is_switch = !self.is_additive_app(&self.selected_app) && !is_import;
         let connection_ixs: Vec<usize> = self
             .providers
             .iter()
@@ -2636,6 +2742,9 @@ impl AppRoot {
         let no_providers = self.providers.is_empty();
 
         let mut plan = Vec::new();
+        if !self.editor_drafts.is_empty() {
+            plan.push(ProviderRow::Drafts);
+        }
         if is_switch {
             plan.push(ProviderRow::Hero);
             if !connection_ixs.is_empty() {
@@ -2929,7 +3038,7 @@ impl AppRoot {
             self.provider_action_in_flight = false;
             return;
         };
-        let app_id = self.selected_app.app_id();
+        let app_id = self.selected_app.clone();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
@@ -2962,7 +3071,7 @@ impl AppRoot {
             self.provider_action_in_flight = false;
             return;
         };
-        let app_id = self.selected_app.app_id();
+        let app_id = self.selected_app.clone();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
@@ -3001,7 +3110,7 @@ impl AppRoot {
             self.provider_action_in_flight = false;
             return;
         };
-        let app_id = self.selected_app.app_id();
+        let app_id = self.selected_app.clone();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
@@ -3290,56 +3399,146 @@ impl AppRoot {
         ]
     }
 
-    fn open_add_editor(&mut self, cx: &mut Context<Self>) {
-        let app = self.app.clone();
-        let app_type = self.selected_app;
-        let Some(backend) = self.workspace_backend(cx) else {
+    fn editor_plugin(
+        &self,
+        backend: &WorkspaceBackend,
+        cx: &mut Context<Self>,
+    ) -> Option<(
+        Arc<dyn ochub_core::plugin::AppPlugin>,
+        Box<dyn ochub_core::provider_config::AppConfig>,
+    )> {
+        if backend.is_remote() && AppType::from_app_id(&self.selected_app).is_none() {
             self.notify_error(
-                t(k::SHELL_PROVIDER_LOAD_FAILED),
-                "remote workspace is not connected".to_string(),
+                t(k::WORKBENCH_EDITOR_UNAVAILABLE),
+                t(k::WORKBENCH_EDITOR_REMOTE_PLUGIN),
                 cx,
             );
+            return None;
+        }
+        if !self
+            .managed_apps
+            .get(&self.selected_app)
+            .is_some_and(|app| app.supports_editor)
+        {
+            self.notify_error(
+                t(k::WORKBENCH_EDITOR_UNAVAILABLE),
+                self.selected_app.to_string(),
+                cx,
+            );
+            return None;
+        }
+        let plugin = ochub_core::plugin::get_plugin(&self.selected_app);
+        let result =
+            plugin.and_then(|plugin| plugin.provider_config().map(|codec| (plugin, codec)));
+        if result.is_none() {
+            self.notify_error(
+                t(k::WORKBENCH_EDITOR_UNAVAILABLE),
+                self.selected_app.to_string(),
+                cx,
+            );
+        }
+        result
+    }
+
+    fn open_add_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.workspace_backend(cx) else {
             return;
         };
-        let editor = cx.new(|cx| ProviderEditor::new_add(app, backend, app_type, cx));
+        let Some((plugin, codec)) = self.editor_plugin(&backend, cx) else {
+            return;
+        };
+        let app = self.app.clone();
+        let app_id = self.selected_app.clone();
+        let editor = cx.new(|cx| ProviderEditor::new_add(app, backend, app_id, plugin, codec, cx));
         self.subscribe_editor(&editor, cx);
         self.editor = Some(editor);
         cx.notify();
     }
 
     fn open_edit_editor(&mut self, provider: Provider, cx: &mut Context<Self>) {
-        let app = self.app.clone();
-        let app_type = self.selected_app;
         let Some(backend) = self.workspace_backend(cx) else {
-            self.notify_error(
-                t(k::SHELL_PROVIDER_LOAD_FAILED),
-                "remote workspace is not connected".to_string(),
-                cx,
-            );
             return;
         };
-        let editor = cx.new(|cx| ProviderEditor::new_edit(app, backend, app_type, &provider, cx));
+        let Some((plugin, codec)) = self.editor_plugin(&backend, cx) else {
+            return;
+        };
+        let app = self.app.clone();
+        let app_id = self.selected_app.clone();
+        let editor = cx
+            .new(|cx| ProviderEditor::new_edit(app, backend, app_id, plugin, codec, &provider, cx));
         self.subscribe_editor(&editor, cx);
         self.editor = Some(editor);
         cx.notify();
+    }
+
+    fn open_editor_draft(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(backend) = self.workspace_backend(cx) else {
+            return;
+        };
+        let Some((plugin, codec)) = self.editor_plugin(&backend, cx) else {
+            return;
+        };
+        let app_id = self.selected_app.clone();
+        let scope = self.active_remote_scope.clone();
+        let app = self.app.clone();
+        let reader = backend.clone();
+        let read_app = app_id.clone();
+        cx.spawn(async move |this, cx| {
+            let result =
+                crate::core_async::run(
+                    async move { reader.get_editor_draft(&read_app, &id).await },
+                )
+                .await;
+            this.update(cx, |this, cx| {
+                if this.selected_app != app_id
+                    || this.active_remote_scope != scope
+                    || this.editor.is_some()
+                {
+                    return;
+                }
+                match result {
+                    Ok(Some(draft)) => {
+                        let editor = cx.new(|cx| {
+                            ProviderEditor::new_draft(
+                                app, backend, app_id, plugin, codec, draft, cx,
+                            )
+                        });
+                        this.subscribe_editor(&editor, cx);
+                        this.editor = Some(editor);
+                    }
+                    Ok(None) => this.reload(cx),
+                    Err(error) => {
+                        this.notify_error(t(k::WORKBENCH_DRAFTS_LOAD_FAILED), error.to_string(), cx)
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn subscribe_editor(&self, editor: &Entity<ProviderEditor>, cx: &mut Context<Self>) {
         Self::observe_toasts(editor, &self.notifications, cx);
         Self::forward_toast(editor, &self.notifications, cx);
         cx.subscribe(editor, |this, _editor, event, cx| match event {
-            EditorEvent::Saved => {
-                this.editor = None;
-                this.notify_success(t(k::SHELL_PROVIDER_SAVED), cx);
-                this.reload(cx);
+            EditorEvent::Saved { leave } | EditorEvent::Applied { leave } => {
+                if *leave && this.pending_navigation.is_some() {
+                    this.complete_navigation(cx);
+                } else {
+                    this.reload(cx);
+                }
                 if this.active_remote_scope.is_none() {
                     shell_menu::refresh(&this.app, cx);
                 }
                 cx.notify();
             }
             EditorEvent::Cancelled => {
-                this.editor = None;
-                cx.notify();
+                if this.allow_navigation(PendingNavigation::CloseEditor, cx) {
+                    this.editor = None;
+                    this.reload(cx);
+                    cx.notify();
+                }
             }
         })
         .detach();
@@ -3360,6 +3559,12 @@ impl AppRoot {
     }
 
     fn open_edit_editor_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(draft) = self.editor_drafts.iter().find(|draft| {
+            draft.provider_id == id || draft.original_provider_id.as_deref() == Some(id)
+        }) {
+            self.open_editor_draft(draft.id.clone(), cx);
+            return;
+        }
         // The list backend redacts secrets on a local workspace, so the cached
         // copy cannot seed an edit form: the form decodes its API key field
         // from it and the save writes the whole record back, which would put
@@ -3390,27 +3595,27 @@ impl AppRoot {
 
     fn render_sidebar_item(
         &self,
-        app: AppType,
+        app: AppId,
         appearance: WindowAppearance,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let selected = self.selected_app == app && self.section == Section::Providers;
-        let accent = Self::app_accent(app);
+        let accent = self.app_accent(&app);
         shell_screen::app_item(
             SharedString::from(format!("app-{}", app.as_str())),
-            Self::app_label(app),
-            Self::app_icon(app),
+            self.app_label(&app),
+            self.app_icon(&app),
             accent,
             selected,
             appearance,
         )
         .aria_label(SharedString::from(tf!(
             k::SHELL_SIDEBAR_OPEN_ARIA,
-            name = Self::app_label(app)
+            name = self.app_label(&app)
         )))
         .aria_selected(selected)
         .on_click(cx.listener(move |this, _event, _window, cx| {
-            this.select_app(app, cx);
+            this.select_app(app.clone(), cx);
         }))
     }
 
@@ -3511,15 +3716,11 @@ impl AppRoot {
     /// The reserved height exists for those traffic lights, so wherever
     /// [`window_chrome`] draws a strip above the whole shell instead, this keeps
     /// only enough of it to breathe.
-    fn render_sidebar_drag_region(
-        &self,
-        has_title_bar: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    fn render_sidebar_drag_region(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("sidebar-window-drag-region")
             .w_full()
-            .h(px(if has_title_bar { 8. } else { 44. }))
+            .h(px(ochub_ui::window_chrome::sidebar_top_inset()))
             .flex_shrink_0()
             .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(
@@ -3535,7 +3736,7 @@ impl AppRoot {
             .id("content-window-drag-region")
             .absolute()
             .top_0()
-            .left(px(252.))
+            .left(px(shell_screen::SIDEBAR_WIDTH))
             .right_0()
             .h(px(10.))
             .window_control_area(WindowControlArea::Drag)
@@ -3548,9 +3749,68 @@ impl AppRoot {
     fn render_sidebar(
         &self,
         appearance: WindowAppearance,
-        has_title_bar: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let primary = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_2()
+            .child(self.render_nav_item(
+                "nav-overview",
+                raw(k::CONSOLE_NAV_OVERVIEW),
+                Section::Overview,
+                appearance,
+                cx,
+            ))
+            .child(self.render_nav_item(
+                "nav-gateway",
+                raw(k::CONSOLE_NAV_ROUTES),
+                Section::Gateway,
+                appearance,
+                cx,
+            ))
+            .child(self.render_nav_item(
+                "nav-usage",
+                raw(k::SHELL_SIDEBAR_NAV_USAGE),
+                Section::Usage,
+                appearance,
+                cx,
+            ))
+            .child(self.render_nav_item(
+                "nav-sessions",
+                raw(k::SHELL_SIDEBAR_NAV_SESSIONS),
+                Section::Sessions,
+                appearance,
+                cx,
+            ));
+        let applications = shell_screen::nav_item(
+            "nav-connections",
+            t(k::CONSOLE_NAV_CONNECTIONS),
+            IconName::Layers,
+            self.section == Section::Providers,
+            appearance,
+        )
+        .aria_expanded(self.applications_expanded)
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child(self.visible_apps.len().to_string()),
+        )
+        .child(icon(
+            if self.applications_expanded {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            },
+            theme::muted(),
+            14.,
+        ))
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.applications_expanded = !this.applications_expanded;
+            cx.notify();
+        }));
         let navigation = div()
             .id("sidebar-navigation")
             .flex()
@@ -3562,26 +3822,28 @@ impl AppRoot {
             .on_scroll_wheel(crate::scrollbar::contain_vertical_scroll(
                 self.sidebar_scroll_handle.clone(),
             ))
-            .pb_4()
+            .py_3()
+            .child(primary)
+            .child(div().px_2().mt_3().child(applications))
+            .when(self.applications_expanded, |nav| {
+                nav.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .pl_3()
+                        .pr_2()
+                        .mt_1()
+                        .children(
+                            self.visible_apps
+                                .iter()
+                                .cloned()
+                                .map(|app| self.render_sidebar_item(app, appearance, cx)),
+                        ),
+                )
+            })
             .child(Self::render_sidebar_group(
-                raw(k::SHELL_SIDEBAR_GROUP_WORKSPACE),
-                appearance,
-            ))
-            .child(self.render_workspace_scope(appearance, cx))
-            .child(Self::render_sidebar_group(
-                raw(k::SHELL_SIDEBAR_GROUP_APPS),
-                appearance,
-            ))
-            .child(
-                div().flex().flex_col().gap_1().px_2().children(
-                    self.visible_apps
-                        .iter()
-                        .copied()
-                        .map(|app| self.render_sidebar_item(app, appearance, cx)),
-                ),
-            )
-            .child(Self::render_sidebar_group(
-                raw(k::SHELL_SIDEBAR_GROUP_TOOLS),
+                raw(k::CONSOLE_NAV_EXTENSIONS),
                 appearance,
             ))
             .child(
@@ -3603,31 +3865,10 @@ impl AppRoot {
                         Section::Skills,
                         appearance,
                         cx,
-                    ))
-                    .child(self.render_nav_item(
-                        "nav-usage",
-                        raw(k::SHELL_SIDEBAR_NAV_USAGE),
-                        Section::Usage,
-                        appearance,
-                        cx,
-                    ))
-                    .child(self.render_nav_item(
-                        "nav-sessions",
-                        raw(k::SHELL_SIDEBAR_NAV_SESSIONS),
-                        Section::Sessions,
-                        appearance,
-                        cx,
-                    ))
-                    .child(self.render_nav_item(
-                        "nav-tools",
-                        raw(k::SHELL_SIDEBAR_NAV_TOOLS),
-                        Section::Tools,
-                        appearance,
-                        cx,
                     )),
             )
             .child(Self::render_sidebar_group(
-                raw(k::SHELL_SIDEBAR_GROUP_NETWORK),
+                raw(k::CONSOLE_NAV_ENVIRONMENT),
                 appearance,
             ))
             .child(
@@ -3636,13 +3877,6 @@ impl AppRoot {
                     .flex_col()
                     .gap_1()
                     .px_2()
-                    .child(self.render_nav_item(
-                        "nav-gateway",
-                        raw(k::SHELL_SIDEBAR_NAV_GATEWAY),
-                        Section::Gateway,
-                        appearance,
-                        cx,
-                    ))
                     .child(self.render_nav_item(
                         "nav-network-proxy",
                         raw(k::SHELL_SIDEBAR_NAV_PROXY),
@@ -3656,54 +3890,119 @@ impl AppRoot {
                         Section::Remote,
                         appearance,
                         cx,
+                    ))
+                    .child(self.render_nav_item(
+                        "nav-tools",
+                        raw(k::SHELL_SIDEBAR_NAV_TOOLS),
+                        Section::Tools,
+                        appearance,
+                        cx,
                     )),
             )
-            .child(Self::render_sidebar_group(
-                raw(k::SHELL_SIDEBAR_GROUP_SYSTEM),
-                appearance,
-            ))
+            .when(std::env::var_os("MS_GALLERY").is_some(), |nav| {
+                nav.child(div().px_2().child(self.render_nav_item(
+                    "nav-gallery",
+                    raw(k::SHELL_SIDEBAR_NAV_GALLERY),
+                    Section::Gallery,
+                    appearance,
+                    cx,
+                )))
+            });
+        let notifications = shell_screen::nav_item(
+            "nav-notifications",
+            t(k::CONSOLE_NAV_NOTIFICATIONS),
+            IconName::Message,
+            self.notifications.read(cx).is_center_open(),
+            appearance,
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child(self.notifications.read(cx).unread_count().to_string()),
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.notifications
+                .update(cx, |host, cx| host.toggle_center(cx))
+        }));
+        let footer = div()
+            .flex_none()
+            .px_2()
+            .py_2()
+            .border_t_1()
+            .border_color(theme::border())
+            .child(notifications)
             .child(
                 div()
                     .flex()
-                    .flex_col()
                     .gap_1()
-                    .px_2()
-                    .child(self.render_nav_item(
-                        "nav-themes",
-                        raw(k::SHELL_SIDEBAR_NAV_THEMES),
-                        Section::Themes,
-                        appearance,
-                        cx,
-                    ))
-                    .child(self.render_nav_item(
-                        "nav-settings",
-                        raw(k::SHELL_SIDEBAR_NAV_SETTINGS),
-                        Section::Settings,
-                        appearance,
-                        cx,
-                    ))
-                    .child(self.render_nav_item(
-                        "nav-about",
-                        raw(k::SHELL_SIDEBAR_NAV_ABOUT),
-                        Section::About,
-                        appearance,
-                        cx,
-                    ))
-                    .when(std::env::var_os("MS_GALLERY").is_some(), |col| {
-                        col.child(self.render_nav_item(
-                            "nav-gallery",
-                            raw(k::SHELL_SIDEBAR_NAV_GALLERY),
-                            Section::Gallery,
-                            appearance,
-                            cx,
-                        ))
-                    }),
+                    .child(
+                        components::icon_only_button_tone(
+                            "nav-themes",
+                            t(k::SHELL_SIDEBAR_NAV_THEMES),
+                            IconName::Palette,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.select_section(Section::Themes, cx)),
+                        ),
+                    )
+                    .child(
+                        components::icon_only_button_tone(
+                            "nav-settings",
+                            t(k::SHELL_SIDEBAR_NAV_SETTINGS),
+                            IconName::Settings,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.select_section(Section::Settings, cx)
+                            }),
+                        ),
+                    )
+                    .child(
+                        components::icon_only_button_tone(
+                            "nav-about",
+                            t(k::SHELL_SIDEBAR_NAV_ABOUT),
+                            IconName::Diamond,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.select_section(Section::About, cx)),
+                        ),
+                    ),
             );
-
+        let chrome = div()
+            .flex_none()
+            .child(self.render_sidebar_drag_region(cx))
+            .child(
+                div()
+                    .px_4()
+                    .pb_3()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("OcHub"),
+            )
+            .child(
+                div()
+                    .pb_3()
+                    .child(self.render_workspace_scope(appearance, cx)),
+            )
+            .border_b_1()
+            .border_color(theme::border());
         shell_screen::sidebar(
             appearance,
-            self.render_sidebar_drag_region(has_title_bar, cx),
-            navigation,
+            chrome,
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(navigation)
+                .child(footer),
         )
     }
 
@@ -3713,9 +4012,9 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let is_import = self.selected_app == AppType::CherryStudio;
+        let is_import = AppType::from_app_id(&self.selected_app) == Some(AppType::CherryStudio);
         let is_current =
-            !self.selected_app.is_additive_mode() && !is_import && provider.id == self.current;
+            !self.is_additive_app(&self.selected_app) && !is_import && provider.id == self.current;
         let is_gateway = provider.is_local_gateway();
         let id = provider.id.clone();
         let edit_id = id.clone();
@@ -3740,10 +4039,10 @@ impl AppRoot {
             self.provider_base_url(provider)
         };
         let provider_name = self.provider_name(provider);
-        let is_official_quota = Self::is_official_quota_provider(self.selected_app, provider);
+        let is_official_quota = Self::is_official_quota_provider(&self.selected_app, provider);
         let quota_line = is_official_quota
             .then(|| self.render_quota_line("provider", &provider.id, &provider_name, cx));
-        let is_additive = self.selected_app.is_additive_mode();
+        let is_additive = self.is_additive_app(&self.selected_app);
         let is_in_live = provider
             .meta
             .as_ref()
@@ -3790,7 +4089,7 @@ impl AppRoot {
                 name: provider_name.clone(),
                 base_url: base_url.clone(),
                 source_position,
-                app_icon: Self::app_icon(self.selected_app),
+                app_icon: self.app_icon(&self.selected_app),
             };
             div()
                 .id(SharedString::from(format!("drag-provider-{}", provider.id)))
@@ -3885,7 +4184,7 @@ impl AppRoot {
             id: SharedString::from(format!("provider-card-{}", provider.id)),
             name: provider_name,
             endpoint: base_url,
-            icon: Self::app_icon(self.selected_app),
+            icon: self.app_icon(&self.selected_app),
             is_current,
             is_drag_source,
             drag_handle: is_sortable
@@ -3913,12 +4212,12 @@ impl AppRoot {
     /// live right now* for the selected app. Shown only in switch (non-additive) mode,
     /// above the list of switchable alternatives.
     fn render_active_hero(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let app = self.selected_app;
-        let accent = Self::app_accent(app);
+        let app = self.selected_app.clone();
+        let accent = self.app_accent(&app);
         let current = self.providers.iter().find(|p| p.id == self.current);
         let is_gateway = current.is_some_and(Provider::is_local_gateway);
         let hero_quota_line = current
-            .filter(|provider| Self::is_official_quota_provider(app, provider))
+            .filter(|provider| Self::is_official_quota_provider(&app, provider))
             .map(|provider| {
                 let name = self.provider_name(provider);
                 self.render_quota_line("hero", &provider.id, &name, cx)
@@ -3963,7 +4262,7 @@ impl AppRoot {
         });
 
         provider_screens::active_provider_hero(provider_screens::ActiveProviderHero {
-            icon: Self::app_icon(app),
+            icon: self.app_icon(&app),
             accent,
             is_gateway,
             current_label: t(k::SHELL_HERO_CURRENT),
@@ -3978,7 +4277,7 @@ impl AppRoot {
     }
 
     fn render_provider_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let app = self.selected_app;
+        let app = self.selected_app.clone();
         let plan = self.provider_rows.clone();
         if self.provider_list_state.item_count() != plan.len() {
             self.provider_list_state.reset(plan.len());
@@ -3987,20 +4286,23 @@ impl AppRoot {
         let connection_count = self.providers.len();
         // A whole sentence per mode: the count sits inside the phrase, and no
         // locale has to build one out of a mode fragment and a tail.
-        let subtitle = SharedString::from(if app == AppType::CherryStudio {
-            tf!(k::SHELL_LIST_SUBTITLE_IMPORT, count = connection_count)
-        } else if app.is_additive_mode() {
-            tf!(k::SHELL_LIST_SUBTITLE_ADDITIVE, count = connection_count)
-        } else {
-            tf!(k::SHELL_LIST_SUBTITLE_DIRECT, count = connection_count)
-        });
+        let subtitle = SharedString::from(
+            if AppType::from_app_id(&app) == Some(AppType::CherryStudio) {
+                tf!(k::SHELL_LIST_SUBTITLE_IMPORT, count = connection_count)
+            } else if self.is_additive_app(&app) {
+                tf!(k::SHELL_LIST_SUBTITLE_ADDITIVE, count = connection_count)
+            } else {
+                tf!(k::SHELL_LIST_SUBTITLE_DIRECT, count = connection_count)
+            },
+        );
 
         let actions = div()
             .flex()
             .flex_row()
             .gap_2()
             .when(
-                app == AppType::Codex && self.active_remote_scope.is_none(),
+                AppType::from_app_id(&app) == Some(AppType::Codex)
+                    && self.active_remote_scope.is_none(),
                 |s| {
                     if self.codex_launch_in_flight {
                         s.child(components::busy_button(
@@ -4039,7 +4341,7 @@ impl AppRoot {
                     this.open_add_editor(cx);
                 })),
             )
-            .when(app_has_settings(app), |s| {
+            .when(app_has_settings(&app), |s| {
                 s.child(
                     components::icon_button(
                         "app-settings-gear",
@@ -4061,6 +4363,41 @@ impl AppRoot {
                 // inter-item gap); pb_3 mirrors wide_column's default gap.
                 let block = div().w_full().pb_3();
                 match plan.get(ix).copied() {
+                    Some(ProviderRow::Drafts) => {
+                        let rows = this
+                            .editor_drafts
+                            .iter()
+                            .map(|draft| {
+                                let id = draft.id.clone();
+                                let name: SharedString = if draft.name.trim().is_empty() {
+                                    t(k::WORKBENCH_DRAFTS_UNNAMED)
+                                } else {
+                                    draft.name.clone().into()
+                                };
+                                layout::row()
+                                    .gap_3()
+                                    .child(div().flex_1().min_w_0().truncate().child(name))
+                                    .child(
+                                        components::button(
+                                            SharedString::from(format!("open-draft-{}", draft.id)),
+                                            t(k::WORKBENCH_DRAFTS_OPEN),
+                                            ButtonTone::Neutral,
+                                            ButtonSize::Sm,
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.open_editor_draft(id.clone(), cx)
+                                            }),
+                                        ),
+                                    )
+                                    .into_any_element()
+                            })
+                            .collect::<Vec<_>>();
+                        block
+                            .child(layout::section_header(t(k::WORKBENCH_DRAFTS_TITLE), None))
+                            .child(components::card().p_0().children(rows))
+                            .into_any_element()
+                    }
                     Some(ProviderRow::Hero) => {
                         block.child(this.render_active_hero(cx)).into_any_element()
                     }
@@ -4108,7 +4445,7 @@ impl AppRoot {
         );
 
         provider_screens::provider_list_page(
-            Self::app_label(app),
+            self.app_label(&app),
             subtitle,
             actions,
             layout::wide_virtual_body("provider-list-body", list, &self.provider_list_state),
@@ -4117,6 +4454,7 @@ impl AppRoot {
 
     fn render_content(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.section {
+            Section::Overview => self.overview_view.clone().into_any_element(),
             Section::Settings => self.settings_view.clone().into_any_element(),
             Section::Gateway => self.gateway_view.clone().into_any_element(),
             Section::Network => self.network_view.clone().into_any_element(),
@@ -4144,6 +4482,17 @@ impl AppRoot {
 
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.navigation_focus
+            .sync(self.pending_navigation.is_some(), None, window, cx);
+        self.modal_focus.sync(
+            self.confirm_delete.is_some()
+                || self.provider_quota_detail.is_some()
+                || self.pending_drift.is_some()
+                || self.show_first_run_notice,
+            None,
+            window,
+            cx,
+        );
         if self.provider_drag_state.is_some() && !cx.has_active_drag() {
             self.provider_drag_state = None;
         }
@@ -4161,30 +4510,37 @@ impl Render for AppRoot {
         let has_title_bar = title_bar.is_some();
         // The strip already spans the top edge where a title bar exists, so the
         // absolutely-positioned fallback would only sit on top of it.
-        let content_drag_region = (!has_title_bar).then(|| self.render_content_drag_region(cx));
-        let app_body = shell_screen::app_body(
-            self.render_sidebar(appearance, has_title_bar, cx),
-            self.render_content(cx),
-        );
+        let content_drag_region = (cfg!(target_os = "macos") && !has_title_bar)
+            .then(|| self.render_content_drag_region(cx));
+        let app_body =
+            shell_screen::app_body(self.render_sidebar(appearance, cx), self.render_content(cx));
         shell_screen::app_root()
             .key_context("App")
             .on_action(cx.listener(Self::save_active))
             .on_action(cx.listener(Self::cancel_active))
+            .on_action(
+                cx.listener(|this, _: &ochub_ui::modal::Dismiss, window, cx| {
+                    this.cancel_active(&Cancel, window, cx);
+                }),
+            )
             .on_drag_move::<DraggedProvider>(cx.listener(Self::handle_provider_drag_move))
             .on_drop(cx.listener(Self::drop_provider_drag))
             .children(title_bar)
             .child(app_body)
             .children(content_drag_region)
-            .child(self.notifications.clone())
+            .children(window_chrome::resize_frame(window))
             .when_some(self.confirm_delete.clone(), |root, provider| {
                 let delete_id = provider.id.clone();
                 let message =
                     SharedString::from(tf!(k::SHELL_DELETE_MESSAGE, name = provider.name));
-                root.child(components::modal_overlay(
-                    components::modal_card()
+                root.child(ochub_ui::modal::overlay(
+                    "delete-provider-modal",
+                    t(k::SHELL_DELETE_TITLE),
+                    &self.modal_focus,
+                    ochub_ui::modal::card(window, px(520.))
                         .child(components::modal_header(t(k::SHELL_DELETE_TITLE)))
                         .child(
-                            components::modal_body()
+                            ochub_ui::modal::body("delete-provider-modal-body")
                                 .child(div().text_color(theme::subtext()).text_sm().child(message)),
                         )
                         .child(components::modal_footer(vec![
@@ -4214,17 +4570,20 @@ impl Render for AppRoot {
                 ))
             })
             .when_some(self.provider_quota_detail.clone(), |root, (id, name)| {
-                root.child(self.render_quota_detail(id, name, cx))
+                root.child(self.render_quota_detail(id, name, window, cx))
             })
             .when_some(self.pending_drift.clone(), |root, pending| {
                 root.child(self.render_drift_modal(pending, window, cx))
             })
             .when(self.show_first_run_notice, |root| {
-                root.child(components::modal_overlay(
-                    components::modal_card()
+                root.child(ochub_ui::modal::overlay(
+                    "first-run-modal",
+                    t(k::SHELL_FIRST_RUN_TITLE),
+                    &self.modal_focus,
+                    ochub_ui::modal::card(window, px(520.))
                         .child(components::modal_header(t(k::SHELL_FIRST_RUN_TITLE)))
                         .child(
-                            components::modal_body()
+                            ochub_ui::modal::body("first-run-modal-body")
                                 .child(
                                     div()
                                         .flex()
@@ -4248,6 +4607,8 @@ impl Render for AppRoot {
                         .child(components::modal_footer(self.first_run_actions(cx))),
                 ))
             })
+            .children(self.render_navigation_modal(window, cx))
+            .child(self.notifications.clone())
     }
 }
 

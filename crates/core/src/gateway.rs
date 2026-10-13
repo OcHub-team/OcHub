@@ -20,6 +20,7 @@ pub mod apply;
 pub mod health;
 pub mod pipeline;
 pub mod router;
+pub(crate) mod routing_policy;
 pub mod server;
 pub mod service;
 pub mod types;

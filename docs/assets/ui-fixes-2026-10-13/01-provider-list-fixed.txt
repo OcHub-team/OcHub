@@ -1,0 +1,39 @@
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
++	8 container
++		9 pop up button Local configuration
++		10 button Open Claude Code
++		11 button Open Claude Desktop
++		12 button Open Codex
++		13 button Open Cherry Studio
++		14 button Open Grok Build
++		15 button Open Kimi Code
++		16 button Open OpenCode
++		17 button Open OpenClaw
++		18 button Open Hermes
++		19 button Open MCP servers
++		20 button Open Skills
++		21 button Open Usage
++		22 button Open Sessions
++		23 button Open Advanced tools
++		24 button Open Model providers
++		25 button Open Network proxy
++		26 button Open Remote nodes
++		27 button Open Themes
++		28 button Open Settings
++		29 button Open About
++		30 button Add a connection
++		31 button Open app settings
++		32 button Edit audit-beta-edited
++		33 button Reorder Claude Official, position 1 of 2, Help: Hold and drag onto another connection to change the order
++		34 button Refresh quota for Claude Official
++		35 button Refresh quota for Claude Official
++		36 button Edit Claude Official
++		37 button Duplicate Claude Official
++		38 button Delete Claude Official
++		39 button Switch to Claude Official
++		40 button Help: Hold and drag onto another connection to change the order, Reorder UI audit regional development and staging provider with a very long descriptive connection name, position 2 of 2
++		41 button Edit UI audit regional development and staging provider with a very long descriptive connection name
++		42 button Duplicate UI audit regional development and staging provider with a very long descriptive connection name
++		43 button Delete UI audit regional development and staging provider with a very long descriptive connection name
++		44 button Switch to UI audit regional development and staging provider with a very long descriptive connection name
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise

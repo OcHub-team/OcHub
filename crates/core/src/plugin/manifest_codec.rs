@@ -7,6 +7,7 @@
 //! will, and `validate`/`presets`/`parse_files` interpret their declarative rules.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
@@ -29,11 +30,21 @@ use super::manifest::{
 pub struct ManifestCodec {
     pub manifest: Arc<AppManifest>,
     pub hooks: Arc<HookRegistry>,
+    preview_root: Option<PathBuf>,
 }
 
 impl ManifestCodec {
     pub fn new(manifest: Arc<AppManifest>, hooks: Arc<HookRegistry>) -> Self {
-        Self { manifest, hooks }
+        Self {
+            manifest,
+            hooks,
+            preview_root: None,
+        }
+    }
+
+    pub(crate) fn with_preview_root(mut self, root: PathBuf) -> Self {
+        self.preview_root = Some(root);
+        self
     }
 
     /// The store-subtree key backing the file a mapping targets.
@@ -71,7 +82,7 @@ impl ManifestCodec {
     }
 
     /// Build the store subtree for one mapped (non-passthrough) file.
-    fn build_store(&self, file: &FileSpec, values: &FormValues) -> Value {
+    fn build_store(&self, file: &FileSpec, values: &FormValues, prior: &Value) -> Value {
         // clear_when: an emptied store (form-level condition baked into encode).
         if let Some(cond) = &file.clear_when
             && condition_matches(values, cond)
@@ -80,12 +91,35 @@ impl ManifestCodec {
         }
 
         let claimed = self.claimed_keys(&file.id);
-        let mut store = Map::new();
+        // Fields own only their mapped paths. Rebuilding the whole store from
+        // an empty map used to discard settings entered in the file editor,
+        // including siblings of a mapped nested key.
+        let mut store = prior.as_object().cloned().unwrap_or_default();
 
         for field in self.manifest.fields() {
             let Some(map) = &field.map else { continue };
             if map.file != file.id {
                 continue;
+            }
+            // Remove the previous owned value before writing its replacement.
+            // This also makes omit_empty and emit_when=false actual removals,
+            // without removing a neighbouring key that the form cannot edit.
+            match map.target() {
+                MapTarget::EnvKey(key) => {
+                    store.remove(key);
+                }
+                MapTarget::Pointer(pointer) => {
+                    remove_path(&mut store, &pointer_tokens(pointer));
+                }
+                MapTarget::TomlPath(path) => {
+                    let tokens = path.split('.').map(str::to_string).collect::<Vec<_>>();
+                    remove_path(&mut store, &tokens);
+                }
+                MapTarget::Rest => {
+                    // The key/value editor represents unclaimed strings only.
+                    // Preserve unrepresented objects, arrays, numbers and bools.
+                    store.retain(|key, value| claimed.contains(key) || !value.is_string());
+                }
             }
             if let Some(cond) = &map.emit_when
                 && !condition_matches(values, cond)
@@ -96,7 +130,13 @@ impl ManifestCodec {
             match map.target() {
                 MapTarget::EnvKey(key) => {
                     if let Some(v) = mapped_scalar(field, values, map) {
-                        store.insert(key.to_string(), v);
+                        // Environment files carry strings even when the form
+                        // represents a toggle as a boolean.
+                        let value = match v {
+                            Value::Bool(value) => Value::String(value.to_string()),
+                            other => other,
+                        };
+                        store.insert(key.to_string(), value);
                     }
                 }
                 MapTarget::Pointer(p) => {
@@ -135,6 +175,26 @@ impl AppConfig for ManifestCodec {
         self.manifest
             .app_id()
             .expect("manifest id validated at load time")
+    }
+
+    fn secret_paths(&self) -> Vec<Vec<String>> {
+        self.manifest
+            .fields()
+            .filter(|field| field.kind == FieldKindSpec::Secret)
+            .filter_map(|field| {
+                let map = field.map.as_ref()?;
+                let mut path = vec![self.store_key_of(&map.file)?.to_string()];
+                match map.target() {
+                    MapTarget::EnvKey(key) => path.push(key.to_string()),
+                    MapTarget::Pointer(pointer) => path.extend(pointer_tokens(pointer)),
+                    MapTarget::TomlPath(dotted) => {
+                        path.extend(dotted.split('.').map(str::to_string))
+                    }
+                    MapTarget::Rest => return None,
+                }
+                Some(path)
+            })
+            .collect()
     }
 
     fn schema(&self) -> Vec<FormSection> {
@@ -179,7 +239,11 @@ impl AppConfig for ManifestCodec {
                         .and_then(|s| s.get(key))
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    set_str(&mut values, &field.id, v);
+                    if field.kind == FieldKindSpec::Toggle {
+                        set_bool(&mut values, &field.id, v.parse().unwrap_or(false));
+                    } else {
+                        set_str(&mut values, &field.id, v);
+                    }
                 }
                 MapTarget::Pointer(p) => {
                     let v = store.and_then(|s| s.pointer(p));
@@ -242,7 +306,11 @@ impl AppConfig for ManifestCodec {
                     }
                 }
             } else {
-                let store = self.build_store(file, values);
+                let store = self.build_store(
+                    file,
+                    values,
+                    prior.get(&file.store_key).unwrap_or(&Value::Null),
+                );
                 settings.insert(file.store_key.clone(), store);
             }
         }
@@ -254,21 +322,25 @@ impl AppConfig for ManifestCodec {
     }
 
     fn preview(&self, values: &FormValues, prior: &Value) -> Vec<PreviewFile> {
+        let encoded = self.encode(values, prior, None);
         self.manifest
             .files
             .iter()
             .map(|file| {
-                let store = if file.passthrough {
-                    prior
-                        .get(&file.store_key)
-                        .cloned()
-                        .unwrap_or_else(|| Value::Object(Map::new()))
-                } else {
-                    self.build_store(file, values)
-                };
+                let store = encoded
+                    .settings_config
+                    .get(&file.store_key)
+                    .cloned()
+                    .unwrap_or_else(|| Value::Object(Map::new()));
                 let content = super::format::serialize(file.format, &store).unwrap_or_default();
                 PreviewFile {
-                    filename: format!("{}/{}", self.manifest.config_dir_default(), file.path),
+                    filename: self
+                        .preview_root
+                        .as_ref()
+                        .map(|root| root.join(&file.path).to_string_lossy().into_owned())
+                        .unwrap_or_else(|| {
+                            format!("{}/{}", self.manifest.config_dir_default(), file.path)
+                        }),
                     language: super::format::language(file.format),
                     content,
                 }
@@ -288,7 +360,7 @@ impl AppConfig for ManifestCodec {
             match rule.rule {
                 ValidateRule::Require => {
                     if let Some(field) = &rule.field
-                        && str_val(values, field).trim().is_empty()
+                        && value_is_empty(values.get(field))
                     {
                         issues.push(ConfigIssue::error(rule.message.clone()).for_field(field));
                     }
@@ -318,6 +390,33 @@ impl AppConfig for ManifestCodec {
                         issues.push(ConfigIssue::info(rule.message.clone()));
                     }
                 }
+            }
+        }
+
+        for field in self.manifest.fields() {
+            if field.required
+                && field
+                    .visible_when
+                    .as_ref()
+                    .is_none_or(|condition| condition_matches(values, condition))
+                && value_is_empty(values.get(&field.id))
+                && !issues.iter().any(|issue| {
+                    issue.field.as_deref() == Some(field.id.as_str())
+                        && issue.severity == crate::provider_config::Severity::Error
+                })
+            {
+                issues.push(
+                    ConfigIssue::error(
+                        crate::AppError::localized_ja(
+                            "manifest.field_required",
+                            format!("{}不能为空。", field.label),
+                            format!("{} is required.", field.label),
+                            format!("{} を入力してください。", field.label),
+                        )
+                        .to_string(),
+                    )
+                    .for_field(field.id.clone()),
+                );
             }
         }
 
@@ -422,7 +521,21 @@ fn build_form_field(field: &FieldSpec) -> FormField {
 
 /// Whether a form field currently equals a condition's value.
 fn condition_matches(values: &FormValues, cond: &Condition) -> bool {
-    str_val(values, &cond.field) == cond.equals
+    match values.get(&cond.field) {
+        Some(Value::Bool(value)) => value.to_string() == cond.equals,
+        Some(Value::Number(value)) => value.to_string() == cond.equals,
+        _ => str_val(values, &cond.field) == cond.equals,
+    }
+}
+
+fn value_is_empty(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => true,
+        Some(Value::String(value)) => value.trim().is_empty(),
+        Some(Value::Array(value)) => value.is_empty(),
+        Some(Value::Object(value)) => value.is_empty(),
+        Some(Value::Bool(_) | Value::Number(_)) => false,
+    }
 }
 
 /// A store subtree counts as "empty" when it is missing, null, a non-object, or
@@ -439,6 +552,19 @@ fn store_is_empty(settings_config: &Value, store_key: &str) -> bool {
 fn mapped_scalar(field: &FieldSpec, values: &FormValues, map: &MapSpec) -> Option<Value> {
     if matches!(field.kind, FieldKindSpec::Toggle) {
         return Some(Value::Bool(bool_val(values, &field.id)));
+    }
+    if matches!(
+        field.kind,
+        FieldKindSpec::KeyValue | FieldKindSpec::ModelGrid
+    ) {
+        let value = values.get(&field.id).cloned().unwrap_or_else(|| {
+            if field.kind == FieldKindSpec::ModelGrid {
+                Value::Array(Vec::new())
+            } else {
+                Value::Object(Map::new())
+            }
+        });
+        return (!map.omit_empty || !value_is_empty(Some(&value))).then_some(value);
     }
     let raw = str_val(values, &field.id);
     let owned = if map.trim {
@@ -459,6 +585,22 @@ fn decode_scalar(values: &mut FormValues, field: &FieldSpec, value: Option<&Valu
             values,
             &field.id,
             value.and_then(Value::as_bool).unwrap_or(false),
+        );
+    } else if field.kind == FieldKindSpec::ModelGrid {
+        values.insert(
+            field.id.clone(),
+            value
+                .filter(|value| value.is_array())
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        );
+    } else if field.kind == FieldKindSpec::KeyValue {
+        values.insert(
+            field.id.clone(),
+            value
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or_else(|| Value::Object(Map::new())),
         );
     } else {
         set_str(
@@ -503,6 +645,28 @@ fn insert_path(map: &mut Map<String, Value>, tokens: &[String], value: Value) {
             }
             if let Some(obj) = entry.as_object_mut() {
                 insert_path(obj, rest, value);
+            }
+        }
+    }
+}
+
+/// Remove only a field-owned leaf, pruning empty parents created by that path.
+fn remove_path(map: &mut Map<String, Value>, tokens: &[String]) {
+    match tokens {
+        [] => {}
+        [last] => {
+            map.remove(last);
+        }
+        [head, rest @ ..] => {
+            let empty = match map.get_mut(head).and_then(Value::as_object_mut) {
+                Some(child) => {
+                    remove_path(child, rest);
+                    child.is_empty()
+                }
+                None => false,
+            };
+            if empty {
+                map.remove(head);
             }
         }
     }

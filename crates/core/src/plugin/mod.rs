@@ -19,9 +19,11 @@ pub mod plugin_manifest;
 pub mod registry;
 
 #[cfg(test)]
+mod manifest_hardening_tests;
+#[cfg(test)]
 mod manifest_tests;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 pub use capabilities::LiveConfigOps;
@@ -82,6 +84,17 @@ pub trait AppPlugin: Send + Sync + 'static {
     /// True for plugins loaded from a user manifest file.
     fn is_user_manifest(&self) -> bool {
         false
+    }
+    /// On-disk source of a loaded declarative adapter, including a previous
+    /// good version retained after a failed reload.
+    fn manifest_path(&self) -> Option<&Path> {
+        None
+    }
+    /// Stable identity of a declarative adapter's configuration contract.
+    /// Draft application can reject a changed adapter instead of interpreting
+    /// an existing edit with a different schema or writer after reload.
+    fn configuration_revision(&self) -> Option<&str> {
+        None
     }
 
     // ---- switching semantics ----

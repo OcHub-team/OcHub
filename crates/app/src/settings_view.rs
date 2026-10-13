@@ -6,7 +6,7 @@
 //! purpose-built rows ([`layout::switch_row`], [`select_row`](layout::select_row),
 //! [`navigate_row`](layout::navigate_row), [`action_row`](layout::action_row)) —
 //! it holds no text input and no Save button, and every row writes the moment
-//! it is operated. Two sub-pages hang off it: **apps** (one switch per plugin)
+//! it is operated. Two sub-pages hang off it: **apps** (explicit management actions)
 //! and **sync** (the app's only batched form, ending in a
 //! [`components::commit_bar`]).
 //!
@@ -42,14 +42,16 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui::{
-    Context, Entity, FontWeight, ListAlignment, ListState, ScrollHandle, SharedString, Window, div,
-    point, prelude::*, px,
+    Context, Entity, Focusable, FontWeight, ListAlignment, ListState, ScrollHandle, SharedString,
+    Window, div, point, prelude::*, px,
 };
 use ochub_core::AppState;
+use ochub_core::application::AppSummary;
 use ochub_core::db::import_ccswitch::{self, DetectedSource};
 use ochub_core::plugin::{AppPlugin, ManifestLoadError};
 use ochub_core::session_index::{self, IndexStats, SessionIndex};
 use ochub_core::settings::{self, AppSettings};
+use ochub_ui::modal::{self, ModalFocusState};
 
 use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{k, t};
@@ -77,6 +79,7 @@ pub enum SettingsEvent {
 }
 
 impl gpui::EventEmitter<SettingsEvent> for SettingsView {}
+impl gpui::EventEmitter<crate::interaction::DiscardForm> for SettingsView {}
 
 /// Which of the three pages is on screen. Sub-pages are reached only through
 /// their parent [`layout::navigate_row`], so a text field is never operated
@@ -99,6 +102,12 @@ pub(crate) enum Confirm {
     CcswitchImport,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsModal {
+    Confirm(Confirm),
+    DataDirectory,
+}
+
 pub struct SettingsView {
     app: Arc<AppState>,
     backend: WorkspaceBackend,
@@ -108,6 +117,10 @@ pub struct SettingsView {
     /// back into the store — see the module doc.
     settings: AppSettings,
     plugins: Arc<[Arc<dyn AppPlugin>]>,
+    /// Remote application metadata is never substituted with local adapters.
+    remote_apps: Vec<AppSummary>,
+    remote_apps_loading: bool,
+    remote_apps_error: Option<SharedString>,
     plugin_load_errors: Arc<[ManifestLoadError]>,
     page: Page,
     /// The six root blocks, or one block when a search query is active.
@@ -140,6 +153,8 @@ pub struct SettingsView {
     warned_dual_target: bool,
     pending_nav: Option<Page>,
     confirm: Option<Confirm>,
+    modal_focus: ModalFocusState,
+    active_modal: Option<SettingsModal>,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
     /// cc-switch data found on disk, or `None` when there is nothing to import.
@@ -167,6 +182,43 @@ const APPS_BLOCK_COUNT: usize = 3;
 const MANUAL_MAINTENANCE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 impl SettingsView {
+    pub(crate) fn leave_state(&self, cx: &gpui::App) -> crate::interaction::LeaveState {
+        let directory_dirty = self.data_dir_editing
+            && self.data_dir_input.read(cx).content().trim() != self.data_dir_value.trim();
+        crate::interaction::LeaveState::new(
+            self.draft_dirty(cx) || directory_dirty,
+            self.draft_saving()
+                || self.settings_busy
+                || self.sync_busy
+                || self.ccswitch_busy
+                || self.session_index_busy
+                || !self.toggling.is_empty(),
+        )
+    }
+
+    pub(crate) fn discard_changes(&mut self, cx: &mut Context<Self>) {
+        self.data_dir_editing = false;
+        self.data_dir_input.update(cx, |input, cx| {
+            input.set_content(self.data_dir_value.clone(), cx)
+        });
+        self.confirm = None;
+        self.pending_nav = None;
+        self.enter(Page::Root, cx);
+    }
+
+    fn cancel_data_dir(&mut self, cx: &mut Context<Self>) {
+        match self.leave_state(cx) {
+            crate::interaction::LeaveState::Busy => {}
+            crate::interaction::LeaveState::Dirty => cx.emit(crate::interaction::DiscardForm(
+                crate::interaction::FormOwner::Settings,
+            )),
+            crate::interaction::LeaveState::Clean => {
+                self.data_dir_editing = false;
+                cx.notify();
+            }
+        }
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::new(cx, t(k::SETTINGS_SEARCH_PLACEHOLDER)).compact());
         let initial_data_dir = ochub_core::paths::get_app_config_dir()
@@ -184,6 +236,9 @@ impl SettingsView {
             app,
             settings: settings::get_settings(),
             plugins: ochub_core::plugin::all_plugins_snapshot(),
+            remote_apps: Vec::new(),
+            remote_apps_loading: false,
+            remote_apps_error: None,
             plugin_load_errors: ochub_core::plugin::manifest_load_errors().into(),
             page: Page::Root,
             root_list: ListState::new(ROOT_BLOCK_COUNT, ListAlignment::Top, px(600.)),
@@ -204,6 +259,8 @@ impl SettingsView {
             warned_dual_target: false,
             pending_nav: None,
             confirm: None,
+            modal_focus: ModalFocusState::new(cx),
+            active_modal: None,
             status: None,
             status_level: None,
             ccswitch_source: None,
@@ -424,6 +481,29 @@ impl SettingsView {
     }
 
     pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        if self.backend.same_workspace(&backend) && !self.backend.same_target(&backend) {
+            self.workspace_generation = self.workspace_generation.wrapping_add(1);
+            self.backend = backend;
+            self.workspace_available = true;
+            if let Some(draft) = self.draft.as_mut() {
+                draft.backend = self.backend.clone();
+                draft.saving = false;
+            }
+            self.load_workspace_settings(cx);
+            self.load_workspace_metadata(cx);
+            self.load_workspace_apps(cx);
+            return;
+        }
+        if self.backend.same_target(&backend) {
+            self.workspace_available = true;
+            self.reload(cx);
+            return;
+        }
+        self.close_sync();
+        self.page = Page::Root;
+        self.confirm = None;
+        self.pending_nav = None;
+        self.open_select_row = None;
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.workspace_remote = backend.is_remote();
         self.backend = backend;
@@ -433,6 +513,13 @@ impl SettingsView {
         self.ccswitch_busy = false;
         self.session_index_busy = false;
         self.toggling.clear();
+        self.remote_apps.clear();
+        self.remote_apps_loading = false;
+        self.remote_apps_error = None;
+        if !self.workspace_remote {
+            self.plugins = ochub_core::plugin::all_plugins_snapshot();
+            self.plugin_load_errors = ochub_core::plugin::manifest_load_errors().into();
+        }
         self.settings = if self.workspace_remote {
             merge_workspace_settings(settings::get_settings(), AppSettings::default())
         } else {
@@ -446,23 +533,27 @@ impl SettingsView {
         }
         self.load_workspace_settings(cx);
         self.load_workspace_metadata(cx);
+        self.load_workspace_apps(cx);
     }
 
     pub fn set_workspace_unavailable(&mut self, cx: &mut Context<Self>) {
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.workspace_remote = true;
         self.workspace_available = false;
+        if let Some(draft) = self.draft.as_mut() {
+            draft.saving = false;
+        }
         self.settings_busy = false;
         self.sync_busy = false;
         self.ccswitch_busy = false;
         self.session_index_busy = false;
         self.toggling.clear();
+        self.remote_apps.clear();
+        self.remote_apps_loading = false;
+        self.remote_apps_error = None;
         let controller = settings::get_settings();
         self.settings = merge_workspace_settings(controller, AppSettings::default());
         self.ccswitch_source = None;
-        self.data_dir_value = SharedString::default();
-        self.data_dir_has_override = false;
-        self.data_dir_editing = false;
         self.session_index_stats = None;
         self.root_list.remeasure();
         self.apps_list.remeasure();
@@ -550,9 +641,13 @@ impl SettingsView {
                             .or_else(|| data_dir["effective"].as_str())
                             .unwrap_or_default()
                             .to_string();
+                        let dirty = this.data_dir_editing
+                            && this.data_dir_input.read(cx).content() != this.data_dir_value;
                         this.data_dir_value = SharedString::from(path.clone());
-                        this.data_dir_input
-                            .update(cx, |input, cx| input.set_content(path, cx));
+                        if !dirty {
+                            this.data_dir_input
+                                .update(cx, |input, cx| input.set_content(path, cx));
+                        }
                         this.ccswitch_source = source.filter(|source| !source.is_empty());
                     }
                     Err(error) => {
@@ -599,6 +694,13 @@ impl SettingsView {
             window.play_system_bell();
             return;
         }
+        if self.data_dir_editing {
+            let path = self.data_dir_input.read(cx).content().trim().to_string();
+            if !path.is_empty() {
+                self.apply_data_dir(Some(path), cx);
+            }
+            return;
+        }
         match self.page {
             Page::Sync if self.draft_dirty(cx) && !self.draft_saving() => self.save_sync(cx),
             _ => window.play_system_bell(),
@@ -606,6 +708,10 @@ impl SettingsView {
     }
 
     pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.data_dir_editing {
+            self.cancel_data_dir(cx);
+            return;
+        }
         // Esc while the discard modal is up means "keep editing", and that is
         // an answer rather than a dead end — no bell.
         if self.confirm.take().is_some() {
@@ -821,25 +927,48 @@ impl SettingsView {
             )
     }
 
-    fn render_confirm(&self, confirm: Confirm, cx: &mut Context<Self>) -> gpui::Div {
+    fn modal_overlay(
+        &self,
+        id: &'static str,
+        title: SharedString,
+        card: gpui::Div,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        modal::overlay(id, title, &self.modal_focus, card).on_action(
+            cx.listener(|this, _: &modal::Dismiss, window, cx| this.shortcut_cancel(window, cx)),
+        )
+    }
+
+    fn render_confirm(
+        &self,
+        confirm: Confirm,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         match confirm {
-            Confirm::Restore => self.render_restore_confirm(cx),
-            Confirm::DiscardDraft => self.render_discard_confirm(cx),
-            Confirm::CcswitchImport => self.render_ccswitch_confirm(cx),
+            Confirm::Restore => self.render_restore_confirm(window, cx),
+            Confirm::DiscardDraft => self.render_discard_confirm(window, cx),
+            Confirm::CcswitchImport => self.render_ccswitch_confirm(window, cx),
         }
     }
 
-    fn render_ccswitch_confirm(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_ccswitch_confirm(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let path = self
             .ccswitch_source
             .as_ref()
             .map(|source| ochub_core::paths::abbreviate_home(&source.path))
             .unwrap_or_default();
-        components::modal_overlay(
-            components::modal_card()
+        self.modal_overlay(
+            "settings-ccswitch-modal",
+            t(k::SETTINGS_DATA_CCSWITCH_LABEL),
+            modal_card(window)
                 .child(components::modal_header(t(k::SETTINGS_DATA_CCSWITCH_LABEL)))
                 .child(
-                    components::modal_body()
+                    modal::body("settings-ccswitch-body")
                         .child(
                             div()
                                 .text_color(theme::subtext())
@@ -872,22 +1001,28 @@ impl SettingsView {
                     }))
                     .into_any_element(),
                 ])),
+            cx,
         )
     }
 
-    fn render_restore_confirm(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_restore_confirm(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let provider = self
             .sync_target()
             .map(SyncTarget::provider)
             .unwrap_or_default();
-        components::modal_overlay(
-            components::modal_card()
-                .child(components::modal_header(SharedString::from(tf!(
-                    k::SETTINGS_CONFIRM_DOWNLOAD_TITLE,
-                    provider = provider
-                ))))
+        let title =
+            SharedString::from(tf!(k::SETTINGS_CONFIRM_DOWNLOAD_TITLE, provider = provider));
+        self.modal_overlay(
+            "settings-restore-modal",
+            title.clone(),
+            modal_card(window)
+                .child(components::modal_header(title))
                 .child(
-                    components::modal_body().child(
+                    modal::body("settings-restore-body").child(
                         div()
                             .text_color(theme::subtext())
                             .text_sm()
@@ -921,15 +1056,22 @@ impl SettingsView {
                     }))
                     .into_any_element(),
                 ])),
+            cx,
         )
     }
 
-    fn render_discard_confirm(&self, cx: &mut Context<Self>) -> gpui::Div {
-        components::modal_overlay(
-            components::modal_card()
+    fn render_discard_confirm(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        self.modal_overlay(
+            "settings-discard-modal",
+            t(k::SETTINGS_DISCARD_TITLE),
+            modal_card(window)
                 .child(components::modal_header(t(k::SETTINGS_DISCARD_TITLE)))
                 .child(
-                    components::modal_body().child(
+                    modal::body("settings-discard-body").child(
                         div()
                             .text_color(theme::subtext())
                             .text_sm()
@@ -963,15 +1105,22 @@ impl SettingsView {
                     }))
                     .into_any_element(),
                 ])),
+            cx,
         )
     }
 
-    fn render_data_dir_editor(&self, cx: &mut Context<Self>) -> gpui::Div {
-        components::modal_overlay(
-            components::modal_card()
+    fn render_data_dir_editor(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        self.modal_overlay(
+            "settings-data-dir-modal",
+            t(k::SETTINGS_DATA_DIR_PROMPT),
+            modal_card(window)
                 .child(components::modal_header(t(k::SETTINGS_DATA_DIR_PROMPT)))
                 .child(
-                    components::modal_body().child(
+                    modal::body("settings-data-dir-body").child(
                         div()
                             .flex()
                             .flex_col()
@@ -988,8 +1137,7 @@ impl SettingsView {
                         ButtonSize::Sm,
                     )
                     .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.data_dir_editing = false;
-                        cx.notify();
+                        this.cancel_data_dir(cx);
                     }))
                     .into_any_element(),
                     components::button(
@@ -1006,25 +1154,47 @@ impl SettingsView {
                     }))
                     .into_any_element(),
                 ])),
+            cx,
         )
     }
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let active_modal = if self.data_dir_editing {
+            Some(SettingsModal::DataDirectory)
+        } else {
+            self.confirm.map(SettingsModal::Confirm)
+        };
+        if self.active_modal != active_modal {
+            self.modal_focus.sync(false, None, window, cx);
+            self.active_modal = active_modal;
+        }
+        let initial = (active_modal == Some(SettingsModal::DataDirectory))
+            .then(|| self.data_dir_input.read(cx).focus_handle(cx));
+        self.modal_focus
+            .sync(active_modal.is_some(), initial.as_ref(), window, cx);
         let mut page = match self.page {
             Page::Root => self.render_root(cx),
             Page::Apps => self.render_apps(cx),
             Page::Sync => self.render_sync(cx),
-        };
-        if let Some(confirm) = self.confirm {
-            page = page.child(self.render_confirm(confirm, cx));
         }
-        if self.data_dir_editing {
-            page = page.child(self.render_data_dir_editor(cx));
+        .relative();
+        match active_modal {
+            Some(SettingsModal::Confirm(confirm)) => {
+                page = page.child(self.render_confirm(confirm, window, cx));
+            }
+            Some(SettingsModal::DataDirectory) => {
+                page = page.child(self.render_data_dir_editor(window, cx));
+            }
+            None => {}
         }
         page
     }
+}
+
+fn modal_card(window: &Window) -> gpui::Div {
+    modal::card_in(crate::product_ui::shell::content_viewport(window), px(520.))
 }
 
 fn merge_workspace_settings(mut controller: AppSettings, workspace: AppSettings) -> AppSettings {

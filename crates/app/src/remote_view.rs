@@ -11,11 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::StreamExt as _;
 use gpui::{
-    Context, Entity, FontWeight, MouseButton, ScrollHandle, SharedString, Window, div, prelude::*,
-    px, relative,
+    Context, Entity, Focusable, FontWeight, MouseButton, ScrollHandle, SharedString, Window, div,
+    prelude::*, px, relative,
 };
 use ochub_core::application::AppSummary;
 use ochub_protocol::Capability;
+use ochub_ui::modal::{self, ModalFocusState};
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, t};
@@ -36,20 +37,15 @@ fn icon_only_button(
     label: impl Into<SharedString>,
     name: IconName,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .role(gpui::Role::Button)
-        .aria_label(label.into())
-        .w(px(30.))
-        .h(px(30.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .cursor_pointer()
-        .text_color(theme::muted())
-        .hover(|button| button.bg(theme::surface_hover()).text_color(theme::text()))
-        .child(icon(name, theme::muted(), 14.))
+    components::icon_only_button_tone(id, label, name, ButtonTone::Ghost, ButtonSize::Sm)
+        .size(px(30.))
+}
+
+fn modal_card(window: &Window, preferred_width: f32) -> gpui::Div {
+    modal::card_in(
+        crate::product_ui::shell::content_viewport(window),
+        px(preferred_width),
+    )
 }
 
 struct RemoteSnapshot {
@@ -72,6 +68,16 @@ enum ConnectionState {
 enum AddMode {
     SshConfig,
     Manual,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RemoteModal {
+    SshConfig,
+    Manual,
+    Fingerprint,
+    Update,
+    Issue,
+    Bootstrap,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -283,6 +289,7 @@ pub struct RemoteView {
     backend: Option<WorkspaceBackend>,
     apps: Vec<AppSummary>,
     add_open: bool,
+    add_baseline: Vec<String>,
     add_mode: AddMode,
     ssh_config_entries: Vec<SshConfigEntry>,
     selected_ssh_config: Option<usize>,
@@ -296,6 +303,8 @@ pub struct RemoteView {
     update_dialog: Option<NodeUpdateDialog>,
     bootstrap_dialog: Option<NodeBootstrapDialog>,
     issue_dialog: Option<(RemoteHost, RemoteConnectionIssue)>,
+    modal_focus: ModalFocusState,
+    active_modal: Option<RemoteModal>,
     probe_generation: u64,
     probing: bool,
     busy: bool,
@@ -305,8 +314,67 @@ pub struct RemoteView {
 }
 
 impl gpui::EventEmitter<RemoteEvent> for RemoteView {}
+impl gpui::EventEmitter<crate::interaction::DiscardForm> for RemoteView {}
 
 impl RemoteView {
+    fn add_values(&self, cx: &gpui::App) -> Vec<String> {
+        [
+            &self.target_input,
+            &self.hostname_input,
+            &self.port_input,
+            &self.cli_input,
+        ]
+        .map(|input| input.read(cx).content().to_string())
+        .into()
+    }
+
+    pub(crate) fn leave_state(&self, cx: &gpui::App) -> crate::interaction::LeaveState {
+        crate::interaction::LeaveState::new(
+            self.add_open && self.add_values(cx) != self.add_baseline,
+            self.busy
+                || self
+                    .update_dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.working())
+                || self
+                    .bootstrap_dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.working()),
+        )
+    }
+
+    pub(crate) fn discard_changes(&mut self, cx: &mut Context<Self>) {
+        self.add_open = false;
+        self.selected_ssh_config = None;
+        self.scanned_keys.clear();
+        for (input, baseline) in [
+            &self.target_input,
+            &self.hostname_input,
+            &self.port_input,
+            &self.cli_input,
+        ]
+        .iter()
+        .zip(&self.add_baseline)
+        {
+            input.update(cx, |input, cx| input.set_content(baseline.clone(), cx));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn shortcut_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.bootstrap_dialog.is_some() {
+            self.close_node_bootstrap(cx);
+        } else if self.issue_dialog.is_some() {
+            self.close_issue_details(cx);
+        } else if self.update_dialog.is_some() {
+            self.close_node_update(cx);
+        } else if self.add_open && !self.busy {
+            self.cancel_add(cx);
+        } else {
+            window.play_system_bell();
+        }
+    }
+
     pub fn new(cx: &mut Context<Self>) -> Self {
         let (store, status, status_level) = match RemoteHostStore::load() {
             Ok(store) => (store, None, None),
@@ -339,6 +407,7 @@ impl RemoteView {
             backend: None,
             apps: Vec::new(),
             add_open: false,
+            add_baseline: Vec::new(),
             add_mode: AddMode::SshConfig,
             ssh_config_entries: Vec::new(),
             selected_ssh_config: None,
@@ -352,6 +421,8 @@ impl RemoteView {
             update_dialog: None,
             bootstrap_dialog: None,
             issue_dialog: None,
+            modal_focus: ModalFocusState::new(cx),
+            active_modal: None,
             probe_generation: 0,
             probing: false,
             busy: false,
@@ -407,14 +478,6 @@ impl RemoteView {
             .flatten()
     }
 
-    pub(crate) fn enabled_builtin_apps(&self) -> Vec<ochub_core::AppType> {
-        self.apps
-            .iter()
-            .filter(|app| app.enabled && app.supports_provider)
-            .filter_map(|app| app.id.parse().ok())
-            .collect()
-    }
-
     pub(crate) fn activate_scope(&mut self, id: String, cx: &mut Context<Self>) {
         if self.selected_id.as_deref() != Some(id.as_str()) {
             self.select_host(id.clone(), cx);
@@ -431,6 +494,7 @@ impl RemoteView {
 
     fn open_add(&mut self, cx: &mut Context<Self>) {
         self.add_open = true;
+        self.add_baseline = self.add_values(cx);
         self.add_mode = AddMode::SshConfig;
         self.scanned_keys.clear();
         self.ssh_config_error = None;
@@ -452,10 +516,13 @@ impl RemoteView {
     }
 
     fn cancel_add(&mut self, cx: &mut Context<Self>) {
-        self.add_open = false;
-        self.selected_ssh_config = None;
-        self.scanned_keys.clear();
-        cx.notify();
+        match self.leave_state(cx) {
+            crate::interaction::LeaveState::Busy => {}
+            crate::interaction::LeaveState::Dirty => cx.emit(crate::interaction::DiscardForm(
+                crate::interaction::FormOwner::Remote,
+            )),
+            crate::interaction::LeaveState::Clean => self.discard_changes(cx),
+        }
     }
 
     fn has_ssh_alias(&self, alias: &str) -> bool {
@@ -1634,25 +1701,53 @@ impl RemoteView {
         .detach();
     }
 
-    fn render_add_modal(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let close = cx.listener(|this: &mut Self, _: &(), _window, cx| this.cancel_add(cx));
-        let card = if !self.scanned_keys.is_empty() {
-            self.render_fingerprint_card(cx)
+    fn render_add_modal(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let close =
+            cx.listener(|this: &mut Self, _: &(), window, cx| this.shortcut_cancel(window, cx));
+        let (title, card) = if !self.scanned_keys.is_empty() {
+            (
+                t(k::REMOTE_FINGERPRINT_TITLE),
+                self.render_fingerprint_card(window, cx),
+            )
         } else {
             match self.add_mode {
-                AddMode::SshConfig => self.render_ssh_config_card(cx),
-                AddMode::Manual => self.render_manual_add_card(cx),
+                AddMode::SshConfig => (
+                    t(k::REMOTE_ADD_CONFIG_TITLE),
+                    self.render_ssh_config_card(window, cx),
+                ),
+                AddMode::Manual => (
+                    t(k::REMOTE_ADD_TITLE),
+                    self.render_manual_add_card(window, cx),
+                ),
             }
         };
-        components::modal_overlay(card)
-            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                close(&(), window, cx)
-            })
+        modal::overlay(
+            "remote-add-modal",
+            title,
+            &self.modal_focus,
+            card.on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            }),
+        )
+        .on_action(
+            cx.listener(|this, _: &modal::Dismiss, window, cx| this.shortcut_cancel(window, cx)),
+        )
+        .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+            close(&(), window, cx)
+        })
     }
 
-    fn render_issue_details_modal(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_issue_details_modal(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let Some((host, issue)) = self.issue_dialog.as_ref() else {
-            return div();
+            return div().into_any_element();
         };
         let node_name = configured_node_name(host);
         let close_footer =
@@ -1699,11 +1794,7 @@ impl RemoteView {
                 ),
             ));
         }
-        let body = components::modal_body()
-            .id("remote-issue-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
+        let body = modal::body("remote-issue-body")
             .child(
                 div()
                     .flex()
@@ -1747,7 +1838,7 @@ impl RemoteView {
                             .bg(theme::surface())
                             .px_3()
                             .py_3()
-                            .font_family("Menlo")
+                            .font_family(ochub_ui::assets::monospace_font_family())
                             .text_xs()
                             .text_color(theme::subtext())
                             .child(SharedString::from(diagnostics)),
@@ -1780,9 +1871,7 @@ impl RemoteView {
             .on_click(move |_event, window, cx| close_footer(&(), window, cx))
             .into_any_element(),
         );
-        let card = components::modal_card()
-            .w(px(680.))
-            .max_h(px(720.))
+        let card = modal_card(window, 680.)
             .child(
                 components::modal_header(t(k::REMOTE_ISSUE_DETAILS_TITLE)).child(
                     icon_only_button(
@@ -1795,12 +1884,25 @@ impl RemoteView {
             )
             .child(body)
             .child(components::modal_footer(actions));
-        components::modal_overlay(card)
+        modal::overlay(
+            "remote-issue-modal",
+            t(k::REMOTE_ISSUE_DETAILS_TITLE),
+            &self.modal_focus,
+            card,
+        )
+        .on_action(
+            cx.listener(|this, _: &modal::Dismiss, window, cx| this.shortcut_cancel(window, cx)),
+        )
+        .into_any_element()
     }
 
-    fn render_node_bootstrap_modal(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_node_bootstrap_modal(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let Some(dialog) = self.bootstrap_dialog.as_ref() else {
-            return div();
+            return div().into_any_element();
         };
         let node_name = configured_node_name(&dialog.host);
         let close_header =
@@ -1837,39 +1939,34 @@ impl RemoteView {
         } else {
             t(k::REMOTE_BOOTSTRAP_TITLE_UPGRADE)
         };
-        let mut body = components::modal_body()
-            .id("remote-bootstrap-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::text())
-                                    .child(SharedString::from(node_name)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme::muted())
-                                    .child(SharedString::from(dialog.host.ssh_alias.clone())),
-                            ),
-                    )
-                    .child(components::badge(phase_tone, phase_label.clone())),
-            );
+        let mut body = modal::body("remote-bootstrap-body").child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::text())
+                                .child(SharedString::from(node_name)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::muted())
+                                .child(SharedString::from(dialog.host.ssh_alias.clone())),
+                        ),
+                )
+                .child(components::badge(phase_tone, phase_label.clone())),
+        );
         if let Some(prepared) = &dialog.prepared {
             let destination = prepared.probe.home.join(".local/bin/ochcli");
             let rows = vec![
@@ -2005,34 +2102,45 @@ impl RemoteView {
             )
             .into_any_element(),
         };
-        let card = components::modal_card()
-            .w(px(700.))
-            .max_h(px(760.))
-            .child(components::modal_header(title).child(if dialog.working() {
-                icon_only_button(
-                    "remote-bootstrap-close-disabled",
-                    t(k::REMOTE_ACTION_CANCEL),
-                    IconName::Close,
-                )
-                .opacity(0.35)
-                .into_any_element()
-            } else {
-                icon_only_button(
-                    "remote-bootstrap-close",
-                    t(k::REMOTE_ACTION_CANCEL),
-                    IconName::Close,
-                )
-                .on_click(move |_event, window, cx| close_header(&(), window, cx))
-                .into_any_element()
-            }))
+        let card = modal_card(window, 700.)
+            .child(
+                components::modal_header(title.clone()).child(if dialog.working() {
+                    icon_only_button(
+                        "remote-bootstrap-close-disabled",
+                        t(k::REMOTE_ACTION_CANCEL),
+                        IconName::Close,
+                    )
+                    .tab_stop(false)
+                    .opacity(0.35)
+                    .into_any_element()
+                } else {
+                    icon_only_button(
+                        "remote-bootstrap-close",
+                        t(k::REMOTE_ACTION_CANCEL),
+                        IconName::Close,
+                    )
+                    .on_click(move |_event, window, cx| close_header(&(), window, cx))
+                    .into_any_element()
+                }),
+            )
             .child(body)
             .child(components::modal_footer(vec![primary]));
-        components::modal_overlay(card)
+        modal::overlay("remote-bootstrap-modal", title, &self.modal_focus, card)
+            .on_action(
+                cx.listener(|this, _: &modal::Dismiss, window, cx| {
+                    this.shortcut_cancel(window, cx)
+                }),
+            )
+            .into_any_element()
     }
 
-    fn render_node_update_modal(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_node_update_modal(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let Some(dialog) = self.update_dialog.as_ref() else {
-            return div();
+            return div().into_any_element();
         };
         let node_name = configured_node_name(&dialog.host);
         let close = cx.listener(|this: &mut Self, _: &(), _window, cx| this.close_node_update(cx));
@@ -2079,39 +2187,34 @@ impl RemoteView {
             NodeUpdatePhase::Failed => (t(k::REMOTE_UPDATE_PHASE_FAILED), BadgeTone::Danger),
             NodeUpdatePhase::Cancelled => (t(k::REMOTE_UPDATE_PHASE_CANCELLED), BadgeTone::Neutral),
         };
-        let mut body = components::modal_body()
-            .id("remote-node-update-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::text())
-                                    .child(SharedString::from(node_name)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme::muted())
-                                    .child(SharedString::from(dialog.host.ssh_alias.clone())),
-                            ),
-                    )
-                    .child(components::badge(phase_tone, phase_label)),
-            );
+        let mut body = modal::body("remote-node-update-body").child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::text())
+                                .child(SharedString::from(node_name)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::muted())
+                                .child(SharedString::from(dialog.host.ssh_alias.clone())),
+                        ),
+                )
+                .child(components::badge(phase_tone, phase_label)),
+        );
         if let Some(report) = &dialog.report {
             let relay_selected = dialog.strategy == NodeUpdateStrategy::Relay
                 || (dialog.strategy == NodeUpdateStrategy::Automatic && relay_allowed);
@@ -2466,11 +2569,7 @@ impl RemoteView {
             )
             .into_any_element()
         };
-        let max_height = (window.viewport_size().height - px(32.)).max(px(320.));
-        let card = components::modal_card()
-            .w(px(720.))
-            .max_w_full()
-            .max_h(max_height)
+        let card = modal_card(window, 720.)
             .child(
                 components::modal_header(t(k::REMOTE_UPDATE_TITLE)).child(if dialog.working() {
                     icon_only_button(
@@ -2478,6 +2577,7 @@ impl RemoteView {
                         t(k::REMOTE_ACTION_CANCEL),
                         IconName::Close,
                     )
+                    .tab_stop(false)
                     .opacity(0.35)
                     .into_any_element()
                 } else {
@@ -2493,8 +2593,10 @@ impl RemoteView {
             .child(body)
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .items_center()
                     .justify_end()
                     .gap_2()
@@ -2504,7 +2606,16 @@ impl RemoteView {
                     .border_color(theme::border())
                     .child(primary),
             );
-        components::modal_overlay(card)
+        modal::overlay(
+            "remote-update-modal",
+            t(k::REMOTE_UPDATE_TITLE),
+            &self.modal_focus,
+            card,
+        )
+        .on_action(
+            cx.listener(|this, _: &modal::Dismiss, window, cx| this.shortcut_cancel(window, cx)),
+        )
+        .into_any_element()
     }
 
     fn modal_header(&self, title: SharedString, cx: &mut Context<Self>) -> gpui::Div {
@@ -2514,13 +2625,14 @@ impl RemoteView {
                 t(k::REMOTE_ACTION_CANCEL),
                 IconName::Close,
             )
-            .on_click(cx.listener(|this, _event, _window, cx| this.cancel_add(cx))),
+            .on_click(cx.listener(|this, _event, window, cx| this.shortcut_cancel(window, cx))),
         )
     }
 
-    fn render_ssh_config_card(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_ssh_config_card(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let manual = cx.listener(|this: &mut Self, _: &(), _window, cx| this.show_manual_add(cx));
-        let cancel = cx.listener(|this: &mut Self, _: &(), _window, cx| this.cancel_add(cx));
+        let cancel =
+            cx.listener(|this: &mut Self, _: &(), window, cx| this.shortcut_cancel(window, cx));
         let add =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.scan_selected_ssh_config(cx));
         let mut list = div()
@@ -2661,14 +2773,10 @@ impl RemoteView {
             .selected_ssh_config
             .and_then(|index| self.ssh_config_entries.get(index))
             .is_some_and(|entry| !self.has_ssh_alias(&entry.alias));
-        components::modal_card()
-            .w(px(680.))
-            .max_h(px(680.))
+        modal_card(window, 680.)
             .child(self.modal_header(t(k::REMOTE_ADD_CONFIG_TITLE), cx))
             .child(
-                components::modal_body()
-                    .flex_1()
-                    .min_h_0()
+                modal::body("remote-ssh-config-body")
                     .child(
                         div()
                             .text_xs()
@@ -2686,8 +2794,10 @@ impl RemoteView {
             )
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .gap_3()
@@ -2750,7 +2860,7 @@ impl RemoteView {
             )
     }
 
-    fn render_manual_add_card(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_manual_add_card(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let scan = cx.listener(|this: &mut Self, _: &(), _window, cx| this.scan(cx));
         let back = cx.listener(|this: &mut Self, _: &(), _window, cx| this.show_ssh_config_add(cx));
         let fields = div()
@@ -2804,22 +2914,15 @@ impl RemoteView {
                     .child(icon(IconName::Key, theme::muted(), 14.))
                     .child(t(k::REMOTE_SECURITY_NOTE)),
             );
-        components::modal_card()
-            .w(px(680.))
-            .max_h(px(720.))
+        modal_card(window, 680.)
             .child(self.modal_header(t(k::REMOTE_ADD_TITLE), cx))
-            .child(
-                components::modal_body()
-                    .id("remote-manual-add-body")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(fields),
-            )
+            .child(modal::body("remote-manual-add-body").child(fields))
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .gap_3()
@@ -2858,7 +2961,7 @@ impl RemoteView {
             )
     }
 
-    fn render_fingerprint_card(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_fingerprint_card(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let back =
             cx.listener(|this: &mut Self, _: &(), _window, cx| this.back_from_fingerprint(cx));
         let trust = cx.listener(|this: &mut Self, _: &(), _window, cx| this.trust_and_connect(cx));
@@ -2875,11 +2978,10 @@ impl RemoteView {
                     .into_any_element()
             })
             .collect();
-        components::modal_card()
-            .w(px(680.))
+        modal_card(window, 680.)
             .child(self.modal_header(t(k::REMOTE_FINGERPRINT_TITLE), cx))
             .child(
-                components::modal_body()
+                modal::body("remote-fingerprint-body")
                     .child(
                         div()
                             .text_sm()
@@ -2890,8 +2992,10 @@ impl RemoteView {
             )
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .gap_3()
@@ -3218,6 +3322,32 @@ async fn load_snapshot(backend: WorkspaceBackend) -> Result<RemoteSnapshot, Stri
 
 impl gpui::Render for RemoteView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let active_modal = if self.bootstrap_dialog.is_some() {
+            Some(RemoteModal::Bootstrap)
+        } else if self.issue_dialog.is_some() {
+            Some(RemoteModal::Issue)
+        } else if self.update_dialog.is_some() {
+            Some(RemoteModal::Update)
+        } else if !self.add_open {
+            None
+        } else if !self.scanned_keys.is_empty() {
+            Some(RemoteModal::Fingerprint)
+        } else {
+            Some(match self.add_mode {
+                AddMode::SshConfig => RemoteModal::SshConfig,
+                AddMode::Manual => RemoteModal::Manual,
+            })
+        };
+        // A wizard step replaces the previous focus tree. Restore its invoker
+        // before mounting the next step, then choose that step's initial focus.
+        if self.active_modal != active_modal {
+            self.modal_focus.sync(false, None, window, cx);
+            self.active_modal = active_modal;
+        }
+        let initial = (active_modal == Some(RemoteModal::Manual))
+            .then(|| self.target_input.read(cx).focus_handle(cx));
+        self.modal_focus
+            .sync(active_modal.is_some(), initial.as_ref(), window, cx);
         let add = cx.listener(|this: &mut Self, _: &(), _window, cx| this.open_add(cx));
         let action = if self.add_open {
             components::disabled_button(
@@ -3249,23 +3379,27 @@ impl gpui::Render for RemoteView {
             layout::wide_column().child(self.render_connection_list(cx))
         };
         let mut page = layout::page()
+            .relative()
             .child(layout::page_header(t(k::REMOTE_PAGE_TITLE), None).child(action))
             .child(layout::scroll_body(
                 "remote-nodes-body",
                 &self.scroll,
                 content,
             ));
-        if self.add_open {
-            page = page.child(self.render_add_modal(cx));
-        }
-        if self.update_dialog.is_some() {
-            page = page.child(self.render_node_update_modal(window, cx));
-        }
-        if self.issue_dialog.is_some() {
-            page = page.child(self.render_issue_details_modal(cx));
-        }
-        if self.bootstrap_dialog.is_some() {
-            page = page.child(self.render_node_bootstrap_modal(cx));
+        match active_modal {
+            Some(RemoteModal::SshConfig | RemoteModal::Manual | RemoteModal::Fingerprint) => {
+                page = page.child(self.render_add_modal(window, cx));
+            }
+            Some(RemoteModal::Update) => {
+                page = page.child(self.render_node_update_modal(window, cx));
+            }
+            Some(RemoteModal::Issue) => {
+                page = page.child(self.render_issue_details_modal(window, cx));
+            }
+            Some(RemoteModal::Bootstrap) => {
+                page = page.child(self.render_node_bootstrap_modal(window, cx));
+            }
+            None => {}
         }
         page
     }

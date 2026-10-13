@@ -5,9 +5,20 @@ use serde_json::Value;
 use crate::db::Database;
 use crate::error::AppError;
 use crate::model::Provider;
+use crate::services::config_commit::PreparedConfigWrite;
 
 /// Live config file read/write surface of one app.
 pub trait LiveConfigOps: Send + Sync {
+    /// Describe exact file effects without changing live state. Opaque external
+    /// operations return None and must not advertise a reversible file receipt.
+    fn prepare_write(
+        &self,
+        _db: &Database,
+        _provider: &Provider,
+    ) -> Result<Option<PreparedConfigWrite>, AppError> {
+        Ok(None)
+    }
+
     /// Switch mode: write the provider as the live config.
     /// Additive mode: upsert this provider into the live config.
     ///

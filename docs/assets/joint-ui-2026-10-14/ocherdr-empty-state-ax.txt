@@ -1,0 +1,45 @@
+- [0] AXWindow "OcHerdr" [actions=[raise]]
+  - AXToolbar "终端"
+    - AXButton "没有正在运行的 Herdr 会话"
+      - [1] AXButton "刷新" [actions=[press]]
+  - AXToolbar "状态栏"
+    - [2] AXButton "QA · Offline" [actions=[press]]
+      - [3] AXButton "聚合视图" [actions=[press]]
+    - AXButton "没有 Herdr 会话"
+    - [4] AXButton "快捷键" [actions=[press]]
+  - AXWindow "快捷键"
+    - [5] AXTextField "查找快捷键" = "查找快捷键"
+    - AXStaticText "新建标签: ⌘T"
+    - AXStaticText "关闭窗格或最后一个标签: ⌘W"
+    - AXStaticText "关闭工作区: ⌘⇧W"
+    - AXStaticText "新建工作区: ⌘⇧N"
+    - AXStaticText "显示或隐藏文件: ⌘⇧E"
+    - AXStaticText "编辑文件路径: ⌘L"
+    - AXStaticText "外观与设置: ⌘,"
+    - AXStaticText "复制终端选区: ⌘C"
+    - AXStaticText "选择终端文本: ⌘A"
+    - AXStaticText "上一个标签: ⌘["
+    - AXStaticText "下一个标签: ⌘]"
+    - AXStaticText "上一个标签: ^⇧⇥"
+    - AXStaticText "下一个标签: ^⇥"
+    - AXStaticText "重命名标签或工作区: f2"
+    - AXStaticText "打开快捷键参考: ⌘/"
+    - AXStaticText "跳转到指定标签: ⌘1–9"
+    - AXStaticText "新建标签 · 在 Control+B 之后: Ctrl+B → C"
+    - AXStaticText "新建工作区: Ctrl+B → Shift+N"
+    - AXStaticText "下一个 / 上一个标签: Ctrl+B → N / P"
+    - AXStaticText "跳转到指定标签: Ctrl+B → 1–9"
+    - AXStaticText "重命名标签: Ctrl+B → Shift+T"
+    - AXStaticText "重命名工作区: Ctrl+B → Shift+W"
+    - AXStaticText "重命名窗格: Ctrl+B → Shift+P"
+    - AXStaticText "关闭标签: Ctrl+B → Shift+X"
+    - AXStaticText "关闭工作区: Ctrl+B → Shift+D"
+    - AXStaticText "向下 / 向上移动工作区: Ctrl+B → Shift+J / K"
+    - AXStaticText "打开 Herdr 设置: Ctrl+B → S"
+    - AXStaticText "聚焦相邻窗格 · 在 Control+B 之后: Ctrl+B → H / J / K / L"
+    - AXStaticText "键盘移动窗格 · 在 Control+B 之后: Ctrl+B → M"
+    - AXStaticText "取消前缀、移动或对话框: Esc"
+    - [6] AXButton "关闭" [actions=[press]]
+  - [7] AXButton [actions=[press]]
+  - [8] AXButton [help="this button also has an action to zoom the window" actions=[press,zoomwindow,showmenu]]
+  - [9] AXButton [actions=[press]]

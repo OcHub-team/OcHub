@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
     GridColumn, Language, PreviewFile, SelectOption, set_str, str_val,
@@ -56,8 +57,9 @@ impl AppConfig for ClaudeDesktopConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "端点与鉴权",
+            FormSection::identified(
+                "endpoint_auth",
+                tr(TextKey::EndpointAuthSection),
                 vec![
                     FormField::new(
                         "base_url",
@@ -66,11 +68,11 @@ impl AppConfig for ClaudeDesktopConfig {
                             placeholder: "https://gateway.example.com".into(),
                         },
                     )
-                    .help("原生 Anthropic Messages 端点；跨格式服务请在 OcHub 模型供应商页面配置。")
+                    .help(tr(TextKey::DesktopBaseUrlHelp))
                     .required(),
                     FormField::new(
                         "auth_field",
-                        "鉴权字段",
+                        tr(TextKey::AuthField),
                         FieldKind::Select {
                             options: vec![
                                 SelectOption::new(AUTH_TOKEN, "ANTHROPIC_AUTH_TOKEN（Bearer）"),
@@ -87,23 +89,28 @@ impl AppConfig for ClaudeDesktopConfig {
                     ),
                 ],
             ),
-            FormSection::new(
-                "模型",
-                vec![FormField::new(
-                    "routes",
-                    "Claude 模型（Sonnet / Opus / Fable / Haiku）",
-                    FieldKind::ModelGrid {
-                        columns: vec![
-                            GridColumn::text("role", "角色", ""),
-                            GridColumn::text("model", "模型", "claude-sonnet-4-6"),
-                            GridColumn::text("label", "显示名", "Sonnet"),
-                            GridColumn::toggle("one_m", "1M 上下文"),
-                        ],
-                    },
-                )
-                .help(
-                    "这里只接受对应角色的 Claude-safe 模型名；任意模型映射请在 OcHub 模型供应商页面配置。",
-                )],
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
+                vec![
+                    FormField::new(
+                        "routes",
+                        tr(TextKey::DesktopModels),
+                        FieldKind::ModelGrid {
+                            columns: vec![
+                                GridColumn::text("role", tr(TextKey::RoleColumn), ""),
+                                GridColumn::text(
+                                    "model",
+                                    tr(TextKey::ModelLabel),
+                                    "claude-sonnet-4-6",
+                                ),
+                                GridColumn::text("label", tr(TextKey::DisplayName), "Sonnet"),
+                                GridColumn::toggle("one_m", tr(TextKey::OneMillionContext)),
+                            ],
+                        },
+                    )
+                    .help(tr(TextKey::DesktopModelsHelp)),
+                ],
             ),
         ]
     }
@@ -213,17 +220,14 @@ impl AppConfig for ClaudeDesktopConfig {
     fn validate(&self, values: &FormValues) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
         if str_val(values, "base_url").trim().is_empty() {
-            issues.push(ConfigIssue::error("Base URL 不能为空。").for_field("base_url"));
+            issues.push(ConfigIssue::error(tr(TextKey::BaseUrlRequired)).for_field("base_url"));
         }
         if str_val(values, "api_key").trim().is_empty() {
-            issues.push(ConfigIssue::warning("尚未填写 API Key。").for_field("api_key"));
+            issues.push(ConfigIssue::warning(tr(TextKey::ApiKeyMissing)).for_field("api_key"));
         }
         if str_val(values, "auth_field") == AUTH_API_KEY {
             issues.push(
-                ConfigIssue::warning(
-                    "Claude Desktop profile 使用 Bearer；建议选择 ANTHROPIC_AUTH_TOKEN。",
-                )
-                .for_field("auth_field"),
+                ConfigIssue::warning(tr(TextKey::DesktopBearerWarning)).for_field("auth_field"),
             );
         }
         for (index, row) in grid_rows(values).iter().enumerate() {
@@ -237,8 +241,9 @@ impl AppConfig for ClaudeDesktopConfig {
                 .unwrap_or("")
                 .trim();
             if !model.is_empty() && model != route_id {
-                issues.push(ConfigIssue::error(format!(
-                    "{route_id} 不能映射到 {model}；请在 OcHub 模型供应商页面配置模型映射。"
+                issues.push(ConfigIssue::error(localized::format(
+                    TextKey::DesktopMappingInvalid,
+                    &[("route_id", &(route_id)), ("model", &(model))],
                 )));
             }
         }

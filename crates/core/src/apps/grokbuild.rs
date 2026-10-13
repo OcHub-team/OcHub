@@ -36,7 +36,16 @@ pub fn get_grok_config_path() -> PathBuf {
 pub fn validate_config_toml_syntax(config_toml: &str) -> Result<(), AppError> {
     toml::from_str::<toml::Table>(config_toml)
         .map(|_| ())
-        .map_err(|error| AppError::Config(format!("Grok Build config.toml 格式错误: {error}")))
+        .map_err(config_parse_error)
+}
+
+fn config_parse_error(error: impl std::fmt::Display) -> AppError {
+    AppError::localized_ja(
+        "grokbuild.config.parse_failed",
+        format!("Grok Build config.toml 格式错误: {error}"),
+        format!("Invalid Grok Build config.toml: {error}"),
+        format!("Grok Build の config.toml の形式が無効です: {error}"),
+    )
 }
 
 fn required_string<'a>(table: &'a toml::value::Table, key: &str) -> Result<&'a str, AppError> {
@@ -45,7 +54,14 @@ fn required_string<'a>(table: &'a toml::value::Table, key: &str) -> Result<&'a s
         .and_then(toml::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::Config(format!("Grok Build 配置缺少有效的 {key} 字段")))
+        .ok_or_else(|| {
+            AppError::localized_ja(
+                "grokbuild.config.required_field",
+                format!("Grok Build 配置缺少有效的 {key} 字段"),
+                format!("Grok Build configuration requires a valid {key} field"),
+                format!("Grok Build の設定には有効な {key} フィールドが必要です"),
+            )
+        })
 }
 
 fn optional_string(table: &toml::value::Table, key: &str) -> Option<String> {
@@ -58,34 +74,57 @@ fn optional_string(table: &toml::value::Table, key: &str) -> Option<String> {
 }
 
 pub fn validate_config_toml(config_toml: &str) -> Result<(), AppError> {
-    let root = toml::from_str::<toml::Table>(config_toml)
-        .map_err(|error| AppError::Config(format!("Grok Build config.toml 格式错误: {error}")))?;
+    let root = toml::from_str::<toml::Table>(config_toml).map_err(config_parse_error)?;
     let models = root
         .get("models")
         .and_then(toml::Value::as_table)
-        .ok_or_else(|| AppError::Config("Grok Build 配置缺少 [models]".into()))?;
+        .ok_or_else(|| {
+            AppError::localized_ja(
+                "grokbuild.config.models_missing",
+                "Grok Build 配置缺少 [models]",
+                "Grok Build configuration is missing [models]",
+                "Grok Build の設定に [models] がありません",
+            )
+        })?;
     let profile = required_string(models, "default")?;
     let model = root
         .get("model")
         .and_then(toml::Value::as_table)
         .and_then(|models| models.get(profile))
         .and_then(toml::Value::as_table)
-        .ok_or_else(|| AppError::Config(format!("Grok Build 配置缺少 [model.\"{profile}\"]")))?;
+        .ok_or_else(|| {
+            AppError::localized_ja(
+                "grokbuild.config.model_missing",
+                format!("Grok Build 配置缺少 [model.\"{profile}\"]"),
+                format!("Grok Build configuration is missing [model.\"{profile}\"]"),
+                format!("Grok Build の設定に [model.\"{profile}\"] がありません"),
+            )
+        })?;
 
     required_string(model, "model")?;
     required_string(model, "base_url")?;
     required_string(model, "name")?;
     required_string(model, "api_backend")?;
     if optional_string(model, "api_key").is_none() && optional_string(model, "env_key").is_none() {
-        return Err(AppError::Config(
-            "Grok Build 配置缺少有效的 api_key 或 env_key 字段".into(),
+        return Err(AppError::localized_ja(
+            "grokbuild.config.credentials_required",
+            "Grok Build 配置缺少有效的 api_key 或 env_key 字段",
+            "Grok Build configuration requires a valid api_key or env_key field",
+            "Grok Build の設定には有効な api_key または env_key フィールドが必要です",
         ));
     }
     model
         .get("context_window")
         .and_then(toml::Value::as_integer)
         .filter(|value| *value > 0)
-        .ok_or_else(|| AppError::Config("Grok Build context_window 必须是正整数".into()))?;
+        .ok_or_else(|| {
+            AppError::localized_ja(
+                "grokbuild.config.context_window_invalid",
+                "Grok Build context_window 必须是正整数",
+                "Grok Build context_window must be a positive integer",
+                "Grok Build の context_window には正の整数を指定してください",
+            )
+        })?;
     Ok(())
 }
 
@@ -146,7 +185,7 @@ pub fn strip_grok_mcp_servers_from_settings(settings: &mut Value) -> Result<(), 
     };
     let mut document = config_text
         .parse::<toml_edit::DocumentMut>()
-        .map_err(|error| AppError::Config(format!("Grok Build config.toml 格式错误: {error}")))?;
+        .map_err(config_parse_error)?;
     if document.as_table_mut().remove("mcp_servers").is_some() {
         settings["config"] = Value::String(document.to_string());
     }
@@ -156,7 +195,12 @@ pub fn strip_grok_mcp_servers_from_settings(settings: &mut Value) -> Result<(), 
 pub fn read_grok_live_settings() -> Result<Value, AppError> {
     let path = get_grok_config_path();
     if !path.exists() {
-        return Err(AppError::Config("Grok Build 配置文件不存在".into()));
+        return Err(AppError::localized_ja(
+            "grokbuild.config.file_missing",
+            "Grok Build 配置文件不存在",
+            "Grok Build configuration file does not exist",
+            "Grok Build の設定ファイルがありません",
+        ));
     }
     let config = fs::read_to_string(&path).map_err(|error| AppError::io(&path, error))?;
     // The official xAI OAuth profile intentionally uses an empty config and
@@ -170,7 +214,14 @@ pub fn write_grok_provider_live(provider: &Provider) -> Result<(), AppError> {
         .settings_config
         .get("config")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::Config("Grok Build 配置缺少 config 字段".into()))?;
+        .ok_or_else(|| {
+            AppError::localized_ja(
+                "grokbuild.config.config_missing",
+                "Grok Build 配置缺少 config 字段",
+                "Grok Build configuration is missing the config field",
+                "Grok Build の設定に config フィールドがありません",
+            )
+        })?;
     if provider.category.as_deref() == Some("official") {
         validate_config_toml_syntax(config)?;
     } else {
@@ -210,5 +261,69 @@ context_window = 500000
     fn rejects_missing_credentials() {
         let config = valid_config().replace("env_key = \"XAI_API_KEY\"\n", "");
         assert!(validate_config_toml(&config).is_err());
+    }
+
+    #[test]
+    fn validation_errors_include_chinese_english_and_japanese() {
+        let cases = [
+            ("".to_string(), "models_missing", "[models]"),
+            ("[models]".to_string(), "required_field", "default"),
+            (
+                "[models]\ndefault = \"用户配置-{profile}\"".to_string(),
+                "model_missing",
+                "用户配置-{profile}",
+            ),
+            (
+                valid_config().replace("model = \"grok-4.5\"", "model = \"\""),
+                "required_field",
+                "model",
+            ),
+            (
+                valid_config().replace("env_key = \"XAI_API_KEY\"\n", ""),
+                "credentials_required",
+                "api_key",
+            ),
+            (
+                valid_config().replace("context_window = 500000", "context_window = -1"),
+                "context_window_invalid",
+                "context_window",
+            ),
+        ];
+
+        // Inspect each supplied locale without mutating the process-wide locale;
+        // AppError's display tests cover choosing the installed language.
+        for (config, expected_key, parameter) in cases {
+            let AppError::Localized { key, zh, en, ja } =
+                validate_config_toml(&config).unwrap_err()
+            else {
+                panic!("Grok Build validation must provide localized messages");
+            };
+            assert_eq!(key, format!("grokbuild.config.{expected_key}"));
+            for message in [&zh, &en, &ja.unwrap()] {
+                assert!(message.contains(parameter), "{key}: {message}");
+            }
+            assert!(zh.contains("配置") || zh.contains("正整数"));
+            assert!(en.starts_with("Grok Build "));
+        }
+    }
+
+    #[test]
+    fn parse_error_translations_preserve_the_original_toml_excerpt() {
+        let config = "name = \"用户文件-{error}\" trailing";
+        for error in [
+            validate_config_toml_syntax(config).unwrap_err(),
+            validate_config_toml(config).unwrap_err(),
+        ] {
+            let AppError::Localized { key, zh, en, ja } = error else {
+                panic!("Grok Build parsing must provide localized messages");
+            };
+            assert_eq!(key, "grokbuild.config.parse_failed");
+            assert!(en.starts_with("Invalid Grok Build config.toml: "));
+            let ja = ja.unwrap();
+            assert!(ja.starts_with("Grok Build の config.toml の形式が無効です: "));
+            for message in [&zh, &en, &ja] {
+                assert!(message.contains("用户文件-{error}"));
+            }
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 use serde_json::{Map, Value, json};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues,
     GridColumn, Language, Preset, PreviewFile, SelectOption, set_str, str_val,
@@ -23,8 +24,9 @@ impl AppConfig for KimiCodeConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "供应商",
+            FormSection::identified(
+                "provider",
+                tr(TextKey::ProviderSection),
                 vec![
                     FormField::new(
                         "provider_id",
@@ -33,11 +35,11 @@ impl AppConfig for KimiCodeConfig {
                             placeholder: "my-provider".into(),
                         },
                     )
-                    .help("写入 config.toml 的 [providers.<id>]，模型通过该 ID 引用供应商。")
+                    .help(tr(TextKey::KimiProviderIdHelp))
                     .required(),
                     FormField::new(
                         "provider_type",
-                        "协议类型",
+                        tr(TextKey::ProtocolType),
                         FieldKind::Select {
                             options: vec![
                                 SelectOption::new("openai", "OpenAI Chat Completions"),
@@ -49,7 +51,7 @@ impl AppConfig for KimiCodeConfig {
                             ],
                         },
                     )
-                    .help("必须与上游实际协议一致。")
+                    .help(tr(TextKey::ProtocolTypeHelp))
                     .required(),
                     FormField::new(
                         "base_url",
@@ -67,45 +69,51 @@ impl AppConfig for KimiCodeConfig {
                     ),
                 ],
             ),
-            FormSection::new(
-                "模型",
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
                 vec![
                     FormField::new(
                         "default_model",
-                        "默认模型别名",
+                        tr(TextKey::DefaultModelAlias),
                         FieldKind::Text {
                             placeholder: "gpt-4.1".into(),
                         },
                     )
-                    .help("必须与下方某一行的模型别名一致；切换供应商时会写入 default_model。")
+                    .help(tr(TextKey::DefaultModelAliasHelp))
                     .required(),
                     FormField::new(
                         "models",
-                        "模型列表",
+                        tr(TextKey::ModelList),
                         FieldKind::ModelGrid {
                             columns: vec![
-                                GridColumn::text("alias", "模型别名", "gpt-4.1"),
-                                GridColumn::text("model", "上游模型 ID", "gpt-4.1"),
-                                GridColumn::text("context", "上下文", "128000"),
-                                GridColumn::text("output", "最大输出", "16384"),
-                                GridColumn::text("display_name", "显示名", "GPT-4.1"),
+                                GridColumn::text("alias", tr(TextKey::ModelAlias), "gpt-4.1"),
+                                GridColumn::text("model", tr(TextKey::UpstreamModelId), "gpt-4.1"),
+                                GridColumn::text("context", tr(TextKey::Context), "128000"),
+                                GridColumn::text("output", tr(TextKey::MaximumOutput), "16384"),
+                                GridColumn::text(
+                                    "display_name",
+                                    tr(TextKey::DisplayName),
+                                    "GPT-4.1",
+                                ),
                                 GridColumn::text(
                                     "capabilities",
-                                    "能力",
+                                    tr(TextKey::Capabilities),
                                     "thinking,tool_use,image_in",
                                 ),
                             ],
                         },
                     )
-                    .help("上下文为必填正整数；能力使用英文逗号分隔。"),
+                    .help(tr(TextKey::KimiModelsHelp)),
                 ],
             ),
-            FormSection::new(
-                "高级",
+            FormSection::identified(
+                "advanced",
+                tr(TextKey::AdvancedSection),
                 vec![
                     FormField::new(
                         "custom_headers",
-                        "自定义请求头",
+                        tr(TextKey::CustomHeaders),
                         FieldKind::KeyValue {
                             key_placeholder: "X-Header".into(),
                             value_placeholder: "value".into(),
@@ -113,13 +121,13 @@ impl AppConfig for KimiCodeConfig {
                     ),
                     FormField::new(
                         "env",
-                        "凭据环境映射",
+                        tr(TextKey::CredentialEnvironment),
                         FieldKind::KeyValue {
                             key_placeholder: "OPENAI_API_KEY".into(),
                             value_placeholder: "sk-...".into(),
                         },
                     )
-                    .help("这些键写入 [providers.<id>.env]，并不会修改 shell 环境。"),
+                    .help(tr(TextKey::KimiEnvironmentHelp)),
                 ],
             )
             .advanced(),
@@ -254,21 +262,27 @@ impl AppConfig for KimiCodeConfig {
 
     fn parse_files(&self, contents: &[String]) -> Result<Value, String> {
         let text = contents.first().map(String::as_str).unwrap_or("");
-        let parsed = toml::from_str::<toml::Value>(text)
-            .map_err(|error| format!("config.toml 解析失败: {error}"))?;
-        serde_json::to_value(parsed).map_err(|error| format!("config.toml 转换失败: {error}"))
+        let parsed = toml::from_str::<toml::Value>(text).map_err(|error| {
+            localized::format(TextKey::KimiTomlParseFailed, &[("error", &(error))])
+        })?;
+        serde_json::to_value(parsed).map_err(|error| {
+            localized::format(TextKey::KimiTomlConvertFailed, &[("error", &(error))])
+        })
     }
 
     fn validate(&self, values: &FormValues) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
         if str_val(values, "provider_id").trim().is_empty() {
-            issues.push(ConfigIssue::error("Provider ID 不能为空。").for_field("provider_id"));
+            issues
+                .push(ConfigIssue::error(tr(TextKey::ProviderIdRequired)).for_field("provider_id"));
         }
         if str_val(values, "provider_type").trim().is_empty() {
-            issues.push(ConfigIssue::error("协议类型不能为空。").for_field("provider_type"));
+            issues.push(
+                ConfigIssue::error(tr(TextKey::ProtocolTypeRequired)).for_field("provider_type"),
+            );
         }
         let Some(rows) = values.get("models").and_then(Value::as_array) else {
-            issues.push(ConfigIssue::error("至少需要配置一个模型。").for_field("models"));
+            issues.push(ConfigIssue::error(tr(TextKey::ModelRequired)).for_field("models"));
             return issues;
         };
         let aliases = rows
@@ -278,7 +292,7 @@ impl AppConfig for KimiCodeConfig {
             .filter(|alias| !alias.is_empty())
             .collect::<Vec<_>>();
         if aliases.is_empty() {
-            issues.push(ConfigIssue::error("至少需要配置一个模型。").for_field("models"));
+            issues.push(ConfigIssue::error(tr(TextKey::ModelRequired)).for_field("models"));
         }
         for row in rows {
             let alias = row
@@ -297,8 +311,11 @@ impl AppConfig for KimiCodeConfig {
                 .is_empty()
             {
                 issues.push(
-                    ConfigIssue::error(format!("模型 {alias} 缺少上游模型 ID。"))
-                        .for_field("models"),
+                    ConfigIssue::error(localized::format(
+                        TextKey::KimiUpstreamModelMissing,
+                        &[("alias", &(alias))],
+                    ))
+                    .for_field("models"),
                 );
             }
             let context = row
@@ -313,15 +330,19 @@ impl AppConfig for KimiCodeConfig {
                 .is_none()
             {
                 issues.push(
-                    ConfigIssue::error(format!("模型 {alias} 的上下文必须是正整数。"))
-                        .for_field("models"),
+                    ConfigIssue::error(localized::format(
+                        TextKey::KimiContextInvalid,
+                        &[("alias", &(alias))],
+                    ))
+                    .for_field("models"),
                 );
             }
         }
         let default_model = str_val(values, "default_model").trim();
         if !default_model.is_empty() && !aliases.contains(&default_model) {
             issues.push(
-                ConfigIssue::error("默认模型别名必须存在于模型列表中。").for_field("default_model"),
+                ConfigIssue::error(tr(TextKey::DefaultModelAliasInvalid))
+                    .for_field("default_model"),
             );
         }
         issues
@@ -340,8 +361,16 @@ impl AppConfig for KimiCodeConfig {
 
     fn presets(&self) -> Vec<Preset> {
         vec![
-            Preset::new("自定义", KimiCodeConfig.decode(&Value::Null, None)).with_category(""),
-            Preset::new("官方订阅", official_form_values()).with_identity(
+            Preset::new(
+                tr(TextKey::CustomPreset),
+                KimiCodeConfig.decode(&Value::Null, None),
+            )
+            .with_category(""),
+            Preset::new(
+                tr(TextKey::OfficialSubscriptionPreset),
+                official_form_values(),
+            )
+            .with_identity(
                 "official",
                 "Kimi Code Official",
                 "https://www.kimi.com/code/",
@@ -557,16 +586,14 @@ mod tests {
         assert_eq!(
             presets
                 .iter()
-                .map(|preset| preset.name.as_str())
+                .map(|preset| preset.category.as_deref())
                 .collect::<Vec<_>>(),
-            ["自定义", "官方订阅"]
+            [Some(""), Some("official")]
         );
         let preset = presets
             .into_iter()
-            .find(|preset| preset.name == "官方订阅")
+            .find(|preset| preset.category.as_deref() == Some("official"))
             .unwrap();
-        assert_eq!(preset.name, "官方订阅");
-        assert_eq!(preset.category.as_deref(), Some("official"));
         assert!(
             codec
                 .validate_for_category(&preset.values, Some("official"))

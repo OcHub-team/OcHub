@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::ProtocolError;
 
 pub mod methods {
+    pub const OVERVIEW_READ: &str = "overview.read";
     pub const STATUS_READ: &str = "status.read";
     pub const DOCTOR_RUN: &str = "doctor.run";
     pub const APP_LIST: &str = "app.list";
@@ -13,6 +14,12 @@ pub mod methods {
     pub const PROVIDER_GET: &str = "provider.get";
     pub const PROVIDER_CREATE: &str = "provider.create";
     pub const PROVIDER_UPDATE: &str = "provider.update";
+    pub const EDITOR_DRAFT_LIST: &str = "editor.draft.list";
+    pub const EDITOR_DRAFT_GET: &str = "editor.draft.get";
+    pub const EDITOR_DRAFT_SAVE: &str = "editor.draft.save";
+    pub const EDITOR_DRAFT_DELETE: &str = "editor.draft.delete";
+    pub const EDITOR_DRAFT_APPLY: &str = "editor.draft.apply";
+    pub const CONFIG_APPLY_UNDO: &str = "config.apply.undo";
     pub const PROVIDER_DELETE: &str = "provider.delete";
     pub const PROVIDER_DUPLICATE: &str = "provider.duplicate";
     pub const PROVIDER_SORT: &str = "provider.sort";

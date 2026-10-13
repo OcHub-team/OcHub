@@ -175,6 +175,16 @@ pub enum Command {
     Version,
     /// Show local OcHub and Gateway status.
     Status,
+
+    /// Read the current environment's routing, connections, and observed usage.
+    Overview {
+        /// UTC start timestamp in seconds; defaults to the previous 24 hours.
+        #[arg(long)]
+        from: Option<i64>,
+        /// UTC end timestamp in seconds; defaults to now.
+        #[arg(long)]
+        to: Option<i64>,
+    },
     /// Run local integrity, dependency, and configuration diagnostics.
     Doctor {
         /// Also test configured cloud backends over the network.
@@ -203,6 +213,8 @@ pub enum Command {
     Apply(DeclarativeApplyArgs),
     /// Manage direct providers.
     Provider(ProviderArgs),
+    /// Keep unfinished configuration drafts and explicitly apply or undo them.
+    Editor(EditorArgs),
     /// Manage OAuth accounts and provider bindings.
     Auth(AuthArgs),
     /// Query subscription and coding-plan quotas.
@@ -441,6 +453,54 @@ pub enum SettingsProxyCommand {
 pub struct ProviderArgs {
     #[command(subcommand)]
     pub command: ProviderCommand,
+}
+
+#[derive(Debug, Args)]
+pub struct EditorArgs {
+    #[command(subcommand)]
+    pub command: EditorCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EditorCommand {
+    List {
+        #[arg(long)]
+        app: String,
+    },
+    Get {
+        id: String,
+        #[arg(long)]
+        app: String,
+    },
+    Save {
+        id: String,
+        #[arg(long)]
+        app: String,
+        /// Omit only when creating a new draft.
+        #[arg(long)]
+        expected_revision: Option<u64>,
+        #[arg(long)]
+        from: PathBuf,
+    },
+    Delete {
+        id: String,
+        #[arg(long)]
+        app: String,
+        #[arg(long)]
+        revision: u64,
+    },
+    Apply {
+        id: String,
+        #[arg(long)]
+        app: String,
+        #[arg(long)]
+        revision: u64,
+        #[arg(long, default_value = "abort", value_parser = ["abort", "save", "revert"])]
+        on_drift: String,
+    },
+    Undo {
+        receipt_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

@@ -1,0 +1,13 @@
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+~		45 button Back
+~		46 button Claude Code: Disable management, Help: Built-in adapter · Management enabled
++		47 button Claude Desktop: Disable management, Help: Built-in adapter · Management enabled
++		48 button Codex: Disable management, Help: Built-in adapter · Management enabled
++		49 button Cherry Studio: Disable management, Help: Built-in adapter · Management enabled
++		50 button Grok Build: Disable management, Help: Built-in adapter · Management enabled
++		51 button Kimi Code: Disable management, Help: Built-in adapter · Management enabled
++		52 button OpenCode: Disable management, Help: Built-in adapter · Management enabled
++		53 button OpenClaw: Disable management, Help: Built-in adapter · Management enabled
++		54 button Hermes: Disable management, Help: Built-in adapter · Management enabled
++		55 button Audit audit-app: Disable management, Help: User plugin · Management enabled · CLI available · No desktop page yet
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise

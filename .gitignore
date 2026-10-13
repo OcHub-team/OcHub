@@ -3,3 +3,6 @@
 /target-app-probe
 .DS_Store
 *.tmp.*
+# Per-checkout Cargo configuration and exact local dependency snapshots.
+/.cargo/config.toml
+/.cargo/local-sources/

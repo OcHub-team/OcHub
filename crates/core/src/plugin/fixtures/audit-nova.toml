@@ -1,0 +1,81 @@
+# Synthetic app used to verify that an ID unknown to AppType can be managed.
+# Install only into an isolated QA home; all endpoint data is fictional.
+manifest_version = 1
+
+[app]
+id = "audit-nova"
+name = "Nova QA"
+accent = "#5B6FC8"
+sort_order = 200
+mode = "switch"
+enabled_by_default = true
+[app.icon]
+glyph = "N"
+[app.config_dir]
+default = "~/.audit-nova"
+
+[[files]]
+id = "config"
+path = "config.toml"
+format = "toml"
+store_key = "config"
+write = "merge_shallow"
+file_mode = "0600"
+dir_mode = "0700"
+
+[[files]]
+id = "auth"
+path = "auth.json"
+format = "json"
+store_key = "auth"
+write = "replace"
+file_mode = "0600"
+dir_mode = "0700"
+
+[[sections]]
+title = "Connection"
+[[sections.fields]]
+id = "base_url"
+label = "Service URL"
+kind = "text"
+required = true
+placeholder = "https://api.example.invalid/v1"
+map = { file = "config", toml_path = "endpoint.url", trim = true }
+[[sections.fields]]
+id = "api_key"
+label = "API key"
+kind = "secret"
+required = true
+placeholder = "Synthetic QA credential"
+map = { file = "auth", pointer = "/credentials/token", omit_empty = true, trim = true }
+[[sections.fields]]
+id = "model"
+label = "Default model"
+kind = "text"
+required = true
+map = { file = "config", toml_path = "model", trim = true }
+
+[[sections]]
+title = "Advanced"
+advanced = true
+[[sections.fields]]
+id = "telemetry"
+label = "Allow telemetry"
+kind = "toggle"
+map = { file = "config", toml_path = "telemetry.enabled" }
+[[sections.fields]]
+id = "models"
+label = "Additional models"
+kind = "model_grid"
+map = { file = "config", toml_path = "models", omit_empty = true }
+columns = [
+  { key = "id", label = "Model", kind = "text" },
+  { key = "enabled", label = "Enabled", kind = "toggle" },
+]
+
+[[presets]]
+name = "Example API"
+values = { base_url = "https://api.example.invalid/v1", model = "nova-example" }
+[[presets]]
+name = "Local service"
+values = { base_url = "http://127.0.0.1:11434/v1", model = "nova-local" }

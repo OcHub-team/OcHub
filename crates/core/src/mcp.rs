@@ -17,10 +17,12 @@
 mod claude;
 mod claude_mcp;
 mod codex;
+mod config_plan;
 mod grokbuild;
 mod hermes;
 mod opencode;
 mod validation;
+pub(crate) use config_plan::prepare_config_sync;
 
 // Re-export the public sync/import API (mirrors cc-switch `mcp/mod.rs`).
 pub use claude::{

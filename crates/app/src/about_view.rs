@@ -75,6 +75,8 @@ pub struct AboutView {
     /// shows what is on disk.
     settings: AppSettings,
     update: UpdateState,
+    /// Owned by the job, not by the currently rendered workspace snapshot.
+    install_in_progress: bool,
     /// Serializes the settings write and the release-page launch. Neither
     /// should be startable twice from one impatient double-click.
     busy: bool,
@@ -85,6 +87,10 @@ pub struct AboutView {
 }
 
 impl AboutView {
+    pub(crate) fn is_installing(&self) -> bool {
+        self.install_in_progress
+    }
+
     pub fn new(app: Arc<AppState>, _cx: &mut Context<Self>) -> Self {
         Self {
             backend: WorkspaceBackend::local(app),
@@ -93,6 +99,7 @@ impl AboutView {
             workspace_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             settings: settings::get_settings(),
             update: UpdateState::default(),
+            install_in_progress: false,
             busy: false,
             scroll: ScrollHandle::new(),
             status: None,
@@ -110,11 +117,20 @@ impl AboutView {
     }
 
     pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        if self.backend.same_target(&backend) && self.workspace_available {
+            // Reopening About is not a new update operation. Preserve the
+            // progress and the double-submit guard owned by the running task.
+            self.load_workspace_status(cx);
+            return;
+        }
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.workspace_remote = backend.is_remote();
         self.backend = backend;
         self.workspace_available = true;
-        self.update = UpdateState::default();
+        self.update = UpdateState {
+            installing: self.install_in_progress,
+            ..Default::default()
+        };
         self.workspace_version = None;
         self.load_workspace_status(cx);
     }
@@ -124,7 +140,10 @@ impl AboutView {
         self.workspace_remote = true;
         self.workspace_available = false;
         self.workspace_version = None;
-        self.update = UpdateState::default();
+        self.update = UpdateState {
+            installing: self.install_in_progress,
+            ..Default::default()
+        };
         cx.notify();
     }
 
@@ -454,7 +473,7 @@ impl AboutView {
     /// otherwise be lost on every update, and the single-instance lock and
     /// gateway port would be released late enough to race the relaunch.
     fn install_update(&mut self, cx: &mut Context<Self>) {
-        if self.update.installing {
+        if self.install_in_progress || !self.workspace_available {
             return;
         }
         if self.workspace_remote {
@@ -462,6 +481,7 @@ impl AboutView {
             return;
         }
         self.update.installing = true;
+        self.install_in_progress = true;
         self.update.progress = None;
         self.set_status(
             NotificationLevel::Info,
@@ -495,6 +515,7 @@ impl AboutView {
         cx.spawn(async move |this, cx| {
             let prepared = task.await;
             this.update(cx, |this, cx| {
+                this.install_in_progress = false;
                 this.update.installing = false;
                 this.update.progress = None;
                 match prepared {
@@ -514,7 +535,7 @@ impl AboutView {
                                     cx.background_executor()
                                         .timer(std::time::Duration::from_millis(600))
                                         .await;
-                                    cx.update(|cx| cx.quit());
+                                    cx.update(crate::request_main_quit);
                                 })
                                 .detach();
                             }
@@ -548,10 +569,11 @@ impl AboutView {
     }
 
     fn install_remote_update(&mut self, cx: &mut Context<Self>) {
-        if !self.workspace_available || !self.workspace_remote {
+        if self.install_in_progress || !self.workspace_available || !self.workspace_remote {
             return;
         }
         self.update.installing = true;
+        self.install_in_progress = true;
         self.update.progress = None;
         self.set_status(
             NotificationLevel::Info,
@@ -564,10 +586,12 @@ impl AboutView {
             let result =
                 crate::core_async::run(async move { backend.install_update().await }).await;
             this.update(cx, |this, cx| {
+                this.install_in_progress = false;
+                this.update.installing = false;
                 if generation != this.workspace_generation {
+                    cx.notify();
                     return;
                 }
-                this.update.installing = false;
                 match result {
                     Ok(value) if value["installed"].as_bool() == Some(true) => {
                         let version = value["version"]

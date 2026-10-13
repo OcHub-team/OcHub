@@ -105,6 +105,7 @@ pub struct SkillsView {
     rows: Arc<[SkillRow]>,
     list_state: ListState,
     reload_generation: u64,
+    workspace_generation: u64,
 }
 
 impl SkillsView {
@@ -170,6 +171,7 @@ impl SkillsView {
             rows: Arc::from([SkillRow::Tabs, SkillRow::Stats, SkillRow::InstalledToolbar]),
             list_state: ListState::new(3, ListAlignment::Top, px(512.)),
             reload_generation: 0,
+            workspace_generation: 0,
         };
 
         // 过滤输入变化时重排列表（忽略光标闪烁等无关通知）。
@@ -257,6 +259,8 @@ impl SkillsView {
         skill_apps: Vec<AppType>,
         cx: &mut Context<Self>,
     ) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.repo_mutating = false;
         self.backend = backend;
         self.workspace_available = true;
         self.skill_apps = skill_apps.into();
@@ -276,6 +280,8 @@ impl SkillsView {
         skill_apps: Vec<AppType>,
         cx: &mut Context<Self>,
     ) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.repo_mutating = false;
         self.reload_generation = self.reload_generation.wrapping_add(1);
         self.workspace_available = false;
         self.skill_apps = skill_apps.into();
@@ -386,9 +392,14 @@ impl SkillsView {
             return;
         }
         self.repo_mutating = true;
+        let generation = self.workspace_generation;
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(work()).await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.repo_mutating = false;
                 apply(this, result, cx);
                 this.refresh_list(cx);
@@ -1837,23 +1848,31 @@ impl SkillsView {
             let toggle_owner = owner.clone();
             let toggle_name = name.clone();
             let enabled = repo.enabled;
+            let toggle = cx.listener(move |this, _: &(), _window, cx| {
+                this.toggle_repo(toggle_owner.clone(), toggle_name.clone(), cx);
+            });
             rows.push(
-                layout::row()
-                    .child(layout::row_label(
-                        format!("{}/{}", repo.owner, repo.name),
-                        Some(SharedString::from(tf!(
-                            k::SKILLS_REPO_BRANCH,
-                            branch = repo.branch
-                        ))),
-                    ))
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .w_full()
+                    .gap_2()
+                    .pr_4()
                     .child(
-                        div()
-                            .id(SharedString::from(format!("repo-toggle-{owner}-{name}")))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.toggle_repo(toggle_owner.clone(), toggle_name.clone(), cx);
-                            }))
-                            .child(layout::toggle(enabled)),
+                        layout::switch_row(
+                            SharedString::from(format!("repo-toggle-{owner}-{name}")),
+                            format!("{}/{}", repo.owner, repo.name),
+                            Some(SharedString::from(tf!(
+                                k::SKILLS_REPO_BRANCH,
+                                branch = repo.branch
+                            ))),
+                            enabled,
+                            self.repo_mutating || !self.workspace_available,
+                            move |window, cx| toggle(&(), window, cx),
+                        )
+                        .flex_1()
+                        .min_w_0(),
                     )
                     .child(
                         components::button(

@@ -10,9 +10,9 @@ use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use gpui::{
-    Anchor, Animation, AnimationExt, Bounds, Context, ElementId, Entity, FontWeight, ListAlignment,
-    ListState, MouseButton, Pixels, Point, ScrollHandle, SharedString, Window, anchored, canvas,
-    deferred, div, ease_out_quint, point, prelude::*, px, relative,
+    Anchor, Animation, AnimationExt, Bounds, ClipboardItem, Context, ElementId, Entity, FontWeight,
+    ListAlignment, ListState, MouseButton, Pixels, Point, ScrollHandle, SharedString, Window,
+    anchored, canvas, deferred, div, ease_out_quint, point, prelude::*, px, relative,
 };
 use ochub_core::application::{PricingDefault, UsageFilter};
 use ochub_core::services::session_usage::DataSourceSummary;
@@ -2900,9 +2900,12 @@ impl UsageView {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_log(request_id.clone(), cx);
                     }));
-                    div().w_full().flex().flex_col().child(row).when_some(
-                        selected_detail,
-                        |s, detail| {
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .child(ochub_ui::keyboard::interactive(row))
+                        .when_some(selected_detail, |s, detail| {
                             s.child(
                                 div()
                                     .p_3()
@@ -2911,8 +2914,7 @@ impl UsageView {
                                     .border_color(theme::border())
                                     .child(Self::render_request_detail(detail)),
                             )
-                        },
-                    )
+                        })
                 })
                 .collect::<Vec<_>>();
 
@@ -2999,8 +3001,9 @@ impl UsageView {
             )
             .child(
                 div()
-                    .grid()
-                    .grid_cols(3)
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
                     .gap_3()
                     .child(detail_cell(
                         raw(k::USAGE_DETAIL_REQUEST_ID),
@@ -3214,34 +3217,30 @@ impl UsageView {
                             .truncate()
                             .child(SharedString::from(item.display_name.clone())),
                     );
-                let cache_write_cell =
-                    div()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_color(theme::text())
-                                .text_xs()
-                                .child(SharedString::from(format!(
-                                    "5m  ${}",
-                                    item.cache_creation_cost_per_million
-                                ))),
-                        )
-                        .child(div().text_color(theme::muted()).text_xs().child(
-                            SharedString::from(format!(
-                                "1h  ${}",
-                                item.cache_creation_1h_cost_per_million
-                            )),
-                        ));
+                let cache_write_cell = div()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_color(theme::text()).text_xs().truncate().child(
+                        SharedString::from(format!(
+                            "5m  ${}",
+                            item.cache_creation_cost_per_million
+                        )),
+                    ))
+                    .child(div().text_color(theme::muted()).text_xs().truncate().child(
+                        SharedString::from(format!(
+                            "1h  ${}",
+                            item.cache_creation_1h_cost_per_million
+                        )),
+                    ));
                 let actions = div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap_1()
                     .child(
-                        components::icon_button_tone(
+                        components::icon_only_button_tone(
                             ElementId::Name(format!("pricing-edit-{}", item.model_id).into()),
                             t(k::USAGE_PRICING_EDIT),
                             IconName::Settings,
@@ -3255,7 +3254,7 @@ impl UsageView {
                         )),
                     )
                     .child(
-                        components::icon_button_tone(
+                        components::icon_only_button_tone(
                             ElementId::Name(format!("pricing-delete-{}", item.model_id).into()),
                             t(k::USAGE_PRICING_DELETE),
                             IconName::Trash,
@@ -3269,19 +3268,18 @@ impl UsageView {
                             },
                         )),
                     );
-                components::table_row(
-                    vec![
-                        model_cell.into_any_element(),
-                        text_cell(format!("${}", item.input_cost_per_million)).into_any_element(),
-                        text_cell(format!("${}", item.output_cost_per_million)).into_any_element(),
-                        text_cell(format!("${}", item.cache_read_cost_per_million))
-                            .into_any_element(),
-                        cache_write_cell.into_any_element(),
-                        actions.into_any_element(),
-                    ],
-                    6,
-                    ix + 1 == row_count,
-                )
+                pricing_table_columns(vec![
+                    model_cell.into_any_element(),
+                    text_cell(format!("${}", item.input_cost_per_million)).into_any_element(),
+                    text_cell(format!("${}", item.output_cost_per_million)).into_any_element(),
+                    text_cell(format!("${}", item.cache_read_cost_per_million)).into_any_element(),
+                    cache_write_cell.into_any_element(),
+                    actions.into_any_element(),
+                ])
+                .items_center()
+                .when(ix + 1 != row_count, |row| {
+                    row.border_b_1().border_color(theme::border())
+                })
                 .id(ElementId::Name(
                     format!("pricing-row-{}", item.model_id).into(),
                 ))
@@ -3421,14 +3419,30 @@ impl UsageView {
                                     total = pricing_total
                                 ))),
                             ))
-                            .child(components::table_header(&[
-                                raw(k::USAGE_PRICING_COL_MODEL_ID),
-                                raw(k::USAGE_PRICING_COL_INPUT),
-                                raw(k::USAGE_PRICING_COL_OUTPUT),
-                                raw(k::USAGE_PRICING_COL_CACHE_READ),
-                                raw(k::USAGE_PRICING_COL_CACHE_WRITE),
-                                raw(k::USAGE_PRICING_COL_ACTIONS),
-                            ]))
+                            .child(
+                                pricing_table_columns(
+                                    [
+                                        raw(k::USAGE_PRICING_COL_MODEL_ID),
+                                        raw(k::USAGE_PRICING_COL_INPUT),
+                                        raw(k::USAGE_PRICING_COL_OUTPUT),
+                                        raw(k::USAGE_PRICING_COL_CACHE_READ),
+                                        raw(k::USAGE_PRICING_COL_CACHE_WRITE),
+                                        raw(k::USAGE_PRICING_COL_ACTIONS),
+                                    ]
+                                    .into_iter()
+                                    .map(|label| {
+                                        div()
+                                            .text_color(theme::muted())
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(label)
+                                            .into_any_element()
+                                    })
+                                    .collect(),
+                                )
+                                .border_b_1()
+                                .border_color(theme::border()),
+                            )
                             .when(pricing_rows.is_empty(), |s| {
                                 s.child(components::empty_state(
                                     IconName::Diamond,
@@ -4252,19 +4266,70 @@ fn filter_chip(
     )
 }
 
+/// Price headers and body cells share this budget. The two icon actions need
+/// 60px regardless of locale; the model receives the remaining width.
+fn pricing_table_columns(cells: Vec<gpui::AnyElement>) -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .gap_2()
+        .px_4()
+        .py_2()
+        .children(cells.into_iter().enumerate().map(|(index, cell)| {
+            let column = div().min_w_0().child(cell);
+            if index == 0 {
+                column.flex_1()
+            } else {
+                column.flex_none().w(px(if index == 5 { 60. } else { 72. }))
+            }
+        }))
+}
+
 fn detail_cell(label: &'static str, value: impl Into<SharedString>) -> impl IntoElement {
+    let value = value.into();
+    let copied = value.clone();
     div()
         .flex()
         .flex_col()
+        .flex_1()
+        .flex_basis(px(180.))
         .gap_1()
-        .min_w_0()
-        .child(div().text_color(theme::muted()).text_xs().child(label))
+        .min_w(px(180.))
         .child(
             div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(theme::muted())
+                        .text_xs()
+                        .child(label),
+                )
+                .child(
+                    components::icon_only_button_tone(
+                        SharedString::from(format!("usage-detail-copy-{label}")),
+                        tf!(k::USAGE_DETAIL_COPY, label = label),
+                        IconName::Copy,
+                        ButtonTone::Ghost,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(move |_event, _window, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copied.to_string()));
+                    }),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .min_w_0()
                 .text_color(theme::text())
                 .text_xs()
-                .truncate()
-                .child(value.into()),
+                .whitespace_normal()
+                .child(value),
         )
 }
 

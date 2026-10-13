@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, value};
 
+use super::localized::{self, TextKey, text as tr};
 use super::{
     AppConfig, ConfigIssue, EncodeResult, FieldKind, FormField, FormSection, FormValues, Language,
     Preset, PreviewFile, SelectOption, set_str, str_val,
@@ -23,21 +24,22 @@ impl AppConfig for GrokBuildConfig {
 
     fn schema(&self) -> Vec<FormSection> {
         vec![
-            FormSection::new(
-                "模型",
+            FormSection::identified(
+                "models",
+                tr(TextKey::ModelsSection),
                 vec![
                     FormField::new(
                         "profile",
-                        "配置名称",
+                        tr(TextKey::ConfigName),
                         FieldKind::Text {
                             placeholder: DEFAULT_MODEL.into(),
                         },
                     )
-                    .help("[models].default 与 [model.<name>] 使用的客户端配置名。")
+                    .help(tr(TextKey::GrokProfileHelp))
                     .required(),
                     FormField::new(
                         "upstream_model",
-                        "上游模型",
+                        tr(TextKey::UpstreamModel),
                         FieldKind::Text {
                             placeholder: DEFAULT_MODEL.into(),
                         },
@@ -45,7 +47,7 @@ impl AppConfig for GrokBuildConfig {
                     .required(),
                     FormField::new(
                         "name",
-                        "显示名",
+                        tr(TextKey::DisplayName),
                         FieldKind::Text {
                             placeholder: "xAI Grok".into(),
                         },
@@ -53,8 +55,9 @@ impl AppConfig for GrokBuildConfig {
                     .required(),
                 ],
             ),
-            FormSection::new(
-                "端点与鉴权",
+            FormSection::identified(
+                "endpoint_auth",
+                tr(TextKey::EndpointAuthSection),
                 vec![
                     FormField::new(
                         "base_url",
@@ -66,11 +69,11 @@ impl AppConfig for GrokBuildConfig {
                     .required(),
                     FormField::new(
                         "credential_mode",
-                        "鉴权方式",
+                        tr(TextKey::AuthMethod),
                         FieldKind::Select {
                             options: vec![
                                 SelectOption::new(CREDENTIAL_INLINE, "API Key"),
-                                SelectOption::new(CREDENTIAL_ENV, "环境变量"),
+                                SelectOption::new(CREDENTIAL_ENV, tr(TextKey::EnvironmentVariable)),
                             ],
                         },
                     ),
@@ -84,7 +87,7 @@ impl AppConfig for GrokBuildConfig {
                     .visible_when("credential_mode", CREDENTIAL_INLINE),
                     FormField::new(
                         "env_key",
-                        "环境变量名",
+                        tr(TextKey::EnvironmentVariableName),
                         FieldKind::Text {
                             placeholder: "XAI_API_KEY".into(),
                         },
@@ -92,8 +95,9 @@ impl AppConfig for GrokBuildConfig {
                     .visible_when("credential_mode", CREDENTIAL_ENV),
                 ],
             ),
-            FormSection::new(
-                "协议",
+            FormSection::identified(
+                "protocol",
+                tr(TextKey::ProtocolSection),
                 vec![
                     FormField::new(
                         "api_backend",
@@ -109,7 +113,7 @@ impl AppConfig for GrokBuildConfig {
                     .required(),
                     FormField::new(
                         "context_window",
-                        "上下文窗口",
+                        tr(TextKey::ContextWindow),
                         FieldKind::Text {
                             placeholder: DEFAULT_CONTEXT_WINDOW.to_string(),
                         },
@@ -229,14 +233,20 @@ impl AppConfig for GrokBuildConfig {
     fn validate(&self, values: &FormValues) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
         for (field, label) in [
-            ("profile", "配置名称"),
-            ("upstream_model", "上游模型"),
-            ("name", "显示名"),
+            ("profile", tr(TextKey::ConfigName)),
+            ("upstream_model", tr(TextKey::UpstreamModel)),
+            ("name", tr(TextKey::DisplayName)),
             ("base_url", "Base URL"),
             ("api_backend", "API Backend"),
         ] {
             if str_val(values, field).trim().is_empty() {
-                issues.push(ConfigIssue::error(format!("{label}不能为空。")).for_field(field));
+                issues.push(
+                    ConfigIssue::error(localized::format(
+                        TextKey::FieldRequired,
+                        &[("label", &(label))],
+                    ))
+                    .for_field(field),
+                );
             }
         }
 
@@ -247,7 +257,7 @@ impl AppConfig for GrokBuildConfig {
         };
         if str_val(values, credential_field).trim().is_empty() {
             issues.push(
-                ConfigIssue::warning("请填写 API Key 或环境变量名。").for_field(credential_field),
+                ConfigIssue::warning(tr(TextKey::CredentialMissing)).for_field(credential_field),
             );
         }
         if str_val(values, "context_window")
@@ -257,7 +267,9 @@ impl AppConfig for GrokBuildConfig {
             .filter(|value| *value > 0)
             .is_none()
         {
-            issues.push(ConfigIssue::error("上下文窗口必须是正整数。").for_field("context_window"));
+            issues.push(
+                ConfigIssue::error(tr(TextKey::ContextWindowInvalid)).for_field("context_window"),
+            );
         }
         issues
     }

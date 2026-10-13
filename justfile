@@ -23,6 +23,11 @@ run-release:
 qa-app:
     ./scripts/package-qa-app.sh
 
+# 从本地 UI 仓库读取 Cargo.toml 固定的 commit，供离线联调使用。
+# 不读取未提交改动，也不改变 Cargo.lock 中的 Git 来源。
+use-local-ui repository="../ochub-ui":
+    python3 ./scripts/use-local-ui.py "{{repository}}"
+
 # 快速类型检查（全 workspace）
 check:
     cargo check --workspace

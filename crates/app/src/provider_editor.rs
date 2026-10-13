@@ -12,22 +12,24 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::product_ui::provider_editor::{
-    self as editor_screen, PREVIEW_SPLIT_FRACTION, PREVIEW_SPLIT_MAX_WIDTH, PREVIEW_SPLIT_MIN_WIDTH,
-};
+use crate::product_ui::provider_editor as editor_screen;
 use gpui::{
-    Anchor, Context, Entity, FontWeight, HighlightStyle, ListAlignment, ListState, MouseButton,
-    Pixels, SharedString, StyledText, Task, Window, anchored, deferred, div, point, prelude::*, px,
-    relative, uniform_list,
+    Anchor, Context, Entity, Focusable, FontWeight, HighlightStyle, ListAlignment, ListOffset,
+    ListState, MouseButton, Pixels, SharedString, StyledText, Task, Window, anchored, deferred,
+    div, point, prelude::*, px, uniform_list,
+};
+use ochub_core::application::{
+    DraftApplyState, EditorCommonConfig, EditorDraft, EditorDraftApplyResult, EditorDraftInput,
+    ProviderSwitchPolicy, provider_revision_hash,
 };
 use ochub_core::gateway::apply;
+use ochub_core::plugin::{AppMode, AppPlugin};
 use ochub_core::provider_config::{
     self, AppConfig, ConfigIssue, FieldKind, FormField, FormSection, FormValues, GridCellKind,
     Language, Severity, StationCapabilities, bool_val, str_val,
 };
 use ochub_core::services::ConfigService;
-use ochub_core::services::provider::ProviderService;
-use ochub_core::{AppState, AppType, Provider, ProviderMeta, UsageResult};
+use ochub_core::{AppId, AppState, AppType, Provider, ProviderMeta, UsageResult};
 use serde_json::{Map, Value, json};
 
 use crate::code_editor::CodeEditor;
@@ -39,14 +41,17 @@ use crate::i18n::{k, raw, t};
 use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::notifications::NotificationLevel;
+use crate::product_ui::shell::content_viewport;
 use crate::remote::WorkspaceBackend;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::tf;
 use crate::theme;
+use ochub_ui::modal::{self, ModalFocusState};
 
 /// Outcome of the editor, observed by the host view via `cx.subscribe`.
 pub enum EditorEvent {
-    Saved,
+    Saved { leave: bool },
+    Applied { leave: bool },
     Cancelled,
 }
 
@@ -62,6 +67,8 @@ struct GridRow {
     id: usize,
     cells: HashMap<String, Entity<TextInput>>,
     toggles: HashMap<String, bool>,
+    /// Native row fields that this schema does not render still belong to it.
+    extras: Map<String, Value>,
 }
 
 /// Active "edit this file directly" modal over the preview.
@@ -70,6 +77,7 @@ struct RawEdit {
     filename: SharedString,
     input: Entity<CodeEditor>,
     error: Option<SharedString>,
+    original_content: String,
 }
 
 #[derive(Clone)]
@@ -82,6 +90,7 @@ struct PreviewDocument {
     regions: Arc<Vec<FoldRegion>>,
     region_headers: Arc<HashSet<usize>>,
     visible_rows: Arc<Vec<usize>>,
+    max_line_cells: usize,
 }
 
 impl PreviewDocument {
@@ -114,15 +123,17 @@ struct PreviewBuild {
 
 const PREVIEW_REFRESH_DELAY: Duration = Duration::from_millis(140);
 const PREVIEW_FOLD_BACKGROUND_LINE_THRESHOLD: usize = 4_096;
-enum ProviderSaveFailure {
-    CommonConfig(String),
-    Provider(String),
-    HistoryMigration(String),
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditorTab {
+    Basic,
+    Advanced,
+    Files,
 }
 
-struct ProviderSaveOutcome {
-    saved_snippet: Option<String>,
-    result: Result<(), ProviderSaveFailure>,
+#[derive(Clone)]
+struct PendingApply {
+    draft: EditorDraft,
+    snapshot: Value,
 }
 
 /// Where a channel gets its endpoint from: typed in by hand, or supplied by a
@@ -165,7 +176,11 @@ impl ModelSuggestionTarget {
 pub struct ProviderEditor {
     app: Arc<AppState>,
     backend: WorkspaceBackend,
-    app_type: AppType,
+    backend_available: bool,
+    app_id: AppId,
+    app_type: Option<AppType>,
+    plugin: Arc<dyn AppPlugin>,
+    plugin_revision: Option<String>,
     codec: Box<dyn AppConfig>,
     /// Shared so each frame's render iterates it without a deep clone.
     schema: Arc<Vec<FormSection>>,
@@ -197,10 +212,6 @@ pub struct ProviderEditor {
     presets: Arc<Vec<provider_config::Preset>>,
     /// Field id of the one schema select whose dropdown is currently open.
     open_select_field: Option<String>,
-    show_preview: bool,
-    /// Stacked (narrow-window) mode only: whether the preview pane is expanded
-    /// or collapsed to its one-line summary bar.
-    preview_expanded: bool,
     /// Collapsed fold regions in the preview pane: (file index, header line).
     preview_collapsed: HashSet<(usize, usize)>,
     /// Only the selected file is mounted; this keeps multi-file previews from
@@ -215,10 +226,14 @@ pub struct ProviderEditor {
     preview_refresh_task: Option<Task<()>>,
     /// When `Some`, a modal code editor for one preview file is open.
     raw_edit: Option<RawEdit>,
+    raw_focus: ModalFocusState,
+    convert_focus: ModalFocusState,
     common_config_supported: bool,
     common_config_enabled: bool,
     common_snippet: Entity<TextInput>,
     original_snippet: String,
+    original_snippet_present: bool,
+    common_base_pinned: bool,
     convert_open: bool,
     /// Prevent duplicate submissions while provider/config writes run off the
     /// UI thread.
@@ -246,8 +261,25 @@ pub struct ProviderEditor {
     form_stack_grid: bool,
     form_official_login: bool,
     show_advanced_fields: bool,
-    activate_after_save: bool,
-    saved_provider_id: Option<String>,
+    tab: EditorTab,
+    draft_id: String,
+    draft_revision: Option<u64>,
+    stable_provider_id: String,
+    base_provider_hash: Option<String>,
+    saved_snapshot: Value,
+    raw_documents: Option<Vec<String>>,
+    direct_values: Option<FormValues>,
+    station_values: Option<FormValues>,
+    official_values: Option<FormValues>,
+    checked_snapshot: Option<Value>,
+    applied: bool,
+    pending_apply: Option<PendingApply>,
+    receipt_id: Option<String>,
+    undo_provider: Option<Option<Provider>>,
+    undo_draft: Option<EditorDraft>,
+    field_errors: HashMap<String, SharedString>,
+    operation_note: Option<SharedString>,
+    operation_failed: bool,
 }
 
 impl ProviderEditor {
@@ -259,9 +291,8 @@ impl ProviderEditor {
     /// heights are memoized until the width changes, so a translation that
     /// makes a row taller or shorter also needs an explicit remeasure.
     ///
-    /// The schema-driven inputs are deliberately left alone: their
-    /// placeholders come from `ochub_core::provider_config`, which owns that
-    /// text and is translated there.
+    /// Re-read translated schema metadata without replacing input entities or
+    /// their drafts, selection, focus or undo history.
     pub fn relocalize(&mut self, cx: &mut Context<Self>) {
         self.provider_id.update(cx, |input, cx| {
             input.set_placeholder(t(k::PROVIDER_EDITOR_IDENTITY_ID_PLACEHOLDER), cx)
@@ -275,19 +306,56 @@ impl ProviderEditor {
         self.common_snippet.update(cx, |input, cx| {
             input.set_placeholder(t(k::PROVIDER_EDITOR_COMMON_CONFIG_SNIPPET_PLACEHOLDER), cx)
         });
+        self.schema = Arc::new(self.codec.schema());
+        self.presets = Arc::new(self.codec.presets());
+        for field in self.schema.iter().flat_map(|section| &section.fields) {
+            match &field.kind {
+                FieldKind::Text { placeholder } | FieldKind::Secret { placeholder } => {
+                    if let Some(input) = self.text_inputs.get(&field.id) {
+                        input.update(cx, |input, cx| {
+                            input.set_placeholder(placeholder.clone(), cx)
+                        });
+                    }
+                }
+                FieldKind::KeyValue {
+                    key_placeholder,
+                    value_placeholder,
+                } => {
+                    for row in self.kv_rows.get(&field.id).into_iter().flatten() {
+                        row.key.update(cx, |input, cx| {
+                            input.set_placeholder(key_placeholder.clone(), cx)
+                        });
+                        row.value.update(cx, |input, cx| {
+                            input.set_placeholder(value_placeholder.clone(), cx)
+                        });
+                    }
+                }
+                FieldKind::ModelGrid { columns } => {
+                    for row in self.grid_rows.get(&field.id).into_iter().flatten() {
+                        for column in columns {
+                            if let GridCellKind::Text { placeholder } = &column.kind
+                                && let Some(input) = row.cells.get(&column.key)
+                            {
+                                input.update(cx, |input, cx| {
+                                    input.set_placeholder(placeholder.clone(), cx)
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         self.form_list_state.remeasure();
+        self.invalidate_preview(cx);
         cx.notify();
     }
 
     pub(crate) fn shortcut_save(&mut self, cx: &mut Context<Self>) {
-        if self.saving {
+        if self.saving || self.convert_open {
             return;
         }
-        if self.raw_edit.is_some() {
-            self.apply_raw_edit(cx);
-        } else {
-            self.do_save(cx);
-        }
+        self.submit_draft(false, false, cx);
     }
 
     pub(crate) fn shortcut_cancel(&mut self, cx: &mut Context<Self>) {
@@ -311,43 +379,46 @@ impl ProviderEditor {
     pub fn new_add(
         app: Arc<AppState>,
         backend: WorkspaceBackend,
-        app_type: AppType,
+        app_id: AppId,
+        plugin: Arc<dyn AppPlugin>,
+        codec: Box<dyn AppConfig>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let codec = provider_config::config_for(app_type)
-            .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
         let schema = codec.schema();
         let values = codec.decode(&Value::Null, None);
         let mut this = Self::base(
-            app, backend, app_type, codec, schema, values, None, None, cx,
+            app, backend, app_id, plugin, codec, schema, values, None, None, cx,
         );
         Self::observe_preview_input(&this.category, cx);
         this.build_inputs(cx);
         this.load_station_options(cx);
         this.start_preview_build(cx);
+        this.saved_snapshot = this.editor_snapshot(cx);
         this
     }
 
     pub fn new_edit(
         app: Arc<AppState>,
         backend: WorkspaceBackend,
-        app_type: AppType,
+        app_id: AppId,
+        plugin: Arc<dyn AppPlugin>,
+        codec: Box<dyn AppConfig>,
         provider: &Provider,
         cx: &mut Context<Self>,
     ) -> Self {
-        let codec = provider_config::config_for(app_type)
-            .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
+        let app_type = AppType::from_app_id(&app_id);
         let schema = codec.schema();
         let values = codec.decode(&provider.settings_config, provider.meta.as_ref());
         let station_route = provider
             .meta
             .as_ref()
             .and_then(|meta| meta.gateway_route_id.clone())
-            .filter(|_| provider_config::station_source_supported(app_type));
+            .filter(|_| app_type.is_some_and(provider_config::station_source_supported));
         let mut this = Self::base(
             app,
             backend,
-            app_type,
+            app_id,
+            plugin,
             codec,
             schema,
             values,
@@ -364,6 +435,7 @@ impl ProviderEditor {
         this.build_inputs(cx);
         this.load_station_options(cx);
         this.start_preview_build(cx);
+        this.saved_snapshot = this.editor_snapshot(cx);
         this
     }
 
@@ -371,7 +443,8 @@ impl ProviderEditor {
     fn base(
         app: Arc<AppState>,
         backend: WorkspaceBackend,
-        app_type: AppType,
+        app_id: AppId,
+        plugin: Arc<dyn AppPlugin>,
         codec: Box<dyn AppConfig>,
         schema: Vec<FormSection>,
         values: FormValues,
@@ -383,26 +456,13 @@ impl ProviderEditor {
             .as_ref()
             .map(|p| p.settings_config.clone())
             .unwrap_or(Value::Null);
-        let common_config_supported = common_config_supported(app_type);
+        let app_type = AppType::from_app_id(&app_id);
+        let common_config_supported = app_type.is_some_and(common_config_supported);
         let presets = Arc::new(codec.presets());
-        let selected_preset = if original_provider
-            .as_ref()
-            .and_then(|provider| provider.category.as_deref())
-            == Some("official")
-        {
-            presets
-                .iter()
-                .position(|preset| preset.category.as_deref() == Some("official"))
-        } else if original_provider.is_none() && !presets.is_empty() {
-            Some(0)
-        } else {
-            presets.iter().position(|preset| {
-                preset
-                    .category
-                    .as_deref()
-                    .is_none_or(|category| category != "official")
-            })
-        };
+        // A preset is selected only when the user actually applies it. The
+        // presence or category of a connection does not establish its origin,
+        // and restoring a draft must never silently apply template defaults.
+        let selected_preset = None;
         let common_config_enabled = original_provider
             .as_ref()
             .and_then(|provider| provider.meta.as_ref())
@@ -418,10 +478,19 @@ impl ProviderEditor {
             input.set_content("", cx);
             input
         });
+        let stable_provider_id = original_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let base_provider_hash = original_provider.as_ref().map(provider_revision_hash);
+        let plugin_revision = plugin.configuration_revision().map(str::to_owned);
         let mut this = Self {
             app,
             backend,
+            backend_available: true,
+            app_id,
             app_type,
+            plugin,
+            plugin_revision,
             codec,
             schema: Arc::new(schema),
             values,
@@ -444,8 +513,6 @@ impl ProviderEditor {
             selected_preset,
             presets,
             open_select_field: None,
-            show_preview: true,
-            preview_expanded: false,
             preview_collapsed: HashSet::new(),
             preview_active_file: 0,
             preview_cache: PreviewCache::default(),
@@ -454,10 +521,14 @@ impl ProviderEditor {
             preview_applied_generation: 0,
             preview_refresh_task: None,
             raw_edit: None,
+            raw_focus: ModalFocusState::new(cx),
+            convert_focus: ModalFocusState::new(cx),
             common_config_supported,
             common_config_enabled,
             common_snippet,
             original_snippet,
+            original_snippet_present: false,
+            common_base_pinned: false,
             convert_open: false,
             saving: false,
             error: None,
@@ -474,9 +545,36 @@ impl ProviderEditor {
             form_stack_grid: false,
             form_official_login: false,
             show_advanced_fields: false,
-            activate_after_save: false,
-            saved_provider_id: None,
+            tab: EditorTab::Basic,
+            draft_id: uuid::Uuid::new_v4().to_string(),
+            draft_revision: None,
+            stable_provider_id,
+            base_provider_hash,
+            saved_snapshot: Value::Null,
+            raw_documents: None,
+            direct_values: None,
+            station_values: None,
+            official_values: None,
+            checked_snapshot: None,
+            applied: false,
+            pending_apply: None,
+            receipt_id: None,
+            undo_provider: None,
+            undo_draft: None,
+            field_errors: HashMap::new(),
+            operation_note: None,
+            operation_failed: false,
         };
+        for input in [
+            &this.name,
+            &this.provider_id,
+            &this.website_url,
+            &this.category,
+            &this.notes,
+            &this.common_snippet,
+        ] {
+            Self::observe_preview_input(input, cx);
+        }
         this.load_common_snippet(cx);
         this
     }
@@ -486,34 +584,43 @@ impl ProviderEditor {
             return;
         }
         let backend = self.backend.clone();
-        let app_type = self.app_type;
+        let app_id = self.app_id.clone();
         cx.spawn(async move |this, cx| {
             let result =
-                crate::core_async::run(
-                    async move { backend.common_config(&app_type.app_id()).await },
-                )
-                .await;
+                crate::core_async::run(async move { backend.common_config(&app_id).await }).await;
             this.update(cx, |this, cx| {
+                if this.common_base_pinned {
+                    return;
+                }
                 let snippet = match result {
-                    Ok(snippet) => snippet.unwrap_or_default(),
+                    Ok(snippet) => snippet,
                     Err(error) => {
                         log::warn!(
                             "failed to load common config snippet for {}: {}",
-                            app_type.as_str(),
+                            this.app_id.as_str(),
                             error
                         );
-                        String::new()
+                        None
                     }
                 };
                 // A fast typist may have changed the empty editor before the
                 // database result returned. Keep their text, while still
                 // recording the stored baseline for the save comparison.
-                let untouched = this.common_snippet.read(cx).content().is_empty();
+                let was_clean = !this.is_dirty(cx);
+                let untouched = this.draft_revision.is_none()
+                    && this.common_snippet.read(cx).content().is_empty();
+                this.original_snippet_present = snippet.is_some();
+                let snippet = snippet.unwrap_or_default();
                 this.original_snippet = snippet.clone();
+                this.common_base_pinned = true;
                 if untouched {
                     this.common_snippet
                         .update(cx, |input, cx| input.set_content(snippet, cx));
                 }
+                if was_clean {
+                    this.saved_snapshot = this.editor_snapshot(cx);
+                }
+                cx.notify();
             })
             .ok();
         })
@@ -541,12 +648,17 @@ impl ProviderEditor {
     /// Load the stations this app could draw from. Only runs for apps whose
     /// codec supports the station source; everyone else never sees the toggle.
     fn load_station_options(&mut self, cx: &mut Context<Self>) {
-        if !provider_config::station_source_supported(self.app_type) {
+        if !self
+            .app_type
+            .is_some_and(provider_config::station_source_supported)
+        {
             self.station_options_loaded = true;
             return;
         }
         let backend = self.backend.clone();
-        let app_type = self.app_type;
+        let Some(app_type) = self.app_type else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let result =
                 crate::core_async::run(
@@ -590,7 +702,9 @@ impl ProviderEditor {
             return;
         }
         let backend = self.backend.clone();
-        let app_type = self.app_type;
+        let Some(app_type) = self.app_type else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
@@ -623,8 +737,20 @@ impl ProviderEditor {
         if self.source == source {
             return;
         }
+        match self.source {
+            ProviderSource::Direct => self.direct_values = Some(self.current_values(cx)),
+            ProviderSource::Station => self.station_values = Some(self.current_values(cx)),
+        }
         self.source = source;
-        if self.app_type == AppType::Codex && str_val(&self.values, "auth_mode") != "api_key" {
+        let restored = match source {
+            ProviderSource::Direct => self.direct_values.clone(),
+            ProviderSource::Station => self.station_values.clone(),
+        };
+        if let Some(values) = restored {
+            self.apply_values(values, cx);
+        }
+        if self.app_type == Some(AppType::Codex) && str_val(&self.values, "auth_mode") != "api_key"
+        {
             provider_config::set_str(
                 &mut self.values,
                 "auth_mode",
@@ -694,7 +820,9 @@ impl ProviderEditor {
             return;
         }
         let caps = self.station_capabilities();
-        provider_config::clamp_station_fields(&mut self.values, self.app_type, caps);
+        if let Some(app_type) = self.app_type {
+            provider_config::clamp_station_fields(&mut self.values, app_type, caps);
+        }
     }
 
     /// Models the selected station declares, for suggestion popovers.
@@ -824,14 +952,11 @@ impl ProviderEditor {
                             self.next_row_id += 1;
                             let mut cells = HashMap::new();
                             let mut toggles = HashMap::new();
+                            let extras = row.as_object().cloned().unwrap_or_default();
                             for col in &columns {
                                 match &col.kind {
                                     GridCellKind::Text { placeholder } => {
-                                        let content = row
-                                            .get(&col.key)
-                                            .and_then(Value::as_str)
-                                            .unwrap_or_default()
-                                            .to_string();
+                                        let content = grid_text_display(row.get(&col.key));
                                         let placeholder = placeholder.clone();
                                         let input = cx.new(|cx| {
                                             let mut input = TextInput::new(cx, placeholder);
@@ -850,7 +975,12 @@ impl ProviderEditor {
                                     }
                                 }
                             }
-                            rows.push(GridRow { id, cells, toggles });
+                            rows.push(GridRow {
+                                id,
+                                cells,
+                                toggles,
+                                extras,
+                            });
                         }
                     }
                     self.grid_rows.insert(field.id.clone(), rows);
@@ -863,12 +993,14 @@ impl ProviderEditor {
 
     fn observe_preview_input(input: &Entity<TextInput>, cx: &mut Context<Self>) {
         cx.subscribe(input, |this, _input, _: &TextInputEvent, cx| {
+            this.field_errors.clear();
             // An open model popover filters against the live input text, so a
             // keystroke has to repaint the form, not just the input itself.
             if this.open_model_suggestion.is_some() {
                 cx.notify();
             }
             this.schedule_preview_refresh(cx);
+            cx.notify();
         })
         .detach();
     }
@@ -877,6 +1009,9 @@ impl ProviderEditor {
     /// responsive immediately and rebuild the potentially multi-megabyte native
     /// document only after the user pauses briefly.
     fn schedule_preview_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.checked_snapshot.take().is_some() {
+            self.operation_note = None;
+        }
         self.preview_dirty = true;
         self.preview_generation = self.preview_generation.wrapping_add(1);
         self.preview_refresh_task.take();
@@ -902,33 +1037,36 @@ impl ProviderEditor {
         }
         self.pull_values(cx);
         let generation = self.preview_generation;
-        let app_type = self.app_type;
+        let plugin = self.plugin.clone();
         let values = self.values.clone();
         let working_base = self.working_base.clone();
         let category = self.category.read(cx).content().trim().to_string();
         let collapsed = self.preview_collapsed.clone();
+        let raw_documents = self.raw_documents.clone();
         self.preview_dirty = false;
         self.preview_refresh_task = None;
 
         cx.spawn(async move |this, cx| {
             let build = cx
                 .background_spawn(async move {
-                    let codec = provider_config::config_for(app_type)
-                        .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
-                    build_preview_cache(
+                    let codec = plugin.provider_config()?;
+                    Some(build_preview_cache(
                         codec.as_ref(),
                         &values,
                         &working_base,
                         (!category.is_empty()).then_some(category.as_str()),
                         &collapsed,
-                    )
+                        raw_documents.as_deref(),
+                    ))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if generation != this.preview_generation {
                     return;
                 }
-                this.apply_preview_build(build);
+                if let Some(build) = build {
+                    this.apply_preview_build(build);
+                }
                 this.preview_applied_generation = generation;
                 cx.notify();
             })
@@ -949,6 +1087,7 @@ impl ProviderEditor {
             &self.working_base,
             (!category.is_empty()).then_some(category.as_str()),
             &self.preview_collapsed,
+            self.raw_documents.as_deref(),
         );
         self.apply_preview_build(build);
         self.preview_applied_generation = self.preview_generation;
@@ -1016,7 +1155,13 @@ impl ProviderEditor {
     fn open_raw_edit(&mut self, index: usize, cx: &mut Context<Self>) {
         self.ensure_preview_current(cx);
         if let Some(file) = self.preview_cache.files.get(index) {
-            let content = SharedString::from(file.content.to_string());
+            let original_content = self
+                .raw_documents
+                .as_ref()
+                .and_then(|files| files.get(index))
+                .cloned()
+                .unwrap_or_else(|| file.content.to_string());
+            let content = SharedString::from(original_content.clone());
             let filename = file.filename.clone();
             let lang = file.lang;
             let input = cx.new(|cx| {
@@ -1024,19 +1169,63 @@ impl ProviderEditor {
                 input.set_content(content, cx);
                 input
             });
+            cx.observe(&input, |_this, _input, cx| cx.notify()).detach();
             self.raw_edit = Some(RawEdit {
                 file_index: index,
                 filename,
                 input,
                 error: None,
+                original_content,
             });
             cx.notify();
         }
     }
 
     fn close_raw_edit(&mut self, cx: &mut Context<Self>) {
+        self.raw_documents = self.current_raw_documents(cx);
         self.raw_edit = None;
+        self.invalidate_preview(cx);
         cx.notify();
+    }
+
+    /// Switching back to structured fields must never silently ignore a newer
+    /// native document. Invalid text remains editable/savable on the file tab.
+    fn merge_pending_raw(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(documents) = self.raw_documents.clone() else {
+            return true;
+        };
+        match self.codec.parse_files(&documents) {
+            Ok(mut settings) => {
+                if self.plugin.is_user_manifest() {
+                    settings = replace_document_stores(&self.working_base, settings);
+                }
+                self.pull_values(cx);
+                let prior_meta = self
+                    .original_provider
+                    .as_ref()
+                    .and_then(|provider| provider.meta.as_ref());
+                let current_meta = self
+                    .codec
+                    .encode(&self.values, &self.working_base, prior_meta)
+                    .meta;
+                self.values = self.codec.decode(&settings, current_meta.as_ref());
+                self.working_base = settings;
+                self.raw_documents = None;
+                self.text_inputs.clear();
+                self.kv_rows.clear();
+                self.grid_rows.clear();
+                self.build_inputs(cx);
+                self.invalidate_preview(cx);
+                true
+            }
+            Err(error) => {
+                self.tab = EditorTab::Files;
+                self.operation_note = Some(error.into());
+                self.operation_failed = true;
+                cx.notify();
+                false
+            }
+        }
     }
 
     /// Parse the edited file back into values (and re-derive the form), preserving
@@ -1052,17 +1241,21 @@ impl ProviderEditor {
             .codec
             .encode(&self.values, &self.working_base, prior_meta.as_ref())
             .meta;
-        let mut contents: Vec<String> = self
-            .preview_cache
-            .files
-            .iter()
-            .map(|file| file.content.to_string())
-            .collect();
+        let mut contents: Vec<String> = self.current_raw_documents(cx).unwrap_or_else(|| {
+            self.preview_cache
+                .files
+                .iter()
+                .map(|file| file.content.to_string())
+                .collect()
+        });
         if idx < contents.len() {
             contents[idx] = edited;
         }
         match self.codec.parse_files(&contents) {
-            Ok(settings) => {
+            Ok(mut settings) => {
+                if self.plugin.is_user_manifest() {
+                    settings = replace_document_stores(&self.working_base, settings);
+                }
                 // The edited document becomes the new authoritative base, so
                 // keys the form doesn't model are preserved through save.
                 self.working_base = settings.clone();
@@ -1072,10 +1265,9 @@ impl ProviderEditor {
                 self.grid_rows.clear();
                 self.build_inputs(cx);
                 self.raw_edit = None;
-                self.set_status(
-                    NotificationLevel::Success,
-                    t(k::PROVIDER_EDITOR_RAW_APPLIED),
-                );
+                self.raw_documents = None;
+                self.operation_note = Some(t(k::PROVIDER_EDITOR_RAW_APPLIED));
+                self.operation_failed = false;
                 self.invalidate_preview(cx);
             }
             Err(e) => {
@@ -1109,11 +1301,11 @@ impl ProviderEditor {
         for (id, rows) in &self.grid_rows {
             let mut arr = Vec::new();
             for row in rows {
-                let mut obj = Map::new();
+                let mut obj = row.extras.clone();
                 for (k, input) in &row.cells {
                     obj.insert(
                         k.clone(),
-                        Value::String(input.read(cx).content().to_string()),
+                        grid_text_value(row.extras.get(k), input.read(cx).content().as_ref()),
                     );
                 }
                 for (k, on) in &row.toggles {
@@ -1130,11 +1322,12 @@ impl ProviderEditor {
         // arrival's `invalidate_preview` corrects.
         if self.source == ProviderSource::Station
             && let Some(info) = &self.station_gateway
+            && let Some(app_type) = self.app_type
         {
             let caps = self.station_capabilities();
             provider_config::inject_station_endpoint(
                 &mut self.values,
-                self.app_type,
+                app_type,
                 &info.origin,
                 &info.key,
                 caps,
@@ -1244,7 +1437,12 @@ impl ProviderEditor {
         self.grid_rows
             .entry(field_id.clone())
             .or_default()
-            .push(GridRow { id, cells, toggles });
+            .push(GridRow {
+                id,
+                cells,
+                toggles,
+                extras: Map::new(),
+            });
         if let Some(rows) = self.grid_rows.get(&field_id)
             && let Some(row) = rows.last()
         {
@@ -1303,572 +1501,869 @@ impl ProviderEditor {
         (snippet != self.original_snippet).then_some(snippet)
     }
 
-    fn check_configuration(&mut self, cx: &mut Context<Self>) {
-        self.pull_values(cx);
-        let mut values = self.values.clone();
-        if self.source == ProviderSource::Station {
-            if let Some(gateway) = &self.station_gateway {
-                provider_config::inject_station_endpoint(
-                    &mut values,
-                    self.app_type,
-                    &gateway.origin,
-                    &gateway.key,
-                    self.station_capabilities(),
-                );
-            } else {
-                self.set_error(t(k::PROVIDER_EDITOR_STATION_REQUIRED));
-                cx.notify();
-                return;
-            }
+    /// The host uses the same snapshot for every navigation and close path.
+    /// Preview cache invalidation and visual tab state are intentionally absent.
+    pub(crate) fn is_dirty(&self, cx: &gpui::App) -> bool {
+        self.pending_apply.is_some() || self.editor_snapshot(cx) != self.saved_snapshot
+    }
+
+    pub(crate) fn is_busy(&self) -> bool {
+        self.saving
+    }
+
+    pub(crate) fn has_pending_apply(&self) -> bool {
+        self.pending_apply.is_some()
+    }
+
+    pub(crate) fn can_save_draft(&self) -> bool {
+        !self.saving
+            && self.pending_apply.is_none()
+            && self.backend_available
+            && self.backend.supports_editor_drafts()
+    }
+
+    pub(crate) fn set_workspace_backend(
+        &mut self,
+        backend: Option<WorkspaceBackend>,
+        cx: &mut Context<Self>,
+    ) {
+        self.backend_available = backend.is_some();
+        if let Some(backend) = backend {
+            self.backend = backend;
         }
-        let issues = self.codec.validate(&values);
-        if let Some(issue) = issues.iter().find(|i| i.severity == Severity::Error) {
-            self.set_error(issue.message.clone());
+        if !self.backend_available {
+            self.operation_note = Some(t(k::PROVIDER_EDITOR_WORKBENCH_OFFLINE));
+            self.operation_failed = true;
         } else {
-            self.set_status(NotificationLevel::Info, t(k::PROVIDER_EDITOR_CODEX_CHECKED));
+            self.operation_note = self
+                .pending_apply
+                .as_ref()
+                .map(|_| t(k::PROVIDER_EDITOR_WORKBENCH_PENDING_REQUIRED));
+            self.operation_failed = self.pending_apply.is_some();
         }
         cx.notify();
     }
 
-    fn finish_save(&mut self, cx: &mut Context<Self>) {
-        if !self.activate_after_save {
-            cx.emit(EditorEvent::Saved);
+    pub(crate) fn request_save_and_leave(&mut self, cx: &mut Context<Self>) {
+        self.submit_draft(false, true, cx);
+    }
+
+    fn current_values(&self, cx: &gpui::App) -> FormValues {
+        let mut values = self.values.clone();
+        for (id, input) in &self.text_inputs {
+            values.insert(
+                id.clone(),
+                Value::String(input.read(cx).content().to_string()),
+            );
+        }
+        for (id, rows) in &self.kv_rows {
+            let object = rows
+                .iter()
+                .filter_map(|row| {
+                    let key = row.key.read(cx).content().trim().to_string();
+                    (!key.is_empty())
+                        .then(|| (key, Value::String(row.value.read(cx).content().to_string())))
+                })
+                .collect();
+            values.insert(id.clone(), Value::Object(object));
+        }
+        for (id, rows) in &self.grid_rows {
+            values.insert(
+                id.clone(),
+                Value::Array(
+                    rows.iter()
+                        .map(|row| {
+                            let mut object = row.extras.clone();
+                            for (key, input) in &row.cells {
+                                object.insert(
+                                    key.clone(),
+                                    grid_text_value(
+                                        row.extras.get(key),
+                                        input.read(cx).content().as_ref(),
+                                    ),
+                                );
+                            }
+                            for (key, value) in &row.toggles {
+                                object.insert(key.clone(), Value::Bool(*value));
+                            }
+                            Value::Object(object)
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        values
+    }
+
+    fn current_raw_documents(&self, cx: &gpui::App) -> Option<Vec<String>> {
+        let mut documents = self.raw_documents.clone();
+        if let Some(raw) = &self.raw_edit
+            && (documents.is_some()
+                || raw.input.read(cx).content().as_ref() != raw.original_content)
+        {
+            let files = documents.get_or_insert_with(|| {
+                self.preview_cache
+                    .files
+                    .iter()
+                    .map(|file| file.content.to_string())
+                    .collect()
+            });
+            if let Some(file) = files.get_mut(raw.file_index) {
+                *file = raw.input.read(cx).content().to_string();
+            }
+        }
+        documents
+    }
+
+    fn editor_snapshot(&self, cx: &gpui::App) -> Value {
+        let mut snapshot = json!({
+            "name": self.name.read(cx).content().to_string(),
+            "providerId": self.provider_id.read(cx).content().to_string(),
+            "website": self.website_url.read(cx).content().to_string(),
+            "category": self.category.read(cx).content().to_string(),
+            "notes": self.notes.read(cx).content().to_string(),
+            "values": self.current_values(cx), "workingBase": self.working_base,
+            "kvRows": self.kv_rows.iter().map(|(id, rows)| (id.clone(), rows.iter().map(|row| json!({
+                "key": row.key.read(cx).content().to_string(), "value": row.value.read(cx).content().to_string()
+            })).collect::<Vec<_>>())).collect::<HashMap<_, _>>(),
+            "source": if self.source == ProviderSource::Station { "station" } else { "direct" },
+            "station": self.selected_station,
+            "directValues": self.direct_values, "stationValues": self.station_values, "officialValues": self.official_values,
+            "commonEnabled": self.common_config_enabled,
+            "commonSnippet": self.common_snippet.read(cx).content().to_string(),
+            "commonBaseline": self.original_snippet_present.then(|| self.original_snippet.clone()),
+            "rawDocuments": self.current_raw_documents(cx),
+        });
+        if let Some(revision) = &self.plugin_revision {
+            snapshot["pluginRevision"] = json!(revision);
+        }
+        snapshot
+    }
+
+    pub fn new_draft(
+        app: Arc<AppState>,
+        backend: WorkspaceBackend,
+        app_id: AppId,
+        plugin: Arc<dyn AppPlugin>,
+        codec: Box<dyn AppConfig>,
+        draft: EditorDraft,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::new_edit(
+            app,
+            backend,
+            app_id,
+            plugin,
+            codec,
+            &draft.input.provider,
+            cx,
+        );
+        this.original_id = draft.input.original_provider_id.clone();
+        this.base_provider_hash = draft.input.base_provider_hash.clone();
+        this.stable_provider_id = draft.input.provider.id.clone();
+        this.draft_id = draft.id;
+        this.draft_revision = Some(draft.revision);
+        let state = &draft.input.editor_state;
+        if let Some(revision) = state.get("pluginRevision").and_then(Value::as_str) {
+            this.plugin_revision = Some(revision.to_owned());
+        }
+        for (key, input) in [
+            ("name", &this.name),
+            ("providerId", &this.provider_id),
+            ("website", &this.website_url),
+            ("category", &this.category),
+            ("notes", &this.notes),
+            ("commonSnippet", &this.common_snippet),
+        ] {
+            if let Some(value) = state.get(key).and_then(Value::as_str) {
+                input.update(cx, |input, cx| input.set_content(value.to_string(), cx));
+            }
+        }
+        if let Some(values) = state
+            .get("values")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            this.values = values;
+        }
+        if let Some(base) = state.get("workingBase") {
+            this.working_base = base.clone();
+        }
+        if let Some(source) = state.get("source").and_then(Value::as_str) {
+            this.source = if source == "station" {
+                ProviderSource::Station
+            } else {
+                ProviderSource::Direct
+            };
+        }
+        if let Some(station) = state.get("station") {
+            this.selected_station = station.as_str().map(str::to_owned);
+        }
+        this.direct_values = state
+            .get("directValues")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        this.station_values = state
+            .get("stationValues")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        this.official_values = state
+            .get("officialValues")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        this.common_config_enabled = state
+            .get("commonEnabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(this.common_config_enabled);
+        if let Some(common) = &draft.input.common_config {
+            this.original_snippet = common.base_snippet.clone().unwrap_or_default();
+            this.original_snippet_present = common.base_snippet.is_some();
+            this.common_base_pinned = true;
+        } else if let Some(baseline) = state.get("commonBaseline") {
+            this.original_snippet = baseline.as_str().unwrap_or_default().to_owned();
+            this.original_snippet_present = baseline.is_string();
+            this.common_base_pinned = true;
+        }
+        this.raw_documents = draft.input.raw_documents.or_else(|| {
+            state
+                .get("rawDocuments")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+        });
+        if this.raw_documents.is_some() {
+            this.tab = EditorTab::Files;
+        }
+        this.text_inputs.clear();
+        this.kv_rows.clear();
+        this.grid_rows.clear();
+        this.build_inputs(cx);
+        if let Some(fields) = state.get("kvRows").and_then(Value::as_object) {
+            for (field, rows) in fields {
+                let Some(rows) = rows.as_array() else {
+                    continue;
+                };
+                let mut restored = Vec::new();
+                for row in rows {
+                    let id = this.next_row_id;
+                    this.next_row_id += 1;
+                    let key = cx.new(|cx| {
+                        let mut input = TextInput::new(cx, "key");
+                        input.set_content(row["key"].as_str().unwrap_or("").to_owned(), cx);
+                        input
+                    });
+                    let value = cx.new(|cx| {
+                        let mut input = TextInput::new(cx, "value");
+                        input.set_content(row["value"].as_str().unwrap_or("").to_owned(), cx);
+                        input
+                    });
+                    Self::observe_preview_input(&key, cx);
+                    Self::observe_preview_input(&value, cx);
+                    restored.push(KvRow { id, key, value });
+                }
+                this.kv_rows.insert(field.clone(), restored);
+            }
+        }
+        this.saved_snapshot = this.editor_snapshot(cx);
+        this.invalidate_preview(cx);
+        this
+    }
+
+    fn draft_input(&mut self, cx: &mut Context<Self>) -> EditorDraftInput {
+        self.pull_values(cx);
+        let prior_meta = self
+            .original_provider
+            .as_ref()
+            .and_then(|p| p.meta.as_ref());
+        let encoded = self
+            .codec
+            .encode(&self.values, &self.working_base, prior_meta);
+        let typed_id = self.provider_id.read(cx).content().trim().to_string();
+        let id = if typed_id.is_empty() {
+            self.stable_provider_id.clone()
+        } else {
+            typed_id
+        };
+        let mut provider = self
+            .original_provider
+            .clone()
+            .unwrap_or_else(|| Provider::with_id(id.clone(), String::new(), Value::Null, None));
+        provider.id = id;
+        provider.name = self.name.read(cx).content().trim().to_string();
+        provider.settings_config = encoded.settings_config;
+        provider.meta = encoded.meta;
+        provider.website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
+        provider.category = nonempty(self.category.read(cx).content().trim().to_string());
+        provider.notes = nonempty(self.notes.read(cx).content().trim().to_string());
+        if provider.created_at.is_none() {
+            provider.created_at = Some(chrono_now_millis());
+        }
+        if self.common_config_supported {
+            provider
+                .meta
+                .get_or_insert_with(ProviderMeta::default)
+                .common_config_enabled = self.common_config_enabled.then_some(true);
+        }
+        if self.source == ProviderSource::Station {
+            provider
+                .meta
+                .get_or_insert_with(ProviderMeta::default)
+                .gateway_route_id = self.selected_station.clone();
+        } else if let Some(meta) = provider.meta.as_mut() {
+            meta.gateway_route_id = None;
+        }
+        EditorDraftInput {
+            provider,
+            original_provider_id: self.original_id.clone(),
+            base_provider_hash: self.base_provider_hash.clone(),
+            editor_state: self.editor_snapshot(cx),
+            raw_documents: self.current_raw_documents(cx),
+            common_config: self
+                .common_snippet_update(cx)
+                .map(|snippet| EditorCommonConfig {
+                    snippet,
+                    base_snippet: self
+                        .original_snippet_present
+                        .then(|| self.original_snippet.clone()),
+                }),
+        }
+    }
+
+    fn check_configuration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_apply.is_some() {
+            self.operation_note = Some(t(k::PROVIDER_EDITOR_WORKBENCH_PENDING_REQUIRED));
+            self.operation_failed = true;
+            cx.notify();
             return;
         }
-        let Some(id) = self.saved_provider_id.clone() else {
-            cx.emit(EditorEvent::Saved);
+        self.pull_values(cx);
+        self.field_errors.clear();
+        if self.name.read(cx).content().trim().is_empty() {
+            let message = t(k::PROVIDER_EDITOR_IDENTITY_NAME_REQUIRED);
+            self.field_errors.insert("$name".into(), message.clone());
+            self.tab = EditorTab::Basic;
+            self.show_advanced_fields = false;
+            self.form_list_state.remeasure();
+            self.form_list_state.scroll_to(ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.),
+            });
+            self.name.read(cx).focus_handle(cx).focus(window, cx);
+            self.operation_note = Some(message.clone());
+            self.operation_failed = true;
+            cx.notify();
             return;
-        };
+        }
+        let mut values = self.values.clone();
+        if let Some(documents) = self.current_raw_documents(cx) {
+            match self.codec.parse_files(&documents) {
+                Ok(settings) => {
+                    values = self.codec.decode(
+                        &settings,
+                        self.original_provider
+                            .as_ref()
+                            .and_then(|p| p.meta.as_ref()),
+                    )
+                }
+                Err(error) => {
+                    self.tab = EditorTab::Files;
+                    self.operation_note = Some(error.clone().into());
+                    self.operation_failed = true;
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        let category = nonempty(self.category.read(cx).content().to_string());
+        let issues = self
+            .codec
+            .validate_for_category(&values, category.as_deref());
+        for issue in &issues {
+            if issue.severity == Severity::Error
+                && let Some(field) = &issue.field
+            {
+                self.field_errors
+                    .insert(field.clone(), issue.message.clone().into());
+            }
+        }
+        if let Some(issue) = issues.iter().find(|i| i.severity == Severity::Error) {
+            if let Some(field) = &issue.field {
+                let advanced = self.schema.iter().any(|s| {
+                    self.section_is_advanced(s) && s.fields.iter().any(|f| &f.id == field)
+                });
+                self.tab = if advanced {
+                    EditorTab::Advanced
+                } else {
+                    EditorTab::Basic
+                };
+                self.show_advanced_fields = advanced;
+                self.form_list_state.remeasure();
+                if let Some(index) = self.schema.iter().position(|section| {
+                    section
+                        .fields
+                        .iter()
+                        .any(|candidate| &candidate.id == field)
+                }) {
+                    self.form_list_state.scroll_to(ListOffset {
+                        item_ix: index + 1,
+                        offset_in_item: px(0.),
+                    });
+                }
+                if let Some(input) = self.text_inputs.get(field) {
+                    input.read(cx).focus_handle(cx).focus(window, cx);
+                }
+            }
+            self.operation_note = Some(issue.message.clone().into());
+            self.operation_failed = true;
+        } else {
+            self.checked_snapshot = Some(self.editor_snapshot(cx));
+            self.operation_note = Some(t(k::PROVIDER_EDITOR_CODEX_CHECKED));
+            self.operation_failed = false;
+        }
+        cx.notify();
+    }
+
+    /// Persist a revision first. Applying never reads a newer unconfirmed draft.
+    fn submit_draft(&mut self, apply_to_target: bool, leave: bool, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
+        if self.pending_apply.is_some() {
+            self.set_error(t(k::PROVIDER_EDITOR_WORKBENCH_PENDING_REQUIRED));
+            cx.notify();
+            return;
+        }
+        if !self.backend_available {
+            self.set_error(t(k::PROVIDER_EDITOR_WORKBENCH_OFFLINE));
+            cx.notify();
+            return;
+        }
+        if !self.backend.supports_editor_drafts() {
+            self.set_error(t(k::PROVIDER_EDITOR_WORKBENCH_UNSUPPORTED));
+            cx.notify();
+            return;
+        }
+        if !apply_to_target
+            && !self.is_dirty(cx)
+            && self.draft_revision.is_none()
+            && self.original_id.is_some()
+        {
+            self.operation_note = Some(t(k::PROVIDER_EDITOR_WORKBENCH_UNCHANGED));
+            cx.emit(EditorEvent::Saved { leave });
+            cx.notify();
+            return;
+        }
+        let input = self.draft_input(cx);
+        let snapshot = input.editor_state.clone();
         let backend = self.backend.clone();
-        let app = self.app_type.app_id();
+        let plugin = self.plugin.clone();
+        let app_id = self.app_id.clone();
+        let draft_id = self.draft_id.clone();
+        let expected_revision = self.draft_revision;
+        let station = if apply_to_target && self.source == ProviderSource::Station {
+            match (self.app_type, self.selected_station.clone()) {
+                (Some(app_type), Some(route)) => Some((
+                    app_type,
+                    route,
+                    self.values.clone(),
+                    self.working_base.clone(),
+                    self.station_capabilities(),
+                    self.station_models().to_vec(),
+                )),
+                _ => {
+                    self.set_error(t(k::PROVIDER_EDITOR_STATION_REQUIRED));
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         self.saving = true;
+        self.error = None;
+        self.operation_note = None;
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
-                let plan = backend
-                    .plan_provider_switch(
-                        &app,
-                        &id,
-                        ochub_core::application::ProviderSwitchPolicy::Save,
+                let mut draft = backend
+                    .upsert_editor_draft(&app_id, &draft_id, expected_revision, input)
+                    .await
+                    .map_err(|error| (None, error.to_string(), false))?;
+                if !apply_to_target {
+                    return Ok((draft, None));
+                }
+                if let Some((app_type, route, mut values, mut base, caps, models)) = station {
+                    let prepared = async {
+                        {
+                            let codec = plugin.provider_config().ok_or_else(|| {
+                                "The selected app no longer has a configuration codec".to_string()
+                            })?;
+                            if let Some(documents) = &draft.input.raw_documents {
+                                base = codec.parse_files(documents)?;
+                                values = codec.decode(&base, draft.input.provider.meta.as_ref());
+                            }
+                            if draft.input.provider.name.trim().is_empty() {
+                                return Err(
+                                    t(k::PROVIDER_EDITOR_IDENTITY_NAME_REQUIRED).to_string()
+                                );
+                            }
+                            if let Some(issue) = codec
+                                .validate_for_category(
+                                    &values,
+                                    draft.input.provider.category.as_deref(),
+                                )
+                                .into_iter()
+                                .find(|issue| issue.severity == Severity::Error)
+                            {
+                                return Err(issue.message);
+                            }
+                        }
+                        backend
+                            .set_gateway_running(true)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let (origin, key) = backend
+                            .station_gateway_preview(&route, app_type)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let original = &draft.input.provider;
+                        let identity = apply::StationChannelIdentity {
+                            id: original.id.clone(),
+                            name: original.name.clone(),
+                            website_url: original.website_url.clone(),
+                            category: original.category.clone(),
+                            notes: original.notes.clone(),
+                        };
+                        let mut provider = apply::build_station_channel_with_endpoint(
+                            app_type,
+                            &route,
+                            &values,
+                            identity,
+                            &origin,
+                            &key,
+                            caps,
+                            &models,
+                            &base,
+                            original.meta.as_ref(),
+                        )
+                        .map_err(|e| e.to_string())?;
+                        provider.created_at = original.created_at;
+                        provider.sort_index = original.sort_index;
+                        provider.icon.clone_from(&original.icon);
+                        provider.icon_color.clone_from(&original.icon_color);
+                        let mut next = draft.input.clone();
+                        {
+                            let codec = plugin.provider_config().ok_or_else(|| {
+                                "The selected app no longer has a configuration codec".to_string()
+                            })?;
+                            next.editor_state["values"] = serde_json::to_value(
+                                codec.decode(&provider.settings_config, provider.meta.as_ref()),
+                            )
+                            .map_err(|error| error.to_string())?;
+                            next.editor_state["workingBase"] = provider.settings_config.clone();
+                        }
+                        next.provider = provider;
+                        // The snapshot keeps the user's raw text for a failed
+                        // apply/undo; core must apply the prepared station data.
+                        next.raw_documents = None;
+                        backend
+                            .upsert_editor_draft(&app_id, &draft_id, Some(draft.revision), next)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                    .await;
+                    match prepared {
+                        Ok(prepared) => draft = prepared,
+                        Err(error) => return Err((Some(draft), error, false)),
+                    }
+                }
+                let outcome = backend
+                    .apply_editor_draft(
+                        &app_id,
+                        &draft_id,
+                        draft.revision,
+                        ProviderSwitchPolicy::Abort,
                     )
-                    .await?;
-                backend.apply_provider_switch(plan).await
+                    .await
+                    .map_err(|error| {
+                        (Some(draft.clone()), error.to_string(), backend.is_remote())
+                    })?;
+                if outcome.state == DraftApplyState::ExternalConfirmation {
+                    if backend.is_remote() {
+                        return Err((
+                            Some(draft),
+                            t(k::SHELL_PROVIDER_IMPORT_REMOTE_UNSUPPORTED).to_string(),
+                            false,
+                        ));
+                    }
+                    let provider = outcome.provider.as_ref().ok_or_else(|| {
+                        (
+                            Some(draft.clone()),
+                            "Import request has no prepared provider".to_string(),
+                            false,
+                        )
+                    })?;
+                    let deeplink = ochub_core::apps::cherry_studio::build_provider_import_deeplink(
+                        &provider.provider,
+                    )
+                    .map_err(|error| (Some(draft.clone()), error.to_string(), false))?;
+                    crate::app_ui::open_cherry_studio_deeplink(&deeplink)
+                        .map_err(|error| (Some(draft.clone()), error, false))?;
+                }
+                Ok((draft, Some(outcome)))
             })
             .await;
             this.update(cx, |this, cx| {
                 this.saving = false;
                 match result {
-                    Ok(_) => cx.emit(EditorEvent::Saved),
-                    Err(error) => {
-                        this.set_error(error.to_string());
-                        cx.notify();
+                    Ok((draft, outcome)) => {
+                        this.accept_submission(draft, outcome, snapshot, leave, cx)
+                    }
+                    Err((saved, error, application_unknown)) => {
+                        if application_unknown && let Some(draft) = saved.clone() {
+                            this.pending_apply = Some(PendingApply { draft, snapshot });
+                            this.operation_note = Some(
+                                tf!(k::PROVIDER_EDITOR_WORKBENCH_RESULT_UNKNOWN, error = error)
+                                    .into(),
+                            );
+                            this.operation_failed = true;
+                            cx.notify();
+                            return;
+                        }
+                        if let Some(draft) = saved {
+                            this.draft_revision = Some(draft.revision);
+                            this.saved_snapshot = snapshot;
+                            cx.emit(EditorEvent::Saved { leave: false });
+                        }
+                        this.operation_note = Some(error.clone().into());
+                        this.operation_failed = true;
                     }
                 }
+                cx.notify();
             })
             .ok();
         })
         .detach();
     }
 
-    fn do_save(&mut self, cx: &mut Context<Self>) {
+    fn accept_submission(
+        &mut self,
+        draft: EditorDraft,
+        outcome: Option<EditorDraftApplyResult>,
+        snapshot: Value,
+        leave: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_apply = None;
+
+        let unchanged_in_flight = self.editor_snapshot(cx) == snapshot;
+        self.draft_revision = Some(draft.revision);
+        self.saved_snapshot = snapshot;
+        if let Some(outcome) = outcome {
+            match outcome.state {
+                DraftApplyState::Applied => {
+                    self.applied = true;
+                    self.undo_draft = outcome.undo_available.then(|| draft.clone());
+                    self.undo_provider = outcome
+                        .undo_available
+                        .then(|| self.original_provider.clone());
+                    self.receipt_id = if outcome.undo_available {
+                        outcome.receipt_id
+                    } else {
+                        None
+                    };
+                    if let Some(details) = outcome.provider {
+                        self.original_id = Some(details.provider.id.clone());
+                        self.base_provider_hash = Some(provider_revision_hash(&details.provider));
+                        if unchanged_in_flight {
+                            self.working_base = details.provider.settings_config.clone();
+                            self.values = self
+                                .codec
+                                .decode(&self.working_base, details.provider.meta.as_ref());
+                            self.raw_documents = None;
+                            self.raw_edit = None;
+                            self.text_inputs.clear();
+                            self.kv_rows.clear();
+                            self.grid_rows.clear();
+                            self.build_inputs(cx);
+                            self.set_identity(&details.provider, cx);
+                        }
+                        self.original_provider = Some(details.provider);
+                    }
+                    if let Some(common) = draft.input.common_config {
+                        self.original_snippet = common.snippet;
+                        self.original_snippet_present = true;
+                    }
+                    if unchanged_in_flight {
+                        self.saved_snapshot = self.editor_snapshot(cx);
+                        self.invalidate_preview(cx);
+                    }
+                    self.draft_id = uuid::Uuid::new_v4().to_string();
+                    self.draft_revision = None;
+                    self.operation_note = Some(t(k::PROVIDER_EDITOR_WORKBENCH_APPLIED));
+                    self.operation_failed = false;
+                    if !outcome.warnings.is_empty() {
+                        self.operation_note = Some(
+                            format!(
+                                "{} {}",
+                                t(k::PROVIDER_EDITOR_WORKBENCH_APPLIED),
+                                outcome.warnings.join(" ")
+                            )
+                            .into(),
+                        );
+                    }
+                    cx.emit(EditorEvent::Applied {
+                        leave: leave && unchanged_in_flight,
+                    });
+                }
+                DraftApplyState::ExternalConfirmation => {
+                    self.operation_note = Some(t(k::PROVIDER_EDITOR_WORKBENCH_EXTERNAL));
+                    self.operation_failed = false;
+                    cx.emit(EditorEvent::Saved { leave: false });
+                }
+                DraftApplyState::Failed => {
+                    let detail = outcome.failure.map(|f| f.message).unwrap_or_default();
+                    self.operation_note =
+                        Some(tf!(k::PROVIDER_EDITOR_WORKBENCH_APPLY_FAILED, error = detail).into());
+                    self.operation_failed = true;
+                    cx.emit(EditorEvent::Saved { leave: false });
+                }
+            }
+        } else {
+            self.applied = false;
+            self.operation_note = Some(t(k::PROVIDER_EDITOR_WORKBENCH_SAVED));
+            self.operation_failed = false;
+            cx.emit(EditorEvent::Saved {
+                leave: leave && unchanged_in_flight,
+            });
+        }
+    }
+
+    /// Resolve the exact previously submitted revision. In particular, do not
+    /// upsert first: a successful remote commit has already consumed its draft.
+    fn reconcile_pending_apply(&mut self, cx: &mut Context<Self>) {
         if self.saving {
             return;
         }
-        if self.source == ProviderSource::Station {
-            self.do_save_station(cx);
-            return;
-        }
-        let name = self.name.read(cx).content().trim().to_string();
-        if name.is_empty() {
-            self.set_error(t(k::PROVIDER_EDITOR_IDENTITY_NAME_REQUIRED));
+        if !self.backend_available {
+            self.set_error(t(k::PROVIDER_EDITOR_WORKBENCH_OFFLINE));
             cx.notify();
             return;
         }
-        self.pull_values(cx);
-        let category = nonempty(self.category.read(cx).content().trim().to_string());
-        if self.app_type == AppType::KimiCode && category.as_deref() == Some("official") {
-            provider_config::apply_official_defaults(&mut self.values);
-        }
-
-        let issues = self
-            .codec
-            .validate_for_category(&self.values, category.as_deref());
-        if let Some(err) = issues.iter().find(|i| i.severity == Severity::Error) {
-            self.set_error(tf!(
-                k::PROVIDER_EDITOR_SAVE_CONFIG_INVALID,
-                message = err.message
-            ));
-            cx.notify();
+        let Some(pending) = self.pending_apply.clone() else {
             return;
-        }
-
-        let prior_meta = self.original_provider.as_ref().and_then(|p| p.meta.clone());
-        let mut encoded = self
-            .codec
-            .encode(&self.values, &self.working_base, prior_meta.as_ref());
-
-        let snippet_update = self.common_snippet_update(cx);
-        if self.common_config_supported {
-            if self.common_config_enabled {
-                encoded
-                    .meta
-                    .get_or_insert_with(ProviderMeta::default)
-                    .common_config_enabled = Some(true);
-            } else if let Some(meta) = encoded.meta.as_mut() {
-                meta.common_config_enabled = None;
-            }
-        }
-
-        let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
-        let notes = nonempty(self.notes.read(cx).content().trim().to_string());
-
-        let (original_id, provider) = if let Some(original_id) = self.original_id.clone() {
-            let mut provider = self.original_provider.clone().unwrap_or_else(|| {
-                Provider::with_id(original_id.clone(), name.clone(), json!({}), None)
-            });
-            provider.name = name;
-            provider.settings_config = encoded.settings_config;
-            provider.meta = encoded.meta;
-            provider.website_url = website_url;
-            provider.category = category;
-            provider.notes = notes;
-            (Some(original_id), provider)
-        } else {
-            let id_input = self.provider_id.read(cx).content().trim().to_string();
-            let id = if id_input.is_empty() {
-                uuid::Uuid::new_v4().to_string()
-            } else {
-                id_input
-            };
-            let mut provider = Provider::with_id(id, name, encoded.settings_config, website_url);
-            provider.meta = encoded.meta;
-            provider.category = category;
-            provider.notes = notes;
-            provider.created_at = Some(chrono_now_millis());
-            (None, provider)
         };
-
-        self.saved_provider_id = Some(provider.id.clone());
-        self.saving = true;
-        self.error = None;
         let backend = self.backend.clone();
-        let app_type = self.app_type;
-        cx.spawn(async move |this, cx| {
-            let outcome = crate::core_async::run(async move {
-                let app_id = app_type.app_id();
-                let mut saved_snippet = None;
-                if let Some(snippet) = snippet_update {
-                    if let Err(error) = backend.set_common_config(&app_id, snippet.clone()).await {
-                        return ProviderSaveOutcome {
-                            saved_snippet,
-                            result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
-                        };
-                    }
-                    saved_snippet = Some(snippet);
-                }
-
-                let result = match original_id {
-                    Some(original_id) => match serde_json::to_value(provider) {
-                        Ok(patch) => if app_type == AppType::Codex {
-                            backend
-                                .update_provider_draft(&app_id, &original_id, patch)
-                                .await
-                        } else {
-                            backend.update_provider(&app_id, &original_id, patch).await
-                        }
-                        .map(|_| ()),
-                        Err(error) => Err(error.into()),
-                    },
-                    None => backend
-                        .create_provider(&app_id, provider, app_type != AppType::Codex)
-                        .await
-                        .map(|_| ()),
-                }
-                .map_err(|error| ProviderSaveFailure::Provider(error.to_string()));
-                ProviderSaveOutcome {
-                    saved_snippet,
-                    result,
-                }
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                this.saving = false;
-                if let Some(snippet) = outcome.saved_snippet {
-                    this.original_snippet = snippet;
-                }
-                match outcome.result {
-                    Ok(()) => this.finish_save(cx),
-                    Err(error) => {
-                        this.set_error(match error {
-                            ProviderSaveFailure::CommonConfig(e)
-                            | ProviderSaveFailure::Provider(e)
-                            | ProviderSaveFailure::HistoryMigration(e) => e,
-                        });
-                        cx.notify();
-                    }
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn do_save_station(&mut self, cx: &mut Context<Self>) {
-        let name = self.name.read(cx).content().trim().to_string();
-        if name.is_empty() {
-            self.set_error(t(k::PROVIDER_EDITOR_IDENTITY_NAME_REQUIRED));
-            cx.notify();
-            return;
-        }
-        let Some(route_id) = self.selected_station.clone() else {
-            self.set_error(t(k::PROVIDER_EDITOR_STATION_REQUIRED));
-            cx.notify();
-            return;
-        };
-        self.pull_values(cx);
-        let values = self.values.clone();
-        let category = nonempty(self.category.read(cx).content().trim().to_string());
-        let website_url = nonempty(self.website_url.read(cx).content().trim().to_string());
-        let notes = nonempty(self.notes.read(cx).content().trim().to_string());
-        let original_id = self.original_id.clone();
-        let channel_id = original_id.clone().unwrap_or_else(|| {
-            let typed = self.provider_id.read(cx).content().trim().to_string();
-            if typed.is_empty() {
-                uuid::Uuid::new_v4().to_string()
-            } else {
-                typed
-            }
-        });
-        self.saved_provider_id = Some(channel_id.clone());
-        let identity = apply::StationChannelIdentity {
-            id: channel_id,
-            name,
-            website_url,
-            category,
-            notes,
-        };
-        let snippet_update = self.common_snippet_update(cx);
-        let common_config_supported = self.common_config_supported;
-        let common_config_enabled = self.common_config_enabled;
-        let working_base = self.working_base.clone();
-        let original_provider = self.original_provider.clone();
-        let prior_meta = original_provider.as_ref().and_then(|p| p.meta.clone());
-        let caps = self.station_capabilities();
-        let catalog_models = self.station_models().to_vec();
-
-        if self.backend.is_remote() {
-            self.do_save_station_remote(
-                identity,
-                route_id,
-                values,
-                original_id,
-                original_provider,
-                prior_meta,
-                working_base,
-                snippet_update,
-                common_config_supported,
-                common_config_enabled,
-                caps,
-                catalog_models,
-                cx,
-            );
-            return;
-        }
-
+        let app_id = self.app_id.clone();
         self.saving = true;
-        self.error = None;
-        let app = self.app.clone();
-        let app_type = self.app_type;
-        cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_spawn(async move {
-                    let mut saved_snippet = None;
-                    if let Some(snippet) = snippet_update {
-                        if let Err(error) = ConfigService::set_common_config_snippet(
-                            &app,
-                            app_type.as_str(),
-                            snippet.clone(),
-                        ) {
-                            return ProviderSaveOutcome {
-                                saved_snippet,
-                                result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
-                            };
-                        }
-                        saved_snippet = Some(snippet);
-                    }
-
-                    let result = (|| {
-                        // The channel points at the local gateway, so saving
-                        // implies the gateway should run — same contract as
-                        // applying a station from the gateway page.
-                        let mut config = app
-                            .db
-                            .get_gateway_config()
-                            .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
-                        if !config.enabled {
-                            config.enabled = true;
-                            app.db.set_gateway_config(&config).map_err(|error| {
-                                ProviderSaveFailure::Provider(error.to_string())
-                            })?;
-                        }
-                        let status = futures::executor::block_on(app.gateway.start())
-                            .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
-                        let mut provider = apply::build_station_channel(
-                            &app,
-                            app_type,
-                            &route_id,
-                            &values,
-                            identity,
-                            &status.base_url,
-                            &working_base,
-                            prior_meta.as_ref(),
-                        )
-                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
-                        // Legacy station entries used the OcHub record UUID as
-                        // Codex's model_provider. Only that exact generated
-                        // shape is safe to migrate automatically: shared,
-                        // user-chosen buckets (for example `custom`) may be
-                        // referenced by more than one connection.
-                        let history_bucket_rename = if app_type == AppType::Codex {
-                            original_provider.as_ref().and_then(|original| {
-                                let old_id = original
-                                    .settings_config
-                                    .get("config")
-                                    .and_then(Value::as_str)
-                                    .and_then(
-                                        ochub_core::apps::codex::extract_codex_model_provider_id,
-                                    )?;
-                                let new_id = provider
-                                    .settings_config
-                                    .get("config")
-                                    .and_then(Value::as_str)
-                                    .and_then(
-                                        ochub_core::apps::codex::extract_codex_model_provider_id,
-                                    )?;
-                                let legacy_coupled_id = old_id == original.id
-                                    && (uuid::Uuid::parse_str(&old_id).is_ok()
-                                        || old_id.starts_with("local-gateway-"));
-                                (legacy_coupled_id && old_id != new_id).then_some((old_id, new_id))
-                            })
-                        } else {
-                            None
-                        };
-                        // Editing must not strip fields the form doesn't own.
-                        if let Some(original) = original_provider.as_ref() {
-                            provider.created_at = original.created_at;
-                            provider.sort_index = original.sort_index;
-                            provider.icon.clone_from(&original.icon);
-                            provider.icon_color.clone_from(&original.icon_color);
-                        }
-                        if common_config_supported {
-                            if common_config_enabled {
-                                provider
-                                    .meta
-                                    .get_or_insert_with(ProviderMeta::default)
-                                    .common_config_enabled = Some(true);
-                            } else if let Some(meta) = provider.meta.as_mut() {
-                                meta.common_config_enabled = None;
-                            }
-                        }
-                        if app_type == AppType::Codex {
-                            ProviderService::save_codex_draft(&app, provider)
-                        } else {
-                            match original_id {
-                                Some(original_id) => ProviderService::update(
-                                    &app,
-                                    app_type,
-                                    Some(&original_id),
-                                    provider,
-                                ),
-                                None => ProviderService::add(&app, app_type, provider, true),
-                            }
-                        }
-                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
-                        if app_type != AppType::Codex
-                            && let Some((old_id, new_id)) = history_bucket_rename
-                        {
-                            ochub_core::services::migrate_codex_history_provider_bucket(
-                                &old_id, &new_id,
-                            )
-                            .map_err(|error| {
-                                ProviderSaveFailure::HistoryMigration(error.to_string())
-                            })?;
-                        }
-                        Ok(())
-                    })();
-                    ProviderSaveOutcome {
-                        saved_snippet,
-                        result,
-                    }
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.saving = false;
-                if let Some(snippet) = outcome.saved_snippet {
-                    this.original_snippet = snippet;
-                }
-                match outcome.result {
-                    Ok(()) => this.finish_save(cx),
-                    Err(ProviderSaveFailure::CommonConfig(error)) => {
-                        this.set_error(tf!(
-                            k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
-                            error = error
-                        ));
-                        cx.notify();
-                    }
-                    Err(ProviderSaveFailure::Provider(error)) => {
-                        this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
-                        cx.notify();
-                    }
-                    Err(ProviderSaveFailure::HistoryMigration(error)) => {
-                        this.set_error(tf!(
-                            k::PROVIDER_EDITOR_HISTORY_MIGRATION_FAILED,
-                            error = error
-                        ));
-                        cx.notify();
-                    }
-                }
-            })
-            .ok();
-        })
-        .detach();
         cx.notify();
-    }
-
-    /// Remote save path: start the node's gateway, resolve origin + key on the
-    /// node, then write the provider through the same create/update methods a
-    /// direct connection uses.
-    #[allow(clippy::too_many_arguments)]
-    fn do_save_station_remote(
-        &mut self,
-        identity: apply::StationChannelIdentity,
-        route_id: String,
-        values: FormValues,
-        original_id: Option<String>,
-        original_provider: Option<Provider>,
-        prior_meta: Option<ProviderMeta>,
-        working_base: Value,
-        snippet_update: Option<String>,
-        common_config_supported: bool,
-        common_config_enabled: bool,
-        caps: StationCapabilities,
-        catalog_models: Vec<String>,
-        cx: &mut Context<Self>,
-    ) {
-        self.saving = true;
-        self.error = None;
-        let backend = self.backend.clone();
-        let app_type = self.app_type;
         cx.spawn(async move |this, cx| {
-            let outcome = crate::core_async::run(async move {
-                let app_id = app_type.app_id();
-                let mut saved_snippet = None;
-                if let Some(snippet) = snippet_update {
-                    if let Err(error) = backend.set_common_config(&app_id, snippet.clone()).await {
-                        return ProviderSaveOutcome {
-                            saved_snippet,
-                            result: Err(ProviderSaveFailure::CommonConfig(error.to_string())),
-                        };
-                    }
-                    saved_snippet = Some(snippet);
-                }
-
-                let result = async {
-                    if let Err(error) = backend.set_gateway_running(true).await {
-                        return Err(ProviderSaveFailure::Provider(error.to_string()));
-                    }
-                    let (origin, key) = backend
-                        .station_gateway_preview(&route_id, app_type)
-                        .await
-                        .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
-                    let mut provider = apply::build_station_channel_with_endpoint(
-                        app_type,
-                        &route_id,
-                        &values,
-                        identity,
-                        &origin,
-                        &key,
-                        caps,
-                        &catalog_models,
-                        &working_base,
-                        prior_meta.as_ref(),
+            let draft = pending.draft.clone();
+            let result = crate::core_async::run(async move {
+                backend
+                    .apply_editor_draft(
+                        &app_id,
+                        &draft.id,
+                        draft.revision,
+                        ProviderSwitchPolicy::Abort,
                     )
-                    .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))?;
-                    if let Some(original) = original_provider.as_ref() {
-                        provider.created_at = original.created_at;
-                        provider.sort_index = original.sort_index;
-                        provider.icon.clone_from(&original.icon);
-                        provider.icon_color.clone_from(&original.icon_color);
+                    .await
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.saving = false;
+                match result {
+                    Ok(outcome) if outcome.state == DraftApplyState::ExternalConfirmation => {
+                        // Pending operations are remote. Never launch a local
+                        // application as a fallback for a remote import.
+                        this.pending_apply = None;
+                        this.draft_revision = Some(pending.draft.revision);
+                        this.saved_snapshot = pending.snapshot;
+                        this.operation_note = Some(t(k::SHELL_PROVIDER_IMPORT_REMOTE_UNSUPPORTED));
+                        this.operation_failed = true;
+                        cx.emit(EditorEvent::Saved { leave: false });
                     }
-                    if common_config_supported {
-                        if common_config_enabled {
-                            provider
-                                .meta
-                                .get_or_insert_with(ProviderMeta::default)
-                                .common_config_enabled = Some(true);
-                        } else if let Some(meta) = provider.meta.as_mut() {
-                            meta.common_config_enabled = None;
-                        }
+                    Ok(outcome) => this.accept_submission(
+                        pending.draft,
+                        Some(outcome),
+                        pending.snapshot,
+                        false,
+                        cx,
+                    ),
+                    Err(error) => {
+                        this.operation_note = Some(
+                            tf!(k::PROVIDER_EDITOR_WORKBENCH_RESULT_UNKNOWN, error = error).into(),
+                        );
+                        this.operation_failed = true;
                     }
-                    match original_id {
-                        Some(original_id) => match serde_json::to_value(&provider) {
-                            Ok(patch) => if app_type == AppType::Codex {
-                                backend
-                                    .update_provider_draft(&app_id, &original_id, patch)
-                                    .await
-                            } else {
-                                backend.update_provider(&app_id, &original_id, patch).await
-                            }
-                            .map(|_| ()),
-                            Err(error) => Err(error.into()),
-                        },
-                        None => backend
-                            .create_provider(&app_id, provider, app_type != AppType::Codex)
-                            .await
-                            .map(|_| ()),
-                    }
-                    .map_err(|error| ProviderSaveFailure::Provider(error.to_string()))
                 }
-                .await;
-                ProviderSaveOutcome {
-                    saved_snippet,
-                    result,
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn undo_apply(&mut self, cx: &mut Context<Self>) {
+        if self.saving || !self.backend_available || self.pending_apply.is_some() {
+            return;
+        }
+        let Some(receipt) = self.receipt_id.clone() else {
+            return;
+        };
+        let backend = self.backend.clone();
+        let app_id = self.app_id.clone();
+        let undo_draft_id = self.undo_draft.as_ref().map(|draft| draft.id.clone());
+        self.saving = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move {
+                backend.undo_config_apply(&receipt).await?;
+                match undo_draft_id {
+                    Some(id) => backend.get_editor_draft(&app_id, &id).await,
+                    None => Ok(None),
                 }
             })
             .await;
             this.update(cx, |this, cx| {
                 this.saving = false;
-                if let Some(snippet) = outcome.saved_snippet {
-                    this.original_snippet = snippet;
+                match result {
+                    Ok(restored_draft) => {
+                        this.receipt_id = None;
+                        this.applied = false;
+                        if let Some(before) = this.undo_provider.take() {
+                            this.original_id = before.as_ref().map(|provider| provider.id.clone());
+                            this.original_provider = before;
+                        }
+                        let fallback = this.undo_draft.take();
+                        if let Some(draft) = restored_draft {
+                            this.draft_id = draft.id;
+                            this.draft_revision = Some(draft.revision);
+                            this.original_id = draft.input.original_provider_id;
+                            this.base_provider_hash = draft.input.base_provider_hash;
+                            if let Some(common) = draft.input.common_config {
+                                this.original_snippet_present = common.base_snippet.is_some();
+                                this.original_snippet = common.base_snippet.unwrap_or_default();
+                            }
+                            this.saved_snapshot = draft.input.editor_state;
+                        } else {
+                            if let Some(draft) = fallback {
+                                this.original_id = draft.input.original_provider_id;
+                                this.base_provider_hash = draft.input.base_provider_hash;
+                            }
+                            this.draft_id = uuid::Uuid::new_v4().to_string();
+                            this.draft_revision = None;
+                            this.saved_snapshot = Value::Null;
+                        }
+                        this.operation_note = Some(t(k::PROVIDER_EDITOR_WORKBENCH_UNDONE));
+                        this.operation_failed = false;
+                        cx.emit(EditorEvent::Applied { leave: false });
+                    }
+                    Err(error) => {
+                        this.operation_note = Some(error.to_string().into());
+                        this.operation_failed = true;
+                    }
                 }
-                match outcome.result {
-                    Ok(()) => this.finish_save(cx),
-                    Err(ProviderSaveFailure::CommonConfig(error)) => {
-                        this.set_error(tf!(
-                            k::PROVIDER_EDITOR_COMMON_CONFIG_INVALID,
-                            error = error
-                        ));
-                        cx.notify();
-                    }
-                    Err(ProviderSaveFailure::Provider(error)) => {
-                        this.set_error(tf!(k::PROVIDER_EDITOR_SAVE_FAILED, error = error));
-                        cx.notify();
-                    }
-                    Err(ProviderSaveFailure::HistoryMigration(error)) => {
-                        this.set_error(tf!(
-                            k::PROVIDER_EDITOR_HISTORY_MIGRATION_FAILED,
-                            error = error
-                        ));
-                        cx.notify();
-                    }
-                }
+                cx.notify();
             })
             .ok();
         })
         .detach();
-        cx.notify();
     }
-
-    // ---- helper actions (operate on `base_url` / `api_key` fields) -----------
 
     fn field_text(&self, id: &str, cx: &Context<Self>) -> String {
         self.text_inputs
@@ -1880,7 +2375,7 @@ impl ProviderEditor {
     fn fetch_models(&mut self, cx: &mut Context<Self>) {
         if let Some(provider_id) = self.original_id.clone() {
             let backend = self.backend.clone();
-            let app_id = self.app_type.app_id();
+            let app_id = self.app_id.clone();
             self.error = None;
             self.set_status(
                 NotificationLevel::Info,
@@ -1979,7 +2474,7 @@ impl ProviderEditor {
     fn speedtest_base_url(&mut self, cx: &mut Context<Self>) {
         if let Some(provider_id) = self.original_id.clone() {
             let backend = self.backend.clone();
-            let app_id = self.app_type.app_id();
+            let app_id = self.app_id.clone();
             self.error = None;
             self.set_status(
                 NotificationLevel::Info,
@@ -2087,7 +2582,7 @@ impl ProviderEditor {
     fn query_balance(&mut self, cx: &mut Context<Self>) {
         if let Some(provider_id) = self.original_id.clone() {
             let backend = self.backend.clone();
-            let app_id = self.app_type.app_id();
+            let app_id = self.app_id.clone();
             self.error = None;
             self.set_status(
                 NotificationLevel::Info,
@@ -2160,13 +2655,13 @@ impl ProviderEditor {
 
     fn toggle_common_config(&mut self, cx: &mut Context<Self>) {
         self.common_config_enabled = !self.common_config_enabled;
-        cx.notify();
+        self.invalidate_preview(cx);
     }
 
     fn extract_common_config(&mut self, cx: &mut Context<Self>) {
         if self.backend.is_remote() {
             let backend = self.backend.clone();
-            let app_id = self.app_type.app_id();
+            let app_id = self.app_id.clone();
             cx.spawn(async move |this, cx| {
                 let result =
                     crate::core_async::run(
@@ -2205,11 +2700,10 @@ impl ProviderEditor {
             .codec
             .encode(&self.values, &self.working_base, prior_meta.as_ref())
             .settings_config;
-        match ConfigService::extract_common_config_snippet(
-            &self.app,
-            self.app_type,
-            Some(&settings),
-        ) {
+        let Some(app_type) = self.app_type else {
+            return;
+        };
+        match ConfigService::extract_common_config_snippet(&self.app, app_type, Some(&settings)) {
             Ok(snippet) => {
                 self.common_snippet
                     .update(cx, |input, cx| input.set_content(snippet, cx));
@@ -2241,15 +2735,16 @@ impl ProviderEditor {
     }
 
     fn convert_to(&mut self, target: AppType, cx: &mut Context<Self>) {
-        if self.saving {
+        if self.saving || !self.backend_available || self.pending_apply.is_some() {
             return;
         }
         self.pull_values(cx);
-        let target_codec = provider_config::config_for(target)
-            .unwrap_or_else(|| Box::new(provider_config::CodexConfig));
+        let Some(target_codec) = provider_config::config_for(target) else {
+            return;
+        };
         let encoded = target_codec.encode(&self.values, &Value::Null, None);
         let base_name = self.name.read(cx).content().trim().to_string();
-        let source_label = crate::app_meta::label(self.app_type);
+        let source_label = self.plugin.display_name();
         let name = if base_name.is_empty() {
             tf!(k::PROVIDER_EDITOR_CONVERT_COPY_NAME, app = source_label)
         } else {
@@ -2275,7 +2770,19 @@ impl ProviderEditor {
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
                 backend
-                    .create_provider(&target.app_id(), provider, false)
+                    .upsert_editor_draft(
+                        &target.app_id(),
+                        &uuid::Uuid::new_v4().to_string(),
+                        None,
+                        EditorDraftInput {
+                            provider,
+                            original_provider_id: None,
+                            base_provider_hash: None,
+                            editor_state: Value::Null,
+                            raw_documents: None,
+                            common_config: None,
+                        },
+                    )
                     .await
                     .map(|_| ())
                     .map_err(|error| error.to_string())
@@ -2314,20 +2821,22 @@ impl ProviderEditor {
         self.source == ProviderSource::Direct
             && matches!(
                 self.app_type,
-                AppType::Claude
-                    | AppType::ClaudeDesktop
-                    | AppType::Codex
-                    | AppType::KimiCode
-                    | AppType::GrokBuild
+                Some(
+                    AppType::Claude
+                        | AppType::ClaudeDesktop
+                        | AppType::Codex
+                        | AppType::KimiCode
+                        | AppType::GrokBuild
+                )
             )
             && self.category.read(cx).content().trim() == "official"
     }
 
     fn render_official_auth_section(&self) -> gpui::AnyElement {
-        let app_label = crate::app_meta::label(self.app_type);
+        let app_label = self.plugin.display_name();
         let cli_hint = match self.app_type {
-            AppType::Claude => Some("`claude /login`"),
-            AppType::KimiCode => Some("`kimi login`"),
+            Some(AppType::Claude) => Some("`claude /login`"),
+            Some(AppType::KimiCode) => Some("`kimi login`"),
             _ => None,
         };
         let mut card = components::card()
@@ -2370,7 +2879,7 @@ impl ProviderEditor {
         stack_grid: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        if self.app_type == AppType::Codex && field.id == "auth_mode" {
+        if self.app_type == Some(AppType::Codex) && field.id == "auth_mode" {
             let login = str_val(&self.values, "auth_mode") != "api_key";
             let on_select = cx.listener(|this, index: &usize, _, cx| {
                 let mode = if *index == 0 {
@@ -2463,7 +2972,9 @@ impl ProviderEditor {
                 // key, so options that would leave it credential-less are not
                 // offered while that source is active.
                 let hidden: &[&str] = if self.source == ProviderSource::Station {
-                    provider_config::station_hidden_options(self.app_type, &field.id)
+                    self.app_type
+                        .map(|app| provider_config::station_hidden_options(app, &field.id))
+                        .unwrap_or(&[])
                 } else {
                     &[]
                 };
@@ -2540,7 +3051,7 @@ impl ProviderEditor {
                         .opacity(components::DISABLED_OPACITY)
                         .into_any_element()
                 } else {
-                    control
+                    ochub_ui::keyboard::interactive(control)
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _e, _w, cx| {
                             this.toggle_bool(fid.clone(), cx);
@@ -2554,14 +3065,21 @@ impl ProviderEditor {
                 .into_any_element(),
         };
 
-        components::field(field.label.clone(), field.required, None, body).into_any_element()
+        components::field(field.label.clone(), field.required, None, body)
+            .when_some(
+                self.field_errors.get(&field.id).cloned(),
+                |field, message| {
+                    field.child(div().text_xs().text_color(theme::red()).child(message))
+                },
+            )
+            .into_any_element()
     }
 
     /// A toggle the selected station leaves no room for: the transport it
     /// declares (`supports_websockets`), or a feature it has no upstream for.
     /// Disabled capabilities stay visible without explanatory sublabels.
     fn station_toggle_disabled(&self, field: &FormField) -> bool {
-        if self.source != ProviderSource::Station || self.app_type != AppType::Codex {
+        if self.source != ProviderSource::Station || self.app_type != Some(AppType::Codex) {
             return false;
         }
         match field.id.as_str() {
@@ -2872,6 +3390,17 @@ impl ProviderEditor {
                                                     "grid-tog-{field_id}-{rid}-{}",
                                                     column.key
                                                 )))
+                                                .role(gpui::Role::Switch)
+                                                .aria_label(SharedString::from(
+                                                    column.label.clone(),
+                                                ))
+                                                .aria_toggled(if on {
+                                                    gpui::Toggled::True
+                                                } else {
+                                                    gpui::Toggled::False
+                                                })
+                                                .focusable()
+                                                .tab_stop(true)
                                                 .cursor_pointer()
                                                 .child(layout::toggle(on))
                                                 .on_click(cx.listener(
@@ -2943,7 +3472,7 @@ impl ProviderEditor {
                 GridCellKind::Toggle => div().w(px(64.)).flex_none().child(label),
             });
         }
-        header = header.child(div().w(px(72.)).flex_none());
+        header = header.child(div().w(px(32.)).flex_none());
         col = col.child(header);
 
         if let Some(rows) = self.grid_rows.get(field_id) {
@@ -2995,6 +3524,15 @@ impl ProviderEditor {
                                             "grid-tog-{field_id}-{rid}-{}",
                                             c.key
                                         )))
+                                        .role(gpui::Role::Switch)
+                                        .aria_label(SharedString::from(c.label.clone()))
+                                        .aria_toggled(if on {
+                                            gpui::Toggled::True
+                                        } else {
+                                            gpui::Toggled::False
+                                        })
+                                        .focusable()
+                                        .tab_stop(true)
                                         .cursor_pointer()
                                         .child(layout::toggle(on))
                                         .on_click(cx.listener(move |this, _e, _w, cx| {
@@ -3007,8 +3545,8 @@ impl ProviderEditor {
                 }
                 let fid = field_id.to_string();
                 card = card.child(
-                    div().flex_none().child(
-                        components::icon_button_tone(
+                    div().w(px(32.)).flex_none().child(
+                        components::icon_only_button_tone(
                             SharedString::from(format!("grid-del-{field_id}-{rid}")),
                             t(k::PROVIDER_EDITOR_ROW_DELETE),
                             IconName::Trash,
@@ -3173,6 +3711,7 @@ impl ProviderEditor {
                     .flex_none()
                     .items_center()
                     .min_w_full()
+                    .min_w(px(document.max_line_cells as f32 * 8. + 64.))
                     .h(px(18.))
                     .px_4()
                     .cursor_pointer()
@@ -3193,17 +3732,16 @@ impl ProviderEditor {
 
     fn render_preview(
         &self,
-        compact: bool,
-        expanded_height: Pixels,
+        _compact: bool,
+        _expanded_height: Pixels,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let file_count = self.preview_cache.files.len();
         let file_index = self.preview_active_file.min(file_count.saturating_sub(1));
         let document = self.preview_cache.files.get(file_index).cloned();
 
-        // One header row carries everything the old three rows did: title,
-        // file switcher, per-file meta and actions. Every row saved here goes
-        // straight to visible preview lines.
+        // Keep file tabs short; the selected target's complete path has its
+        // own horizontally scrollable line below this compact action bar.
         let mut header = div()
             .flex()
             .flex_row()
@@ -3228,7 +3766,7 @@ impl ProviderEditor {
                 header = header.child(
                     components::button(
                         SharedString::from(format!("preview-tab-{index}")),
-                        file.filename.clone(),
+                        preview_file_basename(&file.filename),
                         if index == file_index {
                             ButtonTone::Neutral
                         } else {
@@ -3237,6 +3775,8 @@ impl ProviderEditor {
                         ButtonSize::Sm,
                     )
                     .flex_none()
+                    .max_w(px(180.))
+                    .overflow_hidden()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_preview_file(index, cx);
                     })),
@@ -3249,8 +3789,8 @@ impl ProviderEditor {
                     .truncate()
                     .text_color(theme::subtext())
                     .text_xs()
-                    .font_family("Menlo")
-                    .child(file.filename.clone()),
+                    .font_family(ochub_ui::assets::monospace_font_family())
+                    .child(preview_file_basename(&file.filename)),
             );
         }
         header = header.child(div().flex_1());
@@ -3292,34 +3832,29 @@ impl ProviderEditor {
                 this.invalidate_preview(cx);
             })),
         );
-        if compact {
-            header = header.child(
-                components::button(
-                    "preview-collapse",
-                    t(k::PROVIDER_EDITOR_PREVIEW_COLLAPSE),
-                    ButtonTone::Ghost,
-                    ButtonSize::Sm,
-                )
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.preview_expanded = false;
-                    cx.notify();
-                })),
-            );
-        }
-
         let mut pane = components::card()
             .p_0()
             .min_h_0()
-            .flex_none()
+            .min_w_0()
+            .flex_1()
+            .w_full()
+            .h_full()
             .overflow_hidden()
-            .when(compact, |pane| pane.w_full().h(expanded_height))
-            .when(!compact, |pane| {
-                pane.w(relative(PREVIEW_SPLIT_FRACTION))
-                    .min_w(px(PREVIEW_SPLIT_MIN_WIDTH))
-                    .max_w(px(PREVIEW_SPLIT_MAX_WIDTH))
-                    .h_full()
+            .child(header)
+            .when_some(document.as_ref(), |pane, file| {
+                pane.child(preview_path_row(
+                    "preview-selected-path",
+                    file.filename.clone(),
+                ))
             })
-            .child(header);
+            .child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(t(k::PROVIDER_EDITOR_WORKBENCH_CANDIDATE)),
+            );
 
         // Issues sit directly under the header: they are the actionable part
         // of this pane and must never be pushed below the fold by the code.
@@ -3351,6 +3886,7 @@ impl ProviderEditor {
                 this.render_preview_rows(file_index, range, cx)
             }),
         )
+        .with_horizontal_sizing_behavior(gpui::ListHorizontalSizingBehavior::Unconstrained)
         .flex_1()
         .min_h_0()
         .w_full();
@@ -3364,25 +3900,27 @@ impl ProviderEditor {
                 .w_full()
                 .overflow_hidden()
                 .text_xs()
-                .font_family("Menlo")
+                .font_family(ochub_ui::assets::monospace_font_family())
                 .text_color(theme::text())
                 .child(preview_list),
         )
         .into_any_element()
     }
 
-    /// Validation strip: errors first, soft severity tint per row, no inner
-    /// scroll region — the handful of issues a config can raise should simply
-    /// be visible.
+    /// Keep validation visible without consuming the entire preview. Long
+    /// issue lists scroll within a bounded strip below the header.
     fn render_preview_issues(&self) -> Option<gpui::AnyElement> {
         if self.preview_cache.issues.is_empty() {
             return None;
         }
         Some(
             div()
+                .id("preview-validation-issues")
                 .flex()
                 .flex_col()
                 .flex_none()
+                .max_h(px(128.))
+                .overflow_y_scroll()
                 .gap_1()
                 .px_3()
                 .py_2()
@@ -3437,95 +3975,65 @@ impl ProviderEditor {
         )
     }
 
-    /// Stacked-mode collapsed bar: one line naming the files plus issue
-    /// counts. Keeps narrow windows on a single scroll context until the
-    /// preview is explicitly wanted.
-    fn render_preview_summary(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let (errors, warnings) = self.preview_issue_counts();
-        let files: SharedString = if self.preview_cache.files.is_empty() {
-            t(k::PROVIDER_EDITOR_PREVIEW_SUMMARY_EMPTY)
-        } else {
-            SharedString::from(
-                self.preview_cache
-                    .files
-                    .iter()
-                    .map(|file| file.filename.to_string())
-                    .collect::<Vec<_>>()
-                    .join(raw(k::PROVIDER_EDITOR_PREVIEW_FILE_JOIN)),
-            )
-        };
-        editor_screen::preview_summary_card(
-            editor_screen::preview_summary(editor_screen::PreviewSummary {
-                title: t(k::PROVIDER_EDITOR_PREVIEW_TITLE),
-                files,
-                errors: (errors > 0).then(|| {
-                    SharedString::from(tf!(k::PROVIDER_EDITOR_ISSUE_ERROR_COUNT, count = errors))
-                }),
-                warnings: (warnings > 0).then(|| {
-                    SharedString::from(tf!(
-                        k::PROVIDER_EDITOR_ISSUE_WARNING_COUNT,
-                        count = warnings
-                    ))
-                }),
-            })
-            .aria_label(t(k::PROVIDER_EDITOR_PREVIEW_EXPAND_ARIA))
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.preview_expanded = true;
-                cx.notify();
-            })),
-        )
-    }
-
-    fn preview_issue_counts(&self) -> (usize, usize) {
-        (
-            self.preview_cache.error_count,
-            self.preview_cache.warning_count,
-        )
-    }
-
-    /// Issue-count chip rendered beside the save action: the reason a save
-    /// will fail belongs in the same eyeline as the button that commits it.
-    /// In collapsed stacked mode clicking it expands the preview pane.
-    fn render_issue_chip(
+    fn render_raw_modal(
         &self,
-        id: &'static str,
-        tone: BadgeTone,
-        label: String,
-        compact: bool,
+        window: &Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let badge = components::badge(tone, label);
-        if compact && !self.preview_expanded {
-            div()
-                .id(id)
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.preview_expanded = true;
-                    cx.notify();
-                }))
-                .child(badge)
-                .into_any_element()
-        } else {
-            badge.into_any_element()
-        }
-    }
-    fn render_raw_modal(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    ) -> Option<gpui::AnyElement> {
         let raw = self.raw_edit.as_ref()?;
-        let card = components::modal_card()
-            .w(px(760.))
-            .max_h(px(640.))
-            .child(
-                components::modal_header(raw.filename.clone()).child(
-                    components::icon_button_tone(
-                        "raw-close",
-                        t(k::PROVIDER_EDITOR_RAW_CLOSE),
-                        IconName::Close,
-                        ButtonTone::Ghost,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx))),
-                ),
+        let available = content_viewport(window);
+        let save = if !self.can_save_draft() {
+            components::disabled_button(
+                "raw-save-draft",
+                t(k::PROVIDER_EDITOR_ACTION_SAVE),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+                true,
             )
+        } else {
+            components::button(
+                "raw-save-draft",
+                t(k::PROVIDER_EDITOR_ACTION_SAVE),
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.submit_draft(false, false, cx)))
+        };
+        let card = modal::card_in(available, px(760.))
+            .h((available.height - px(32.)).min(px(640.)))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_5()
+                    .py_4()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text())
+                            .child(preview_file_basename(&raw.filename)),
+                    )
+                    .child(
+                        components::icon_button_tone(
+                            "raw-close",
+                            t(k::PROVIDER_EDITOR_RAW_CLOSE),
+                            IconName::Close,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .flex_none()
+                        .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx))),
+                    ),
+            )
+            .child(preview_path_row("raw-selected-path", raw.filename.clone()))
             .child(
                 components::modal_body()
                     .flex_1()
@@ -3553,6 +4061,7 @@ impl ProviderEditor {
                 )
                 .on_click(cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)))
                 .into_any_element(),
+                save.into_any_element(),
                 components::button(
                     "raw-apply",
                     t(k::PROVIDER_EDITOR_RAW_APPLY),
@@ -3566,17 +4075,23 @@ impl ProviderEditor {
             // The overlay occludes the page (the card occludes the overlay), so
             // the editor behind neither scrolls nor reacts; clicking the scrim
             // dismisses the modal.
-            components::modal_overlay(card)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)),
-                )
-                .into_any_element(),
+            modal::overlay(
+                "raw-config-modal",
+                raw.filename.clone(),
+                &self.raw_focus,
+                card,
+            )
+            .on_action(cx.listener(|this, _: &modal::Dismiss, _, cx| this.close_raw_edit(cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| this.close_raw_edit(cx)),
+            )
+            .into_any_element(),
         )
     }
 
     fn render_common_config(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.app_type == AppType::Codex && !self.show_advanced_fields {
+        if self.tab != EditorTab::Advanced {
             return gpui::Empty.into_any_element();
         }
         let enabled = self.common_config_enabled;
@@ -3589,30 +4104,21 @@ impl ProviderEditor {
                 t(k::PROVIDER_EDITOR_COMMON_CONFIG_SECTION_TITLE),
                 None,
             ))
+            .child({
+                let on_change = cx.listener(|this, _: &(), _, cx| this.toggle_common_config(cx));
+                components::checkbox(
+                    "common-config-toggle",
+                    t(k::PROVIDER_EDITOR_COMMON_CONFIG_TOGGLE_LABEL),
+                    enabled,
+                    self.saving,
+                    move |window, cx| on_change(&(), window, cx),
+                )
+            })
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        div().flex().flex_col().gap_1().child(
-                            div()
-                                .text_color(theme::text())
-                                .text_sm()
-                                .child(t(k::PROVIDER_EDITOR_COMMON_CONFIG_TOGGLE_LABEL)),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .id("common-config-toggle")
-                            .cursor_pointer()
-                            .child(layout::toggle(enabled))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.toggle_common_config(cx);
-                            })),
-                    ),
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(t(k::PROVIDER_EDITOR_WORKBENCH_SHARED)),
             )
             .child(
                 div()
@@ -3642,13 +4148,17 @@ impl ProviderEditor {
             .into_any_element()
     }
 
-    fn render_convert_modal(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn render_convert_modal(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         if !self.convert_open {
             return None;
         }
         let mut targets = div().flex().flex_col().gap_2().w_full();
         for app in crate::app_meta::enabled_app_types() {
-            if app == self.app_type {
+            if Some(app) == self.app_type {
                 continue;
             }
             targets = targets.child(
@@ -3657,6 +4167,9 @@ impl ProviderEditor {
                         "convert-target-{}",
                         app.as_str()
                     )))
+                    .role(gpui::Role::Button)
+                    .focusable()
+                    .tab_stop(true)
                     .flex()
                     .flex_row()
                     .items_center()
@@ -3677,12 +4190,15 @@ impl ProviderEditor {
             );
         }
         Some(
-            components::modal_overlay(
-                components::modal_card()
+            modal::overlay(
+                "convert-modal",
+                t(k::PROVIDER_EDITOR_CONVERT_TITLE),
+                &self.convert_focus,
+                modal::card_in(content_viewport(window), px(520.))
                     .child(components::modal_header(t(
                         k::PROVIDER_EDITOR_CONVERT_TITLE,
                     )))
-                    .child(components::modal_body().child(targets))
+                    .child(modal::body("convert-targets").child(targets))
                     .child(components::modal_footer(vec![
                         components::button(
                             "convert-cancel",
@@ -3696,6 +4212,7 @@ impl ProviderEditor {
                         .into_any_element(),
                     ])),
             )
+            .on_action(cx.listener(|this, _: &modal::Dismiss, _, cx| this.close_convert(cx)))
             .into_any_element(),
         )
     }
@@ -3707,10 +4224,13 @@ impl ProviderEditor {
             .gap_4()
             .w_full()
             .when(
-                provider_config::station_source_supported(self.app_type),
+                self.tab == EditorTab::Basic
+                    && self
+                        .app_type
+                        .is_some_and(provider_config::station_source_supported),
                 |column| {
                     column.child(components::field(
-                        if self.app_type == AppType::Codex {
+                        if self.app_type == Some(AppType::Codex) {
                             t(k::PROVIDER_EDITOR_CODEX_MODEL_SOURCE)
                         } else {
                             t(k::PROVIDER_EDITOR_SOURCE_LABEL)
@@ -3721,50 +4241,57 @@ impl ProviderEditor {
                     ))
                 },
             )
-            .child(components::field(
-                t(k::PROVIDER_EDITOR_IDENTITY_NAME_LABEL),
-                true,
-                None,
-                self.name.clone(),
-            ))
-            .when(
-                self.app_type != AppType::Codex || self.show_advanced_fields,
-                |column| {
-                    column
-                        .when(!self.is_editing(), |s| {
-                            s.child(components::field(
-                                t(k::PROVIDER_EDITOR_IDENTITY_ID_LABEL),
-                                false,
-                                None,
-                                self.provider_id.clone(),
-                            ))
-                        })
-                        .child(components::field(
-                            t(k::PROVIDER_EDITOR_IDENTITY_WEBSITE_LABEL),
+            .when(self.tab == EditorTab::Basic, |column| {
+                column.child(
+                    components::field(
+                        t(k::PROVIDER_EDITOR_IDENTITY_NAME_LABEL),
+                        true,
+                        None,
+                        self.name.clone(),
+                    )
+                    .when_some(
+                        self.field_errors.get("$name").cloned(),
+                        |field, message| {
+                            field.child(div().text_xs().text_color(theme::red()).child(message))
+                        },
+                    ),
+                )
+            })
+            .when(self.tab == EditorTab::Advanced, |column| {
+                column
+                    .when(!self.is_editing(), |s| {
+                        s.child(components::field(
+                            t(k::PROVIDER_EDITOR_IDENTITY_ID_LABEL),
                             false,
                             None,
-                            self.website_url.clone(),
+                            self.provider_id.clone(),
                         ))
-                        .child(components::field(
-                            t(k::PROVIDER_EDITOR_IDENTITY_CATEGORY_LABEL),
-                            false,
-                            None,
-                            self.category.clone(),
-                        ))
-                        .child(components::field(
-                            t(k::PROVIDER_EDITOR_IDENTITY_NOTES_LABEL),
-                            false,
-                            None,
-                            self.notes.clone(),
-                        ))
-                },
-            )
+                    })
+                    .child(components::field(
+                        t(k::PROVIDER_EDITOR_IDENTITY_WEBSITE_LABEL),
+                        false,
+                        None,
+                        self.website_url.clone(),
+                    ))
+                    .child(components::field(
+                        t(k::PROVIDER_EDITOR_IDENTITY_CATEGORY_LABEL),
+                        false,
+                        None,
+                        self.category.clone(),
+                    ))
+                    .child(components::field(
+                        t(k::PROVIDER_EDITOR_IDENTITY_NOTES_LABEL),
+                        false,
+                        None,
+                        self.notes.clone(),
+                    ))
+            })
     }
 
     /// Direct-connection vs. relay-station toggle, plus the station picker
     /// when the station source is active.
     fn render_source_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let codex = self.app_type == AppType::Codex;
+        let codex = self.app_type == Some(AppType::Codex);
         let official = codex
             && self.source == ProviderSource::Direct
             && str_val(&self.values, "auth_mode") == "openai_login"
@@ -3802,6 +4329,9 @@ impl ProviderEditor {
                 cx,
             );
             if codex && *index == 0 {
+                if str_val(&this.values, "auth_mode") != "openai_login" {
+                    this.official_values = Some(this.current_values(cx));
+                }
                 provider_config::set_str(&mut this.values, "auth_mode", "openai_login");
                 if let Some(input) = this.text_inputs.get("base_url") {
                     input.update(cx, |i, cx| i.set_content("", cx));
@@ -3812,6 +4342,9 @@ impl ProviderEditor {
                 provider_config::set_str(&mut this.values, "base_url", "");
                 provider_config::set_str(&mut this.values, "api_key", "");
             } else if codex && *index == 2 && str_val(&this.values, "auth_mode") == "openai_login" {
+                if let Some(values) = this.official_values.take() {
+                    this.apply_values(values, cx);
+                }
                 provider_config::set_str(
                     &mut this.values,
                     "auth_mode",
@@ -3926,7 +4459,10 @@ impl ProviderEditor {
         let mut intro = div().flex().flex_col().gap_5().w_full().min_w_0();
         // Station mode owns the endpoint, so the preset picker does not apply
         // there.
-        if self.source == ProviderSource::Direct && !self.presets.is_empty() {
+        if self.tab == EditorTab::Basic
+            && self.source == ProviderSource::Direct
+            && !self.presets.is_empty()
+        {
             let names: Vec<&str> = self
                 .presets
                 .iter()
@@ -3948,24 +4484,11 @@ impl ProviderEditor {
                 ),
             ));
         }
-        intro
-            .child(self.render_identity(cx))
-            .when(self.app_type == AppType::Codex, |column| {
-                column.child(
-                    components::button(
-                        "codex-advanced",
-                        t(k::PROVIDER_EDITOR_CODEX_ADVANCED),
-                        ButtonTone::Ghost,
-                        ButtonSize::Sm,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_advanced_fields = !this.show_advanced_fields;
-                        this.form_list_state.remeasure();
-                        cx.notify();
-                    })),
-                )
-            })
-            .into_any_element()
+        intro.child(self.render_identity(cx)).into_any_element()
+    }
+
+    fn section_is_advanced(&self, section: &FormSection) -> bool {
+        section.advanced || (self.app_type == Some(AppType::Codex) && section.id == "provider")
     }
 
     fn render_form_section(
@@ -3978,17 +4501,17 @@ impl ProviderEditor {
         let Some(section) = self.schema.get(section_index) else {
             return gpui::Empty.into_any_element();
         };
-        if self.app_type == AppType::Codex && section.advanced && !self.show_advanced_fields {
+        if self.section_is_advanced(section) != (self.tab == EditorTab::Advanced) {
             return gpui::Empty.into_any_element();
         }
         if official_login
-            && self.app_type != AppType::Codex
-            && (section.title == "端点与鉴权"
-                || (self.app_type == AppType::KimiCode && section_index == 0))
+            && self.app_type != Some(AppType::Codex)
+            && (section.id == "endpoint_auth"
+                || (self.app_type == Some(AppType::KimiCode) && section_index == 0))
         {
             return self.render_official_auth_section();
         }
-        if official_login && self.app_type == AppType::KimiCode && section_index > 0 {
+        if official_login && self.app_type == Some(AppType::KimiCode) && section_index > 0 {
             return gpui::Empty.into_any_element();
         }
 
@@ -4001,7 +4524,7 @@ impl ProviderEditor {
             .iter()
             .filter(|field| field.is_visible(&self.values))
             .filter(|field| {
-                !(self.app_type == AppType::Codex
+                !(self.app_type == Some(AppType::Codex)
                     && !self.show_advanced_fields
                     && matches!(
                         field.id.as_str(),
@@ -4009,7 +4532,7 @@ impl ProviderEditor {
                     ))
             })
             .filter(|field| {
-                !(self.app_type == AppType::Codex
+                !(self.app_type == Some(AppType::Codex)
                     && self.source == ProviderSource::Direct
                     && str_val(&self.values, "auth_mode") == "openai_login"
                     && self
@@ -4027,9 +4550,13 @@ impl ProviderEditor {
             })
             .filter(|field| {
                 !(station_mode
-                    && provider_config::station_managed_fields(self.app_type)
+                    && self
+                        .app_type
+                        .map(provider_config::station_managed_fields)
+                        .unwrap_or(&[])
                         .contains(&field.id.as_str())
-                    && !(self.app_type == AppType::Codex && field.id == "supports_websockets"))
+                    && !(self.app_type == Some(AppType::Codex)
+                        && field.id == "supports_websockets"))
             })
             .collect();
         if fields.is_empty() {
@@ -4041,7 +4568,7 @@ impl ProviderEditor {
             .flex_col()
             .gap_3()
             .w_full()
-            .when(self.app_type != AppType::Codex, |column| {
+            .when(self.app_type != Some(AppType::Codex), |column| {
                 column.child(layout::section_header(section.title.clone(), None))
             });
         for field in fields {
@@ -4053,7 +4580,11 @@ impl ProviderEditor {
     fn render_form_tools(&self, official_login: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
         // Fetch-models/speedtest/balance all interrogate the typed-in
         // endpoint, which station channels simply don't have.
-        if official_login || self.source == ProviderSource::Station {
+        if self.app_type.is_none()
+            || official_login
+            || self.source == ProviderSource::Station
+            || self.tab != EditorTab::Advanced
+        {
             return gpui::Empty.into_any_element();
         }
         div()
@@ -4101,6 +4632,21 @@ impl ProviderEditor {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let schema_len = self.schema.len();
+        if index > 0
+            && index <= schema_len
+            && self.section_is_advanced(&self.schema[index - 1])
+                != (self.tab == EditorTab::Advanced)
+        {
+            return gpui::Empty.into_any_element();
+        }
+        if index == schema_len + 1
+            && (!self.common_config_supported || self.tab != EditorTab::Advanced)
+        {
+            return gpui::Empty.into_any_element();
+        }
+        if index == schema_len + 2 && self.tab != EditorTab::Advanced {
+            return gpui::Empty.into_any_element();
+        }
         let content = if index == 0 {
             self.render_form_intro(cx)
         } else if index <= schema_len {
@@ -4131,7 +4677,26 @@ impl Render for ProviderEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let window_width = window.viewport_size().width;
         let compact_layout = editor_screen::is_compact(window_width.into());
-        let stack_grid = editor_screen::stacks_field_grid(window_width.into());
+        let form_width = editor_screen::form_width(window_width.into(), false);
+        let stack_grid = self
+            .schema
+            .iter()
+            .flat_map(|section| &section.fields)
+            .any(|field| {
+                if let FieldKind::ModelGrid { columns } = &field.kind {
+                    let text = columns
+                        .iter()
+                        .filter(|c| matches!(c.kind, GridCellKind::Text { .. }))
+                        .count();
+                    editor_screen::stacks_field_grid(form_width, text, columns.len() - text)
+                } else {
+                    false
+                }
+            });
+        let raw_initial = self.raw_edit.as_ref().map(|raw| raw.input.focus_handle(cx));
+        self.raw_focus
+            .sync(self.raw_edit.is_some(), raw_initial.as_ref(), window, cx);
+        self.convert_focus.sync(self.convert_open, None, window, cx);
         let official_login = self.uses_official_login(cx);
         if self.form_stack_grid != stack_grid || self.form_official_login != official_login {
             self.form_stack_grid = stack_grid;
@@ -4146,144 +4711,236 @@ impl Render for ProviderEditor {
         };
         let subtitle = SharedString::from(tf!(
             k::PROVIDER_EDITOR_PAGE_SUBTITLE,
-            app = crate::app_meta::label(self.app_type)
+            app = self.plugin.display_name()
         ));
 
-        // Stacked mode: the pane takes a real share of the window when
-        // expanded and folds to a one-line summary bar when not, so narrow
-        // windows keep a single scroll context.
-        let preview_height = (window.viewport_size().height * 0.45).clamp(px(320.), px(620.));
-        let preview = if !self.show_preview {
-            None
-        } else if !compact_layout || self.preview_expanded {
-            Some(
-                self.render_preview(compact_layout, preview_height, cx)
-                    .into_any_element(),
-            )
-        } else {
-            Some(self.render_preview_summary(cx).into_any_element())
-        };
-        let modal = self.render_raw_modal(cx);
-        let convert_modal = self.render_convert_modal(cx);
-
-        let (error_count, warning_count) = self.preview_issue_counts();
-        let mut actions = div()
+        let modal = self.render_raw_modal(window, cx);
+        let convert_modal = self.render_convert_modal(window, cx);
+        let actions = div()
             .flex()
-            .flex_row()
-            .flex_wrap()
             .items_center()
-            .justify_end()
-            .gap_2();
-        if error_count > 0 {
-            actions = actions.child(self.render_issue_chip(
-                "editor-error-chip",
-                BadgeTone::Danger,
-                tf!(k::PROVIDER_EDITOR_ISSUE_ERROR_COUNT, count = error_count),
-                compact_layout,
-                cx,
-            ));
-        }
-        if warning_count > 0 {
-            actions = actions.child(self.render_issue_chip(
-                "editor-warning-chip",
-                BadgeTone::Warning,
-                tf!(
-                    k::PROVIDER_EDITOR_ISSUE_WARNING_COUNT,
-                    count = warning_count
-                ),
-                compact_layout,
-                cx,
-            ));
-        }
-        let save_button = if self.saving {
-            components::busy_button(
+            .gap_2()
+            .when(self.app_type.is_some(), |actions| {
+                actions.child(
+                    components::button(
+                        "editor-convert",
+                        t(k::PROVIDER_EDITOR_ACTION_CONVERT),
+                        ButtonTone::Ghost,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.open_convert(cx))),
+                )
+            })
+            .child(
+                components::button(
+                    "editor-docs",
+                    t(k::PROVIDER_EDITOR_ACTION_DOCS),
+                    ButtonTone::Ghost,
+                    ButtonSize::Sm,
+                )
+                .on_click(|_, _, cx| {
+                    cx.open_url(match ochub_core::i18n::current() {
+                        ochub_core::i18n::Locale::Zh => {
+                            "https://docs.ochub.org/zh/guides/providers"
+                        }
+                        ochub_core::i18n::Locale::Ja => {
+                            "https://docs.ochub.org/ja/guides/providers"
+                        }
+                        ochub_core::i18n::Locale::En => "https://docs.ochub.org/guides/providers",
+                    })
+                }),
+            )
+            .child(
+                components::button(
+                    "editor-cancel",
+                    t(k::PROVIDER_EDITOR_ACTION_CANCEL),
+                    ButtonTone::Ghost,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if !this.saving {
+                        cx.emit(EditorEvent::Cancelled);
+                    }
+                })),
+            );
+        let tab_labels = [
+            t(k::PROVIDER_EDITOR_WORKBENCH_BASIC),
+            t(k::PROVIDER_EDITOR_WORKBENCH_ADVANCED),
+            t(k::PROVIDER_EDITOR_WORKBENCH_FILES),
+        ];
+        let on_tab = cx.listener(|this, index: &usize, _, cx| {
+            if *index != 2 && !this.merge_pending_raw(cx) {
+                return;
+            }
+            this.tab = match index {
+                1 => EditorTab::Advanced,
+                2 => EditorTab::Files,
+                _ => EditorTab::Basic,
+            };
+            this.show_advanced_fields = this.tab == EditorTab::Advanced;
+            this.form_list_state.remeasure();
+            cx.notify();
+        });
+        let tabs = components::segmented(
+            "editor-depth",
+            &tab_labels
+                .iter()
+                .map(SharedString::as_ref)
+                .collect::<Vec<_>>(),
+            match self.tab {
+                EditorTab::Basic => 0,
+                EditorTab::Advanced => 1,
+                EditorTab::Files => 2,
+            },
+            move |index, window, cx| on_tab(&index, window, cx),
+        );
+        let available = self.backend_available && self.backend.supports_editor_drafts();
+        let save_button = if !self.can_save_draft() {
+            components::disabled_button(
                 "editor-save",
                 t(k::PROVIDER_EDITOR_ACTION_SAVE),
-                if self.app_type == AppType::Codex {
-                    ButtonTone::Neutral
-                } else {
-                    ButtonTone::Primary
-                },
-                ButtonSize::Md,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
                 true,
             )
         } else {
             components::button(
                 "editor-save",
                 t(k::PROVIDER_EDITOR_ACTION_SAVE),
-                if self.app_type == AppType::Codex {
-                    ButtonTone::Neutral
-                } else {
-                    ButtonTone::Primary
-                },
-                ButtonSize::Md,
+                ButtonTone::Neutral,
+                ButtonSize::Sm,
             )
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.activate_after_save = false;
-                this.do_save(cx);
+            .on_click(cx.listener(|this, _, _, cx| this.submit_draft(false, false, cx)))
+        };
+        let apply_label = if self.pending_apply.is_some() {
+            t(k::PROVIDER_EDITOR_WORKBENCH_RECONCILE).to_string()
+        } else if self.app_type == Some(AppType::CherryStudio) {
+            tf!(
+                k::PROVIDER_EDITOR_WORKBENCH_IMPORT,
+                app = self.plugin.display_name()
+            )
+        } else if self.plugin.mode() == AppMode::Additive {
+            tf!(
+                k::PROVIDER_EDITOR_WORKBENCH_ADD,
+                app = self.plugin.display_name()
+            )
+        } else {
+            tf!(
+                k::PROVIDER_EDITOR_WORKBENCH_APPLY,
+                app = self.plugin.display_name()
+            )
+        };
+        let apply_button = if self.saving {
+            components::busy_button(
+                "editor-apply",
+                apply_label,
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+                true,
+            )
+        } else if !available {
+            components::disabled_button(
+                "editor-apply",
+                apply_label,
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+                true,
+            )
+        } else {
+            components::button(
+                "editor-apply",
+                apply_label,
+                ButtonTone::Primary,
+                ButtonSize::Sm,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.pending_apply.is_some() {
+                    this.reconcile_pending_apply(cx);
+                } else {
+                    this.submit_draft(true, false, cx);
+                }
             }))
         };
-        let actions = actions
-            .when(self.app_type == AppType::Codex && !self.saving, |actions| {
-                actions
+        let dirty = self.is_dirty(cx);
+        let state_label = if self.pending_apply.is_some() {
+            t(k::PROVIDER_EDITOR_WORKBENCH_PENDING_TAG)
+        } else if self.saving {
+            t(k::PROVIDER_EDITOR_WORKBENCH_BUSY)
+        } else if dirty {
+            t(k::PROVIDER_EDITOR_WORKBENCH_MODIFIED)
+        } else if self.applied {
+            t(k::PROVIDER_EDITOR_WORKBENCH_APPLIED_TAG)
+        } else if self.draft_revision.is_some() {
+            t(k::PROVIDER_EDITOR_WORKBENCH_SAVED_TAG)
+        } else {
+            t(k::PROVIDER_EDITOR_WORKBENCH_UNCHANGED)
+        };
+        let note = if self.pending_apply.is_some() {
+            t(k::PROVIDER_EDITOR_WORKBENCH_PENDING_REQUIRED)
+        } else if !self.backend_available {
+            t(k::PROVIDER_EDITOR_WORKBENCH_OFFLINE)
+        } else if !available {
+            t(k::PROVIDER_EDITOR_WORKBENCH_UNSUPPORTED)
+        } else if self.applied && !dirty {
+            t(k::PROVIDER_EDITOR_WORKBENCH_CLIENT_UNKNOWN)
+        } else if self.preview_cache.error_count > 0 {
+            SharedString::from(format!(
+                "{} · {}",
+                t(k::PROVIDER_EDITOR_WORKBENCH_NOT_APPLIED),
+                tf!(
+                    k::PROVIDER_EDITOR_ISSUE_ERROR_COUNT,
+                    count = self.preview_cache.error_count
+                )
+            ))
+        } else if self.preview_cache.warning_count > 0 {
+            SharedString::from(format!(
+                "{} · {}",
+                t(k::PROVIDER_EDITOR_WORKBENCH_NOT_APPLIED),
+                tf!(
+                    k::PROVIDER_EDITOR_ISSUE_WARNING_COUNT,
+                    count = self.preview_cache.warning_count
+                )
+            ))
+        } else {
+            t(k::PROVIDER_EDITOR_WORKBENCH_NOT_APPLIED)
+        };
+        let footer = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .when(compact_layout, |footer| footer.flex_wrap())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .min_w_0()
+                    .flex_1()
+                    .child(div().text_xs().text_color(theme::text()).child(state_label))
+                    .child(div().text_xs().text_color(theme::muted()).child(note)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .flex_none()
                     .child(
                         components::button(
                             "editor-check",
                             t(k::PROVIDER_EDITOR_CODEX_CHECK),
-                            ButtonTone::Neutral,
-                            ButtonSize::Md,
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.check_configuration(cx))),
-                    )
-                    .child(
-                        components::button(
-                            "editor-save-activate",
-                            t(k::PROVIDER_EDITOR_CODEX_SAVE_ACTIVATE),
-                            ButtonTone::Primary,
-                            ButtonSize::Md,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.activate_after_save = true;
-                            this.do_save(cx);
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if !this.saving {
+                                this.check_configuration(window, cx);
+                            }
                         })),
                     )
-            })
-            .child(
-                components::button(
-                    "editor-docs",
-                    t(k::PROVIDER_EDITOR_ACTION_DOCS),
-                    ButtonTone::Neutral,
-                    ButtonSize::Md,
-                )
-                .aria_label(t(k::PROVIDER_EDITOR_ACTION_DOCS))
-                .on_click(|_, _, cx| {
-                    cx.open_url(match ochub_core::i18n::current() {
-                        ochub_core::i18n::Locale::Zh => "https://docs.ochub.org/zh/codex/configure",
-                        ochub_core::i18n::Locale::Ja => "https://docs.ochub.org/ja/codex/configure",
-                        ochub_core::i18n::Locale::En => "https://docs.ochub.org/codex/configure",
-                    })
-                }),
-            )
-            .child(
-                components::button(
-                    "editor-convert",
-                    t(k::PROVIDER_EDITOR_ACTION_CONVERT),
-                    ButtonTone::Neutral,
-                    ButtonSize::Md,
-                )
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.open_convert(cx);
-                })),
-            )
-            .child(save_button)
-            .child(
-                components::button(
-                    "editor-cancel",
-                    t(k::PROVIDER_EDITOR_ACTION_CANCEL),
-                    ButtonTone::Neutral,
-                    ButtonSize::Md,
-                )
-                .on_click(cx.listener(|_t, _e, _w, cx| cx.emit(EditorEvent::Cancelled))),
+                    .child(save_button)
+                    .child(apply_button),
             );
 
         let form_list = gpui::list(
@@ -4321,26 +4978,72 @@ impl Render for ProviderEditor {
                     .child(form_list),
             );
 
+        let content = if self.tab == EditorTab::Files {
+            self.render_preview(false, px(0.), cx).into_any_element()
+        } else {
+            form_scroll.into_any_element()
+        };
+        let content = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .gap_3()
+            .when_some(self.operation_note.clone(), |content, note| {
+                content.child(
+                    div()
+                        .id("editor-operation-result")
+                        .max_h(px(112.))
+                        .overflow_y_scroll()
+                        .flex_none()
+                        .px_3()
+                        .py_2()
+                        .border_1()
+                        .border_color(theme::border())
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(if self.operation_failed {
+                            theme::red()
+                        } else {
+                            theme::subtext()
+                        })
+                        .child(note)
+                        .when(self.receipt_id.is_some(), |result| {
+                            result.child(
+                                components::button(
+                                    "editor-undo",
+                                    t(k::PROVIDER_EDITOR_WORKBENCH_UNDO),
+                                    ButtonTone::Ghost,
+                                    ButtonSize::Sm,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.undo_apply(cx))),
+                            )
+                        }),
+                )
+            })
+            .child(content);
         editor_screen::provider_editor_page(editor_screen::ProviderEditorPage {
             title,
             subtitle,
             actions: actions.into_any_element(),
-            form_scroll: form_scroll.into_any_element(),
-            preview,
+            tabs: tabs.into_any_element(),
+            footer: footer.into_any_element(),
+            form_scroll: content.into_any_element(),
+            preview: None,
             // The form is the editor page's primary scroll context. Its rail
             // belongs to the full-width page chrome rather than the split
             // boundary between the form and the independent file preview.
-            form_scrollbar: Some(
+            form_scrollbar: (self.tab != EditorTab::Files).then(|| {
                 crate::scrollbar::VerticalScrollbar::new(
                     "editor-form-scrollbar",
                     self.form_list_state.clone(),
                 )
-                .into_any_element(),
-            ),
+                .into_any_element()
+            }),
             modal,
             convert_modal,
             compact_layout,
-            stack_grid,
         })
     }
 }
@@ -4365,15 +5068,98 @@ fn common_config_supported(app: AppType) -> bool {
     matches!(app, AppType::Claude | AppType::Codex)
 }
 
+fn preview_file_basename(path: &str) -> SharedString {
+    // Remote paths may use either separator, regardless of the local OS.
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+        .to_owned()
+        .into()
+}
+
+fn preview_path_row(id: &'static str, path: SharedString) -> impl IntoElement {
+    let copied = path.clone();
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_2()
+        .px_4()
+        .py_1()
+        .min_w_0()
+        .child(
+            div()
+                .id(id)
+                .flex_1()
+                .min_w_0()
+                .overflow_x_scroll()
+                .text_xs()
+                .text_color(theme::muted())
+                .font_family(ochub_ui::assets::monospace_font_family())
+                .child(div().whitespace_nowrap().child(path)),
+        )
+        .child(
+            components::icon_button_tone(
+                SharedString::from(format!("{id}-copy")),
+                t(k::PROVIDER_EDITOR_PREVIEW_COPY_PATH),
+                IconName::Copy,
+                ButtonTone::Ghost,
+                ButtonSize::Sm,
+            )
+            .flex_none()
+            .on_click(move |_, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.to_string()));
+            }),
+        )
+}
+
+fn grid_text_display(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Null) | None => String::new(),
+        Some(value) => value.to_string(),
+    }
+}
+
+/// Text controls may display native numbers, bools, or structured values. An
+/// untouched cell must not change their type simply because the form mounted.
+fn grid_text_value(original: Option<&Value>, text: &str) -> Value {
+    match original {
+        Some(value) if !value.is_string() && grid_text_display(Some(value)) == text => {
+            value.clone()
+        }
+        _ => Value::String(text.to_owned()),
+    }
+}
+
+/// A raw document owns its declared store completely (including deletions),
+/// while plugin metadata outside those stores remains untouched.
+fn replace_document_stores(prior: &Value, parsed: Value) -> Value {
+    match (prior.as_object(), parsed) {
+        (Some(prior), Value::Object(parsed)) => {
+            let mut merged = prior.clone();
+            merged.extend(parsed);
+            Value::Object(merged)
+        }
+        (_, parsed) => parsed,
+    }
+}
+
 fn build_preview_cache(
     codec: &dyn AppConfig,
     values: &FormValues,
     working_base: &Value,
     category: Option<&str>,
     collapsed_regions: &HashSet<(usize, usize)>,
+    raw_documents: Option<&[String]>,
 ) -> PreviewBuild {
     let started = Instant::now();
     let mut issues = codec.validate_for_category(values, category);
+    if let Some(raw) = raw_documents
+        && let Err(error) = codec.parse_files(raw)
+    {
+        issues.insert(0, ConfigIssue::error(error));
+    }
     issues.sort_by_key(|issue| match issue.severity {
         Severity::Error => 0u8,
         Severity::Warning => 1,
@@ -4393,7 +5179,10 @@ fn build_preview_cache(
     let documents = files
         .into_iter()
         .enumerate()
-        .map(|(file_index, file)| {
+        .map(|(file_index, mut file)| {
+            if let Some(raw) = raw_documents.and_then(|files| files.get(file_index)) {
+                file.content.clone_from(raw);
+            }
             let lang = match file.language {
                 ochub_core::provider_config::Language::Json => Lang::Json,
                 ochub_core::provider_config::Language::Toml => Lang::Toml,
@@ -4408,6 +5197,27 @@ fn build_preview_cache(
             };
             let content: Arc<str> = Arc::from(file.content);
             let line_ranges = Arc::new(preview_line_ranges(&content));
+            // A conservative monospace bound also accounts for long lines
+            // outside the virtualized viewport. Cache once per document,
+            // rather than scanning all text on every rendered frame.
+            let max_line_cells = line_ranges
+                .iter()
+                .map(|range| {
+                    content[range.clone()]
+                        .chars()
+                        .map(|c| {
+                            if c == '\t' {
+                                8
+                            } else if c.is_ascii() {
+                                1
+                            } else {
+                                2
+                            }
+                        })
+                        .sum::<usize>()
+                })
+                .max()
+                .unwrap_or(0);
             let regions = Arc::new(fold_regions(lang, &content));
             let region_headers = Arc::new(
                 regions
@@ -4435,6 +5245,7 @@ fn build_preview_cache(
                 regions,
                 region_headers,
                 visible_rows,
+                max_line_cells,
             }
         })
         .collect();
@@ -4578,9 +5389,57 @@ impl crate::notifications::ToastSource for ProviderEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::{preview_line_ranges, preview_visible_rows};
+    use super::{
+        build_preview_cache, grid_text_display, grid_text_value, preview_line_ranges,
+        preview_visible_rows, replace_document_stores,
+    };
     use crate::fold::FoldRegion;
+    use ochub_core::provider_config::{AppConfig, CodexConfig};
+    use serde_json::{Value, json};
     use std::collections::HashSet;
+
+    #[test]
+    fn untouched_native_grid_cells_preserve_value_type_and_explicit_edits_replace_it() {
+        for original in [
+            json!(32768),
+            json!(true),
+            Value::Null,
+            json!({"future": [1, 2]}),
+        ] {
+            let display = grid_text_display(Some(&original));
+            assert_eq!(grid_text_value(Some(&original), &display), original);
+            assert_eq!(grid_text_value(Some(&original), "edited"), json!("edited"));
+        }
+        assert_eq!(grid_text_display(Some(&json!(32768))), "32768");
+        assert_eq!(grid_text_value(Some(&json!(32768)), ""), json!(""));
+    }
+
+    #[test]
+    fn raw_document_edit_preserves_unknown_metadata_but_honors_key_deletion() {
+        let prior = json!({"settings":{"keep":1,"remove":2},"pluginMetadata":{"future":true}});
+        let parsed = json!({"settings":{"keep":3}});
+        let result = replace_document_stores(&prior, parsed);
+        assert_eq!(result["pluginMetadata"], prior["pluginMetadata"]);
+        assert_eq!(result["settings"], json!({"keep":3}));
+        assert!(result["settings"].get("remove").is_none());
+    }
+
+    #[test]
+    fn invalid_saved_raw_document_is_visible_instead_of_a_generated_replacement() {
+        let codec = CodexConfig;
+        let values = codec.decode(&serde_json::Value::Null, None);
+        let documents = vec!["model = [".to_string(), "{}".to_string()];
+        let preview = build_preview_cache(
+            &codec,
+            &values,
+            &serde_json::Value::Null,
+            None,
+            &HashSet::new(),
+            Some(&documents),
+        );
+        assert_eq!(preview.cache.files[0].content.as_ref(), "model = [");
+        assert!(preview.cache.error_count > 0);
+    }
 
     #[test]
     fn preview_line_index_preserves_empty_and_trailing_lines() {

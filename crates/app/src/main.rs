@@ -13,8 +13,10 @@ mod core_async;
 mod diagnostics;
 mod gateway_view;
 mod i18n;
+mod interaction;
 mod mcp_view;
 mod network_view;
+mod overview_view;
 mod product_ui;
 mod provider_editor;
 mod quota;
@@ -323,7 +325,13 @@ pub(crate) fn close_main_window(cx: &mut App) {
     let Some(handle) = cx.windows().into_iter().next() else {
         return;
     };
-    let _ = handle.update(cx, |_root, window, cx| {
+    let Some(handle) = handle.downcast::<AppRoot>() else {
+        return;
+    };
+    let _ = handle.update(cx, |root, window, cx| {
+        if !root.request_close(false, cx) {
+            return;
+        }
         shell_support::save_window_bounds(window.window_bounds().get_bounds());
         if ochub_core::settings::get_settings().minimize_to_tray_on_close {
             keep_main_window_in_background(window, cx);
@@ -331,6 +339,20 @@ pub(crate) fn close_main_window(cx: &mut App) {
             window.remove_window();
         }
     });
+}
+
+pub(crate) fn request_main_quit(cx: &mut App) {
+    for window in cx.windows() {
+        if let Some(handle) = window.downcast::<AppRoot>() {
+            let allowed = handle
+                .update(cx, |root, _, cx| root.request_close(true, cx))
+                .unwrap_or(true);
+            if !allowed {
+                return;
+            }
+        }
+    }
+    cx.quit();
 }
 
 #[cfg(target_os = "windows")]
@@ -442,7 +464,21 @@ fn main() {
         ),
     }
     let app_state = Arc::new(AppState::new(db));
-    app_state.bootstrap();
+    let recovery_error = ochub_core::application::Application::from_state(app_state.clone())
+        .recover_config_commits()
+        .err()
+        .map(|error| error.to_string());
+    if recovery_error.is_none() {
+        app_state.bootstrap();
+    } else {
+        for error in ochub_core::plugin::load_and_register_user_plugins() {
+            log::warn!(
+                "failed to load user plugin {}: {}",
+                error.path,
+                error.message
+            );
+        }
+    }
 
     spawn_app_services(app_state.clone());
 
@@ -502,17 +538,16 @@ fn main() {
                 window_min_size: Some(size(px(960.), px(640.))),
                 window_background: theme::window_background_appearance(),
                 titlebar: Some(TitlebarOptions {
-                    // Never drawn: macOS hides the title text whenever the
-                    // titlebar is transparent, and Windows has no titlebar to
-                    // draw it in. It is the window *name* that matters — the
-                    // label Windows shows in the taskbar and Alt-Tab, which
-                    // was blank without it.
+                    // Linux server decorations use this as their native title;
+                    // Windows uses it in the taskbar and Alt-Tab. macOS hides
+                    // the title text under its transparent traffic-light bar.
                     title: Some(SharedString::new_static("OcHub")),
-                    // Content extends behind the native titlebar. Only the macOS
-                    // traffic lights remain, embedded directly in the sidebar;
-                    // `window_chrome` draws the Windows caption buttons.
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(18.), px(18.))),
+                    // Only macOS and Windows extend content into their title
+                    // bar. Linux keeps compositor decoration negotiation, so
+                    // window_chrome draws a strip only when it receives CSD.
+                    appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
+                    traffic_light_position: cfg!(target_os = "macos")
+                        .then(|| point(px(18.), px(18.))),
                 }),
                 ..Default::default()
             },
@@ -535,7 +570,7 @@ fn main() {
                             cx.refresh_windows();
                         })
                         .detach();
-                    cx.new(|cx| AppRoot::new(app_state.clone(), cx))
+                    cx.new(|cx| AppRoot::new(app_state.clone(), recovery_error, cx))
                 }
             },
         );
@@ -548,7 +583,14 @@ fn main() {
         };
         window
             .update(cx, |_root, window, cx| {
-                window.on_window_should_close(cx, |window, _cx| {
+                let root = cx.entity().downgrade();
+                window.on_window_should_close(cx, move |window, _cx| {
+                    if !root
+                        .update(_cx, |root, cx| root.request_close(false, cx))
+                        .unwrap_or(true)
+                    {
+                        return false;
+                    }
                     shell_support::save_window_bounds(window.window_bounds().get_bounds());
                     // Read fresh rather than capturing, so toggling the
                     // setting takes effect without a restart.

@@ -20,7 +20,9 @@ fn read_config_text() -> Result<String, AppError> {
     std::fs::read_to_string(&path).map_err(|error| AppError::io(&path, error))
 }
 
-fn json_server_to_grokbuild_toml_table(server_spec: &Value) -> Result<toml_edit::Table, AppError> {
+pub(super) fn json_server_to_grokbuild_toml_table(
+    server_spec: &Value,
+) -> Result<toml_edit::Table, AppError> {
     let mut table = json_server_to_toml_table(server_spec)?;
     table.remove("type");
     if let Some(headers) = table.remove("http_headers") {

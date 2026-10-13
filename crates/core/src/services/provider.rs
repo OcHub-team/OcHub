@@ -6,7 +6,7 @@
 pub mod drift;
 mod endpoints;
 pub(crate) mod live;
-mod secrets;
+pub(crate) mod secrets;
 mod usage;
 
 use indexmap::IndexMap;
@@ -84,7 +84,7 @@ pub struct SwitchResult {
 }
 
 impl ProviderService {
-    fn normalize_provider_if_claude(app_type: &AppType, provider: &mut Provider) {
+    pub(crate) fn normalize_provider_if_claude(app_type: &AppType, provider: &mut Provider) {
         if matches!(app_type, AppType::Claude) {
             let mut v = provider.settings_config.clone();
             if normalize_claude_models_in_value(&mut v) {
@@ -105,6 +105,33 @@ impl ProviderService {
         } else {
             provider_exists_in_live_config(app_type, provider_id)
         }
+    }
+
+    pub(crate) fn is_managed_in_live(
+        state: &AppState,
+        app_type: AppType,
+        provider: &Provider,
+    ) -> Result<bool, AppError> {
+        if !app_type.is_additive_mode() {
+            return Ok(
+                crate::settings::get_effective_current_provider(&state.db, &app_type)?.as_deref()
+                    == Some(&provider.id),
+            );
+        }
+        if app_type == AppType::OpenCode
+            && matches!(provider.category.as_deref(), Some("omo" | "omo-slim"))
+        {
+            return state.db.is_omo_provider_current(
+                app_type.as_str(),
+                &provider.id,
+                provider.category.as_deref().unwrap_or_default(),
+            );
+        }
+        Self::check_live_config_exists(
+            &app_type,
+            &provider.id,
+            Self::provider_live_config_managed(provider),
+        )
     }
 
     fn provider_live_config_managed(provider: &Provider) -> Option<bool> {
@@ -148,6 +175,21 @@ impl ProviderService {
         provider: Provider,
         add_to_live: bool,
     ) -> Result<bool, AppError> {
+        let omo = app_type == AppType::OpenCode
+            && matches!(provider.category.as_deref(), Some("omo" | "omo-slim"));
+        if app_type != AppType::CherryStudio
+            && !omo
+            && add_to_live
+            && (app_type.is_additive_mode()
+                || state.db.get_current_provider(app_type.as_str())?.is_none())
+        {
+            let application =
+                crate::application::Application::from_state(std::sync::Arc::new(state.clone()));
+            application
+                .add_provider(&app_type.app_id(), provider, true)
+                .map_err(|e| AppError::Message(e.to_string()))?;
+            return Ok(true);
+        }
         let mut provider = provider;
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
@@ -255,6 +297,17 @@ impl ProviderService {
         let existing_provider = state
             .db
             .get_provider_by_id(&original_id, app_type.as_str())?;
+        if app_type != AppType::CherryStudio
+            && let Some(existing) = existing_provider.as_ref()
+            && Self::is_managed_in_live(state, app_type, existing)?
+        {
+            let application =
+                crate::application::Application::from_state(std::sync::Arc::new(state.clone()));
+            application
+                .update_provider(&app_type.app_id(), &original_id, provider)
+                .map_err(|e| AppError::Message(e.to_string()))?;
+            return Ok(true);
+        }
         // A caller may be holding a redacted read of this provider (the list
         // backend hands one out on purpose). Saving it back would write `******`
         // over the credential, so any masked field is taken from the record
@@ -575,6 +628,19 @@ impl ProviderService {
         id: &str,
         resolution: ProviderVersionResolution,
     ) -> Result<SwitchResult, AppError> {
+        if app_type != AppType::CherryStudio {
+            let application =
+                crate::application::Application::from_state(std::sync::Arc::new(state.clone()));
+            let policy = match resolution {
+                ProviderVersionResolution::Save => crate::application::ProviderSwitchPolicy::Save,
+                ProviderVersionResolution::Revert => {
+                    crate::application::ProviderSwitchPolicy::Revert
+                }
+            };
+            return application
+                .switch_provider(&app_type.app_id(), id, policy)
+                .map_err(|e| AppError::Message(e.to_string()));
+        }
         crate::plugin::registry::ensure_app_type_enabled(&app_type)?;
 
         // Check if provider exists
@@ -1099,7 +1165,10 @@ impl ProviderService {
         .await
     }
 
-    fn validate_provider_settings(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
+    pub(crate) fn validate_provider_settings(
+        app_type: &AppType,
+        provider: &Provider,
+    ) -> Result<(), AppError> {
         match app_type {
             AppType::Claude => {
                 if !provider.settings_config.is_object() {

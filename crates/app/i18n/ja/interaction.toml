@@ -1,0 +1,5 @@
+"interaction.leave.title" = "未保存の変更"
+"interaction.leave.message" = "このフォームには未保存の変更があります。フォームに戻って保存するか、変更を破棄して続行してください。"
+"interaction.leave.discard" = "破棄して続行"
+"interaction.leave.return" = "編集に戻る"
+"interaction.offline_draft" = "再接続すると保存できます。入力内容はこのウィンドウに保持されています。"

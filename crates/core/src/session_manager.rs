@@ -65,30 +65,36 @@ pub struct DeleteSessionOutcome {
 }
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
-    let (r1, r2, r3, r4, r5, r6) = std::thread::scope(|s| {
-        let h1 = s.spawn(codex::scan_sessions);
-        let h2 = s.spawn(claude::scan_sessions);
-        let h3 = s.spawn(opencode::scan_sessions);
-        let h4 = s.spawn(openclaw::scan_sessions);
-        let h5 = s.spawn(hermes::scan_sessions);
-        let h6 = s.spawn(grokbuild::scan_sessions);
-        (
-            h1.join().unwrap_or_default(),
-            h2.join().unwrap_or_default(),
-            h3.join().unwrap_or_default(),
-            h4.join().unwrap_or_default(),
-            h5.join().unwrap_or_default(),
-            h6.join().unwrap_or_default(),
-        )
-    });
+    scan_sessions_for_apps(&[])
+}
 
-    let mut sessions = Vec::new();
-    sessions.extend(r1);
-    sessions.extend(r2);
-    sessions.extend(r3);
-    sessions.extend(r4);
-    sessions.extend(r5);
-    sessions.extend(r6);
+/// Scan only the requested applications. An empty filter retains the all-app
+/// behavior. In particular, looking up one session must not traverse every
+/// other tool's history before discarding those results.
+pub fn scan_sessions_for_apps(apps: &[crate::AppType]) -> Vec<SessionMeta> {
+    type Scanner = fn() -> Vec<SessionMeta>;
+    let scanners: [(crate::AppType, Scanner); 6] = [
+        (crate::AppType::Codex, codex::scan_sessions),
+        (crate::AppType::Claude, claude::scan_sessions),
+        (crate::AppType::OpenCode, opencode::scan_sessions),
+        (crate::AppType::OpenClaw, openclaw::scan_sessions),
+        (crate::AppType::Hermes, hermes::scan_sessions),
+        (crate::AppType::GrokBuild, grokbuild::scan_sessions),
+    ];
+    let selected = scanners
+        .into_iter()
+        .filter(|(app, _)| apps.is_empty() || apps.contains(app))
+        .collect::<Vec<_>>();
+    let mut sessions = std::thread::scope(|scope| {
+        let workers = selected
+            .into_iter()
+            .map(|(_, scan)| scope.spawn(scan))
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().unwrap_or_default())
+            .collect::<Vec<_>>()
+    });
 
     sessions.sort_by(|a, b| {
         let a_ts = a.last_active_at.or(a.created_at).unwrap_or(0);

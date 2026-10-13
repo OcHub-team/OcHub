@@ -1,0 +1,48 @@
+Window: "OcHub", App: OcHub QA.
+0 standard window OcHub, Secondary Actions: Raise
+	1 container
+		2 pop up button 本地配置
+		3 button 打开 Claude Code
+		4 button 打开 Claude Desktop
+		5 button 打开 Codex
+		6 button 打开 Cherry Studio
+		7 button 打开 Grok Build
+		8 button 打开 Kimi Code
+		9 button 打开 OpenCode
+		10 button 打开 OpenClaw
+		11 button 打开 Hermes
+		12 button 打开 Audit audit-app
+		13 button 打开 Nova QA
+		14 button 打开 MCP 服务器
+		15 button 打开 技能
+		16 button 打开 用量
+		17 button 打开 会话
+		18 button 打开 高级工具
+		19 button 打开 模型供应商
+		20 button 打开 网络代理
+		21 button 打开 远程节点
+		22 button 打开 主题
+		23 button 打开 设置
+		24 button 打开 关于
+		25 button 文档
+		26 button 取消
+		27 button editor-depth 选项 常用
+		28 button editor-depth 选项 高级
+		29 button editor-depth 选项 配置文件
+		30 button config.toml
+		31 button auth.json
+		32 button 编辑
+		33 button 刷新
+		34 button 复制完整路径
+		35 button 检查配置
+		36 button 保存到 OcHub
+		37 button 应用到 Nova QA
+	38 close button
+	39 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	40 minimize button
+41 menu bar
+	42 OcHub QA
+	43 文件
+	44 编辑
+
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise

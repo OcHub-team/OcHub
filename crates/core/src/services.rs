@@ -12,6 +12,8 @@ pub mod codex_history_migration;
 pub mod codex_oauth_models;
 pub mod coding_plan;
 pub mod config;
+pub mod config_commit;
+pub(crate) mod config_plan;
 pub mod env;
 pub mod key_quota;
 pub mod mcp;

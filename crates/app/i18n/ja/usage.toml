@@ -30,6 +30,7 @@
 "usage.detail.cache_write" = "キャッシュ書き込み（5 分）"
 "usage.detail.cache_write_1h" = "キャッシュ書き込み（1 時間）"
 "usage.detail.cache_write_cost" = "キャッシュ書き込みコスト"
+"usage.detail.copy" = "{label}をコピー"
 "usage.detail.tps" = "出力速度"
 "usage.detail.error" = "エラー: {error}"
 "usage.detail.first_token" = "最初のトークン"

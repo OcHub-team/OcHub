@@ -30,6 +30,7 @@
 "usage.detail.cache_write" = "Cache write (5 minutes)"
 "usage.detail.cache_write_1h" = "Cache write (1 hour)"
 "usage.detail.cache_write_cost" = "Cache write cost"
+"usage.detail.copy" = "Copy {label}"
 "usage.detail.tps" = "Output speed"
 "usage.detail.error" = "Error: {error}"
 "usage.detail.first_token" = "First token"

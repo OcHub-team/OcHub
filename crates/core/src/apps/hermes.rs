@@ -283,7 +283,7 @@ fn remove_all_sections(raw: &str, section_key: &str) -> String {
 }
 
 /// Replace a YAML section in raw text, or append it if not found.
-fn replace_yaml_section(
+pub(crate) fn replace_yaml_section(
     raw: &str,
     section_key: &str,
     value: &serde_norway::Value,
@@ -756,6 +756,14 @@ pub fn set_provider(
 ) -> Result<HermesWriteOutcome, AppError> {
     let _guard = hermes_write_lock().lock()?;
 
+    let providers_value = prepared_provider_section(name, provider_config)?;
+    write_yaml_section_to_config_locked("custom_providers", &providers_value)
+}
+
+fn prepared_provider_section(
+    name: &str,
+    provider_config: serde_json::Value,
+) -> Result<serde_norway::Value, AppError> {
     let config = read_hermes_config()?;
     ensure_provider_writable(&config, name, "edit")?;
     let mut providers: Vec<serde_norway::Value> = config
@@ -817,8 +825,47 @@ pub fn set_provider(
         providers.push(yaml_val);
     }
 
-    let providers_value = serde_norway::Value::Sequence(providers);
-    write_yaml_section_to_config_locked("custom_providers", &providers_value)
+    Ok(serde_norway::Value::Sequence(providers))
+}
+
+pub(crate) fn prepare_provider_file(
+    provider: &crate::Provider,
+) -> Result<crate::services::config_commit::PreparedFileWrite, AppError> {
+    use crate::services::config_commit::{PreparedFileWrite, read_optional};
+    let path = get_hermes_config_path();
+    let before = read_optional(&path)?;
+    let raw = before
+        .as_ref()
+        .map(|b| std::str::from_utf8(b).map_err(|e| AppError::Config(e.to_string())))
+        .transpose()?
+        .unwrap_or("");
+    let providers = prepared_provider_section(&provider.id, provider.settings_config.clone())?;
+    let mut after = replace_yaml_section(raw, "custom_providers", &providers)?;
+    let first = provider
+        .settings_config
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|m| m.first())
+        .and_then(|m| m.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let current = get_model_config()?.unwrap_or_default();
+    let model = HermesModelConfig {
+        default: first.or(current.default.clone()),
+        provider: Some(provider.id.clone()),
+        ..current
+    };
+    let model = json_to_yaml(
+        &serde_json::to_value(model).map_err(|source| AppError::JsonSerialize { source })?,
+    )?;
+    after = replace_yaml_section(&after, "model", &model)?;
+    Ok(PreparedFileWrite {
+        path,
+        before,
+        after: Some(after.into_bytes()),
+        file_mode: None,
+        dir_mode: None,
+    })
 }
 
 /// Remove a custom provider by name.

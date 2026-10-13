@@ -57,6 +57,7 @@ pub fn provider_card(spec: ProviderCard) -> gpui::Stateful<gpui::Div> {
                         .justify_center()
                         .w(px(30.))
                         .h(px(30.))
+                        .flex_none()
                         .rounded_md()
                         .bg(if spec.is_current {
                             theme::sidebar_selected()
@@ -81,15 +82,21 @@ pub fn provider_card(spec: ProviderCard) -> gpui::Stateful<gpui::Div> {
                     div()
                         .flex()
                         .flex_col()
+                        .flex_1()
+                        .min_w_0()
                         .gap_1()
                         .child(
                             div()
                                 .flex()
                                 .flex_row()
+                                .min_w_0()
                                 .items_center()
                                 .gap_2()
                                 .child(
                                     div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
                                         .text_color(theme::text())
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(spec.name),
@@ -103,6 +110,8 @@ pub fn provider_card(spec: ProviderCard) -> gpui::Stateful<gpui::Div> {
                         )
                         .child(
                             div()
+                                .min_w_0()
+                                .truncate()
                                 .text_color(theme::muted())
                                 .text_xs()
                                 .child(spec.endpoint),

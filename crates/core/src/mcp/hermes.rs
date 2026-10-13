@@ -60,7 +60,7 @@ fn should_sync_hermes_mcp() -> bool {
 /// - `stdio`: output `command`, `args`, `env` (strip `type` field)
 /// - `sse`/`http`: output `url`, `headers` (strip `type` field)
 /// - Always add `enabled: true`
-fn convert_to_hermes_format(spec: &Value) -> Result<Value, AppError> {
+pub(super) fn convert_to_hermes_format(spec: &Value) -> Result<Value, AppError> {
     let obj = spec
         .as_object()
         .ok_or_else(|| AppError::McpValidation("MCP spec must be a JSON object".into()))?;
@@ -213,7 +213,7 @@ pub fn sync_single_server_to_hermes(
 /// Core fields (command, args, env, url, headers) come from `new_spec`.
 /// Hermes-specific fields (enabled, tools, sampling, etc.) are kept from
 /// `existing` — this prevents OcHub from overwriting user customizations.
-fn merge_hermes_spec(existing: &Value, new_spec: &Value) -> Value {
+pub(super) fn merge_hermes_spec(existing: &Value, new_spec: &Value) -> Value {
     let mut result = serde_json::Map::new();
 
     // Copy Hermes-specific fields from existing config

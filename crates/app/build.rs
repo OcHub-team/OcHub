@@ -28,7 +28,11 @@ const REFERENCE: &str = "zh-Hans";
 fn main() {
     configure_windows_resources();
 
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("i18n");
+    // Build-script binaries can be reused by checkouts sharing a target
+    // directory. Resolve the invoking package at execution time so a cached
+    // script never compiles a different checkout's translation catalogs.
+    let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+        .join("i18n");
     println!("cargo:rerun-if-changed={}", dir.display());
 
     let catalogs: BTreeMap<&str, BTreeMap<String, String>> = LOCALES

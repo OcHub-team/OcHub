@@ -1,0 +1,6 @@
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+~		31 switch (settable, boolean) Claude plugin integration, Value: off
+~		33 text field (settable) ~/.claude, Value: gamma delta 三🙂
++		35 button 复制通知内容
++		36 button 关闭通知
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise

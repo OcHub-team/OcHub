@@ -1,0 +1,9 @@
+The following is a diff from the previous accessibility tree for Window: "OcHub" with ~ and + representing changed and added elements, respectively. Removed elements are summarized by ID range.
+Removed element IDs: 51-58
++		49 button Collapse
++		50 dialog ~/.codex/config.toml
++			51 button Close
++			52 text field
++			53 button Cancel
++			54 button Apply
+The focused UI element is 0 standard window OcHub, Secondary Actions: Raise

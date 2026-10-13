@@ -20,7 +20,7 @@ use crate::command::{
     ClaudePluginCommand, Cli, CodexAuthCommand, CodexCommand, CodexHistoryCommand, Command,
     CommonConfigCommand, ConfigCommand, CopilotAuthCommand, DataDirCommand, DeclarativeApplyArgs,
     DeclarativePlanArgs, DeeplinkCommand, DesktopAutostartCommand, DesktopCommand, DriftPolicyArg,
-    EnvCommand, GatewayChannelCommand, GatewayCommand, GatewayConfigCommand,
+    EditorCommand, EnvCommand, GatewayChannelCommand, GatewayCommand, GatewayConfigCommand,
     GatewayEndpointCommand, GatewayKeyCommand, GatewayRouteCommand, GatewayRouteRuleCommand,
     GetSetCommand, HermesCommand, HermesMemoryCommand, LightweightCommand, McpCommand,
     MigrateCommand, OmoCommand, OpenclawCommand, OpenclawModelCommand, OpencodeCommand,
@@ -243,6 +243,9 @@ pub async fn execute_with_application(
 async fn dispatch(application: &Application, cli: &Cli, output: &Output) -> Result<(), CliError> {
     match &cli.command {
         Command::Status => output.success(&application.status().await?, &[]),
+        Command::Overview { from, to } => {
+            output.success(&application.overview_snapshot(*from, *to).await?, &[])
+        }
         Command::Doctor { network } => {
             if *network {
                 require_online(cli, "doctor network checks")?;
@@ -259,6 +262,7 @@ async fn dispatch(application: &Application, cli: &Cli, output: &Output) -> Resu
         Command::Plan(args) => run_declarative_plan(application, args, output),
         Command::Apply(args) => run_declarative_apply(application, args, cli, output).await,
         Command::Provider(args) => run_provider(application, &args.command, cli, output).await,
+        Command::Editor(args) => run_editor(application, &args.command, cli, output),
         Command::Auth(args) => run_auth(application, &args.command, cli, output).await,
         Command::Quota(args) => run_quota(application, &args.command, cli, output).await,
         Command::ClaudeDesktop(args) => run_claude_desktop(application, &args.command, cli, output),
@@ -414,6 +418,13 @@ fn mutation_name(command: &Command) -> Option<&'static str> {
             _ => None,
         },
         Command::Apply(_) => Some("config.apply"),
+        Command::Editor(args) => match &args.command {
+            EditorCommand::Save { .. } => Some("editor.draft.save"),
+            EditorCommand::Delete { .. } => Some("editor.draft.delete"),
+            EditorCommand::Apply { .. } => Some("editor.draft.apply"),
+            EditorCommand::Undo { .. } => Some("config.apply.undo"),
+            _ => None,
+        },
         Command::Provider(args) => match &args.command {
             ProviderCommand::Add { .. } => Some("provider.add"),
             ProviderCommand::Edit { .. } => Some("provider.edit"),
@@ -2289,6 +2300,108 @@ async fn run_settings(
                 output.success(&application.test_proxy_settings(proxy).await?, &[])
             }
         },
+    }
+}
+
+fn run_editor(
+    application: &Application,
+    command: &EditorCommand,
+    cli: &Cli,
+    output: &Output,
+) -> Result<(), CliError> {
+    use ochub_core::application::{DraftApplyState, EditorDraftInput};
+    // Draft bodies can contain arbitrary raw text. Key-based redaction alone
+    // cannot safely display editor_state or raw_documents.
+    let display_draft = |value: Value| {
+        if cli.show_secrets || value.is_null() {
+            return value;
+        }
+        let mut value = redact_json(&value);
+        if let Some(input) = value.get_mut("input").and_then(Value::as_object_mut) {
+            input.insert("editorState".into(), Value::Null);
+            input.insert("rawDocuments".into(), Value::Null);
+            input.insert("commonConfig".into(), Value::Null);
+            if let Some(provider) = input.get_mut("provider").and_then(Value::as_object_mut) {
+                // A draft may hold native TOML/YAML and secrets at arbitrary
+                // plugin paths, so redact its full editable payload by default.
+                provider.insert("settingsConfig".into(), Value::Null);
+                provider.insert("meta".into(), Value::Null);
+            }
+        }
+        value
+    };
+    if cli.dry_run
+        && !matches!(
+            command,
+            EditorCommand::List { .. } | EditorCommand::Get { .. }
+        )
+    {
+        return output.success(
+            &json!({ "dryRun": true, "action": "editor.configuration" }),
+            &[],
+        );
+    }
+    match command {
+        EditorCommand::List { app } => {
+            output.success(&application.list_editor_drafts(&app_id(app)?)?, &[])
+        }
+        EditorCommand::Get { app, id } => output.success(
+            &display_draft(serde_json::to_value(
+                application.get_editor_draft(&app_id(app)?, id)?,
+            )?),
+            &[],
+        ),
+        EditorCommand::Save {
+            app,
+            id,
+            expected_revision,
+            from,
+        } => {
+            let input: EditorDraftInput = read_structured(from)?;
+            let saved =
+                application.upsert_editor_draft(&app_id(app)?, id, *expected_revision, input)?;
+            output.success(&display_draft(serde_json::to_value(saved)?), &[])
+        }
+        EditorCommand::Delete { app, id, revision } => {
+            application.delete_editor_draft(&app_id(app)?, id, *revision)?;
+            output.success(&json!({ "deleted": true, "id": id }), &[])
+        }
+        EditorCommand::Apply {
+            app,
+            id,
+            revision,
+            on_drift,
+        } => {
+            let policy = serde_json::from_value(json!(on_drift))?;
+            let result = application.apply_editor_draft(&app_id(app)?, id, *revision, policy)?;
+            if result.state == DraftApplyState::Failed {
+                let message = result
+                    .failure
+                    .as_ref()
+                    .map(|failure| failure.message.clone())
+                    .unwrap_or_else(|| "configuration was not applied".into());
+                return Err(CliError::Remote {
+                    code: "CONFIG_APPLY_FAILED".into(),
+                    message,
+                    retryable: false,
+                    details: serde_json::to_value(&result)?,
+                    exit_code: 8,
+                });
+            }
+            let mut display = serde_json::to_value(&result)?;
+            if !cli.show_secrets
+                && let Some(provider) = display
+                    .pointer_mut("/provider/provider")
+                    .and_then(Value::as_object_mut)
+            {
+                provider.insert("settingsConfig".into(), Value::Null);
+                provider.insert("meta".into(), Value::Null);
+            }
+            output.success(&display, &result.warnings)
+        }
+        EditorCommand::Undo { receipt_id } => {
+            output.success(&application.undo_config_apply(receipt_id)?, &[])
+        }
     }
 }
 

@@ -1,0 +1,19 @@
+- [0] AXWindow "OcHerdr" [actions=[raise]]
+  - AXToolbar "终端"
+    - AXButton "没有正在运行的 Herdr 会话"
+      - [1] AXButton "刷新" [actions=[press]]
+  - AXToolbar "状态栏"
+    - [2] AXButton "QA · Offline" [actions=[press]]
+      - [3] AXButton "聚合视图" [actions=[press]]
+    - AXButton "没有 Herdr 会话"
+    - [4] AXButton "快捷键" [actions=[press]]
+  - AXWindow "快捷键"
+    - [5] AXTextField "查找快捷键" = "重命名"
+    - AXStaticText "重命名标签或工作区: f2"
+    - AXStaticText "重命名标签: Ctrl+B → Shift+T"
+    - AXStaticText "重命名工作区: Ctrl+B → Shift+W"
+    - AXStaticText "重命名窗格: Ctrl+B → Shift+P"
+    - [6] AXButton "关闭" [actions=[press]]
+  - [7] AXButton [actions=[press]]
+  - [8] AXButton [help="this button also has an action to zoom the window" actions=[press,zoomwindow,showmenu]]
+  - [9] AXButton [actions=[press]]

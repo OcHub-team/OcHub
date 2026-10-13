@@ -23,10 +23,15 @@ use tokio::sync::mpsc;
 
 use crate::db::Database;
 use crate::gateway::router::candidates_for_model_ranked;
+pub use crate::gateway::routing_policy::conversion_supported;
+use crate::gateway::routing_policy::{channel_supports_request, dialect_conversion_rank};
+pub(crate) use crate::gateway::routing_policy::{request_model_override, request_model_rule};
 use crate::gateway::types::{
-    ChannelHealth, Dialect, GatewayAppModelPolicy, GatewayChannel, GatewayConfig, GatewayKey,
-    GatewayModelRule, GatewayReasoningConfig, GatewayReasoningMode, GatewayRoute,
+    ChannelHealth, Dialect, GatewayChannel, GatewayConfig, GatewayKey, GatewayReasoningConfig,
+    GatewayReasoningMode, GatewayRoute,
 };
+#[cfg(test)]
+use crate::gateway::types::{GatewayAppModelPolicy, GatewayModelRule};
 use crate::usage_tracking::logger::UsageLogger;
 use crate::usage_tracking::parser::TokenUsage;
 
@@ -78,14 +83,6 @@ impl PipelineOutcome {
     }
 }
 
-/// Can requests of `inlet` dialect be served by a channel of `channel` dialect?
-/// All nine pairs convert (chat-upstream reverse conversion is lossy: thinking
-/// signatures and cache markers have no chat representation). Kept as the single
-/// source of truth so UI/apply guards lift automatically with the matrix.
-pub fn conversion_supported(_inlet: Dialect, _channel: Dialect) -> bool {
-    true
-}
-
 /// Codex remote compaction v2 is a Responses-only protocol extension. Its
 /// `compaction_trigger` input has no faithful Messages/Chat representation, so
 /// it must never enter a lossy dialect conversion or fail over to one.
@@ -99,10 +96,6 @@ fn is_remote_compaction_request(inlet: Dialect, body: &Value) -> bool {
                     item.get("type").and_then(Value::as_str) == Some("compaction_trigger")
                 })
             })
-}
-
-fn channel_supports_request(inlet: Dialect, channel: Dialect, remote_compaction: bool) -> bool {
-    conversion_supported(inlet, channel) && (!remote_compaction || channel == Dialect::Responses)
 }
 
 fn error_body(inlet: Dialect, message: &str) -> Value {
@@ -920,19 +913,6 @@ fn model_unavailable_response(status: u16, body: &str) -> bool {
         .any(|needle| message.contains(needle))
 }
 
-/// Prefer the client's native wire format, then the richer Messages ↔
-/// Responses bridge, and keep conversions involving Chat as the last automatic
-/// choice because Chat cannot preserve every advanced reasoning capability.
-fn dialect_conversion_rank(inlet: Dialect, upstream: Dialect) -> u8 {
-    if inlet == upstream {
-        0
-    } else if !matches!(inlet, Dialect::Chat) && !matches!(upstream, Dialect::Chat) {
-        1
-    } else {
-        2
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn log_usage(
     db: &Database,
@@ -971,33 +951,6 @@ fn log_usage(
         is_streaming,
     ) {
         log::warn!("[gateway] usage log failed: {e}");
-    }
-}
-
-pub(crate) fn request_model_rule<'a>(
-    policy: Option<&'a GatewayAppModelPolicy>,
-    route: Option<&'a GatewayRoute>,
-    model: &str,
-) -> Option<&'a GatewayModelRule> {
-    match policy {
-        Some(policy) => policy.rule_for_model(model),
-        None => route.and_then(|route| route.rule_for_model(model)),
-    }
-}
-
-pub(crate) fn request_model_override<'a>(
-    rule: Option<&'a GatewayModelRule>,
-    policy: Option<&'a GatewayAppModelPolicy>,
-    route: Option<&'a GatewayRoute>,
-) -> Option<&'a str> {
-    match rule {
-        // A matched rule with no target is an explicit pass-through and must
-        // suppress the unmatched fallback.
-        Some(rule) => rule.upstream_model_override(),
-        None => match policy {
-            Some(policy) => policy.fallback_model.as_deref(),
-            None => route.and_then(|route| route.default_model.as_deref()),
-        },
     }
 }
 

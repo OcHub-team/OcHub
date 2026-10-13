@@ -241,26 +241,14 @@ impl SettingsView {
                 None,
                 |this, cx| this.toggle_tray(cx),
             ),
-            RowId::AppsOpen => {
-                let total = self.plugins.len();
-                let enabled = self
-                    .plugins
-                    .iter()
-                    .filter(|plugin| self.app_is_enabled(plugin.as_ref()))
-                    .count();
-                rows::nav(
-                    cx,
-                    row,
-                    Some(SharedString::from(tf!(
-                        k::SETTINGS_APPS_COUNT,
-                        enabled = enabled,
-                        total = total
-                    ))),
-                    false,
-                    None,
-                    |this, cx| this.go(Page::Apps, cx),
-                )
-            }
+            RowId::AppsOpen => rows::nav(
+                cx,
+                row,
+                Some(self.managed_apps_summary()),
+                false,
+                None,
+                |this, cx| this.go(Page::Apps, cx),
+            ),
             RowId::DataDir => rows::act(
                 cx,
                 row,

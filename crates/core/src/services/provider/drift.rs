@@ -618,6 +618,13 @@ pub(crate) fn load_snapshot(app_type: &AppType) -> Option<LiveSnapshot> {
     load_store().apps.remove(app_type.as_str())
 }
 
+pub(crate) fn clear_snapshot(app_type: &AppType) -> Result<(), AppError> {
+    let _guard = store_lock();
+    let mut store = load_store();
+    store.apps.remove(app_type.as_str());
+    save_store(&store)
+}
+
 /// Record what is now on disk as the baseline for future comparisons.
 ///
 /// Reading the file back rather than remembering what we handed to the writer

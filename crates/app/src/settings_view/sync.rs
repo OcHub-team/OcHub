@@ -227,9 +227,42 @@ pub(super) struct DraftField {
 }
 
 pub(super) struct SyncDraft {
+    pub(super) backend: crate::remote::WorkspaceBackend,
     target: SyncTarget,
     fields: Vec<DraftField>,
-    saving: bool,
+    pub(super) saving: bool,
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[gpui::test]
+    fn offline_save_preserves_the_sync_draft_without_entering_busy_state(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app = Arc::new(ochub_core::AppState::new(Arc::new(
+            ochub_core::Database::memory().unwrap(),
+        )));
+        let view = cx.new(|cx| SettingsView::new(app, cx));
+        view.update(cx, |view, cx| {
+            view.settings.webdav_sync = Some(WebDavSyncSettings {
+                enabled: true,
+                ..Default::default()
+            });
+            view.open_sync(cx);
+            let field = view.draft.as_ref().unwrap().fields[0].input.clone();
+            field.update(cx, |input, cx| {
+                input.set_content("https://draft.invalid", cx)
+            });
+            view.set_workspace_unavailable(cx);
+            view.save_sync(cx);
+            assert!(!view.draft_saving());
+            assert!(view.draft_dirty(cx));
+            assert_eq!(field.read(cx).content().as_ref(), "https://draft.invalid");
+        });
+    }
 }
 
 /// One manual sync action, carrying everything it needs.
@@ -295,6 +328,7 @@ impl SettingsView {
             });
         }
         self.draft = Some(SyncDraft {
+            backend: self.backend.clone(),
             target,
             fields,
             saving: false,
@@ -441,6 +475,14 @@ impl SettingsView {
     // ── Commit ──────────────────────────────────────────────────────────────
 
     pub(super) fn save_sync(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available
+            || self
+                .draft
+                .as_ref()
+                .is_none_or(|draft| !draft.backend.same_target(&self.backend))
+        {
+            return;
+        }
         let Some(target) = self.draft.as_ref().map(|draft| draft.target) else {
             return;
         };
@@ -484,9 +526,6 @@ impl SettingsView {
                 serde_json::json!(stored)
             }
         };
-        if !self.workspace_available {
-            return;
-        }
         let backend = self.backend.clone();
         let remote = self.workspace_remote;
         let generation = self.workspace_generation;
@@ -790,13 +829,31 @@ impl SettingsView {
             ))
             // Pinned outside the scroll region: whether there is something
             // unsaved must never be a fact you have to scroll to find.
-            .child(components::commit_bar(
-                "sync",
-                dirty,
-                saving,
-                move |window, cx| discard(&(), window, cx),
-                move |window, cx| save(&(), window, cx),
-            ))
+            .child(if self.workspace_available {
+                components::commit_bar(
+                    "sync",
+                    dirty,
+                    saving,
+                    move |window, cx| discard(&(), window, cx),
+                    move |window, cx| save(&(), window, cx),
+                )
+            } else {
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .px_4()
+                    .py_3()
+                    .child(t(k::INTERACTION_OFFLINE_DRAFT))
+                    .child(components::disabled_button(
+                        "sync-offline-save",
+                        t(k::SETTINGS_ACTION_SAVE),
+                        ButtonTone::Primary,
+                        components::ButtonSize::Md,
+                        true,
+                    ))
+            })
     }
 
     fn render_sync_status(&self) -> gpui::Div {
@@ -868,7 +925,7 @@ impl SettingsView {
     }
 
     fn render_sync_actions(&self, dirty: bool, cx: &mut Context<Self>) -> gpui::Div {
-        let busy = self.sync_busy;
+        let busy = self.sync_busy || !self.workspace_available;
         let acts_on_stored = busy || dirty || !self.saved_valid();
         let test =
             cx.listener(|this, _event: &(), _window: &mut Window, cx| this.test_connection(cx));

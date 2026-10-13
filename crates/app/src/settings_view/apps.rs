@@ -1,27 +1,32 @@
-//! The apps sub-page: one switch per plugin, the manifest errors, and the two
-//! user-plugin commands.
-//!
-//! The switches are here rather than inlined on the root page because the
-//! plugin list is unbounded — the same viewport failure the WebDAV block used
-//! to cause. Enabling an app is a background call now: the service it delegates
-//! to is `async fn` with no `.await` in its body, so the old
-//! `tokio::runtime::Builder…block_on` on the render thread was pure waste, and
-//! it froze the window on every toggle.
+//! Managed apps: plugin source, management state, and explicit row actions.
+//! Built-in adapters and user manifests share the same management contract.
+//! Local manifests share the desktop editor. Unknown remote adapters remain
+//! explicit about their unavailable editor protocol.
 
 use std::process::Command;
 
-use gpui::{AnyElement, Context, SharedString, Window, prelude::*};
+use gpui::{AnyElement, Context, FontWeight, SharedString, Window, div, prelude::*, px};
 use ochub_core::plugin::AppPlugin;
 use ochub_core::settings;
+use ochub_core::{AppId, AppType};
 
-use crate::components::{self, ButtonTone};
+use crate::components::{self, ButtonSize, ButtonTone};
 use crate::i18n::{k, t};
 use crate::layout;
 use crate::notifications::NotificationLevel;
 use crate::shell_menu;
 use crate::tf;
+use crate::theme;
 
 use super::{SettingsEvent, SettingsView};
+
+struct ManagedAppRow {
+    id: AppId,
+    label: SharedString,
+    enabled: bool,
+    user_manifest: bool,
+    supports_provider: bool,
+}
 
 impl SettingsView {
     pub(super) fn render_apps(&mut self, cx: &mut Context<Self>) -> gpui::Div {
@@ -46,42 +51,194 @@ impl SettingsView {
     ) -> AnyElement {
         match ix {
             0 => {
-                let enabled_count = self
-                    .plugins
+                if self.workspace_remote {
+                    if self.remote_apps_error.is_some() {
+                        return gpui::Empty.into_any_element();
+                    }
+                    if self.remote_apps_loading || self.remote_apps.is_empty() {
+                        let message = if self.remote_apps_loading {
+                            t(k::SETTINGS_APPS_REMOTE_LOADING)
+                        } else if !self.workspace_available {
+                            t(k::SETTINGS_APPS_REMOTE_UNAVAILABLE)
+                        } else {
+                            t(k::SETTINGS_APPS_REMOTE_EMPTY)
+                        };
+                        return super::rows::group_block(
+                            t(k::SETTINGS_APPS_SECTION_ENABLED),
+                            vec![
+                                layout::row()
+                                    .child(
+                                        div().text_sm().text_color(theme::muted()).child(message),
+                                    )
+                                    .into_any_element(),
+                            ],
+                        );
+                    }
+                }
+                let apps = self.managed_apps();
+                let enabled_count = apps.iter().filter(|app| app.enabled).count();
+                let rows: Vec<AnyElement> = apps
                     .iter()
-                    .filter(|plugin| self.app_is_enabled(plugin.as_ref()))
-                    .count();
-                let rows: Vec<AnyElement> = self
-                    .plugins
-                    .iter()
-                    .map(|plugin| {
-                        let id = plugin.id().as_str().to_string();
-                        let label = plugin.display_name().to_string();
-                        let enabled = self.app_is_enabled(plugin.as_ref());
-                        // "至少保留一个启用的应用" is a rule about which switch
-                        // can be flipped, so it disables the switch and says why.
-                        // Erroring after the click made the refusal look like a
-                        // failure. It is the only line these rows still carry.
+                    .map(|app| {
+                        let id = app.id.to_string();
+                        let label = app.label.clone();
+                        let enabled = app.enabled;
                         let last_one = enabled && enabled_count <= 1;
                         let busy = self.toggling.contains(&id);
-                        let description = last_one.then(|| t(k::SETTINGS_APPS_KEEP_ONE_ENABLED));
+                        let source = if app.user_manifest {
+                            t(k::SETTINGS_APPS_SOURCE_USER)
+                        } else {
+                            t(k::SETTINGS_APPS_SOURCE_BUILTIN)
+                        };
+                        let state = if enabled {
+                            t(k::SETTINGS_APPS_STATE_ENABLED)
+                        } else {
+                            t(k::SETTINGS_APPS_STATE_DISABLED)
+                        };
+                        let action = if enabled {
+                            t(k::SETTINGS_APPS_MANAGE_DISABLE)
+                        } else {
+                            t(k::SETTINGS_APPS_MANAGE_ENABLE)
+                        };
+                        let editor_notice =
+                            if self.workspace_remote && AppType::from_app_id(&app.id).is_none() {
+                                Some(t(k::SETTINGS_APPS_REMOTE_EDITOR_UNAVAILABLE))
+                            } else if !app.supports_provider {
+                                Some(t(k::SETTINGS_APPS_EDITOR_UNAVAILABLE))
+                            } else {
+                                None
+                            };
+                        let aria_label = SharedString::from(tf!(
+                            k::SETTINGS_APPS_MANAGE_ARIA,
+                            action = action,
+                            app = label
+                        ));
+                        let mut aria_description = format!("{source} · {state}");
+                        if let Some(notice) = &editor_notice {
+                            aria_description.push_str(&format!(" · {notice}"));
+                        }
+                        if last_one {
+                            aria_description
+                                .push_str(&format!(" · {}", t(k::SETTINGS_APPS_KEEP_ONE_ENABLED)));
+                        }
+                        let button_id = SharedString::from(format!("app-{id}-manage"));
                         let toggle_id = id.clone();
-                        layout::switch_row(
-                            SharedString::from(format!("app-{id}")),
-                            SharedString::from(label),
-                            description,
-                            enabled,
-                            last_one || busy,
-                            row_handler(cx.listener(move |this, _event: &(), _window, cx| {
-                                this.set_app_enabled(&toggle_id, cx);
-                            })),
-                        )
-                        .into_any_element()
+                        let control = if busy {
+                            components::busy_button(
+                                button_id,
+                                action,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                                true,
+                            )
+                        } else if last_one || !self.workspace_available {
+                            components::disabled_button(
+                                button_id,
+                                action,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                                true,
+                            )
+                        } else {
+                            components::button(
+                                button_id,
+                                action,
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    this.set_app_enabled(&toggle_id, cx);
+                                },
+                            ))
+                        }
+                        .aria_label(aria_label)
+                        .aria_description(SharedString::from(aria_description))
+                        .flex_none()
+                        .whitespace_nowrap();
+                        let metadata = div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(source)
+                            .child(
+                                div()
+                                    .text_color(if enabled {
+                                        theme::green()
+                                    } else {
+                                        theme::muted()
+                                    })
+                                    .child(state),
+                            )
+                            .when_some(editor_notice, |row, notice| row.child(notice));
+                        let identity = div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme::text())
+                                    .child(label),
+                            )
+                            .child(metadata)
+                            .when(last_one, |column| {
+                                column.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::muted())
+                                        .child(t(k::SETTINGS_APPS_KEEP_ONE_ENABLED)),
+                                )
+                            });
+                        layout::row()
+                            .px_3()
+                            .py_2()
+                            .gap_3()
+                            .child(identity)
+                            .child(control)
+                            .into_any_element()
                     })
                     .collect();
                 super::rows::group_block(t(k::SETTINGS_APPS_SECTION_ENABLED), rows)
             }
             1 => {
+                if self.workspace_remote {
+                    let Some(error) = self.remote_apps_error.clone() else {
+                        return gpui::Empty.into_any_element();
+                    };
+                    return super::rows::group_block(
+                        t(k::SETTINGS_APPS_SECTION_ERRORS),
+                        vec![
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .px_3()
+                                .py_2()
+                                .child(components::field_error(error))
+                                .child(
+                                    components::button(
+                                        "remote-apps-retry",
+                                        t(k::SETTINGS_APPS_REMOTE_RETRY),
+                                        ButtonTone::Neutral,
+                                        ButtonSize::Sm,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| this.load_workspace_apps(cx),
+                                    )),
+                                )
+                                .into_any_element(),
+                        ],
+                    );
+                }
                 if self.plugin_load_errors.is_empty() {
                     return gpui::Empty.into_any_element();
                 }
@@ -103,34 +260,88 @@ impl SettingsView {
                 super::rows::group_block(t(k::SETTINGS_APPS_SECTION_ERRORS), rows)
             }
             2 => {
+                if self.workspace_remote {
+                    return super::rows::group_block(
+                        t(k::SETTINGS_APPS_SECTION_USER),
+                        vec![
+                            layout::row()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme::muted())
+                                        .child(t(k::SETTINGS_APPS_REMOTE_PLUGINS_NOTICE)),
+                                )
+                                .into_any_element(),
+                        ],
+                    );
+                }
                 let dir = ochub_core::plugin::user_plugins_dir();
-                let rows = vec![
-                    layout::action_row(
+                let reload = if self.settings_busy {
+                    components::disabled_button(
                         "apps-reload",
-                        t(k::SETTINGS_APPS_RELOAD_LABEL),
-                        None,
                         t(k::SETTINGS_APPS_RELOAD_ACTION),
                         ButtonTone::Neutral,
-                        self.settings_busy,
-                        row_handler(cx.listener(|this, _event: &(), _window, cx| {
-                            this.reload_user_plugins(cx)
-                        })),
+                        ButtonSize::Sm,
+                        true,
                     )
-                    .into_any_element(),
-                    layout::action_row(
-                        "apps-dir",
-                        t(k::SETTINGS_APPS_PLUGINS_DIR_LABEL),
-                        Some(SharedString::from(dir.to_string_lossy().to_string())),
-                        t(k::SETTINGS_ACTION_OPEN),
+                } else {
+                    components::button(
+                        "apps-reload",
+                        t(k::SETTINGS_APPS_RELOAD_ACTION),
                         ButtonTone::Neutral,
-                        self.settings_busy,
-                        row_handler(cx.listener(|this, _event: &(), _window, cx| {
-                            this.open_user_plugins_dir(cx)
-                        })),
+                        ButtonSize::Sm,
                     )
-                    .into_any_element(),
-                ];
-                super::rows::group_block(t(k::SETTINGS_APPS_SECTION_USER), rows)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.reload_user_plugins(cx)))
+                };
+                let open = if self.settings_busy {
+                    components::disabled_button(
+                        "apps-dir",
+                        t(k::SETTINGS_APPS_PLUGINS_DIR_OPEN),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                        true,
+                    )
+                } else {
+                    components::button(
+                        "apps-dir",
+                        t(k::SETTINGS_APPS_PLUGINS_DIR_OPEN),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(
+                        cx.listener(|this, _event, _window, cx| this.open_user_plugins_dir(cx)),
+                    )
+                };
+                super::rows::group_block(
+                    t(k::SETTINGS_APPS_SECTION_USER),
+                    vec![
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .min_w_0()
+                            .gap_2()
+                            .px_3()
+                            .py_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .truncate()
+                                    .child(SharedString::from(dir.to_string_lossy().to_string())),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(reload)
+                                    .child(open),
+                            )
+                            .into_any_element(),
+                    ],
+                )
             }
             _ => gpui::Empty.into_any_element(),
         }
@@ -142,6 +353,93 @@ impl SettingsView {
             .unwrap_or_else(|| plugin.enabled_by_default())
     }
 
+    fn managed_apps(&self) -> Vec<ManagedAppRow> {
+        if self.workspace_remote {
+            self.remote_apps
+                .iter()
+                .filter_map(|app| {
+                    Some(ManagedAppRow {
+                        id: AppId::parse(&app.id).ok()?,
+                        label: app.display_name.clone().into(),
+                        enabled: app.enabled,
+                        user_manifest: app.user_manifest,
+                        supports_provider: app.supports_provider,
+                    })
+                })
+                .collect()
+        } else {
+            self.plugins
+                .iter()
+                .map(|plugin| ManagedAppRow {
+                    id: plugin.id().clone(),
+                    label: plugin.display_name().to_string().into(),
+                    enabled: self.app_is_enabled(plugin.as_ref()),
+                    user_manifest: plugin.is_user_manifest(),
+                    supports_provider: plugin.provider_config().is_some(),
+                })
+                .collect()
+        }
+    }
+
+    pub(super) fn managed_apps_summary(&self) -> SharedString {
+        if self.workspace_remote && self.remote_apps_loading {
+            return t(k::SETTINGS_APPS_REMOTE_LOADING);
+        }
+        if self.workspace_remote && (self.remote_apps_error.is_some() || !self.workspace_available)
+        {
+            return t(k::SETTINGS_APPS_REMOTE_UNAVAILABLE);
+        }
+        let (enabled, total) = if self.workspace_remote {
+            (
+                self.remote_apps.iter().filter(|app| app.enabled).count(),
+                self.remote_apps.len(),
+            )
+        } else {
+            (
+                self.plugins
+                    .iter()
+                    .filter(|plugin| self.app_is_enabled(plugin.as_ref()))
+                    .count(),
+                self.plugins.len(),
+            )
+        };
+        tf!(k::SETTINGS_APPS_COUNT, enabled = enabled, total = total).into()
+    }
+
+    pub(super) fn load_workspace_apps(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_remote || !self.workspace_available || self.remote_apps_loading {
+            return;
+        }
+        let backend = self.backend.clone();
+        let generation = self.workspace_generation;
+        self.remote_apps_loading = true;
+        self.remote_apps_error = None;
+        self.apps_list.remeasure();
+        self.root_list.remeasure();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = crate::core_async::run(async move { backend.list_apps().await }).await;
+            this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
+                this.remote_apps_loading = false;
+                match result {
+                    Ok(apps) => this.remote_apps = apps,
+                    Err(error) => {
+                        this.remote_apps_error =
+                            Some(tf!(k::SETTINGS_APPS_REMOTE_LOAD_FAILED, error = error).into())
+                    }
+                }
+                this.apps_list.remeasure();
+                this.root_list.remeasure();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Flip one app, off the render thread.
     ///
     /// `toggling` is keyed per app rather than one global "busy" flag, so only
@@ -151,15 +449,15 @@ impl SettingsView {
         if self.toggling.contains(id) || !self.workspace_available {
             return;
         }
-        let Some(plugin) = self
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id().as_str() == id)
+        let Some(app) = self
+            .managed_apps()
+            .into_iter()
+            .find(|app| app.id.as_str() == id)
         else {
             return;
         };
-        let currently = self.app_is_enabled(plugin.as_ref());
-        let app_id = plugin.id().clone();
+        let currently = app.enabled;
+        let app_id = app.id;
         let backend = self.backend.clone();
         let remote = self.workspace_remote;
         let generation = self.workspace_generation;
@@ -169,10 +467,7 @@ impl SettingsView {
 
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(async move {
-                backend.set_app_enabled(&app_id, !currently).await?;
-                let value = backend.settings().await?;
-                serde_json::from_value::<ochub_core::settings::AppSettings>(value)
-                    .map_err(super::WorkspaceBackendError::from)
+                backend.set_app_enabled(&app_id, !currently).await
             })
             .await;
             this.update(cx, |this, cx| {
@@ -181,12 +476,16 @@ impl SettingsView {
                 }
                 this.toggling.remove(&key);
                 match result {
-                    Ok(workspace) => {
-                        this.settings = if remote {
-                            super::merge_workspace_settings(settings::get_settings(), workspace)
+                    Ok(updated) => {
+                        if remote {
+                            if let Some(app) =
+                                this.remote_apps.iter_mut().find(|app| app.id == updated.id)
+                            {
+                                *app = updated.clone();
+                            }
                         } else {
-                            workspace
-                        };
+                            this.settings = settings::get_settings();
+                        }
                         this.set_status(
                             NotificationLevel::Success,
                             if currently {
@@ -217,9 +516,10 @@ impl SettingsView {
     }
 
     fn reload_user_plugins(&mut self, cx: &mut Context<Self>) {
-        if self.settings_busy {
+        if self.settings_busy || self.workspace_remote || !self.workspace_available {
             return;
         }
+        let generation = self.workspace_generation;
         self.settings_busy = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -235,11 +535,14 @@ impl SettingsView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.settings_busy = false;
                 this.plugins = plugins;
                 this.plugin_load_errors = errors.clone().into();
-                // A partial reload still leaves broken manifests behind, so it is a
-                // warning rather than a clean success.
+                // Failed candidate validation preserves the entire previously
+                // loaded registry. Report retained adapters, not partial success.
                 let (level, message) = if errors.is_empty() {
                     (
                         NotificationLevel::Success,
@@ -268,9 +571,10 @@ impl SettingsView {
     }
 
     fn open_user_plugins_dir(&mut self, cx: &mut Context<Self>) {
-        if self.settings_busy {
+        if self.settings_busy || self.workspace_remote || !self.workspace_available {
             return;
         }
+        let generation = self.workspace_generation;
         let dir = ochub_core::plugin::user_plugins_dir();
         self.settings_busy = true;
         cx.notify();
@@ -296,6 +600,9 @@ impl SettingsView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.settings_busy = false;
                 match result {
                     Ok(()) => this.set_status(
@@ -310,14 +617,4 @@ impl SettingsView {
         })
         .detach();
     }
-}
-
-/// Adapt a `cx.listener` (which takes an event argument) to the
-/// `Fn(&mut Window, &mut App)` the `layout` rows want. `rows.rs` does the same
-/// for the root page; these rows are built inline because their ids are
-/// per-plugin rather than drawn from the `RowId` table.
-fn row_handler(
-    listener: impl Fn(&(), &mut Window, &mut gpui::App) + 'static,
-) -> impl Fn(&mut Window, &mut gpui::App) + 'static {
-    move |window, cx| listener(&(), window, cx)
 }

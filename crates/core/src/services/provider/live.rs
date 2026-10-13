@@ -406,7 +406,7 @@ pub(crate) fn remove_common_config_from_settings(
     }
 }
 
-fn apply_common_config_to_settings(
+pub(crate) fn apply_common_config_to_settings(
     app_type: &AppType,
     settings: &Value,
     snippet: &str,
@@ -558,7 +558,7 @@ pub(crate) fn log_drift(app_type: &AppType, provider: &Provider, report: &LiveDr
 /// Returns the merged configuration alongside the report. Splitting this from
 /// the write is what lets the UI show the user a diff *before* their file
 /// changes, rather than a summary of what already happened to it.
-fn resolve_live_write(
+pub(crate) fn resolve_live_write(
     db: &Database,
     app_type: &AppType,
     outgoing: Option<&Provider>,

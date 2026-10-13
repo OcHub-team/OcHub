@@ -29,6 +29,8 @@ impl Application {
                     supports_mcp: plugin.supports_mcp(),
                     supports_skills: plugin.supports_skills(),
                     user_manifest: plugin.is_user_manifest(),
+                    icon_id: plugin.icon_id().to_string(),
+                    accent: plugin.accent_color(),
                 }
             })
             .collect())

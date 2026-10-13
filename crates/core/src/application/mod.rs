@@ -7,13 +7,16 @@
 mod advanced;
 mod apps;
 mod auth;
+pub(crate) mod config_commits;
 mod declarative;
 mod deeplink;
 mod dto;
+mod editor_drafts;
 mod error;
 mod gateway;
 mod mcp;
 mod migration;
+mod overview;
 mod plugins;
 mod provider_ops;
 mod providers;
@@ -30,15 +33,27 @@ use std::sync::Arc;
 
 use crate::{AppState, Database};
 
+pub use crate::services::config_commit::{ConfigApplyReceipt, ConfigApplyState, ConfigFileChange};
 pub use declarative::{DeclarativeAction, DeclarativeDocument, DeclarativePlan};
 pub use dto::{
     AppModeDto, AppSummary, ConfigDiffFile, ConfigFieldDto, ConfigFieldKindDto, ConfigSchemaDto,
     ConfigSectionDto, DoctorCheck, DoctorReport, OperationOutcome, PluginDetails, PluginSummary,
-    PricingDefault, ProviderDetails, ProviderListItem, ProviderSwitchPlan, StatusSummary,
-    UsageFilter, UsageLimitItem,
+    PricingDefault, ProviderDetails, ProviderListItem, ProviderSnapshot, ProviderSwitchPlan,
+    StatusSummary, UsageFilter, UsageLimitItem,
+};
+pub use editor_drafts::{
+    DraftApplyFailure, DraftApplyStage, DraftApplyState, EditorCommonConfig, EditorDraft,
+    EditorDraftApplyResult, EditorDraftInput, EditorDraftSummary, provider_revision_hash,
 };
 pub use error::{ApplicationError, ApplicationResult};
 pub use gateway::GatewayStation;
+pub use overview::{
+    OverviewCandidateState, OverviewChannel, OverviewConnection, OverviewManagedApp,
+    OverviewProviderPerformance, OverviewReachability, OverviewRequest, OverviewRoute,
+    OverviewRouteBinding, OverviewRouteCandidate, OverviewRouteExplanation, OverviewRouting,
+    OverviewSection, OverviewSectionError, OverviewSnapshot, OverviewTrendBucket, OverviewUsage,
+    OverviewUsageSource, OverviewWindow,
+};
 /// The predicate behind [`redact_json`], shared so the save path can recognize
 /// the fields it produced placeholders for.
 pub(crate) use providers::is_secret_key;
@@ -70,7 +85,19 @@ impl Application {
         crate::app_store::refresh_app_config_dir_override();
         let db = Arc::new(Database::init()?);
         let state = Arc::new(AppState::new(db));
-        if options.bootstrap {
+        let application = Self {
+            state: state.clone(),
+        };
+        let recovered = match application.recover_config_commits() {
+            Ok(_) => true,
+            Err(error) => {
+                log::warn!(
+                    "Configuration recovery requires attention before further writes: {error}"
+                );
+                false
+            }
+        };
+        if options.bootstrap && recovered {
             state.bootstrap();
         } else {
             for error in crate::plugin::load_and_register_user_plugins() {
@@ -81,7 +108,7 @@ impl Application {
                 );
             }
         }
-        Ok(Self { state })
+        Ok(application)
     }
 
     /// Build the facade around an already-owned in-process state.

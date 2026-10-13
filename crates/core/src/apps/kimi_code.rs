@@ -123,6 +123,13 @@ fn ensure_table(document: &mut DocumentMut, key: &str) {
 
 /// Merge a focused provider snapshot into the live Kimi Code TOML document.
 pub fn write_kimi_code_live(provider: &Provider) -> Result<(), AppError> {
+    crate::paths::write_text_file(
+        &get_kimi_code_config_path(),
+        &prepare_provider_document(provider)?,
+    )
+}
+
+pub(crate) fn prepare_provider_document(provider: &Provider) -> Result<String, AppError> {
     let path = get_kimi_code_config_path();
     let existing = read_kimi_code_config_text()?;
     let mut document = if existing.trim().is_empty() {
@@ -180,7 +187,7 @@ pub fn write_kimi_code_live(provider: &Provider) -> Result<(), AppError> {
         }
     }
 
-    crate::paths::write_text_file(&path, &document.to_string())
+    Ok(document.to_string())
 }
 
 #[cfg(test)]

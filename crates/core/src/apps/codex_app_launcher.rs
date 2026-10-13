@@ -1,12 +1,13 @@
 //! Controlled Codex desktop launcher and native picker unlock.
 //!
 //! The Codex renderer applies account gates after it reads the model catalog:
-//! Fast requires ChatGPT auth, while Ultra requires an account setting. OcHub
-//! launches an isolated debugging instance and uses CDP Fetch interception to
-//! remove only those two renderer gates as `app-initial-*.js` loads. The model
-//! catalog and Codex's own React components, setters, and request path remain
-//! responsible for the actual options and selected values. Nothing is changed
-//! in the signed application bundle on disk.
+//! Fast requires ChatGPT auth, while Ultra requires an account setting and two
+//! rollout checks. OcHub launches an isolated
+//! debugging instance and uses CDP Fetch interception to remove those gates as
+//! `app-initial-*.js` loads. The model catalog and Codex's own React
+//! components, setters, and request path remain responsible for the actual
+//! options and selected values. Nothing is changed in the signed application
+//! bundle on disk.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -49,11 +50,40 @@ static FAST_AUTH_GATE: Lazy<Regex> = Lazy::new(|| {
 static FAST_REQUEST_GATE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"fast_mode===!1").expect("Fast request gate regex must compile"));
 
-static ULTRA_ACCOUNT_GATE: Lazy<Regex> = Lazy::new(|| {
+// ChatGPT 26.915 reads a saved service tier only after an account predicate.
+// A custom provider fails that predicate and the tier is discarded before the
+// fast_mode requirement is consulted.
+static SAVED_TIER_AUTH_GATE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?P<lhs>[A-Za-z_$][A-Za-z0-9_$]*)=[A-Za-z_$][A-Za-z0-9_$]*\?\.ultraEffortEnabled===!0",
+        r"if\(!await (?P<pred>[A-Za-z_$][A-Za-z0-9_$]*)\(\)\|\|(?P<call>\(await [A-Za-z_$][A-Za-z0-9_$]*\.sendRequest\(`configRequirements/read`,void 0,\{priority:`critical`\}\))",
     )
-    .expect("Ultra account gate regex must compile")
+    .expect("saved service-tier auth gate regex must compile")
+});
+
+// The account flag is an argument of the slider builder.
+static ULTRA_SLIDER_GATE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"includeUltraInSlider:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\.ultraEffortEnabled===!0",
+    )
+    .expect("Ultra slider gate regex must compile")
+});
+
+// Rollout id 1186680773 also names the multiAgentMode gate. Only the two call
+// sites that drop `ultra` from the model list are rewritten.
+static ULTRA_CATALOG_GATE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"&&[A-Za-z_$][A-Za-z0-9_$]*\(L_,`1186680773`\)")
+        .expect("Ultra catalog gate regex must compile")
+});
+
+static ULTRA_TOOLS_GATE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"includeUltraReasoningEffort:P_\([A-Za-z_$][A-Za-z0-9_$]*,`1186680773`\)")
+        .expect("Ultra tools gate regex must compile")
+});
+
+// Gate 536305374 rejects or reverts an `ultra` selection.
+static ULTRA_SELECTION_GATE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.get)?\(L_,`536305374`\)")
+        .expect("Ultra selection gate regex must compile")
 });
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -269,28 +299,56 @@ fn patch_codex_picker_source(source: &str) -> Result<(String, PickerPatchStats),
     let fast_ui_gates = FAST_UI_GATE.find_iter(source).count();
     let fast_auth_gates = FAST_AUTH_GATE.find_iter(source).count();
     let fast_request_gates = FAST_REQUEST_GATE.find_iter(source).count();
-    let ultra_gates = ULTRA_ACCOUNT_GATE.find_iter(source).count();
-    if fast_ui_gates != 1 || fast_auth_gates != 1 || fast_request_gates != 1 || ultra_gates == 0 {
+    let slider_ultra_gates = ULTRA_SLIDER_GATE.find_iter(source).count();
+    let saved_tier_auth_gates = SAVED_TIER_AUTH_GATE.find_iter(source).count();
+    let ultra_catalog_gates = ULTRA_CATALOG_GATE.find_iter(source).count();
+    let ultra_tools_gates = ULTRA_TOOLS_GATE.find_iter(source).count();
+    let ultra_selection_gates = ULTRA_SELECTION_GATE.find_iter(source).count();
+    if fast_ui_gates != 1
+        || fast_auth_gates != 1
+        || fast_request_gates != 2
+        || slider_ultra_gates != 1
+        || saved_tier_auth_gates != 1
+        || ultra_catalog_gates != 1
+        || ultra_tools_gates != 1
+        || ultra_selection_gates != 4
+    {
         return Err(format!(
-            "unsupported Codex renderer gates (Fast UI: {fast_ui_gates}, Fast auth: {fast_auth_gates}, Fast request: {fast_request_gates}, Ultra: {ultra_gates})"
+            "unsupported Codex renderer gates (Fast UI: {fast_ui_gates}, Fast auth: {fast_auth_gates}, Fast request: {fast_request_gates}, Ultra slider: {slider_ultra_gates}, saved tier auth: {saved_tier_auth_gates}, Ultra catalog: {ultra_catalog_gates}, Ultra tools: {ultra_tools_gates}, Ultra selection: {ultra_selection_gates})"
         ));
     }
 
-    let source = FAST_UI_GATE.replace_all(source, "${lhs}=!0");
+    let mut source = FAST_UI_GATE.replace_all(source, "${lhs}=!0").into_owned();
     // API-key/custom-provider hosts should use their catalog capability rather
     // than an unrelated ChatGPT account type to decide whether Fast exists.
-    let source = FAST_AUTH_GATE.replace_all(&source, "if(${auth}!==`chatgpt`)return!0;");
+    source = FAST_AUTH_GATE
+        .replace_all(&source, "if(${auth}!==`chatgpt`)return!0;")
+        .into_owned();
+    // `!1 &&` short-circuits the account predicate. The requirement request
+    // below still runs; `fast_mode===!2` keeps it from discarding the tier.
+    source = SAVED_TIER_AUTH_GATE
+        .replace_all(&source, "if(!1&&!await ${pred}()||${call}")
+        .into_owned();
     // Preserve the official service-tier setter and request shape, but do not
     // let ChatGPT account requirements erase that value for a custom provider.
-    let source = FAST_REQUEST_GATE.replace_all(&source, "fast_mode===!2");
-    let source = ULTRA_ACCOUNT_GATE.replace_all(&source, "${lhs}=!0");
+    source = FAST_REQUEST_GATE
+        .replace_all(&source, "fast_mode===!2")
+        .into_owned();
+    source = ULTRA_SLIDER_GATE
+        .replace_all(&source, "includeUltraInSlider:!0")
+        .into_owned();
+    source = ULTRA_CATALOG_GATE.replace_all(&source, "&&!0").into_owned();
+    source = ULTRA_TOOLS_GATE
+        .replace_all(&source, "includeUltraReasoningEffort:!0")
+        .into_owned();
+    source = ULTRA_SELECTION_GATE.replace_all(&source, "!0").into_owned();
     Ok((
-        source.into_owned(),
+        source,
         PickerPatchStats {
             fast_ui_gates,
             fast_auth_gates,
             fast_request_gates,
-            ultra_gates,
+            ultra_gates: slider_ultra_gates,
         },
     ))
 }
@@ -768,26 +826,36 @@ mod tests {
     }
 
     #[test]
-    fn renderer_patch_removes_fast_and_ultra_account_gates() {
-        let source = r#"async function uvn(e,t){if(e==null)return null;try{if((await t()).requirements?.featureRequirements?.fast_mode===!1)return null}catch(e){return null}return e}function X1r(e){let i=Ij(e),a=i?.authMethod===`chatgpt`,c={},u=!1,d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1;return{isServiceTierAllowed:d}}async function Pna(e,t){let n=await jna(e,t);if(n!==`chatgpt`)return!1;return!0}function OYs(){let o={},s=o?.ultraEffortEnabled===!0;return s}function HTs(){let A={},j=A?.ultraEffortEnabled===!0;return j}"#;
+    fn renderer_patch_unlocks_chatgpt_26_fast_and_ultra_gates() {
+        let source = r#"async function Fqt(e,t,n){if(e==null)return null;try{if((await n()).requirements?.featureRequirements?.fast_mode===!1)return null}catch(e){return null}return e}async function qqt(e,t,n,r){try{if(!await r()||(await e.sendRequest(`configRequirements/read`,void 0,{priority:`critical`})).requirements?.featureRequirements?.fast_mode===!1)return null;return e}catch(e){return null}}async function Qdi(e,t){let n=await KI(e,t);if(n!==`chatgpt`)return!1;return!0}function TRa(e){let a=!1,u=!1,c={},d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1;return{isServiceTierAllowed:d}}function IPa(e,{includeUltraInSlider:t=!1}={}){return t}let picked=IPa(models,{sliderModelsConfig:z,includeUltraInSlider:V.data.ultraEffortEnabled===!0});let m=i&&l(L_,`1186680773`);let tools={includeUltraReasoningEffort:P_(r,`1186680773`)};if(n.thinkingEffort===`ultra`&&!e.get(L_,`536305374`))return;let allowed=t.thinkingEffort!==`ultra`||e.get(L_,`536305374`);if(!e.get(L_,`536305374`))return;return i===`ultra`&&!t(L_,`536305374`)?void 0:i"#;
         let (patched, stats) = patch_codex_picker_source(source).expect("supported renderer");
         assert_eq!(
             stats,
             PickerPatchStats {
                 fast_ui_gates: 1,
                 fast_auth_gates: 1,
-                fast_request_gates: 1,
-                ultra_gates: 2,
+                fast_request_gates: 2,
+                ultra_gates: 1,
             }
         );
         assert!(patched.contains("d=!0"));
         assert!(patched.contains("if(n!==`chatgpt`)return!0"));
         assert!(patched.contains("fast_mode===!2"));
-        assert!(patched.contains("s=!0"));
-        assert!(patched.contains("j=!0"));
         assert!(!patched.contains("fast_mode===!1"));
-        assert!(!patched.contains("fast_mode!==!1"));
-        assert!(!patched.contains("ultraEffortEnabled"));
+        assert!(patched.contains(
+            "if(!1&&!await r()||(await e.sendRequest(`configRequirements/read`,void 0,{priority:`critical`})).requirements?.featureRequirements?.fast_mode===!2)return null;"
+        ));
+        assert!(patched.contains("includeUltraInSlider:!0"));
+        assert!(patched.contains("includeUltraInSlider:t=!1"));
+        assert!(!patched.contains("ultraEffortEnabled===!0"));
+        assert!(patched.contains("m=i&&!0"));
+        assert!(patched.contains("includeUltraReasoningEffort:!0"));
+        assert!(patched.contains("thinkingEffort===`ultra`&&!!0"));
+        assert!(patched.contains("thinkingEffort!==`ultra`||!0"));
+        assert!(patched.contains("if(!!0)return"));
+        assert!(patched.contains("i===`ultra`&&!!0?void 0:i"));
+        assert!(!patched.contains("536305374"));
+        assert!(!patched.contains("1186680773"));
     }
 
     #[test]
@@ -796,6 +864,7 @@ mod tests {
         assert!(error.contains("Fast UI: 0"));
         assert!(error.contains("Fast auth: 0"));
         assert!(error.contains("Fast request: 0"));
-        assert!(error.contains("Ultra: 0"));
+        assert!(error.contains("Ultra slider: 0"));
+        assert!(error.contains("Ultra selection: 0"));
     }
 }

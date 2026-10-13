@@ -22,6 +22,8 @@ const OCHUB_SQL_EXPORT_HEADER: &str = "-- OcHub SQLite 导出";
 
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
 const SYNC_SKIP_TABLES: &[&str] = &[
+    "editor_drafts",
+    "config_apply_heads",
     "usage_logs",
     "usage_daily_rollups",
     "litellm_pricing_catalog",
@@ -31,6 +33,8 @@ const SYNC_SKIP_TABLES: &[&str] = &[
 
 /// Tables whose local data is preserved (restored from local snapshot) during WebDAV import.
 const SYNC_PRESERVE_TABLES: &[&str] = &[
+    "editor_drafts",
+    "config_apply_heads",
     "usage_logs",
     "usage_daily_rollups",
     "litellm_pricing_catalog",

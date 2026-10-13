@@ -1,0 +1,142 @@
+{
+  "date": "2026-10-13",
+  "baseline": "76410200193d4f2a22ffe721e688bb8322d19466 + existing working tree",
+  "qaApp": "/tmp/OCHUB-QA.app",
+  "bundleId": "io.ochub.debug.qa",
+  "sourceDirectory": "/tmp/ochub-ui-audit-20261013",
+  "screenshots": [
+    {
+      "file": "raw-modal-min.jpeg",
+      "source": "05-codex-raw-modal-min.jpeg",
+      "language": "zh-CN",
+      "theme": "dark",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "c5bff37a46955878a09077b3f085003a5f0ab306b91af09bf1c76ec26e9d4578"
+    },
+    {
+      "file": "modal-focus-leak.jpeg",
+      "source": "08-preview-collapsed.jpeg",
+      "language": "zh-CN",
+      "theme": "dark",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "7c064161c76ac7dfb129d2e3875cfd10faa55372e4f74ab1c615309b8b1e0408"
+    },
+    {
+      "file": "workspace-before-escape.jpeg",
+      "source": "09-workspace-dropdown-editor.jpeg",
+      "language": "zh-CN",
+      "theme": "dark",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "dc22257702b2630783ce346bd619d7a2e71d5d44886e186e9a4808cc42d3c618"
+    },
+    {
+      "file": "workspace-after-escape.jpeg",
+      "source": "10-workspace-dropdown-escape.jpeg",
+      "language": "zh-CN",
+      "theme": "dark",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "f5185ceb2eb040f12a7e2ef31ff2dfad12f795357c7802e84708cbd76de774c5"
+    },
+    {
+      "file": "provider-long-text.jpeg",
+      "source": "33-claude-long-min-en-light.jpeg",
+      "language": "en",
+      "theme": "light",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "a8c2fe4e3f9d59c9bd63ba66b60315d77ed3339a46a863743c10ccc43722121d"
+    },
+    {
+      "file": "pricing-actions-clipped.jpeg",
+      "source": "40-pricing-form-en.jpeg",
+      "language": "en",
+      "theme": "light",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "387918f6432aedb8028e40915535ba34b3b2c4064c16af2f980f6bee90b57632"
+    },
+    {
+      "file": "preview-long-line.jpeg",
+      "source": "45-kimi-preview-long-min.jpeg",
+      "language": "en",
+      "theme": "light",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "a9841b6e9268cd90836d4e437e531a112ad319f968b86c4ef4ce4e3a55b0b000"
+    },
+    {
+      "file": "schema-untranslated.jpeg",
+      "source": "42-kimi-editor-min-top.jpeg",
+      "language": "en",
+      "theme": "light",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "c955924ed7c11e2646f26b29219c2f5b6ccc6e5962a6718a8c0f655a73b0ee01"
+    },
+    {
+      "file": "disabled-settings.jpeg",
+      "source": "31-settings-min.jpeg",
+      "language": "zh-CN",
+      "theme": "dark",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "d7c45b5c1dac4d6e4465830ddc26537548de4bc1d14245332166c0f11d28ef38"
+    },
+    {
+      "file": "app-settings-switches.jpeg",
+      "source": "14-claude-app-settings.jpeg",
+      "language": "zh-CN",
+      "theme": "dark",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "12f5760a46a65396f499575246af9ee7a59da292f076a7c90d48da68ac5e917b"
+    },
+    {
+      "file": "remote-escape.jpeg",
+      "source": "27-remote-modal-after-escape.jpeg",
+      "language": "zh-CN",
+      "theme": "dark",
+      "logicalWindowSize": [
+        960,
+        640
+      ],
+      "sha256": "4eb02289409b0621c70b21d22addcca6f1daae761b0981b8ff171083f4bd0d47"
+    },
+    {
+      "file": "editor-split-1200.jpeg",
+      "source": "60-kimi-edit-action-recheck.jpeg",
+      "language": "en",
+      "theme": "light",
+      "logicalWindowSize": [
+        1200,
+        700
+      ],
+      "sha256": "41503159ee8f684cf28fb06f24e916bc6e166531ce9d5451f949304b5b568aff"
+    }
+  ],
+  "interactionEvidenceSha256": "926c68cff06063bad384ed3432df03c0effc1fdee2ed07c6a83e521cef54d631"
+}

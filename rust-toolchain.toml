@@ -1,6 +1,5 @@
 [toolchain]
-# Zed pins 1.95.0 for its own builds; anything >= that works for the GPUI
-# path dependency, so we track the current stable.
-channel = "1.97.1"
+# Match the toolchain required by the pinned Zed revision.
+channel = "1.98.1"
 profile = "minimal"
 components = ["rustfmt", "clippy"]

@@ -25,6 +25,14 @@ pub struct AppSummary {
     pub supports_mcp: bool,
     pub supports_skills: bool,
     pub user_manifest: bool,
+    #[serde(default)]
+    pub icon_id: String,
+    #[serde(default = "default_app_accent")]
+    pub accent: u32,
+}
+
+fn default_app_accent() -> u32 {
+    0x6b6a64
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +73,15 @@ pub struct ProviderListItem {
 pub struct ProviderDetails {
     pub app: String,
     pub provider: crate::Provider,
+}
+
+/// One read of the data needed to display a provider page. Providers are redacted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSnapshot {
+    pub providers: Vec<crate::Provider>,
+    pub base_urls: std::collections::BTreeMap<String, String>,
+    pub current: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

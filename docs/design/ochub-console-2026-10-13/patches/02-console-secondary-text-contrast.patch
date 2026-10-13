@@ -1,0 +1,67 @@
+--- a/src/notifications.rs
++++ b/src/notifications.rs
+@@ -693,7 +693,7 @@
+                 .child(
+                     div()
+                         .text_role(TextRole::Caption)
+-                        .text_color(theme::muted())
++                        .text_color(theme::subtext())
+                         .child(components::format_local_timestamp(record.updated_at, true)),
+                 )
+                 .when_some(record.source, |body, source| {
+@@ -727,7 +727,7 @@
+                 div()
+                     .py_8()
+                     .text_role(TextRole::Body)
+-                    .text_color(theme::muted())
++                    .text_color(theme::subtext())
+                     .child(t(k::NOTIFICATIONS_EMPTY)),
+             );
+         } else {
+@@ -776,7 +776,7 @@
+                                     row.child(
+                                         div()
+                                             .text_role(TextRole::Caption)
+-                                            .text_color(theme::muted())
++                                            .text_color(theme::subtext())
+                                             .child(count),
+                                     )
+                                 }),
+@@ -794,7 +794,7 @@
+                             row.child(
+                                 div()
+                                     .text_role(TextRole::Caption)
+-                                    .text_color(theme::muted())
++                                    .text_color(theme::subtext())
+                                     .truncate()
+                                     .child(source),
+                             )
+@@ -802,7 +802,7 @@
+                         .child(
+                             div()
+                                 .text_role(TextRole::Caption)
+-                                .text_color(theme::muted())
++                                .text_color(theme::subtext())
+                                 .child(components::format_local_timestamp(record.updated_at, true)),
+                         )
+                         .on_click(cx.listener(move |this, _, _, cx| this.show_details(id, cx))),
+@@ -844,7 +844,7 @@
+                             .child(
+                                 div()
+                                     .text_role(TextRole::Caption)
+-                                    .text_color(theme::muted())
++                                    .text_color(theme::subtext())
+                                     .child(t(k::NOTIFICATIONS_SESSION)),
+                             ),
+                     )
+--- a/src/navigation.rs
++++ b/src/navigation.rs
+@@ -28,7 +28,7 @@
+         .pt_4()
+         .pb_1()
+         .text_role(TextRole::Caption)
+-        .text_color(theme::muted())
++        .text_color(theme::subtext())
+         .child(label.into())
+ }
+ 

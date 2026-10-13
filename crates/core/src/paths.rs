@@ -245,6 +245,16 @@ pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
 
 /// Atomic write: write to a temp file then rename to avoid half-written state.
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
+    atomic_write_with_mode(path, data, None)
+}
+
+/// Replace a regular file without truncating the original. Permissions are set
+/// on the private temporary file before bytes are written; failed writes clean it up.
+pub fn atomic_write_with_mode(
+    path: &Path,
+    data: &[u8],
+    requested_mode: Option<u32>,
+) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
@@ -252,44 +262,30 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     let parent = path
         .parent()
         .ok_or_else(|| AppError::Config("无效的路径".to_string()))?;
-    let mut tmp = parent.to_path_buf();
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| AppError::Config("无效的文件名".to_string()))?
-        .to_string_lossy()
-        .to_string();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    tmp.push(format!("{file_name}.tmp.{ts}"));
-
-    {
-        let mut f = fs::File::create(&tmp).map_err(|e| AppError::io(&tmp, e))?;
-        f.write_all(data).map_err(|e| AppError::io(&tmp, e))?;
-        f.flush().map_err(|e| AppError::io(&tmp, e))?;
-    }
+    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| AppError::io(parent, e))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let perm = meta.permissions().mode();
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(perm));
-        }
+        let mode = requested_mode
+            .or_else(|| fs::metadata(path).ok().map(|m| m.permissions().mode()))
+            .unwrap_or(0o600);
+        tmp.as_file()
+            .set_permissions(fs::Permissions::from_mode(mode))
+            .map_err(|e| AppError::io(tmp.path(), e))?;
     }
-
-    #[cfg(windows)]
-    {
-        if path.exists() {
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    fs::rename(&tmp, path).map_err(|e| AppError::IoContext {
-        context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
-        source: e,
-    })?;
+    #[cfg(not(unix))]
+    let _ = requested_mode;
+    tmp.write_all(data)
+        .map_err(|e| AppError::io(tmp.path(), e))?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|e| AppError::io(tmp.path(), e))?;
+    tmp.persist(path).map_err(|e| AppError::io(path, e.error))?;
+    #[cfg(unix)]
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|e| AppError::io(parent, e))?;
     Ok(())
 }
 
@@ -389,6 +385,7 @@ mod tests {
 
     #[test]
     fn abbreviate_home_replaces_only_the_home_prefix() {
+        let _guard = crate::test_support::env_lock();
         let home = get_home_dir();
         assert_eq!(
             abbreviate_home(&home.join(".cc-switch/config.json")),

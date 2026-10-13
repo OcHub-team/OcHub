@@ -82,7 +82,7 @@ pub fn materialize_card_if_present(tool: OfficialTool, provider_id: &str) -> Res
     apply_card_to_live(tool, provider_id)
 }
 
-fn clear_live(tool: OfficialTool) -> Result<(), AppError> {
+pub(crate) fn clear_live(tool: OfficialTool) -> Result<(), AppError> {
     match tool {
         OfficialTool::Claude => claude::clear_live(),
         OfficialTool::Kimi => kimi::clear_live(),
@@ -108,7 +108,7 @@ pub fn read_live(tool: OfficialTool) -> Result<Option<Value>, AppError> {
     }
 }
 
-fn write_live(tool: OfficialTool, blob: &Value) -> Result<(), AppError> {
+pub(crate) fn write_live(tool: OfficialTool, blob: &Value) -> Result<(), AppError> {
     match tool {
         OfficialTool::Claude => claude::write_live(blob),
         OfficialTool::Kimi => kimi::write_live(blob),

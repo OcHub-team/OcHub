@@ -14,7 +14,7 @@ impl Application {
         apps: &[AppId],
         query: Option<&str>,
     ) -> ApplicationResult<Vec<SessionMeta>> {
-        let app_ids = apps
+        let app_types = apps
             .iter()
             .map(|app| {
                 let app_type = AppType::from_app_id(app).ok_or_else(|| {
@@ -29,7 +29,7 @@ impl Application {
                         capability: "sessions",
                     });
                 }
-                Ok(app_type.as_str())
+                Ok(app_type)
             })
             .collect::<ApplicationResult<Vec<_>>>()?;
         let query = query
@@ -37,9 +37,8 @@ impl Application {
             .filter(|query| !query.is_empty())
             .map(str::to_lowercase);
 
-        Ok(crate::session_manager::scan_sessions()
+        Ok(crate::session_manager::scan_sessions_for_apps(&app_types)
             .into_iter()
-            .filter(|session| app_ids.is_empty() || app_ids.contains(&session.provider_id.as_str()))
             .filter(|session| {
                 let Some(query) = query.as_deref() else {
                     return true;
@@ -263,5 +262,89 @@ fn map_tool_error(message: String) -> ApplicationError {
         ApplicationError::PlatformUnsupported(message)
     } else {
         ApplicationError::OperationFailed(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AppState, Database};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    #[test]
+    fn filtered_session_scans_preserve_order_search_and_detail_lookup() {
+        let fixture = crate::test_support::TestHome::new();
+        let claude_root = fixture.path().join(".claude/projects/perf");
+        let codex_root = fixture.path().join(".codex/sessions");
+        std::fs::create_dir_all(&claude_root).unwrap();
+        std::fs::create_dir_all(&codex_root).unwrap();
+        let claude = json!({
+            "type":"user", "sessionId":"claude-one", "cwd":"/perf",
+            "timestamp":"2026-10-13T00:00:01Z",
+            "message":{"role":"user","content":"Needle message"}
+        });
+        let codex = json!({
+            "type":"session_meta", "timestamp":"2026-10-13T00:00:02Z",
+            "payload":{"id":"codex-one","cwd":"/perf","source":"cli"}
+        });
+        std::fs::write(claude_root.join("claude-one.jsonl"), format!("{claude}\n")).unwrap();
+        std::fs::write(
+            codex_root.join("rollout-codex-one.jsonl"),
+            format!("{codex}\n"),
+        )
+        .unwrap();
+
+        let application = Application::from_state(Arc::new(AppState::new(Arc::new(
+            Database::memory().unwrap(),
+        ))));
+        let claude_id = AppId::parse("claude").unwrap();
+        let codex_id = AppId::parse("codex").unwrap();
+        let selected = application
+            .list_sessions(std::slice::from_ref(&claude_id), None)
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].session_id, "claude-one");
+        let all = application.list_sessions(&[], None).unwrap();
+        assert_eq!(
+            all.iter()
+                .map(|session| session.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["codex-one", "claude-one"]
+        );
+        let mixed = application
+            .list_sessions(&[claude_id.clone(), codex_id, claude_id.clone()], None)
+            .unwrap();
+        assert_eq!(
+            mixed.len(),
+            2,
+            "repeated app filters must not duplicate sessions"
+        );
+        let query = application
+            .list_sessions(std::slice::from_ref(&claude_id), Some("  NEEDLE  "))
+            .unwrap();
+        assert_eq!(query.len(), 1);
+        let (session, messages) = application
+            .get_session_messages(&claude_id, "claude-one")
+            .unwrap();
+        assert_eq!(session.session_id, "claude-one");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "Needle message");
+        assert!(
+            application
+                .list_sessions(&[AppId::parse("kimi-code").unwrap()], None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            application
+                .list_sessions(&[AppId::parse("claude-desktop").unwrap()], None)
+                .is_err()
+        );
+        assert!(
+            application
+                .list_sessions(&[AppId::parse("unknown").unwrap()], None)
+                .is_err()
+        );
     }
 }

@@ -29,12 +29,73 @@ enum FormMode {
     Edit,
 }
 
+/// Keep the last successful data while a refresh is pending or has failed.
+#[derive(Default)]
+struct ServerLoad {
+    servers: Vec<McpServer>,
+    loading: bool,
+    error: Option<SharedString>,
+}
+
+impl ServerLoad {
+    fn begin(&mut self) {
+        self.loading = true;
+        self.error = None;
+    }
+
+    fn finish(&mut self, result: Result<Vec<McpServer>, SharedString>) {
+        self.loading = false;
+        match result {
+            Ok(servers) => {
+                self.servers = servers;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn needs_status_row(&self) -> bool {
+        self.loading || self.error.is_some() || self.servers.is_empty()
+    }
+}
+
+impl gpui::EventEmitter<crate::interaction::DiscardForm> for McpView {}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+    use crate::interaction::LeaveState;
+
+    #[gpui::test]
+    fn draft_survives_disconnect_and_clean_cancel_needs_no_confirmation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app = Arc::new(AppState::new(Arc::new(
+            ochub_core::Database::memory().unwrap(),
+        )));
+        let view = cx.new(|cx| McpView::new(app, cx));
+        view.update(cx, |view, cx| {
+            view.start_add(cx);
+            assert_eq!(view.leave_state(cx), LeaveState::Clean);
+            view.name
+                .update(cx, |input, cx| input.set_content("unsaved server", cx));
+            assert_eq!(view.leave_state(cx), LeaveState::Dirty);
+            view.set_workspace_unavailable(Vec::new(), cx);
+            assert_eq!(view.name.read(cx).content().as_ref(), "unsaved server");
+            assert_eq!(view.leave_state(cx), LeaveState::Dirty);
+            view.discard_changes(cx);
+            assert_eq!(view.leave_state(cx), LeaveState::Clean);
+        });
+    }
+}
+
 pub struct McpView {
     backend: WorkspaceBackend,
-    servers: Vec<McpServer>,
+    server_load: ServerLoad,
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
     form_mode: FormMode,
+    form_baseline: Vec<String>,
     editing_id: Option<String>,
     name: Entity<TextInput>,
     description: Entity<TextInput>,
@@ -45,12 +106,36 @@ pub struct McpView {
     list_state: ListState,
     form_scroll_handle: ScrollHandle,
     reload_generation: u64,
+    workspace_generation: u64,
     io_busy: bool,
     workspace_available: bool,
     enabled_apps: Arc<[AppType]>,
 }
 
 impl McpView {
+    fn form_values(&self, cx: &gpui::App) -> Vec<String> {
+        vec![
+            self.name.read(cx).content().to_string(),
+            self.description.read(cx).content().to_string(),
+            self.spec_json.read(cx).content().to_string(),
+            serde_json::to_string(&self.apps).expect("MCP app flags serialize"),
+        ]
+    }
+
+    pub(crate) fn leave_state(&self, cx: &gpui::App) -> crate::interaction::LeaveState {
+        crate::interaction::LeaveState::new(
+            self.form_mode != FormMode::List && self.form_values(cx) != self.form_baseline,
+            self.io_busy,
+        )
+    }
+
+    pub(crate) fn discard_changes(&mut self, cx: &mut Context<Self>) {
+        self.form_mode = FormMode::List;
+        self.confirm_delete = None;
+        self.clear_form(cx);
+        cx.notify();
+    }
+
     /// Re-apply the current locale to state that a repaint cannot reach.
     ///
     /// `refresh_windows` re-runs `render`, but gpui's virtualized lists cache
@@ -96,10 +181,11 @@ impl McpView {
             .new(|cx| TextInput::new(cx, r#"{"type":"stdio","command":"","args":[]}"#).code(true));
         Self {
             backend: WorkspaceBackend::local(app.clone()),
-            servers: Vec::new(),
+            server_load: ServerLoad::default(),
             status: None,
             status_level: None,
             form_mode: FormMode::List,
+            form_baseline: Vec::new(),
             editing_id: None,
             name,
             description,
@@ -109,6 +195,7 @@ impl McpView {
             list_state: ListState::new(0, ListAlignment::Top, px(512.)),
             form_scroll_handle: ScrollHandle::new(),
             reload_generation: 0,
+            workspace_generation: 0,
             io_busy: false,
             workspace_available: true,
             enabled_apps: crate::app_meta::enabled_mcp_apps().into(),
@@ -131,8 +218,14 @@ impl McpView {
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.reload_generation = self.reload_generation.wrapping_add(1);
+        if !self.workspace_available {
+            return;
+        }
         let generation = self.reload_generation;
         let backend = self.backend.clone();
+        self.server_load.begin();
+        self.list_state.remeasure();
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let servers = crate::core_async::run(async move {
                 backend
@@ -145,16 +238,9 @@ impl McpView {
                 if generation != this.reload_generation {
                     return;
                 }
-                match servers {
-                    Ok(servers) => this.servers = servers,
-                    Err(error) => {
-                        this.servers.clear();
-                        this.set_status(
-                            NotificationLevel::Error,
-                            tf!(k::MCP_STATUS_LOAD_FAILED, error = error),
-                        );
-                    }
-                }
+                this.server_load.finish(servers.map_err(|error| {
+                    SharedString::from(tf!(k::MCP_STATUS_LOAD_FAILED, error = error))
+                }));
                 this.list_state.remeasure();
                 cx.notify();
             })
@@ -169,11 +255,22 @@ impl McpView {
         enabled_apps: Vec<AppType>,
         cx: &mut Context<Self>,
     ) {
+        if self.backend.same_workspace(&backend) {
+            if !self.backend.same_target(&backend) {
+                self.workspace_generation = self.workspace_generation.wrapping_add(1);
+            }
+            self.backend = backend;
+            self.workspace_available = true;
+            self.enabled_apps = enabled_apps.into();
+            self.reload(cx);
+            return;
+        }
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.backend = backend;
         self.workspace_available = true;
         self.io_busy = false;
         self.enabled_apps = enabled_apps.into();
-        self.servers.clear();
+        self.server_load = ServerLoad::default();
         self.form_mode = FormMode::List;
         self.confirm_delete = None;
         self.list_state.remeasure();
@@ -185,20 +282,14 @@ impl McpView {
         enabled_apps: Vec<AppType>,
         cx: &mut Context<Self>,
     ) {
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.workspace_available = false;
         self.reload_generation = self.reload_generation.wrapping_add(1);
         self.io_busy = false;
         self.enabled_apps = enabled_apps.into();
-        self.servers.clear();
-        self.form_mode = FormMode::List;
+        self.server_load = ServerLoad::default();
+        self.server_load.finish(Err(t(k::MCP_LOAD_UNAVAILABLE)));
         self.confirm_delete = None;
-        self.set_status(
-            NotificationLevel::Error,
-            tf!(
-                k::MCP_STATUS_LOAD_FAILED,
-                error = "remote workspace is not connected"
-            ),
-        );
         self.list_state.remeasure();
         cx.notify();
     }
@@ -220,9 +311,14 @@ impl McpView {
             return;
         }
         self.io_busy = true;
+        let generation = self.workspace_generation;
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let result = crate::core_async::run(work()).await;
             this.update(cx, |this, cx| {
+                if generation != this.workspace_generation {
+                    return;
+                }
                 this.io_busy = false;
                 apply(this, result, cx);
                 cx.notify();
@@ -294,8 +390,12 @@ impl McpView {
     }
 
     fn start_add(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_available {
+            return;
+        }
         self.clear_form(cx);
         self.form_mode = FormMode::Add;
+        self.form_baseline = self.form_values(cx);
         self.clear_status();
         cx.notify();
     }
@@ -313,20 +413,31 @@ impl McpView {
             .unwrap_or_else(|_| server.server.to_string());
         self.spec_json
             .update(cx, |input, cx| input.set_content(spec, cx));
+        self.form_baseline = self.form_values(cx);
         self.clear_status();
         cx.notify();
     }
 
     fn start_edit_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(server) = self.servers.iter().find(|server| server.id == id).cloned() {
+        if let Some(server) = self
+            .server_load
+            .servers
+            .iter()
+            .find(|server| server.id == id)
+            .cloned()
+        {
             self.start_edit(server, cx);
         }
     }
 
     fn cancel_form(&mut self, cx: &mut Context<Self>) {
-        self.form_mode = FormMode::List;
-        self.clear_form(cx);
-        cx.notify();
+        match self.leave_state(cx) {
+            crate::interaction::LeaveState::Busy => {}
+            crate::interaction::LeaveState::Dirty => cx.emit(crate::interaction::DiscardForm(
+                crate::interaction::FormOwner::Mcp,
+            )),
+            crate::interaction::LeaveState::Clean => self.discard_changes(cx),
+        }
     }
 
     fn set_form_app(&mut self, app: AppType, enabled: bool, cx: &mut Context<Self>) {
@@ -634,6 +745,57 @@ impl McpView {
         }))
     }
 
+    fn render_load_state(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.server_load.loading {
+            return components::card()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(components::spinner(theme::muted(), 16.))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(t(k::MCP_LOAD_LOADING)),
+                )
+                .into_any_element();
+        }
+        if let Some(error) = &self.server_load.error {
+            return components::empty_state(
+                IconName::Refresh,
+                t(k::MCP_LOAD_FAILED_TITLE),
+                error.clone(),
+                self.workspace_available.then(|| {
+                    components::button(
+                        "mcp-retry",
+                        t(k::MCP_LOAD_RETRY),
+                        ButtonTone::Neutral,
+                        ButtonSize::Sm,
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| this.reload(cx)))
+                    .into_any_element()
+                }),
+            )
+            .into_any_element();
+        }
+        components::empty_state(
+            IconName::Blocks,
+            t(k::MCP_EMPTY_TITLE),
+            t(k::MCP_EMPTY_HINT),
+            Some(
+                components::button(
+                    "mcp-add-empty",
+                    t(k::MCP_EMPTY_ACTION),
+                    ButtonTone::Primary,
+                    ButtonSize::Sm,
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| this.start_add(cx)))
+                .into_any_element(),
+            ),
+        )
+        .into_any_element()
+    }
+
     fn render_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let title = if self.form_mode == FormMode::Edit {
             t(k::MCP_FORM_TITLE_EDIT)
@@ -733,8 +895,8 @@ impl Render for McpView {
             return self.render_form(cx).into_any_element();
         }
 
-        let empty = self.servers.is_empty();
-        let row_count = self.servers.len().max(1);
+        let has_status_row = self.server_load.needs_status_row();
+        let row_count = self.server_load.servers.len() + usize::from(has_status_row);
         if self.list_state.item_count() != row_count {
             self.list_state.reset(row_count);
         }
@@ -744,28 +906,14 @@ impl Render for McpView {
             cx.processor(move |this, ix: usize, _window, cx| {
                 // 每行自带底部间距（list 不画行间 gap）；pb_3 对齐 content_column 的默认 gap。
                 let block = div().w_full().pb_3();
-                if empty {
-                    block
-                        .child(components::empty_state(
-                            IconName::Blocks,
-                            t(k::MCP_EMPTY_TITLE),
-                            t(k::MCP_EMPTY_HINT),
-                            Some(
-                                components::button(
-                                    "mcp-add-empty",
-                                    t(k::MCP_EMPTY_ACTION),
-                                    ButtonTone::Primary,
-                                    ButtonSize::Sm,
-                                )
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.start_add(cx);
-                                }))
-                                .into_any_element(),
-                            ),
-                        ))
-                        .into_any_element()
+                if has_status_row && ix == 0 {
+                    block.child(this.render_load_state(cx)).into_any_element()
                 } else {
-                    match this.servers.get(ix) {
+                    match this
+                        .server_load
+                        .servers
+                        .get(ix - usize::from(has_status_row))
+                    {
                         Some(server) => {
                             let card = this.render_card(server, cx);
                             block.child(card).into_any_element()
@@ -876,3 +1024,55 @@ impl Render for McpView {
 }
 
 crate::notifications::impl_status_toasts_leveled!(McpView);
+
+#[cfg(test)]
+mod tests {
+    use super::{McpApps, McpServer, ServerLoad};
+
+    fn server(id: &str) -> McpServer {
+        McpServer {
+            id: id.into(),
+            name: id.into(),
+            server: serde_json::json!({"type": "stdio", "command": "synthetic"}),
+            apps: McpApps::default(),
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn failed_refresh_keeps_servers_until_an_authoritative_success() {
+        let mut load = ServerLoad::default();
+        load.finish(Ok(vec![server("existing")]));
+        assert!(!load.needs_status_row());
+        load.begin();
+        assert!(load.loading);
+        assert_eq!(load.servers[0].id, "existing");
+        load.finish(Err("offline".into()));
+        assert!(!load.loading);
+        assert!(load.needs_status_row());
+        assert_eq!(load.error.as_deref(), Some("offline"));
+        assert_eq!(load.servers[0].id, "existing");
+        load.begin();
+        load.finish(Ok(Vec::new()));
+        assert!(load.servers.is_empty());
+        assert!(load.error.is_none());
+        assert!(load.needs_status_row());
+    }
+
+    #[test]
+    fn first_load_failure_remains_distinct_from_a_successful_empty_list() {
+        let mut load = ServerLoad::default();
+        load.begin();
+        assert!(load.loading && load.servers.is_empty());
+        load.finish(Err("unavailable".into()));
+        assert!(load.error.is_some());
+        assert!(load.servers.is_empty());
+        load.begin();
+        assert!(load.loading && load.error.is_none());
+        load.finish(Ok(Vec::new()));
+        assert!(!load.loading && load.error.is_none());
+    }
+}

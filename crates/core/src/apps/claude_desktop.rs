@@ -540,6 +540,10 @@ fn remove_ochub_enterprise_config(path: &Path) -> Result<(), AppError> {
 }
 
 fn write_meta(path: &Path, applied_profile_id: Option<&str>) -> Result<(), AppError> {
+    write_json_file(path, &prepared_meta(path, applied_profile_id)?)
+}
+
+fn prepared_meta(path: &Path, applied_profile_id: Option<&str>) -> Result<Value, AppError> {
     let mut value = read_json_or_empty(path)?;
     if !value.is_object() {
         value = json!({});
@@ -581,7 +585,88 @@ fn write_meta(path: &Path, applied_profile_id: Option<&str>) -> Result<(), AppEr
     }
 
     obj.insert("entries".to_string(), Value::Array(entries));
-    write_json_file(path, &value)
+    Ok(value)
+}
+
+pub(crate) fn prepare_provider_files(
+    provider: &Provider,
+) -> Result<crate::services::config_commit::PreparedConfigWrite, AppError> {
+    use crate::services::config_commit::{PreparedConfigWrite, PreparedFileWrite};
+    let paths = current_platform_paths()?;
+    let official = is_official_provider(provider);
+    if !official {
+        validate_provider(provider)?;
+    }
+    let mut files = Vec::new();
+    for path in [&paths.normal_config_path, &paths.threep_config_path] {
+        let mut value = read_json_or_empty(path)?;
+        let obj = value.as_object_mut().ok_or_else(|| {
+            AppError::Config("Claude Desktop config root must be an object".into())
+        })?;
+        obj.insert(
+            "deploymentMode".into(),
+            json!(if official { "1p" } else { "3p" }),
+        );
+        if official
+            && path == &paths.threep_config_path
+            && let Some(enterprise) = obj
+                .get_mut("enterpriseConfig")
+                .and_then(Value::as_object_mut)
+        {
+            for key in [
+                "disableDeploymentModeChooser",
+                "inferenceGatewayApiKey",
+                "inferenceGatewayAuthScheme",
+                "inferenceGatewayBaseUrl",
+                "inferenceProvider",
+            ] {
+                enterprise.remove(key);
+            }
+            if enterprise.is_empty() {
+                obj.remove("enterpriseConfig");
+            }
+        }
+        files.push(PreparedFileWrite::replace(
+            path.clone(),
+            serde_json::to_vec_pretty(&value)
+                .map_err(|source| AppError::JsonSerialize { source })?,
+        )?);
+    }
+    let mut profile = PreparedFileWrite::replace(paths.profile_path.clone(), Vec::new())?;
+    profile.after = if official {
+        None
+    } else {
+        let credentials = direct_gateway_credentials(provider)?;
+        let models = direct_inference_model_specs(provider)?;
+        Some(
+            serde_json::to_vec_pretty(&build_gateway_profile(
+                &credentials.base_url,
+                &credentials.api_key,
+                (!models.is_empty()).then_some(models.as_slice()),
+            ))
+            .map_err(|source| AppError::JsonSerialize { source })?,
+        )
+    };
+    files.push(profile);
+    files.push(PreparedFileWrite::replace(
+        paths.meta_path.clone(),
+        serde_json::to_vec_pretty(&prepared_meta(
+            &paths.meta_path,
+            (!official).then_some(PROFILE_ID),
+        )?)
+        .map_err(|source| AppError::JsonSerialize { source })?,
+    )?);
+    Ok(PreparedConfigWrite { files })
+}
+
+pub(crate) fn prepared_target_paths() -> Result<Vec<PathBuf>, AppError> {
+    let paths = current_platform_paths()?;
+    Ok(vec![
+        paths.normal_config_path,
+        paths.threep_config_path,
+        paths.profile_path,
+        paths.meta_path,
+    ])
 }
 
 fn read_applied_id(path: &Path) -> Option<String> {

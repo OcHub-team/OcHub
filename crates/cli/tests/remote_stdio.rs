@@ -161,6 +161,70 @@ fn probe_reports_protocol_identity_without_starting_a_listener() {
 }
 
 #[test]
+fn overview_reads_the_selected_node_with_bounded_sections_and_no_credentials() {
+    use serde_json::json;
+    let home = tempfile::tempdir().unwrap();
+    let (child, mut stdin, mut stdout, ack) = start_remote(home.path(), "overview-read");
+    assert!(ack.features.iter().any(|feature| feature == "overview-v1"));
+    let created = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "overview-seed",
+        methods::PROVIDER_CREATE,
+        json!({"app":"codex","provider":{"id":"overview-only","name":"Overview fixture","settingsConfig":{"auth":{},"config":"model_provider = \"custom\"\n[model_providers.custom]\nname = \"Custom\"\nbase_url = \"https://example.invalid/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"overview-synthetic-secret\"\n"}},"addToLive":false}),
+        (Some("overview-seed-key"), None),
+    );
+    assert!(created.ok, "{:?}", created.error);
+    let snapshot = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "overview",
+        methods::OVERVIEW_READ,
+        json!({"from":1000,"to":2000}),
+        (None, None),
+    );
+    assert!(snapshot.ok, "{:?}", snapshot.error);
+    assert_eq!(snapshot.data["window"]["start"], 1000);
+    assert_eq!(snapshot.data["window"]["end"], 2000);
+    assert!(snapshot.data["usage"]["data"]["recordedSuccessRate"].is_null());
+    let apps = snapshot.data["apps"]["data"].as_array().unwrap();
+    assert!(
+        apps.iter()
+            .any(|app| app["app"] == "codex" && app["providerCount"].as_u64().unwrap_or(0) > 0)
+    );
+    let encoded = serde_json::to_string(&snapshot.data).unwrap();
+    assert!(!encoded.contains("overview-synthetic-secret"));
+    assert!(!encoded.contains("settingsConfig"));
+    assert!(!home.path().join(".codex/config.toml").exists());
+    let invalid = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "overview-invalid",
+        methods::OVERVIEW_READ,
+        json!({"from":2000,"to":1000}),
+        (None, None),
+    );
+    assert!(
+        !invalid.ok,
+        "a reversed window must not silently become a broad query"
+    );
+    let unknown = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "overview-unknown",
+        methods::OVERVIEW_READ,
+        json!({"from":1000,"to":2000,"live":true}),
+        (None, None),
+    );
+    assert!(!unknown.ok);
+    close_remote(child, stdin, "done");
+}
+
+#[test]
 fn remote_gateway_start_persists_autostart_for_the_next_owner() {
     let home = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -1597,4 +1661,186 @@ fn remote_codex_draft_update_does_not_create_live_configuration() {
     assert_eq!(updated.data["provider"]["name"], "Updated draft");
     assert!(!home.path().join(".codex/config.toml").exists());
     close_remote(child, stdin, "done");
+}
+
+#[test]
+fn editor_drafts_survive_reconnect_without_writing_live_and_apply_is_reversible() {
+    use serde_json::json;
+    let home = tempfile::tempdir().unwrap();
+    let (child, mut stdin, mut stdout, ack) = start_remote(home.path(), "editor-draft");
+    assert!(
+        ack.features
+            .iter()
+            .any(|feature| feature == "editor-drafts-v1")
+    );
+    // The additive handshake must remain readable when connected to an older node.
+    let mut old_ack = serde_json::to_value(&ack).unwrap();
+    old_ack.as_object_mut().unwrap().remove("features");
+    assert!(
+        serde_json::from_value::<HelloAckFrame>(old_ack)
+            .unwrap()
+            .features
+            .is_empty()
+    );
+    let input = json!({
+        "provider": {"id":"workbench", "name":"", "settingsConfig":{"env":{"ANTHROPIC_AUTH_TOKEN":"synthetic-draft-secret"}}},
+        "editorState":{"values":{"partial":"raw-editor-secret"}},
+        "rawDocuments":["{ raw-document-secret, incomplete"]
+    });
+    let params = json!({"app":"claude", "id":"draft-one", "input":input});
+    let saved = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-save",
+        methods::EDITOR_DRAFT_SAVE,
+        params.clone(),
+        (Some("draft-save-key"), None),
+    );
+    assert!(saved.ok, "{:?}", saved.error);
+    assert_eq!(saved.data["revision"], 1);
+    assert!(
+        saved.data.get("input").is_none(),
+        "save acknowledgements must not duplicate arbitrary secrets"
+    );
+    assert!(!home.path().join(".claude/settings.json").exists());
+    close_remote(child, stdin, "reconnect");
+
+    let (child, mut stdin, mut stdout, ack) = start_remote(home.path(), "editor-draft");
+    let replay = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-replay",
+        methods::EDITOR_DRAFT_SAVE,
+        params,
+        (Some("draft-save-key"), None),
+    );
+    assert!(replay.ok, "{:?}", replay.error);
+    assert_eq!(replay.data, saved.data);
+    let loaded = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-get",
+        methods::EDITOR_DRAFT_GET,
+        json!({"app":"claude","id":"draft-one"}),
+        (None, None),
+    );
+    assert!(loaded.ok, "{:?}", loaded.error);
+    assert_eq!(
+        loaded.data["input"]["rawDocuments"][0],
+        "{ raw-document-secret, incomplete"
+    );
+    let listed = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "providers-before",
+        methods::PROVIDER_LIST,
+        json!({"app":"claude"}),
+        (None, None),
+    );
+    assert!(listed.ok, "{:?}", listed.error);
+    assert!(
+        !listed
+            .data
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["id"] == "workbench")
+    );
+
+    let invalid = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-apply-invalid",
+        methods::EDITOR_DRAFT_APPLY,
+        json!({"app":"claude","id":"draft-one","revision":1}),
+        (Some("draft-invalid-key"), None),
+    );
+    assert!(!invalid.ok);
+    assert_eq!(invalid.error.as_ref().unwrap().code, "CONFIG_APPLY_FAILED");
+    assert!(!home.path().join(".claude/settings.json").exists());
+
+    let valid = json!({"provider":{"id":"workbench","name":"Workbench","settingsConfig":{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid","ANTHROPIC_AUTH_TOKEN":"synthetic-draft-secret"}}}});
+    let updated = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-correct",
+        methods::EDITOR_DRAFT_SAVE,
+        json!({"app":"claude","id":"draft-one","expectedRevision":1,"input":valid}),
+        (Some("draft-correct-key"), None),
+    );
+    assert!(updated.ok, "{:?}", updated.error);
+    assert_eq!(updated.data["revision"], 2);
+    let stale = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-stale",
+        methods::EDITOR_DRAFT_SAVE,
+        json!({"app":"claude","id":"draft-one","expectedRevision":1,"input":valid}),
+        (Some("draft-stale-key"), None),
+    );
+    assert!(
+        !stale.ok,
+        "stale draft revision must not overwrite newer edits"
+    );
+
+    let applied = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-apply",
+        methods::EDITOR_DRAFT_APPLY,
+        json!({"app":"claude","id":"draft-one","revision":2}),
+        (Some("draft-apply-key"), None),
+    );
+    assert!(applied.ok, "{:?}", applied.error);
+    assert_eq!(applied.data["state"], "applied");
+    assert_eq!(applied.data["undoAvailable"], true);
+    assert!(home.path().join(".claude/settings.json").exists());
+    let apply_replay = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-apply-replay",
+        methods::EDITOR_DRAFT_APPLY,
+        json!({"app":"claude","id":"draft-one","revision":2}),
+        (Some("draft-apply-key"), None),
+    );
+    assert!(apply_replay.ok, "{:?}", apply_replay.error);
+    assert_eq!(apply_replay.data, applied.data);
+    let cache =
+        std::fs::read_to_string(home.path().join(".ochub/runtime/remote-operations.json")).unwrap();
+    assert!(!cache.contains("synthetic-draft-secret"));
+    assert!(!cache.contains("raw-document-secret"));
+    assert!(!cache.contains("raw-editor-secret"));
+    let undone = request(
+        &mut stdin,
+        &mut stdout,
+        ack.protocol_version,
+        "draft-undo",
+        methods::CONFIG_APPLY_UNDO,
+        json!({"receiptId":applied.data["receiptId"]}),
+        (Some("draft-undo-key"), None),
+    );
+    assert!(undone.ok, "{:?}", undone.error);
+    assert!(!home.path().join(".claude/settings.json").exists());
+    close_remote(child, stdin, "done");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ochcli"))
+        .env("OCHUB_TEST_HOME", home.path())
+        .args(["--json", "editor", "get", "draft-one", "--app", "claude"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-draft-secret"));
 }

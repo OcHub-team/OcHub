@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::model::{Provider, ProviderMeta};
 use indexmap::IndexMap;
 use rusqlite::params;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 type OmoProviderRow = (
     String,
@@ -70,41 +70,63 @@ impl Database {
         for provider_res in provider_iter {
             let (id, mut provider) = provider_res.map_err(|e| AppError::Database(e.to_string()))?;
             provider.id = id.clone();
-
-            let mut stmt_endpoints = conn.prepare(
-                "SELECT url, added_at FROM provider_endpoints WHERE provider_id = ?1 AND app_type = ?2 ORDER BY added_at ASC, url ASC"
-            ).map_err(|e| AppError::Database(e.to_string()))?;
-
-            let endpoints_iter = stmt_endpoints
-                .query_map(params![id, app_type], |row| {
-                    let url: String = row.get(0)?;
-                    let added_at: Option<i64> = row.get(1)?;
-                    Ok((
-                        url,
-                        crate::settings::CustomEndpoint {
-                            url: "".to_string(),
-                            added_at: added_at.unwrap_or(0),
-                            last_used: None,
-                        },
-                    ))
-                })
-                .map_err(|e| AppError::Database(e.to_string()))?;
-
-            let mut custom_endpoints = HashMap::new();
-            for ep_res in endpoints_iter {
-                let (url, mut ep) = ep_res.map_err(|e| AppError::Database(e.to_string()))?;
-                ep.url = url.clone();
-                custom_endpoints.insert(url, ep);
-            }
-
             if let Some(meta) = &mut provider.meta {
-                meta.custom_endpoints = custom_endpoints;
+                // The endpoint table, rather than legacy inline metadata, is authoritative.
+                meta.custom_endpoints.clear();
             }
-
             providers.insert(id, provider);
         }
 
+        if providers.is_empty() {
+            return Ok(providers);
+        }
+
+        // Read endpoints once for the whole app. The previous per-provider query
+        // scanned this table N times while holding the shared database mutex.
+        let mut endpoints = conn
+            .prepare(
+                "SELECT provider_id, url, added_at FROM provider_endpoints
+             WHERE app_type = ?1 ORDER BY added_at ASC, url ASC",
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = endpoints
+            .query_map(params![app_type], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        for row in rows {
+            let (id, url, added_at) = row.map_err(|e| AppError::Database(e.to_string()))?;
+            if let Some(meta) = providers
+                .get_mut(&id)
+                .and_then(|provider| provider.meta.as_mut())
+            {
+                meta.custom_endpoints.insert(
+                    url.clone(),
+                    crate::settings::CustomEndpoint {
+                        url,
+                        added_at: added_at.unwrap_or(0),
+                        last_used: None,
+                    },
+                );
+            }
+        }
+
         Ok(providers)
+    }
+
+    /// Check one composite primary key without loading provider JSON or endpoints.
+    pub fn provider_exists(&self, app_type: &str, id: &str) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM providers WHERE app_type = ?1 AND id = ?2)",
+            params![app_type, id],
+            |row| row.get(0),
+        )
+        .map_err(|e| AppError::Database(e.to_string()))
     }
 
     pub fn get_current_provider(&self, app_type: &str) -> Result<Option<String>, AppError> {
@@ -168,7 +190,27 @@ impl Database {
         );
 
         match result {
-            Ok(provider) => Ok(Some(provider)),
+            Ok(mut provider) => {
+                let mut endpoints=conn.prepare("SELECT url, added_at FROM provider_endpoints WHERE app_type=?1 AND provider_id=?2").map_err(|e|AppError::Database(e.to_string()))?;
+                let rows = endpoints
+                    .query_map(params![app_type, id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+                    })
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                let meta = provider.meta.get_or_insert_with(Default::default);
+                for row in rows {
+                    let (url, added_at) = row.map_err(|e| AppError::Database(e.to_string()))?;
+                    meta.custom_endpoints.insert(
+                        url.clone(),
+                        crate::settings::CustomEndpoint {
+                            url,
+                            added_at: added_at.unwrap_or(0),
+                            last_used: None,
+                        },
+                    );
+                }
+                Ok(Some(provider))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(AppError::Database(e.to_string())),
         }
@@ -709,6 +751,107 @@ impl Database {
         self.save_provider(app_type_str, &provider)?;
 
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod batch_read_tests {
+    use super::*;
+    use crate::settings::CustomEndpoint;
+    use serde_json::json;
+
+    #[test]
+    fn batch_endpoints_keep_app_scope_order_and_legacy_duplicate_semantics() {
+        let db = Database::memory().unwrap();
+        for (app, id, sort) in [
+            ("claude", "shared", 1),
+            ("claude", "empty", 0),
+            ("codex", "shared", 0),
+        ] {
+            let mut provider = Provider::with_id(id.into(), id.into(), json!({}), None);
+            provider.sort_index = Some(sort);
+            if id == "shared" {
+                let url = format!("https://{app}.invalid");
+                let mut meta = ProviderMeta::default();
+                meta.custom_endpoints.insert(
+                    url.clone(),
+                    CustomEndpoint {
+                        url,
+                        added_at: 1,
+                        last_used: None,
+                    },
+                );
+                provider.meta = Some(meta);
+            }
+            db.save_provider(app, &provider).unwrap();
+        }
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO provider_endpoints (provider_id, app_type, url, added_at) VALUES ('shared','claude','https://claude.invalid',9), ('shared','claude','https://null.invalid',NULL)",
+                [],
+            ).unwrap();
+            // Older databases may still carry inline endpoints. As before,
+            // the separate table must replace them even when it has no rows.
+            let mut legacy = ProviderMeta::default();
+            legacy.custom_endpoints.insert(
+                "obsolete".into(),
+                CustomEndpoint {
+                    url: "obsolete".into(),
+                    added_at: 0,
+                    last_used: None,
+                },
+            );
+            conn.execute(
+                "UPDATE providers SET meta=?1 WHERE app_type='claude' AND id='empty'",
+                [serde_json::to_string(&legacy).unwrap()],
+            )
+            .unwrap();
+        }
+        let providers = db.get_all_providers("claude").unwrap();
+        assert_eq!(
+            providers.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["empty", "shared"]
+        );
+        assert!(
+            providers["empty"]
+                .meta
+                .as_ref()
+                .unwrap()
+                .custom_endpoints
+                .is_empty()
+        );
+        let endpoints = &providers["shared"].meta.as_ref().unwrap().custom_endpoints;
+        assert_eq!(endpoints.len(), 2);
+        assert_eq!(endpoints["https://claude.invalid"].added_at, 9);
+        assert_eq!(
+            endpoints["https://claude.invalid"].url,
+            "https://claude.invalid"
+        );
+        assert_eq!(endpoints["https://null.invalid"].added_at, 0);
+        assert!(endpoints["https://claude.invalid"].last_used.is_none());
+        let other = db.get_all_providers("codex").unwrap();
+        assert_eq!(
+            other["shared"]
+                .meta
+                .as_ref()
+                .unwrap()
+                .custom_endpoints
+                .len(),
+            1
+        );
+        assert!(
+            other["shared"]
+                .meta
+                .as_ref()
+                .unwrap()
+                .custom_endpoints
+                .contains_key("https://codex.invalid")
+        );
+        assert!(db.get_all_providers("absent").unwrap().is_empty());
+        assert!(db.provider_exists("claude", "shared").unwrap());
+        assert!(!db.provider_exists("codex", "empty").unwrap());
+        assert!(!db.provider_exists("claude", "missing").unwrap());
     }
 }
 

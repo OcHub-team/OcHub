@@ -1,0 +1,9 @@
+{
+  "bundleId": "io.ochub.debug.qa",
+  "assetCount": 19,
+  "missingAssets": [],
+  "differentAssets": [],
+  "binaryMatches": true,
+  "binarySha256": "dbcced28d7860fdf402bc6da4f565f390bd2dab8713bbed9b6e6e93a65b8153d",
+  "qaExited": true
+}

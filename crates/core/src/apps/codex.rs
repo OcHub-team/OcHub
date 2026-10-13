@@ -1070,6 +1070,53 @@ pub fn write_codex_provider_live_with_catalog(
     }
 }
 
+/// Build every file before changing any of them, including the generated model catalog.
+pub(crate) fn prepare_provider_files(
+    provider: &crate::Provider,
+) -> Result<crate::services::config_commit::PreparedConfigWrite, AppError> {
+    use crate::services::config_commit::{PreparedConfigWrite, PreparedFileWrite};
+    let settings = &provider.settings_config;
+    let auth = settings
+        .get("auth")
+        .ok_or_else(|| AppError::Config("Codex configuration is missing auth".into()))?;
+    let config = settings.get("config").and_then(Value::as_str).unwrap_or("");
+    let catalog = codex_model_catalog_from_settings(settings)?;
+    let mut config = set_codex_model_catalog_json_field(
+        config,
+        catalog
+            .as_ref()
+            .map(|_| get_codex_model_catalog_path())
+            .as_deref(),
+    )?;
+    if provider.category.as_deref() == Some("official")
+        && crate::settings::unify_codex_session_history()
+    {
+        config = inject_codex_unified_session_bucket(&config)?;
+    } else if provider.category.as_deref() != Some("official") && settings.get("authRaw").is_none()
+    {
+        config = prepare_codex_provider_live_config(auth, &config)?;
+    }
+    validate_config_toml(&config)?;
+    let auth_bytes = match settings.get("authRaw").and_then(Value::as_str) {
+        Some(raw) => raw.as_bytes().to_vec(),
+        None => {
+            serde_json::to_vec_pretty(auth).map_err(|source| AppError::JsonSerialize { source })?
+        }
+    };
+    let mut files = vec![
+        PreparedFileWrite::replace(get_codex_auth_path(), auth_bytes)?,
+        PreparedFileWrite::replace(get_codex_config_path(), config.into_bytes())?,
+    ];
+    if let Some(catalog) = catalog {
+        files.push(PreparedFileWrite::replace(
+            get_codex_model_catalog_path(),
+            serde_json::to_vec_pretty(&catalog)
+                .map_err(|source| AppError::JsonSerialize { source })?,
+        )?);
+    }
+    Ok(PreparedConfigWrite { files })
+}
+
 /// Extract a provider-scoped `experimental_bearer_token` from Codex `config.toml`.
 ///
 /// Mobile compat: third-party providers may store the API key inside

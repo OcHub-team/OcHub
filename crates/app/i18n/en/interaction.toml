@@ -1,0 +1,5 @@
+"interaction.leave.title" = "Unsaved changes"
+"interaction.leave.message" = "This form has unsaved changes. Return to the form to save them, or discard them to continue."
+"interaction.leave.discard" = "Discard and continue"
+"interaction.leave.return" = "Return to form"
+"interaction.offline_draft" = "Reconnect to save. Your changes remain in this window."

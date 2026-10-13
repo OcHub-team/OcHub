@@ -12,6 +12,7 @@ use crate::services::UsageCache;
 use crate::services::provider::ProviderService;
 
 /// Global application state shared across the switching layer and writers.
+#[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
     /// Local relay gateway (standing multi-dialect server + channel routing).
@@ -55,6 +56,28 @@ impl AppState {
     /// original live config. Discovery is repeated on every startup and only
     /// adds provider ids that OcHub does not already manage.
     pub fn bootstrap(&self) {
+        match crate::services::config_commit::pending_receipts() {
+            Ok(pending) if pending.is_empty() => {}
+            pending => {
+                match pending {
+                    Ok(_) => log::warn!(
+                        "Skipping startup configuration discovery until interrupted configuration writes are recovered"
+                    ),
+                    Err(error) => log::warn!(
+                        "Skipping startup configuration discovery because recovery state could not be read: {error}"
+                    ),
+                }
+                // Keep installed adapters available for inspecting drafts while mutation is blocked.
+                for error in crate::plugin::load_and_register_user_plugins() {
+                    log::warn!(
+                        "failed to load user plugin {}: {}",
+                        error.path,
+                        error.message
+                    );
+                }
+                return;
+            }
+        }
         if let Err(error) = crate::settings::enable_extended_managed_apps_once() {
             log::warn!("failed to enable newly supported managed apps: {error}");
         }

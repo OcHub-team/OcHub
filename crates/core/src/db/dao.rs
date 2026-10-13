@@ -3,6 +3,7 @@
 //! Database access operations for each domain. All DAO methods are exposed as
 //! `impl Database` blocks across these submodules.
 
+pub(crate) mod editor_drafts;
 pub mod gateway;
 pub mod mcp;
 pub mod providers;

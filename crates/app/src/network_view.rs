@@ -58,7 +58,54 @@ pub struct NetworkView {
     workspace_generation: u64,
 }
 
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+    use crate::interaction::LeaveState;
+
+    #[gpui::test]
+    fn disconnect_preserves_proxy_draft_and_busy_state_prevents_discard(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app = Arc::new(AppState::new(Arc::new(
+            ochub_core::Database::memory().unwrap(),
+        )));
+        let view = cx.new(|cx| NetworkView::new(app, cx));
+        view.update(cx, |view, cx| {
+            view.host_input
+                .update(cx, |input, cx| input.set_content("proxy-draft.invalid", cx));
+            assert_eq!(view.leave_state(cx), LeaveState::Dirty);
+            view.saving = true;
+            assert_eq!(view.leave_state(cx), LeaveState::Busy);
+            view.set_workspace_unavailable(cx);
+            assert_eq!(
+                view.host_input.read(cx).content().as_ref(),
+                "proxy-draft.invalid"
+            );
+            assert_eq!(view.leave_state(cx), LeaveState::Dirty);
+            view.discard_changes(cx);
+            assert_eq!(view.leave_state(cx), LeaveState::Clean);
+        });
+    }
+}
+
 impl NetworkView {
+    pub(crate) fn leave_state(&self, cx: &App) -> crate::interaction::LeaveState {
+        crate::interaction::LeaveState::new(self.dirty(cx), self.saving)
+    }
+
+    pub(crate) fn discard_changes(&mut self, cx: &mut Context<Self>) {
+        self.discard(cx);
+    }
+
+    pub(crate) fn shortcut_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving || !self.workspace_available || !self.dirty(cx) {
+            window.play_system_bell();
+            return;
+        }
+        self.save(cx);
+    }
+
     pub fn new(app: Arc<AppState>, cx: &mut Context<Self>) -> Self {
         let settings = settings::get_settings();
         let proxy = settings.proxy.clone().unwrap_or_default();
@@ -159,8 +206,6 @@ impl NetworkView {
 
     fn load_proxy(&mut self, cx: &mut Context<Self>) {
         if !self.workspace_available {
-            self.stored_proxy = ProxySettings::default();
-            self.reseed(cx);
             return;
         }
         let backend = self.backend.clone();
@@ -175,12 +220,13 @@ impl NetworkView {
                 }
                 match result {
                     Ok(proxy) => {
+                        let dirty = this.dirty(cx);
                         this.stored_proxy = proxy;
-                        this.reseed(cx);
+                        if !dirty {
+                            this.reseed(cx);
+                        }
                     }
                     Err(error) => {
-                        this.stored_proxy = ProxySettings::default();
-                        this.reseed(cx);
                         this.set_status(
                             NotificationLevel::Error,
                             tf!(k::NETWORK_STATUS_LOAD_FAILED, error = error),
@@ -195,6 +241,15 @@ impl NetworkView {
     }
 
     pub fn set_workspace(&mut self, backend: WorkspaceBackend, cx: &mut Context<Self>) {
+        if self.backend.same_workspace(&backend) {
+            if !self.backend.same_target(&backend) {
+                self.workspace_generation = self.workspace_generation.wrapping_add(1);
+            }
+            self.backend = backend;
+            self.workspace_available = true;
+            self.load_proxy(cx);
+            return;
+        }
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.backend = backend;
         self.workspace_available = true;
@@ -210,8 +265,7 @@ impl NetworkView {
         self.workspace_available = false;
         self.saving = false;
         self.testing = false;
-        self.stored_proxy = ProxySettings::default();
-        self.reseed(cx);
+        cx.notify();
     }
 
     fn dirty(&self, cx: &App) -> bool {

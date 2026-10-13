@@ -1,0 +1,73 @@
+--- a/src/notifications.rs
++++ b/src/notifications.rs
+@@ -997,6 +997,10 @@
+         }
+         let mut toasts = div()
+             .id("notification-host")
++            .debug_selector(|| "notification-host".into())
++            // Block clicks behind the stack while keeping its own hover scope
++            // and allowing page scroll beneath the transient notification.
++            .block_mouse_except_scroll()
+             .absolute()
+             .right(px(TOAST_MARGIN))
+             .track_focus(self.focus_scope.as_ref().expect("focus initialized"))
+@@ -1023,6 +1027,59 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[gpui::test]
++    fn toast_stack_blocks_clicks_behind_it_without_losing_hover_pause(
++        cx: &mut gpui::TestAppContext,
++    ) {
++        struct Probe {
++            host: gpui::Entity<NotificationHost>,
++            background_clicks: usize,
++        }
++        impl Render for Probe {
++            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++                div()
++                    .relative()
++                    .size_full()
++                    .child(
++                        div()
++                            .id("background-action")
++                            .absolute()
++                            .inset_0()
++                            .on_click(cx.listener(|this, _, _, _| {
++                                this.background_clicks += 1;
++                            })),
++                    )
++                    .child(self.host.clone())
++            }
++        }
++        let (probe, cx) = cx.add_window_view(|_, cx| Probe {
++            host: cx.new(|cx| {
++                let mut host = NotificationHost::new();
++                host.info("Saved", cx);
++                host
++            }),
++            background_clicks: 0,
++        });
++        cx.update(|window, _| window.activate_window());
++        let bounds = cx.debug_bounds("notification-host").unwrap();
++        let position = gpui::point(bounds.left() + px(30.), bounds.top() + px(12.));
++        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
++        cx.simulate_click(position, gpui::Modifiers::default());
++        probe.read_with(cx, |probe, cx| {
++            assert_eq!(probe.background_clicks, 0);
++            let host = probe.host.read(cx);
++            assert!(host.hovered);
++            assert!(host.visible[0].countdown_started_at.is_none());
++        });
++        let host = probe.read_with(cx, |probe, _| probe.host.clone());
++        host.update(cx, |host, cx| {
++            host.clear();
++            cx.notify();
++        });
++        cx.simulate_click(position, gpui::Modifiers::default());
++        probe.read_with(cx, |probe, _| assert_eq!(probe.background_clicks, 1));
++    }
+ 
+     #[test]
+     fn long_legacy_error_is_preserved_outside_the_short_preview() {

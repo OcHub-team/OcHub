@@ -1,0 +1,2914 @@
+--- a/src/components.rs
++++ b/src/components.rs
+@@ -24,6 +24,7 @@
+ use crate::text_input::TextInput;
+ use crate::tf;
+ use crate::theme;
++use crate::tokens::{self, ConsoleStyle, TextRole};
+ 
+ // ── Buttons ────────────────────────────────────────────────────────────────
+ 
+@@ -38,9 +39,9 @@
+ 
+ #[derive(Clone, Copy, PartialEq, Eq)]
+ pub enum ButtonSize {
+-    /// Compact default (px_3 py_1).
++    /// A 28px control for dense rows and toolbars.
+     Sm,
+-    /// Roomier variant (px_4 py_1.5) for page-level primary actions.
++    /// A 32px control aligned with standard form inputs.
+     Md,
+ }
+ 
+@@ -190,10 +191,15 @@
+         .id(id)
+         .role(gpui::Role::Button)
+         .aria_label(label)
+-        .rounded_md()
++        .rounded(px(tokens::radius::CONTROL))
+         .bg(bg)
+         .text_color(fg)
+-        .text_sm()
++        .text_role(TextRole::Body)
++        .flex()
++        .items_center()
++        .justify_center()
++        .flex_none()
++        .whitespace_nowrap()
+         .font_weight(if tone.is_emphasis() {
+             FontWeight::SEMIBOLD
+         } else {
+@@ -205,8 +211,8 @@
+             .hover(|s| s.bg(hover_bg));
+     }
+     match size {
+-        ButtonSize::Sm => base.px_3().py_1(),
+-        ButtonSize::Md => base.px_4().py(px(6.)),
++        ButtonSize::Sm => base.px_3().h(px(tokens::control::COMPACT)),
++        ButtonSize::Md => base.px_3().h(px(tokens::control::DEFAULT)),
+     }
+ }
+ 
+@@ -222,8 +228,8 @@
+     let (_, _, fg) = tone.colors();
+     let label = label.into();
+     let (button_size, icon_size) = match size {
+-        ButtonSize::Sm => (28., 14.),
+-        ButtonSize::Md => (32., 16.),
++        ButtonSize::Sm => (tokens::control::COMPACT, tokens::control::ICON_SMALL),
++        ButtonSize::Md => (tokens::control::DEFAULT, tokens::control::ICON),
+     };
+     button_base(id, label, tone, size, true)
+         .p_0()
+@@ -446,7 +452,7 @@
+         .flex()
+         .flex_row()
+         .gap_1()
+-        .text_xs()
++        .text_role(TextRole::Caption)
+         .font_weight(FontWeight::MEDIUM)
+         .text_color(theme::subtext())
+         .child(label.into());
+@@ -480,7 +486,7 @@
+ pub fn field_error(message: impl Into<SharedString>) -> gpui::Div {
+     div()
+         .text_color(theme::red())
+-        .text_xs()
++        .text_role(TextRole::Caption)
+         .child(message.into())
+ }
+ 
+--- a/src/gallery.rs
++++ b/src/gallery.rs
+@@ -2,17 +2,23 @@
+ //! component in every state so visual tuning and regression checks don't
+ //! require clicking through the whole app (GPUI has no hot reload).
+ 
+-use gpui::{Context, FontWeight, ScrollHandle, SharedString, Window, div, prelude::*, px};
++use gpui::{Context, ScrollHandle, SharedString, Window, div, prelude::*, px};
+ 
+ use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
+ use crate::icons::IconName;
+ use crate::layout;
++use crate::navigation;
++use crate::notifications::{NotificationHost, NotificationLevel, NotificationRequest};
++use crate::table::{self, Column};
+ use crate::text_input::TextInput;
+ use crate::theme;
++use crate::tokens::{ConsoleStyle, TextRole};
+ 
+ pub struct GalleryView {
+     demo_input: gpui::Entity<TextInput>,
+     secret_input: gpui::Entity<TextInput>,
++    compact_input: gpui::Entity<TextInput>,
++    notifications: gpui::Entity<NotificationHost>,
+     scroll_handle: ScrollHandle,
+ }
+ 
+@@ -21,6 +27,8 @@
+         Self {
+             demo_input: cx.new(|cx| TextInput::new(cx, "https://example.com")),
+             secret_input: cx.new(|cx| TextInput::new(cx, "sk-ant-…")),
++            compact_input: cx.new(|cx| TextInput::new(cx, "中日英 · 日本語 · Search").compact()),
++            notifications: cx.new(|_| NotificationHost::new()),
+             scroll_handle: ScrollHandle::new(),
+         }
+     }
+@@ -50,7 +58,7 @@
+ }
+ 
+ impl gpui::Render for GalleryView {
+-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
++    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+         let buttons = components::card()
+             .gap_3()
+             .child(Self::demo_row(vec![
+@@ -104,7 +112,143 @@
+                 "随应用自动启动",
+                 Some("启动 OcHub 时自动拉起网关（端点地址保持稳定）。".into()),
+                 layout::toggle(true),
++            ))
++            .child(Self::demo_row(vec![
++                div()
++                    .w(px(240.))
++                    .child(self.compact_input.clone())
++                    .into_any_element(),
++                components::button("g-compact", "28px", ButtonTone::Neutral, ButtonSize::Sm)
++                    .into_any_element(),
++            ]))
++            .child(Self::demo_row(vec![
++                components::disabled_button(
++                    "g-disabled",
++                    "不可用",
++                    ButtonTone::Neutral,
++                    ButtonSize::Md,
++                    true,
++                )
++                .into_any_element(),
++                components::busy_button(
++                    "g-busy",
++                    "处理中",
++                    ButtonTone::Neutral,
++                    ButtonSize::Md,
++                    false,
++                )
++                .into_any_element(),
++            ]));
++
++        let console_columns = [
++            Column::flex("应用 / Application", 120., 1.),
++            Column::flex("连接 / 接続", 180., 2.),
++            Column::fixed("状态", 96.),
++        ];
++        let console_table = components::card().p_0().child(
++            div()
++                .id("gallery-column-scroll")
++                .w_full()
++                .overflow_x_scroll()
++                .child(
++                    table::frame("gallery-console-table", &console_columns)
++                        .child(table::header("gallery-console-header", &console_columns))
++                        .child(table::row(
++                            "gallery-console-row",
++                            &console_columns,
++                            vec![
++                                div().child("Claude Code").into_any_element(),
++                                div()
++                                    .min_w_0()
++                                    .truncate()
++                                    .child("团队主连接 · チーム接続 · Production")
++                                    .into_any_element(),
++                                div()
++                                    .text_color(theme::subtext())
++                                    .child("已配置")
++                                    .into_any_element(),
++                            ],
++                            true,
++                        )),
++                ),
++        );
++        let console_navigation = components::card()
++            .p_2()
++            .child(navigation::item(
++                "gallery-overview",
++                "总览 / Overview",
++                IconName::Layers,
++                true,
++            ))
++            .child(navigation::item(
++                "gallery-connections",
++                "连接 / Connections",
++                IconName::Cloud,
++                false,
+             ));
++        let notice_demo = components::card()
++            .gap_3()
++            .child(
++                div()
++                    .text_role(TextRole::Body)
++                    .text_color(theme::subtext())
++                    .child("浮层保持简短，完整诊断保留在本次启动的通知中心。"),
++            )
++            .child(Self::demo_row(vec![
++                components::button(
++                    "gallery-notice-success",
++                    "简短结果",
++                    ButtonTone::Neutral,
++                    ButtonSize::Md,
++                )
++                .on_click(cx.listener(|this, _, _, cx| {
++                    this.notifications.update(cx, |host, cx| {
++                        host.notify(
++                            NotificationRequest::new(NotificationLevel::Success, "演示草稿已保存")
++                                .summary("这是组件演示，没有写入目标应用。")
++                                .source("本机 · 组件画廊")
++                                .key("gallery:save"),
++                            cx,
++                        );
++                    });
++                }))
++                .into_any_element(),
++                components::button(
++                    "gallery-notice-error",
++                    "长诊断详情",
++                    ButtonTone::Neutral,
++                    ButtonSize::Md,
++                )
++                .on_click(cx.listener(|this, _, _, cx| {
++                    this.notifications.update(cx, |host, cx| {
++                        host.notify(
++                            NotificationRequest::new(NotificationLevel::Error, "演示配置未写入")
++                                .summary("诊断内容保留在通知中心。")
++                                .details(format!(
++                                    "/synthetic/example/{}\n{}",
++                                    "long-path-".repeat(25),
++                                    "保留完整说明 · 詳細を保持 · Full diagnostic detail.\n"
++                                        .repeat(25)
++                                ))
++                                .source("组件画廊 · 虚构数据")
++                                .key("gallery:diagnostic"),
++                            cx,
++                        );
++                    });
++                }))
++                .into_any_element(),
++                components::button(
++                    "gallery-notice-center",
++                    "通知中心",
++                    ButtonTone::Ghost,
++                    ButtonSize::Md,
++                )
++                .on_click(cx.listener(|this, _, _, cx| {
++                    this.notifications
++                        .update(cx, |host, cx| host.toggle_center(cx))
++                }))
++                .into_any_element(),
++            ]));
+ 
+         let segmented_demo = components::card()
+             .gap_3()
+@@ -326,39 +470,37 @@
+             .gap_2()
+             .child(
+                 div()
+-                    .text_xl()
+-                    .font_weight(FontWeight::BOLD)
++                    .text_role(TextRole::PageTitle)
+                     .text_color(theme::text())
+-                    .child("Display 页面大标题 (xl)"),
++                    .child("Page title · 页面标题 · 24 / 30"),
+             )
+             .child(
+                 div()
+-                    .text_lg()
+-                    .font_weight(FontWeight::BOLD)
++                    .text_role(TextRole::SectionTitle)
+                     .text_color(theme::text())
+-                    .child("Title 页面标题 (lg)"),
++                    .child("Section title · 区块标题 · 15 / 22"),
+             )
+             .child(
+                 div()
+-                    .text_sm()
+-                    .font_weight(FontWeight::SEMIBOLD)
++                    .text_role(TextRole::Control)
+                     .text_color(theme::text())
+-                    .child("Heading 区块标题 (sm/semibold)"),
++                    .child("Control · 输入文字 · 14 / 20"),
+             )
+             .child(
+                 div()
+-                    .text_sm()
++                    .text_role(TextRole::Body)
+                     .text_color(theme::text())
+-                    .child("Body 正文与行标签 (sm) — 用于大多数内容。"),
++                    .child("Body · 正文 · 本文 · 13 / 20"),
+             )
+             .child(
+                 div()
+-                    .text_xs()
++                    .text_role(TextRole::Caption)
+                     .text_color(theme::muted())
+-                    .child("Caption 说明文字 (xs) — 用于帮助文本、表头与徽章。"),
++                    .child("Caption · 辅助文字 · 補足 · 12 / 18"),
+             );
+ 
+         layout::page()
++            .relative()
+             .child(layout::page_header(
+                 "组件画廊",
+                 Some(SharedString::from("MS_GALLERY=1 · 共享组件全状态预览")),
+@@ -367,6 +509,16 @@
+                 "gallery-scroll",
+                 &self.scroll_handle,
+                 layout::content_column()
++                    .child(Self::section(
++                        "控制台导航",
++                        "选中 / 未选中，业务状态由宿主拥有",
++                        console_navigation,
++                    ))
++                    .child(Self::section(
++                        "通知",
++                        "短结果 / 长详情 / 键盘 / 本次启动",
++                        notice_demo,
++                    ))
+                     .child(Self::section("按钮", "tone × size,统一悬停与字重", buttons))
+                     .child(Self::section(
+                         "表单字段",
+@@ -405,6 +557,11 @@
+                         div().child(stats),
+                     ))
+                     .child(Self::section("表格", "table_header + table_row", table))
++                    .child(Self::section(
++                        "数据列",
++                        "标题与行共享固定 / 弹性列宽",
++                        console_table,
++                    ))
+                     .child(Self::section("分页", "pagination 页脚条", pagination))
+                     .child(Self::section(
+                         "字体阶梯",
+@@ -412,5 +569,6 @@
+                         type_ramp,
+                     )),
+             ))
++            .child(self.notifications.clone())
+     }
+ }
+--- a/src/layout.rs
++++ b/src/layout.rs
+@@ -49,6 +49,7 @@
+ use crate::scrollbar::{VerticalScrollbar, contain_vertical_scroll};
+ use crate::tf;
+ use crate::theme;
++use crate::tokens::{self, ConsoleStyle, TextRole};
+ 
+ type RowActivation = Rc<dyn Fn(&mut Window, &mut App)>;
+ type RowSelectEventHandler = Rc<dyn Fn(SelectRowEvent, &mut Window, &mut App)>;
+@@ -101,8 +102,7 @@
+             .min_w_0()
+             .truncate()
+             .text_color(theme::text())
+-            .text_xl()
+-            .font_weight(FontWeight::BOLD)
++            .text_role(TextRole::PageTitle)
+             .child(title.into()),
+     );
+     if let Some(subtitle) = subtitle {
+@@ -111,7 +111,7 @@
+                 .min_w_0()
+                 .truncate()
+                 .text_color(theme::muted())
+-                .text_xs()
++                .text_role(TextRole::Caption)
+                 .child(subtitle),
+         );
+     }
+@@ -122,7 +122,8 @@
+         .justify_between()
+         .gap_4()
+         .px_6()
+-        .py_4()
++        .py_3()
++        .min_h(px(tokens::layout::TOOLBAR_HEIGHT))
+         .border_b_1()
+         .border_color(theme::border())
+         .child(title_col)
+@@ -266,6 +267,39 @@
+         .max_w(px(WIDE_MAX_WIDTH))
+ }
+ 
++/// Data pages may use the available width instead of a form's reading width.
++/// Individual tables still declare their own minimum column widths.
++pub fn fluid_column() -> gpui::Div {
++    div()
++        .flex()
++        .flex_col()
++        .items_start()
++        .gap_4()
++        .w_full()
++        .min_w_0()
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum InspectorMode {
++    Beside,
++    Overlay,
++}
++
++/// Use the containing content pane width, after navigation/chrome subtraction.
++/// A narrow page opens the inspector as an overlay rather than compressing its
++/// main table into an unusable third column.
++pub fn inspector_mode(content_width: f32) -> InspectorMode {
++    if content_width
++        >= tokens::layout::MIN_PRIMARY_WITH_INSPECTOR
++            + tokens::layout::INSPECTOR_WIDTH
++            + tokens::space::XL
++    {
++        InspectorMode::Beside
++    } else {
++        InspectorMode::Overlay
++    }
++}
++
+ /// A section header above a [`group`]: small semibold title, plus a muted line
+ /// reserved for data (a count, a path) — never for explaining what the section is.
+ pub fn section_header(
+@@ -280,15 +314,14 @@
+         .child(
+             div()
+                 .text_color(theme::text())
+-                .text_sm()
+-                .font_weight(FontWeight::SEMIBOLD)
++                .text_role(TextRole::SectionTitle)
+                 .child(title.into()),
+         )
+         .when_some(description, |header, description| {
+             header.child(
+                 div()
+                     .text_color(theme::muted())
+-                    .text_xs()
++                    .text_role(TextRole::Caption)
+                     .child(description),
+             )
+         })
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -19,10 +19,13 @@
+ pub mod keyboard;
+ pub mod layout;
+ pub mod modal;
++pub mod navigation;
+ pub mod notifications;
+ pub mod scrollbar;
++pub mod table;
+ pub mod text_input;
+ pub mod theme;
++pub mod tokens;
+ pub mod window_chrome;
+ 
+ // Consumers should use these re-exports when they need to implement a custom
+--- /dev/null
++++ b/src/navigation.rs
+@@ -0,0 +1,80 @@
++//! Navigation presentation. Section ids, selection, environment and actions
++//! belong to the application; the library owns only geometry and interaction.
++
++use gpui::{ElementId, SharedString, div, prelude::*, px};
++
++use crate::{
++    icons::{IconName, icon},
++    keyboard, theme,
++    tokens::{self, ConsoleStyle, TextRole},
++};
++
++pub fn rail() -> gpui::Div {
++    div()
++        .flex()
++        .flex_col()
++        .h_full()
++        .min_h_0()
++        .w(px(tokens::layout::NAVIGATION_WIDTH))
++        .flex_none()
++        .bg(theme::panel())
++        .border_r_1()
++        .border_color(theme::border())
++}
++
++pub fn section_label(label: impl Into<SharedString>) -> gpui::Div {
++    div()
++        .px_3()
++        .pt_4()
++        .pb_1()
++        .text_role(TextRole::Caption)
++        .text_color(theme::subtext())
++        .child(label.into())
++}
++
++pub fn item(
++    id: impl Into<ElementId>,
++    label: impl Into<SharedString>,
++    name: IconName,
++    selected: bool,
++) -> gpui::Stateful<gpui::Div> {
++    let label = label.into();
++    let foreground = if selected {
++        theme::text()
++    } else {
++        theme::subtext()
++    };
++    keyboard::interactive(div().id(id))
++        .role(gpui::Role::Button)
++        .aria_label(label.clone())
++        .aria_selected(selected)
++        .relative()
++        .flex()
++        .items_center()
++        .gap_2()
++        .w_full()
++        .min_w_0()
++        .h(px(tokens::layout::ROW_HEIGHT))
++        .px_3()
++        .rounded(px(tokens::radius::CONTROL))
++        .text_role(TextRole::Body)
++        .text_color(foreground)
++        .cursor_pointer()
++        .when(selected, |item| {
++            item.bg(theme::surface_hover())
++                .font_weight(gpui::FontWeight::MEDIUM)
++                .child(
++                    div()
++                        .absolute()
++                        .left_0()
++                        .top(px(14.))
++                        .w(px(2.))
++                        .h(px(16.))
++                        .rounded_sm()
++                        .bg(theme::accent()),
++                )
++        })
++        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
++        .child(icon(name, foreground, tokens::control::ICON).flex_none())
++        .child(div().flex_1().min_w_0().truncate().child(label))
++}
+--- a/src/notifications.rs
++++ b/src/notifications.rs
+@@ -1,45 +1,34 @@
+-//! App-level notification center and toast host.
++//! Short, non-blocking notifications with an in-memory detail center.
+ //!
+-//! This is intentionally UI-owned: core services return success/warnings/errors,
+-//! while the shell decides whether a result should be silent, inline, or global.
+-
+-use std::cell::RefCell;
+-use std::collections::{HashMap, VecDeque};
+-use std::rc::Rc;
++//! Application code owns severity, redaction, environment labels and retry
++//! policy. This module never writes notification contents to disk and never
++//! turns message text into a business action.
++
++use std::collections::VecDeque;
+ use std::time::{Duration, Instant};
+ 
+ use gpui::{
+-    Animation, AnimationExt, ClipboardItem, Context, FocusHandle, FontWeight, IntoElement,
+-    SharedString, Window, canvas, div, prelude::*, px,
++    Animation, AnimationExt, ClipboardItem, Context, FocusHandle, IntoElement, ScrollHandle,
++    SharedString, Window, div, prelude::*, px,
+ };
+ 
+-use crate::anim::Transition;
++use crate::components::{self, ButtonSize, ButtonTone};
+ use crate::i18n::{k, t};
+ use crate::icons::{IconName, icon};
+-use crate::keyboard;
+-use crate::theme;
+-
+-const MAX_VISIBLE: usize = 3;
++use crate::{
++    keyboard, modal, theme,
++    tokens::{self, ConsoleStyle, TextRole},
++};
++
++const MAX_VISIBLE: usize = 2;
+ const MAX_HISTORY: usize = 64;
+-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+-const ERROR_TIMEOUT: Duration = Duration::from_secs(5);
+-const STACK_LAYER_OFFSET: f32 = 6.;
+-const STACK_LAYER_INSET: f32 = 5.;
+-const TOAST_WIDTH: f32 = 350.;
++const DEFAULT_TIMEOUT: Duration = Duration::from_secs(4);
++const ERROR_TIMEOUT: Duration = Duration::from_secs(6);
++const TOAST_WIDTH: f32 = 360.;
+ const TOAST_MARGIN: f32 = 16.;
+-const TOAST_TOP: f32 = 56.;
+-const TOAST_CONTENT_HEIGHT: f32 = 144.;
+-const TOAST_CHROME_HEIGHT: f32 = 22.; // Vertical padding and the card border.
+-/// Vertical breathing room between toasts once the stack stands open.
+-const TOAST_GAP: f32 = 8.;
+-const STACK_TRANSITION: Duration = Duration::from_millis(220);
+-const TOAST_ENTRY: Duration = Duration::from_millis(240);
+-/// How far a new toast travels in from its anchored right edge.
+-const TOAST_ENTRY_SLIDE: f32 = 10.;
+-/// Height a toast is assumed to want for the single frame between joining a
+-/// stack and being measured. Roughly a title-only card, which is the shortest a
+-/// toast gets — erring low keeps the deck from visibly settling downward.
+-const ASSUMED_TOAST_HEIGHT: f32 = 46.;
++const TOAST_ENTRY: Duration = Duration::from_millis(140);
++const LEGACY_TITLE_LIMIT: usize = 80;
++const SUMMARY_LIMIT: usize = 100;
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum NotificationLevel {
+@@ -52,7 +41,7 @@
+ impl NotificationLevel {
+     fn accent_icon(self) -> (gpui::Rgba, IconName) {
+         match self {
+-            Self::Info => (theme::accent(), IconName::Message),
++            Self::Info => (theme::muted(), IconName::Message),
+             Self::Success => (theme::green(), IconName::Check),
+             Self::Warning => (theme::yellow(), IconName::Diamond),
+             Self::Error => (theme::red(), IconName::Close),
+@@ -60,39 +49,88 @@
+     }
+ 
+     fn default_timeout(self) -> Duration {
+-        match self {
+-            Self::Error => ERROR_TIMEOUT,
+-            _ => DEFAULT_TIMEOUT,
+-        }
++        if self == Self::Error {
++            ERROR_TIMEOUT
++        } else {
++            DEFAULT_TIMEOUT
++        }
++    }
++
++    fn short_title(self) -> SharedString {
++        t(match self {
++            Self::Info => k::NOTIFICATIONS_KIND_INFO,
++            Self::Success => k::NOTIFICATIONS_KIND_SUCCESS,
++            Self::Warning => k::NOTIFICATIONS_KIND_WARNING,
++            Self::Error => k::NOTIFICATIONS_KIND_ERROR,
++        })
++    }
++}
++
++/// The inset is measured from the selected edge of the full content viewport.
++/// Hosts can reserve their own title bar or fixed editor footer without the
++/// component knowing the application's current page.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub enum ToastAnchor {
++    TopRight { inset: f32 },
++    BottomRight { inset: f32 },
++}
++
++impl Default for ToastAnchor {
++    fn default() -> Self {
++        Self::TopRight { inset: 72. }
+     }
+ }
+ 
+ #[derive(Clone)]
+ pub struct Notification {
+     id: u64,
++    key: Option<SharedString>,
+     level: NotificationLevel,
+     title: SharedString,
+-    message: Option<SharedString>,
++    summary: Option<SharedString>,
++    details: Option<SharedString>,
+     source: Option<SharedString>,
+-    auto_dismiss_after: Option<Duration>,
++    full_text: SharedString,
++    updated_at: i64,
++    occurrences: u32,
++    read: bool,
+     remaining: Option<Duration>,
+-    /// `None` means the countdown is held: either the host is hovered, or the
+-    /// toast has not been given a start instant yet. `remaining` then stands on
+-    /// its own as the amount of time still owed.
+     countdown_started_at: Option<Instant>,
+     timer_epoch: u64,
+ }
+ 
+ impl Notification {
+-    /// Invalidates any in-flight dismiss timer for this toast, so a pause that
+-    /// races with an about-to-fire dismissal still wins.
+-    fn invalidate_timer(&mut self) -> u64 {
+-        self.timer_epoch = self.timer_epoch.wrapping_add(1);
+-        self.timer_epoch
+-    }
+-
+-    /// Freezes the countdown, folding time already served into `remaining`.
+-    /// Idempotent: holding an already-held toast leaves it untouched.
++    pub fn id(&self) -> u64 {
++        self.id
++    }
++    pub fn level(&self) -> NotificationLevel {
++        self.level
++    }
++    pub fn title(&self) -> &str {
++        &self.title
++    }
++    pub fn summary(&self) -> Option<&str> {
++        self.summary.as_deref()
++    }
++    pub fn details(&self) -> Option<&str> {
++        self.details.as_deref()
++    }
++    pub fn source(&self) -> Option<&str> {
++        self.source.as_deref()
++    }
++    pub fn full_text(&self) -> &str {
++        &self.full_text
++    }
++    pub fn updated_at(&self) -> i64 {
++        self.updated_at
++    }
++    pub fn occurrences(&self) -> u32 {
++        self.occurrences
++    }
++    pub fn is_read(&self) -> bool {
++        self.read
++    }
++
+     fn hold(&mut self, now: Instant) {
+         if let (Some(remaining), Some(started_at)) =
+             (self.remaining.as_mut(), self.countdown_started_at.take())
+@@ -101,8 +139,6 @@
+         }
+     }
+ 
+-    /// Restarts the countdown, returning the duration still owed. `None` means
+-    /// the toast has nothing left to serve and is due for dismissal.
+     fn resume(&mut self, now: Instant) -> Option<Duration> {
+         let remaining = self.remaining.filter(|remaining| !remaining.is_zero())?;
+         self.countdown_started_at = Some(now);
+@@ -113,8 +149,10 @@
+ pub struct NotificationRequest {
+     level: NotificationLevel,
+     title: SharedString,
+-    message: Option<SharedString>,
++    summary: Option<SharedString>,
++    details: Option<SharedString>,
+     source: Option<SharedString>,
++    key: Option<SharedString>,
+     persistent: bool,
+     timeout: Option<Duration>,
+ }
+@@ -124,31 +162,50 @@
+         Self {
+             level,
+             title: title.into(),
+-            message: None,
++            summary: None,
++            details: None,
+             source: None,
++            key: None,
+             persistent: false,
+             timeout: None,
+         }
+     }
+ 
+-    pub fn message(mut self, message: impl Into<SharedString>) -> Self {
+-        self.message = Some(message.into());
++    /// A brief human-readable explanation. Long text remains available in the
++    /// center and is shortened only in the transient preview.
++    pub fn summary(mut self, summary: impl Into<SharedString>) -> Self {
++        self.summary = Some(summary.into());
+         self
+     }
+ 
+-    #[allow(dead_code)]
++    /// Detailed, already redacted diagnostic text. Never displayed in a toast.
++    pub fn details(mut self, details: impl Into<SharedString>) -> Self {
++        self.details = Some(details.into());
++        self
++    }
++
++    /// Compatibility with previous hosts: message text belongs in the center.
++    pub fn message(self, message: impl Into<SharedString>) -> Self {
++        self.details(message)
++    }
++
++    /// A display-only environment/app label supplied by the host.
+     pub fn source(mut self, source: impl Into<SharedString>) -> Self {
+         self.source = Some(source.into());
+         self
+     }
+ 
+-    #[allow(dead_code)]
++    /// Replace an earlier record for the same operation. Include environment
++    /// identity in keys; unrelated operations should not share one.
++    pub fn key(mut self, key: impl Into<SharedString>) -> Self {
++        self.key = Some(key.into());
++        self
++    }
++
+     pub fn persistent(mut self, persistent: bool) -> Self {
+         self.persistent = persistent;
+         self
+     }
+-
+-    #[allow(dead_code)]
+     pub fn timeout(mut self, timeout: Duration) -> Self {
+         self.timeout = Some(timeout);
+         self
+@@ -157,89 +214,23 @@
+ 
+ pub struct NotificationHost {
+     next_id: u64,
++    next_timer_epoch: u64,
+     visible: VecDeque<Notification>,
+     history: VecDeque<Notification>,
+-    /// Pointer presence over the host. Drives both the countdown hold and, for
+-    /// a multi-toast stack, whether it stands expanded.
+     hovered: bool,
+     focused: bool,
+     focus_scope: Option<FocusHandle>,
+-    measured_layout: Option<(u32, u32)>,
+-    /// `0` is the collapsed deck, `1` the open stack. Reversible mid-flight, so
+-    /// a pointer that leaves halfway retreats from where it was rather than
+-    /// finishing the trip first.
+-    stack: Transition,
+-    /// Natural height of each toast, keyed by id, captured the first time it is
+-    /// laid out. A toast always debuts at the front of the stack where nothing
+-    /// constrains its height, so this records the real content height even
+-    /// though later frames may squeeze it into the deck.
+-    ///
+-    /// Shared with the measuring canvas, which runs during prepaint — after
+-    /// `render` has already handed back its element tree.
+-    heights: Rc<RefCell<HashMap<u64, f32>>>,
++    anchor: ToastAnchor,
++    center_open: bool,
++    selected: Option<u64>,
++    center_focus: Option<modal::ModalFocusState>,
++    center_close_focus: Option<FocusHandle>,
++    center_refocus: bool,
++    center_scroll: ScrollHandle,
+ }
+ 
+ fn toast_width(viewport_width: f32) -> f32 {
+     (viewport_width - TOAST_MARGIN * 2.).clamp(0., TOAST_WIDTH)
+-}
+-
+-fn toast_content_height(viewport_height: f32, count: usize) -> f32 {
+-    let count = count.max(1) as f32;
+-    let available = (viewport_height - TOAST_TOP - TOAST_MARGIN - TOAST_GAP * (count - 1.)) / count;
+-    (available - TOAST_CHROME_HEIGHT).clamp(24., TOAST_CONTENT_HEIGHT)
+-}
+-
+-/// Where one toast sits at a given point in the collapse/expand transition.
+-#[derive(Clone, Copy, Debug, PartialEq)]
+-struct ToastSlot {
+-    top: f32,
+-    /// Horizontal inset on both sides. Deeper cards sit narrower so the deck
+-    /// reads as depth rather than as a misaligned column.
+-    inset: f32,
+-    height: f32,
+-    /// Fade for the card's contents. The card chrome stays put so a collapsed
+-    /// neighbour still reads as a card edge rather than vanishing.
+-    content_opacity: f32,
+-}
+-
+-/// Interpolates the stack layout between the collapsed deck (`progress` 0) and
+-/// the open column (`progress` 1).
+-///
+-/// `heights` are natural content heights, front of the stack first. Collapsed,
+-/// every card is squeezed to the front card's height so the deck's lower edge
+-/// is even; open, each card takes its own height and they queue up with
+-/// [`TOAST_GAP`] between them.
+-fn stack_layout(heights: &[f32], progress: f32) -> Vec<ToastSlot> {
+-    let Some(&front_height) = heights.first() else {
+-        return Vec::new();
+-    };
+-    let progress = progress.clamp(0., 1.);
+-
+-    let mut open_top = 0.;
+-    heights
+-        .iter()
+-        .enumerate()
+-        .map(|(depth, &height)| {
+-            let deck_top = depth as f32 * STACK_LAYER_OFFSET;
+-            let slot = ToastSlot {
+-                top: deck_top + (open_top - deck_top) * progress,
+-                inset: depth as f32 * STACK_LAYER_INSET * (1. - progress),
+-                height: front_height + (height - front_height) * progress,
+-                content_opacity: if depth == 0 { 1. } else { progress },
+-            };
+-            open_top += height + TOAST_GAP;
+-            slot
+-        })
+-        .collect()
+-}
+-
+-/// Overall height the host reserves, so its hover target tracks what is drawn
+-/// instead of always claiming the fully expanded span.
+-fn stack_height(heights: &[f32], progress: f32) -> f32 {
+-    stack_layout(heights, progress)
+-        .iter()
+-        .map(|slot| slot.top + slot.height)
+-        .fold(0., f32::max)
+ }
+ 
+ fn auto_dismiss_timeout(
+@@ -250,32 +241,99 @@
+     (!persistent).then(|| timeout.unwrap_or_else(|| level.default_timeout()))
+ }
+ 
++fn short_preview(text: &str, limit: usize) -> SharedString {
++    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
++    if flat.chars().count() <= limit {
++        return flat.into();
++    }
++    format!(
++        "{}…",
++        flat.chars()
++            .take(limit.saturating_sub(1))
++            .collect::<String>()
++    )
++    .into()
++}
++
++fn request_record(request: NotificationRequest, id: u64, held: bool) -> Notification {
++    let timeout = auto_dismiss_timeout(request.level, request.persistent, request.timeout);
++    let full_text = [
++        Some(request.title.as_ref()),
++        request.summary.as_deref(),
++        request.details.as_deref(),
++        request.source.as_deref(),
++    ]
++    .into_iter()
++    .flatten()
++    .collect::<Vec<_>>()
++    .join("\n")
++    .into();
++    let legacy_long =
++        request.title.chars().count() > LEGACY_TITLE_LIMIT || request.title.contains(['\n', '\r']);
++    let title = if legacy_long {
++        request.level.short_title()
++    } else {
++        request.title.clone()
++    };
++    let details = if legacy_long {
++        Some(
++            [Some(request.title.as_ref()), request.details.as_deref()]
++                .into_iter()
++                .flatten()
++                .collect::<Vec<_>>()
++                .join("\n\n")
++                .into(),
++        )
++    } else {
++        request.details
++    };
++    Notification {
++        id,
++        key: request.key,
++        level: request.level,
++        title,
++        summary: request.summary,
++        details,
++        source: request.source,
++        full_text,
++        updated_at: chrono::Local::now().timestamp(),
++        occurrences: 1,
++        read: false,
++        remaining: timeout,
++        countdown_started_at: timeout.filter(|_| !held).map(|_| Instant::now()),
++        timer_epoch: 0,
++    }
++}
++
+ impl NotificationHost {
+     pub fn new() -> Self {
+         Self {
+             next_id: 1,
++            next_timer_epoch: 1,
+             visible: VecDeque::new(),
+             history: VecDeque::new(),
+             hovered: false,
+             focused: false,
+             focus_scope: None,
+-            measured_layout: None,
+-            stack: Transition::settled(0., STACK_TRANSITION),
+-            heights: Rc::new(RefCell::new(HashMap::new())),
++            anchor: ToastAnchor::default(),
++            center_open: false,
++            selected: None,
++            center_focus: None,
++            center_close_focus: None,
++            center_refocus: false,
++            center_scroll: ScrollHandle::new(),
+         }
+     }
+ 
+     pub fn info(&mut self, title: impl Into<SharedString>, cx: &mut Context<Self>) -> u64 {
+         self.notify(NotificationRequest::new(NotificationLevel::Info, title), cx)
+     }
+-
+     pub fn success(&mut self, title: impl Into<SharedString>, cx: &mut Context<Self>) -> u64 {
+         self.notify(
+             NotificationRequest::new(NotificationLevel::Success, title),
+             cx,
+         )
+     }
+-
+     pub fn warning(
+         &mut self,
+         title: impl Into<SharedString>,
+@@ -283,11 +341,10 @@
+         cx: &mut Context<Self>,
+     ) -> u64 {
+         self.notify(
+-            NotificationRequest::new(NotificationLevel::Warning, title).message(message),
++            NotificationRequest::new(NotificationLevel::Warning, title).details(message),
+             cx,
+         )
+     }
+-
+     pub fn error(
+         &mut self,
+         title: impl Into<SharedString>,
+@@ -295,81 +352,145 @@
+         cx: &mut Context<Self>,
+     ) -> u64 {
+         self.notify(
+-            NotificationRequest::new(NotificationLevel::Error, title)
+-                .message(message)
+-                .persistent(false),
++            NotificationRequest::new(NotificationLevel::Error, title).details(message),
+             cx,
+         )
+     }
+-
+-    /// Status toast with an explicit level.
+-    ///
+-    /// `None` means the source did not classify the message and it is shown as
+-    /// [`NotificationLevel::Info`]. Severity used to be guessed from Chinese
+-    /// substrings, which mis-classified messages even in Chinese and could not
+-    /// survive translation at all; every view now states its own level.
+     pub fn status_leveled(
+         &mut self,
+         level: Option<NotificationLevel>,
+         message: impl Into<SharedString>,
+         cx: &mut Context<Self>,
+     ) -> u64 {
+-        let message = message.into();
+-        let level = level.unwrap_or(NotificationLevel::Info);
+-        self.notify(NotificationRequest::new(level, message), cx)
++        self.notify(
++            NotificationRequest::new(level.unwrap_or(NotificationLevel::Info), message),
++            cx,
++        )
++    }
++
++    pub fn set_anchor(&mut self, anchor: ToastAnchor, cx: &mut Context<Self>) {
++        self.anchor = anchor;
++        cx.notify();
++    }
++    pub fn unread_count(&self) -> usize {
++        self.history.iter().filter(|record| !record.read).count()
++    }
++    pub fn is_center_open(&self) -> bool {
++        self.center_open
++    }
++    pub fn history(&self) -> impl Iterator<Item = &Notification> {
++        self.history.iter()
++    }
++
++    pub fn open_center(&mut self, cx: &mut Context<Self>) {
++        self.center_open = true;
++        self.visible.clear();
++        self.hovered = false;
++        cx.notify();
++    }
++    pub fn toggle_center(&mut self, cx: &mut Context<Self>) {
++        if self.center_open {
++            self.close_center(cx);
++        } else {
++            self.open_center(cx);
++        }
++    }
++    pub fn close_center(&mut self, cx: &mut Context<Self>) {
++        self.center_open = false;
++        cx.notify();
++    }
++    pub fn show_details(&mut self, id: u64, cx: &mut Context<Self>) {
++        if !self.history.iter().any(|record| record.id == id) {
++            return;
++        }
++        self.selected = Some(id);
++        self.center_refocus = self.center_open;
++        self.mark_read(id);
++        self.center_scroll.set_offset(gpui::point(px(0.), px(0.)));
++        self.open_center(cx);
++    }
++    pub fn mark_all_read(&mut self, cx: &mut Context<Self>) {
++        for record in &mut self.history {
++            record.read = true;
++        }
++        cx.notify();
++    }
++    pub fn clear_read(&mut self, cx: &mut Context<Self>) {
++        self.history.retain(|record| !record.read);
++        if self
++            .selected
++            .is_some_and(|id| !self.history.iter().any(|record| record.id == id))
++        {
++            self.selected = None;
++        }
++        cx.notify();
++    }
++    fn mark_read(&mut self, id: u64) {
++        if let Some(record) = self.history.iter_mut().find(|record| record.id == id) {
++            record.read = true;
++        }
+     }
+ 
+     pub fn notify(&mut self, request: NotificationRequest, cx: &mut Context<Self>) -> u64 {
+-        let id = self.next_id;
+-        self.next_id += 1;
+-
+-        let timeout = auto_dismiss_timeout(request.level, request.persistent, request.timeout);
+-        // A toast that lands while the user is already reading the stack starts
+-        // held, exactly as if it had been paused on arrival. Starting its clock
+-        // here would let it expire under a pointer that never left.
+-        let countdown_started_at = timeout
+-            .filter(|_| !self.interacting())
+-            .map(|_| Instant::now());
+-        let notification = Notification {
+-            id,
+-            level: request.level,
+-            title: request.title,
+-            message: request.message,
+-            source: request.source,
+-            auto_dismiss_after: timeout,
+-            remaining: timeout,
+-            countdown_started_at,
+-            timer_epoch: 0,
+-        };
+-
+-        self.visible.push_front(notification.clone());
+-        self.history.push_front(notification);
+-        while self.visible.len() > MAX_VISIBLE {
+-            self.visible.pop_back();
+-        }
++        let mut record = request_record(request, self.next_id, self.interacting());
++        if let Some(previous) = record
++            .key
++            .as_ref()
++            .and_then(|key| {
++                self.history
++                    .iter()
++                    .find(|entry| entry.key.as_ref() == Some(key))
++            })
++            .cloned()
++        {
++            record.id = previous.id;
++            record.occurrences = previous.occurrences.saturating_add(1);
++            self.history.retain(|entry| entry.id != record.id);
++            self.visible.retain(|entry| entry.id != record.id);
++        } else {
++            self.next_id += 1;
++        }
++        // Coalescing retains the record id. A globally unique timer epoch also
++        // invalidates timers from earlier updates that were paused/resumed.
++        record.timer_epoch = self.next_timer_epoch;
++        self.next_timer_epoch = self.next_timer_epoch.wrapping_add(1);
++        let id = record.id;
++        if !self.center_open {
++            if let Some(timeout) = record.remaining
++                && !self.interacting()
++            {
++                Self::schedule_dismiss(id, timeout, record.timer_epoch, cx);
++            }
++            self.visible.push_front(record.clone());
++            while self.visible.len() > MAX_VISIBLE {
++                self.visible.pop_back();
++            }
++        }
++        self.history.push_front(record);
+         while self.history.len() > MAX_HISTORY {
+             self.history.pop_back();
+         }
+-        self.prune_heights();
+-
+-        if let Some(timeout) = timeout
+-            && !self.interacting()
++        if self
++            .selected
++            .is_some_and(|id| !self.history.iter().any(|record| record.id == id))
+         {
+-            Self::schedule_dismiss(id, timeout, 0, cx);
+-        }
+-
++            self.selected = None;
++            self.center_refocus = self.center_open;
++        }
++        cx.notify();
+         id
+     }
+ 
+-    fn schedule_dismiss(id: u64, timeout: Duration, timer_epoch: u64, cx: &mut Context<Self>) {
++    fn schedule_dismiss(id: u64, timeout: Duration, epoch: u64, cx: &mut Context<Self>) {
+         cx.spawn(async move |this, cx| {
+             cx.background_executor().timer(timeout).await;
+             this.update(cx, |this, cx| {
+-                let should_dismiss = !this.interacting()
+-                    && this.visible.iter().any(|notification| {
+-                        notification.id == id && notification.timer_epoch == timer_epoch
+-                    });
+-                if should_dismiss {
++                if !this.interacting()
++                    && this
++                        .visible
++                        .iter()
++                        .any(|record| record.id == id && record.timer_epoch == epoch)
++                {
+                     this.dismiss(id);
+                     cx.notify();
+                 }
+@@ -378,275 +499,441 @@
+         })
+         .detach();
+     }
+-
+-    /// Pointer presence over the host holds *every* visible countdown, not just
+-    /// the toast under the cursor.
+-    ///
+-    /// Pausing only the hovered toast let its neighbours keep expiring while the
+-    /// user was reading them, and the stack collapsed out from under the pointer
+-    /// as soon as it dropped to a single toast. Whether the stack is collapsed,
+-    /// expanded, or a lone toast, the host is one hover target and one clock.
+     fn interacting(&self) -> bool {
+         self.hovered || self.focused
+     }
+-
+     fn set_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+-        let was_interacting = self.interacting();
++        let was = self.interacting();
+         self.hovered = hovered;
+-        self.update_countdowns(was_interacting, cx);
+-    }
+-
++        self.update_countdowns(was, cx);
++    }
+     fn set_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+-        let was_interacting = self.interacting();
++        let was = self.interacting();
+         self.focused = focused;
+-        self.update_countdowns(was_interacting, cx);
+-    }
+-
+-    fn update_countdowns(&mut self, was_interacting: bool, cx: &mut Context<Self>) {
++        self.update_countdowns(was, cx);
++    }
++    fn update_countdowns(&mut self, was: bool, cx: &mut Context<Self>) {
++        if was == self.interacting() {
++            return;
++        }
++        let now = Instant::now();
+         let interacting = self.interacting();
+-        if was_interacting == interacting {
+-            return;
+-        }
+-        let now = Instant::now();
+         let mut resume = Vec::new();
+         let mut expired = Vec::new();
+-        for notification in &mut self.visible {
+-            if notification.auto_dismiss_after.is_none() {
++        for record in &mut self.visible {
++            if record.remaining.is_none() {
+                 continue;
+             }
+-
+-            let timer_epoch = notification.invalidate_timer();
++            let epoch = self.next_timer_epoch;
++            self.next_timer_epoch = self.next_timer_epoch.wrapping_add(1);
++            record.timer_epoch = epoch;
+             if interacting {
+-                notification.hold(now);
++                record.hold(now);
++            } else if let Some(remaining) = record.resume(now) {
++                resume.push((record.id, remaining, epoch));
+             } else {
+-                match notification.resume(now) {
+-                    Some(remaining) => resume.push((notification.id, remaining, timer_epoch)),
+-                    None => expired.push(notification.id),
+-                }
++                expired.push(record.id);
+             }
+         }
+-
+         for id in expired {
+             self.dismiss(id);
+         }
+-        for (id, remaining, timer_epoch) in resume {
+-            Self::schedule_dismiss(id, remaining, timer_epoch, cx);
++        for (id, timeout, epoch) in resume {
++            Self::schedule_dismiss(id, timeout, epoch, cx);
+         }
+         cx.notify();
+     }
+-
+     pub fn dismiss(&mut self, id: u64) {
+-        self.visible.retain(|item| item.id != id);
+-        self.prune_heights();
+-    }
+-
+-    #[allow(dead_code)]
++        self.visible.retain(|record| record.id != id);
++    }
++    /// Dismiss transient previews. History is cleared only by explicit center actions.
+     pub fn clear(&mut self) {
+         self.visible.clear();
+-        self.prune_heights();
+-    }
+-
+-    /// Measurements only matter for toasts still on screen; history keeps no
+-    /// layout of its own.
+-    fn prune_heights(&mut self) {
+-        self.heights
+-            .borrow_mut()
+-            .retain(|id, _| self.visible.iter().any(|item| item.id == *id));
+-    }
+-
+-    #[allow(dead_code)]
+-    pub fn history(&self) -> impl Iterator<Item = &Notification> {
+-        self.history.iter()
+-    }
+-
+-    /// Records the natural height of a toast the first time it is laid out.
+-    ///
+-    /// The measurement runs in a canvas's prepaint, which is why it writes
+-    /// through a shared cell rather than through the entity: `render` has
+-    /// already returned by then, and the value is read on the next frame.
+-    fn measure_height(&self, id: u64) -> impl IntoElement + use<> {
+-        let heights = self.heights.clone();
+-        div().absolute().inset_0().child(
+-            canvas(
+-                move |bounds, window, _cx| {
+-                    let height = f32::from(bounds.size.height);
+-                    if height > 0.
+-                        && let std::collections::hash_map::Entry::Vacant(entry) =
+-                            heights.borrow_mut().entry(id)
+-                    {
+-                        entry.insert(height);
+-                        // Resizing can invalidate a settled stack after its entry
+-                        // animation has ended. Consume the new measurement without
+-                        // waiting for another pointer or keyboard event.
+-                        window.request_animation_frame();
+-                    }
+-                },
+-                |_bounds, _prepaint, _window, _cx| (),
+-            )
+-            .size_full(),
+-        )
+-    }
+-
+-    /// `fill_slot` stretches the card to its positioned wrapper, which is how
+-    /// the deck keeps an even lower edge. It must stay `false` until the toast
+-    /// has been measured, or [`measure_height`](Self::measure_height) would
+-    /// record the imposed height instead of the natural one.
+-    fn render_notification(
++    }
++
++    fn render_toast(
+         &self,
+-        notification: Notification,
+-        content_opacity: f32,
+-        fill_slot: bool,
+-        max_content_height: f32,
++        record: Notification,
+         cx: &mut Context<Self>,
+     ) -> impl IntoElement + use<> {
+-        let id = notification.id;
+-        let (accent, icon_name) = notification.level.accent_icon();
+-        let element_id = SharedString::from(format!("notification-{id}"));
+-        let copy_text = [
+-            Some(notification.title.as_ref()),
+-            notification.message.as_deref(),
+-            notification.source.as_deref(),
+-        ]
+-        .into_iter()
+-        .flatten()
+-        .collect::<Vec<_>>()
+-        .join("\n");
+-
+-        // A toast arrives rather than appears: it slides the last few pixels in
+-        // from the right edge it is anchored to while fading up. One-shot, so
+-        // `with_animation` is the right tool — and it parks the card in place
+-        // under reduced motion for free.
++        let id = record.id;
++        let (accent, icon_name) = record.level.accent_icon();
+         let entry = Animation::new(TOAST_ENTRY).with_easing(crate::anim::ease_out_quint);
+-
+-        let copy = keyboard::interactive(
+-            div()
+-                .id(("notification-copy", id))
+-                .role(gpui::Role::Button)
+-                .aria_label(t(k::NOTIFICATIONS_COPY)),
+-        )
+-        .flex()
+-        .items_center()
+-        .justify_center()
+-        .size(px(24.))
+-        .flex_none()
+-        .rounded_md()
+-        .cursor_pointer()
+-        .hover(|style| style.bg(theme::surface_hover()))
+-        .child(icon(IconName::Copy, theme::muted(), 13.))
+-        .on_click(move |_event, _window, cx| {
+-            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+-        });
+-        let close = keyboard::interactive(
+-            div()
+-                .id(("notification-close", id))
+-                .role(gpui::Role::Button)
+-                .aria_label(t(k::NOTIFICATIONS_DISMISS)),
+-        )
+-        .flex()
+-        .items_center()
+-        .justify_center()
+-        .size(px(24.))
+-        .flex_none()
+-        .rounded_md()
+-        .cursor_pointer()
+-        .hover(|style| style.bg(theme::surface_hover()))
+-        .child(icon(IconName::Close, theme::muted(), 13.))
+-        .on_click(cx.listener(move |this, _event, _window, cx| {
+-            this.dismiss(id);
+-            cx.notify();
+-        }));
+-
+         div()
+-            .id(element_id)
+-            .role(if notification.level == NotificationLevel::Error {
++            .id(("notification", id))
++            .role(if record.level == NotificationLevel::Error {
+                 gpui::Role::Alert
+             } else {
+                 gpui::Role::Status
+             })
+             .relative()
+             .flex()
+-            .flex_col()
++            .items_start()
++            .gap_2()
+             .w_full()
+-            .when(fill_slot, |card| card.h_full())
+-            .rounded_lg()
+-            .overflow_hidden()
++            .min_w_0()
++            .px_3()
++            .py_2()
++            .rounded(px(tokens::radius::OVERLAY))
+             .border_1()
+             .border_color(theme::border())
+-            .bg(theme::panel())
++            .bg(theme::surface())
+             .shadow(theme::shadow_hover())
+-            .child(self.measure_height(id))
+             .child(
+                 div()
+                     .flex()
+-                    .flex_row()
+-                    .items_start()
++                    .items_center()
++                    .h(px(24.))
++                    .flex_none()
++                    .child(icon(icon_name, accent, 16.)),
++            )
++            .child(
++                div()
++                    .flex()
++                    .flex_col()
++                    .flex_1()
++                    .min_w_0()
++                    .gap(px(2.))
++                    .child(
++                        div()
++                            .text_role(TextRole::Body)
++                            .text_color(theme::text())
++                            .line_clamp(2)
++                            .child(record.title),
++                    )
++                    .when_some(record.summary, |column, summary| {
++                        column.child(
++                            div()
++                                .text_role(TextRole::Caption)
++                                .text_color(theme::subtext())
++                                .truncate()
++                                .child(short_preview(&summary, SUMMARY_LIMIT)),
++                        )
++                    }),
++            )
++            .child(
++                components::button(
++                    ("notification-details", id),
++                    t(k::NOTIFICATIONS_DETAILS),
++                    ButtonTone::Ghost,
++                    ButtonSize::Sm,
++                )
++                .on_click(cx.listener(move |this, _, _, cx| this.show_details(id, cx))),
++            )
++            .child(
++                components::icon_only_button_tone(
++                    ("notification-close", id),
++                    t(k::NOTIFICATIONS_DISMISS),
++                    IconName::Close,
++                    ButtonTone::Ghost,
++                    ButtonSize::Sm,
++                )
++                .on_click(cx.listener(move |this, _, _, cx| {
++                    this.dismiss(id);
++                    cx.notify();
++                })),
++            )
++            .with_animation(("notification-entry", id), entry, |card, delta| {
++                card.opacity(delta).left(px((1. - delta) * 6.))
++            })
++    }
++
++    fn render_center(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
++        let selected = self
++            .selected
++            .and_then(|id| self.history.iter().find(|record| record.id == id))
++            .cloned();
++        let mut body = div().flex().flex_col().gap_2().min_w_0();
++        let mut detail_actions = None;
++        if let Some(record) = selected {
++            let copy = record.full_text.clone();
++            detail_actions = Some(
++                div()
++                    .flex()
++                    .items_center()
++                    .justify_between()
+                     .gap_2()
+-                    .min_h_0()
+-                    .px_3()
+-                    .py(px(10.))
+-                    .opacity(content_opacity)
++                    .px_4()
++                    .py_2()
++                    .flex_none()
++                    .child(
++                        components::button(
++                            "notification-back",
++                            t(k::NOTIFICATIONS_BACK),
++                            ButtonTone::Ghost,
++                            ButtonSize::Sm,
++                        )
++                        .on_click(cx.listener(|this, _, _, cx| {
++                            this.selected = None;
++                            this.center_refocus = true;
++                            this.center_scroll.set_offset(gpui::point(px(0.), px(0.)));
++                            cx.notify();
++                        })),
++                    )
++                    .child(
++                        components::button(
++                            "notification-copy",
++                            t(k::NOTIFICATIONS_COPY),
++                            ButtonTone::Neutral,
++                            ButtonSize::Sm,
++                        )
++                        .debug_selector(|| "notification-copy".into())
++                        .on_click(move |_, _, cx| {
++                            cx.write_to_clipboard(ClipboardItem::new_string(copy.to_string()))
++                        }),
++                    ),
++            );
++            body = body
++                .child(
++                    div()
++                        .text_role(TextRole::SectionTitle)
++                        .text_color(theme::text())
++                        .child(record.title),
++                )
++                .child(
++                    div()
++                        .text_role(TextRole::Caption)
++                        .text_color(theme::subtext())
++                        .child(components::format_local_timestamp(record.updated_at, true)),
++                )
++                .when_some(record.source, |body, source| {
++                    body.child(
++                        div()
++                            .text_role(TextRole::Caption)
++                            .text_color(theme::subtext())
++                            .child(source),
++                    )
++                })
++                .when_some(record.summary, |body, summary| {
++                    body.child(
++                        div()
++                            .text_role(TextRole::Body)
++                            .text_color(theme::text())
++                            .whitespace_normal()
++                            .child(summary),
++                    )
++                })
++                .when_some(record.details, |body, details| {
++                    body.child(
++                        div()
++                            .text_role(TextRole::Body)
++                            .text_color(theme::subtext())
++                            .whitespace_normal()
++                            .child(details),
++                    )
++                });
++        } else if self.history.is_empty() {
++            body = body.child(
++                div()
++                    .py_8()
++                    .text_role(TextRole::Body)
++                    .text_color(theme::subtext())
++                    .child(t(k::NOTIFICATIONS_EMPTY)),
++            );
++        } else {
++            for record in self.history.iter().cloned() {
++                let id = record.id;
++                let (accent, icon_name) = record.level.accent_icon();
++                let count = (record.occurrences > 1).then(|| format!("×{}", record.occurrences));
++                body = body.child(
++                    keyboard::interactive(div().id(("notification-record", id)))
++                        .role(gpui::Role::Button)
++                        .aria_label(record.title.clone())
++                        .flex()
++                        .flex_col()
++                        .flex_none()
++                        .min_w_0()
++                        .gap_1()
++                        .p_3()
++                        .rounded(px(tokens::radius::PANEL))
++                        .cursor_pointer()
++                        .bg(if record.read {
++                            theme::surface()
++                        } else {
++                            theme::panel()
++                        })
++                        .hover(|style| style.bg(theme::surface_hover()))
++                        .child(
++                            div()
++                                .flex()
++                                .items_start()
++                                .min_w_0()
++                                .gap_2()
++                                .child(icon(icon_name, accent, 14.).flex_none())
++                                .child(
++                                    div()
++                                        .flex_1()
++                                        .min_w_0()
++                                        .text_role(TextRole::Body)
++                                        .text_color(theme::text())
++                                        .line_clamp(2)
++                                        .child(record.title),
++                                )
++                                .when(!record.read, |row| {
++                                    row.child(components::status_dot_sized(theme::accent(), 5.))
++                                })
++                                .when_some(count, |row, count| {
++                                    row.child(
++                                        div()
++                                            .text_role(TextRole::Caption)
++                                            .text_color(theme::subtext())
++                                            .child(count),
++                                    )
++                                }),
++                        )
++                        .when_some(record.summary, |row, summary| {
++                            row.child(
++                                div()
++                                    .text_role(TextRole::Caption)
++                                    .text_color(theme::subtext())
++                                    .line_clamp(2)
++                                    .child(summary),
++                            )
++                        })
++                        .when_some(record.source, |row, source| {
++                            row.child(
++                                div()
++                                    .text_role(TextRole::Caption)
++                                    .text_color(theme::subtext())
++                                    .truncate()
++                                    .child(source),
++                            )
++                        })
++                        .child(
++                            div()
++                                .text_role(TextRole::Caption)
++                                .text_color(theme::subtext())
++                                .child(components::format_local_timestamp(record.updated_at, true)),
++                        )
++                        .on_click(cx.listener(move |this, _, _, cx| this.show_details(id, cx))),
++                );
++            }
++        }
++        let max_height = (f32::from(window.viewport_size().height) - 80.).max(0.);
++        let card = modal::card(window, px(400.))
++            .id("notification-center-card")
++            .debug_selector(|| "notification-center-card".into())
++            .h(px(max_height))
++            .max_h(px(max_height))
++            .rounded(px(tokens::radius::OVERLAY))
++            .child(
++                div()
++                    .id("notification-center-header")
++                    .debug_selector(|| "notification-center-header".into())
++                    .flex()
++                    .items_center()
++                    .justify_between()
++                    .gap_2()
++                    .px_4()
++                    .py_3()
++                    .flex_none()
++                    .border_b_1()
++                    .border_color(theme::border())
+                     .child(
+                         div()
+                             .flex()
+-                            .items_center()
+-                            .justify_center()
+-                            .w(px(16.))
+-                            .h(px(24.))
+-                            .flex_none()
+-                            .child(icon(icon_name, accent, 16.)),
++                            .flex_col()
++                            .min_w_0()
++                            .gap_1()
++                            .child(
++                                div()
++                                    .text_role(TextRole::SectionTitle)
++                                    .text_color(theme::text())
++                                    .child(t(k::NOTIFICATIONS_CENTER)),
++                            )
++                            .child(
++                                div()
++                                    .text_role(TextRole::Caption)
++                                    .text_color(theme::subtext())
++                                    .child(t(k::NOTIFICATIONS_SESSION)),
++                            ),
+                     )
+                     .child(
+-                        div()
+-                            .id(("notification-text", id))
+-                            .flex()
+-                            .flex_col()
+-                            .gap(px(3.))
+-                            .flex_1()
+-                            .min_w_0()
+-                            .max_h(px(max_content_height))
+-                            .overflow_y_scroll()
+-                            .whitespace_normal()
+-                            .child(
+-                                div()
+-                                    .text_color(theme::text())
+-                                    .text_sm()
+-                                    .font_weight(FontWeight::NORMAL)
+-                                    .line_height(px(20.))
+-                                    .child(notification.title),
+-                            )
+-                            .when_some(notification.message, |column, message| {
+-                                column.child(
+-                                    div()
+-                                        .text_color(theme::subtext())
+-                                        .text_size(px(13.))
+-                                        .line_height(px(18.))
+-                                        .child(message),
+-                                )
+-                            })
+-                            .when_some(notification.source, |column, source| {
+-                                column.child(
+-                                    div()
+-                                        .text_color(theme::muted())
+-                                        .text_xs()
+-                                        .line_height(px(16.))
+-                                        .child(source),
+-                                )
+-                            }),
++                        components::icon_only_button_tone(
++                            "notification-center-close",
++                            t(k::NOTIFICATIONS_DISMISS),
++                            IconName::Close,
++                            ButtonTone::Ghost,
++                            ButtonSize::Md,
++                        )
++                        .track_focus(
++                            self.center_close_focus
++                                .as_ref()
++                                .expect("center close focus initialized"),
++                        )
++                        .on_click(cx.listener(|this, _, _, cx| this.close_center(cx))),
++                    ),
++            )
++            .when_some(detail_actions, |card, actions| card.child(actions))
++            .child(
++                modal::body("notification-center-scroll")
++                    .flex_1()
++                    .track_scroll(&self.center_scroll)
++                    .child(body),
++            )
++            .child(
++                div()
++                    .id("notification-center-footer")
++                    .debug_selector(|| "notification-center-footer".into())
++                    .flex()
++                    .items_center()
++                    .justify_between()
++                    .gap_2()
++                    .px_4()
++                    .py_3()
++                    .flex_none()
++                    .border_t_1()
++                    .border_color(theme::border())
++                    .child(
++                        components::button(
++                            "notifications-read",
++                            t(k::NOTIFICATIONS_MARK_READ),
++                            ButtonTone::Ghost,
++                            ButtonSize::Sm,
++                        )
++                        .on_click(cx.listener(|this, _, _, cx| this.mark_all_read(cx))),
+                     )
+                     .child(
+-                        div()
+-                            .flex()
+-                            .flex_row()
+-                            .items_center()
+-                            .flex_none()
+-                            .child(copy)
+-                            .child(close),
++                        components::button(
++                            "notifications-clear",
++                            t(k::NOTIFICATIONS_CLEAR_READ),
++                            ButtonTone::Ghost,
++                            ButtonSize::Sm,
++                        )
++                        .on_click(cx.listener(|this, _, _, cx| this.clear_read(cx))),
+                     ),
+-            )
+-            .with_animation(("notification-entry", id), entry, |card, delta| {
+-                card.opacity(delta)
+-                    .left(px((1. - delta) * TOAST_ENTRY_SLIDE))
+-            })
++            );
++        let scroll = self.center_scroll.clone();
++        modal::overlay(
++            "notification-center",
++            t(k::NOTIFICATIONS_CENTER),
++            self.center_focus
++                .as_ref()
++                .expect("center focus initialized"),
++            card,
++        )
++        .items_start()
++        .justify_end()
++        .pt(px(64.))
++        .pb_4()
++        .bg(theme::scrim().alpha(if theme::is_dark() { 0.2 } else { 0.08 }))
++        .on_action(cx.listener(|this, _: &modal::Dismiss, _, cx| this.close_center(cx)))
++        .on_key_down(move |event, window, cx| {
++            let delta = match event.keystroke.key.as_str() {
++                "pageup" => Some(240.),
++                "pagedown" => Some(-240.),
++                "home" => Some(f32::MAX),
++                "end" => Some(-f32::MAX),
++                _ => None,
++            };
++            if let Some(delta) = delta {
++                let current = f32::from(scroll.offset().y);
++                let max = f32::from(scroll.max_offset().y);
++                scroll.set_offset(gpui::point(px(0.), px((current + delta).clamp(-max, 0.))));
++                window.refresh();
++                cx.stop_propagation();
++            }
++        })
+     }
+ }
+ 
+@@ -656,19 +943,13 @@
+     }
+ }
+ 
+-/// A child view with legacy status state that is forwarded into the single
+-/// app-level toast host. Taking the value prevents an inline banner and avoids
+-/// emitting the same state again on unrelated redraws.
+ pub trait ToastSource {
+     fn take_toast(&mut self) -> Option<SharedString>;
+-    /// Explicit level for the toast just taken. Default `None` keeps keyword
+-    /// inference; views with blocking/refusal toasts should set it explicitly.
+     fn take_toast_level(&mut self) -> Option<NotificationLevel> {
+         None
+     }
+ }
+ 
+-/// Wires a view's `status` / `status_level` pair into the toast host.
+ #[macro_export]
+ macro_rules! impl_status_toasts_leveled {
+     ($view:ty) => {
+@@ -682,388 +963,321 @@
+         }
+     };
+ }
+-
+ pub use crate::impl_status_toasts_leveled;
+ 
+ impl Render for NotificationHost {
+     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+         if self.focus_scope.is_none() {
+             let scope = cx.focus_handle().tab_stop(false);
+-            cx.on_focus_in(&scope, window, |this, _window, cx| {
+-                this.set_focused(true, cx)
+-            })
+-            .detach();
+-            cx.on_focus_out(&scope, window, |this, _event, _window, cx| {
+-                this.set_focused(false, cx)
+-            })
+-            .detach();
++            cx.on_focus_in(&scope, window, |this, _, cx| this.set_focused(true, cx))
++                .detach();
++            cx.on_focus_out(&scope, window, |this, _, _, cx| this.set_focused(false, cx))
++                .detach();
+             self.focus_scope = Some(scope);
+         }
+-        let viewport = window.viewport_size();
+-        let width = toast_width(viewport.width.into());
+-        let content_height = toast_content_height(viewport.height.into(), self.visible.len());
+-        let layout = (width.to_bits(), content_height.to_bits());
+-        if self.measured_layout != Some(layout) {
+-            self.heights.borrow_mut().clear();
+-            self.measured_layout = Some(layout);
+-        }
+-        let notifications = self.visible.iter().cloned().collect::<Vec<_>>();
+-        let is_stack = notifications.len() > 1;
+-        let reduce_motion = cx.reduce_motion();
+-        let now = Instant::now();
+-
+-        self.stack.retarget(
+-            if is_stack && self.interacting() {
+-                1.
+-            } else {
+-                0.
+-            },
+-            now,
+-            reduce_motion,
+-        );
+-        if self.stack.is_animating(now, reduce_motion) {
+-            window.request_animation_frame();
+-        }
+-        let progress = self.stack.value(now, reduce_motion);
+-
+-        let host = div()
++        if self.center_focus.is_none() {
++            self.center_focus = Some(modal::ModalFocusState::new(cx));
++        }
++        if self.center_close_focus.is_none() {
++            self.center_close_focus = Some(cx.focus_handle().tab_stop(true));
++        }
++        self.center_focus
++            .as_mut()
++            .expect("center focus initialized")
++            .sync(self.center_open, None, window, cx);
++        if self.center_open && std::mem::take(&mut self.center_refocus) {
++            self.center_close_focus
++                .as_ref()
++                .expect("center close focus initialized")
++                .focus(window, cx);
++        }
++        let root = div().absolute().inset_0();
++        if self.center_open {
++            return root.child(self.render_center(window, cx));
++        }
++        let mut toasts = div()
+             .id("notification-host")
++            .debug_selector(|| "notification-host".into())
++            // Block clicks behind the stack while keeping its own hover scope
++            // and allowing page scroll beneath the transient notification.
++            .block_mouse_except_scroll()
+             .absolute()
++            .right(px(TOAST_MARGIN))
+             .track_focus(self.focus_scope.as_ref().expect("focus initialized"))
+-            .top(px(TOAST_TOP))
+-            .right(px(TOAST_MARGIN))
+-            .w(px(width))
+-            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+-                this.set_hovered(*hovered, cx);
+-            }));
+-
+-        // A lone toast never needs positioning arithmetic, and plain flow is
+-        // also what gives a brand new toast the unconstrained layout its
+-        // measurement depends on.
+-        if !is_stack {
+-            return host.flex().flex_col().gap(px(TOAST_GAP)).children(
+-                notifications.into_iter().map(|notification| {
+-                    self.render_notification(notification, 1., false, content_height, cx)
+-                }),
+-            );
+-        }
+-
+-        // A toast joining an existing stack has not been measured yet. It is
+-        // laid out at its natural height for this one frame — its slot still
+-        // reserves an estimate, so the deck around it holds its shape instead
+-        // of springing open and snapping back while the newcomer is sized.
+-        let measured = self.heights.borrow().clone();
+-        let heights = notifications
+-            .iter()
+-            .map(|notification| {
+-                measured
+-                    .get(&notification.id)
+-                    .copied()
+-                    .unwrap_or(ASSUMED_TOAST_HEIGHT)
+-            })
+-            .collect::<Vec<f32>>();
+-
+-        // Keep the host itself absolute. Calling `relative()` on `host` here
+-        // overrides that positioning mode in GPUI, which makes a multi-toast
+-        // stack participate in AppRoot's column layout and steal an equally
+-        // tall strip from the bottom of the window. The inner canvas owns the
+-        // relative coordinate space needed by the absolutely positioned cards.
+-        let mut stack = div()
+-            .relative()
+-            .w_full()
+-            .h(px(stack_height(&heights, progress)));
+-        let slots = stack_layout(&heights, progress);
+-        // Back to front: the newest toast is painted last so it fronts the deck.
+-        for (notification, slot) in notifications.into_iter().zip(slots).rev() {
+-            // Stretching an unmeasured toast to its slot would have the canvas
+-            // record the height the deck imposed rather than the one its
+-            // content wants, and the estimate would then be self-fulfilling.
+-            let fill_slot = measured.contains_key(&notification.id);
+-            stack = stack.child(
+-                div()
+-                    .absolute()
+-                    .top(px(slot.top))
+-                    .left(px(slot.inset))
+-                    .right(px(slot.inset))
+-                    .h(px(slot.height))
+-                    .child(self.render_notification(
+-                        notification,
+-                        slot.content_opacity,
+-                        fill_slot,
+-                        content_height,
+-                        cx,
+-                    )),
+-            );
+-        }
+-        host.child(stack)
++            .w(px(toast_width(window.viewport_size().width.into())))
++            .flex()
++            .flex_col()
++            .gap_2()
++            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.set_hovered(*hovered, cx)));
++        toasts = match self.anchor {
++            ToastAnchor::TopRight { inset } => toasts.top(px(inset.max(TOAST_MARGIN))),
++            ToastAnchor::BottomRight { inset } => toasts.bottom(px(inset.max(TOAST_MARGIN))),
++        };
++        root.child(
++            toasts.children(
++                self.visible
++                    .iter()
++                    .cloned()
++                    .map(|record| self.render_toast(record, cx)),
++            ),
++        )
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+-    use std::time::{Duration, Instant};
+-
+-    use super::{
+-        DEFAULT_TIMEOUT, ERROR_TIMEOUT, MAX_VISIBLE, Notification, NotificationLevel,
+-        STACK_LAYER_INSET, STACK_LAYER_OFFSET, TOAST_CHROME_HEIGHT, TOAST_GAP,
+-        auto_dismiss_timeout, stack_height, stack_layout, toast_content_height, toast_width,
+-    };
+-
+-    fn running_toast(timeout: Duration, started_at: Instant) -> Notification {
+-        Notification {
+-            id: 1,
+-            level: NotificationLevel::Info,
+-            title: "t".into(),
+-            message: None,
+-            source: None,
+-            auto_dismiss_after: Some(timeout),
+-            remaining: Some(timeout),
+-            countdown_started_at: Some(started_at),
+-            timer_epoch: 0,
+-        }
++    use super::*;
++
++    #[gpui::test]
++    fn toast_stack_blocks_clicks_behind_it_without_losing_hover_pause(
++        cx: &mut gpui::TestAppContext,
++    ) {
++        struct Probe {
++            host: gpui::Entity<NotificationHost>,
++            background_clicks: usize,
++        }
++        impl Render for Probe {
++            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++                div()
++                    .relative()
++                    .size_full()
++                    .child(
++                        div()
++                            .id("background-action")
++                            .absolute()
++                            .inset_0()
++                            .on_click(cx.listener(|this, _, _, _| {
++                                this.background_clicks += 1;
++                            })),
++                    )
++                    .child(self.host.clone())
++            }
++        }
++        let (probe, cx) = cx.add_window_view(|_, cx| Probe {
++            host: cx.new(|cx| {
++                let mut host = NotificationHost::new();
++                host.info("Saved", cx);
++                host
++            }),
++            background_clicks: 0,
++        });
++        cx.update(|window, _| window.activate_window());
++        let bounds = cx.debug_bounds("notification-host").unwrap();
++        let position = gpui::point(bounds.left() + px(30.), bounds.top() + px(12.));
++        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
++        cx.simulate_click(position, gpui::Modifiers::default());
++        probe.read_with(cx, |probe, cx| {
++            assert_eq!(probe.background_clicks, 0);
++            let host = probe.host.read(cx);
++            assert!(host.hovered);
++            assert!(host.visible[0].countdown_started_at.is_none());
++        });
++        let host = probe.read_with(cx, |probe, _| probe.host.clone());
++        host.update(cx, |host, cx| {
++            host.clear();
++            cx.notify();
++        });
++        cx.simulate_click(position, gpui::Modifiers::default());
++        probe.read_with(cx, |probe, _| assert_eq!(probe.background_clicks, 1));
+     }
+ 
+     #[test]
+-    fn holding_folds_served_time_into_the_remaining_debt() {
++    fn long_legacy_error_is_preserved_outside_the_short_preview() {
++        let text = format!("/private/config/{}: cannot write", "long-path-".repeat(30));
++        let record = request_record(
++            NotificationRequest::new(NotificationLevel::Error, text.clone()),
++            1,
++            false,
++        );
++        assert!(record.title.chars().count() < LEGACY_TITLE_LIMIT);
++        assert_eq!(record.details(), Some(text.as_str()));
++        assert_eq!(record.full_text(), text);
++        assert_eq!(toast_width(300.), 268.);
++    }
++
++    #[test]
++    fn holding_then_resuming_deducts_only_elapsed_running_time() {
+         let start = Instant::now();
+-        let mut toast = running_toast(Duration::from_secs(3), start);
+-
++        let mut toast = request_record(
++            NotificationRequest::new(NotificationLevel::Info, "Saved")
++                .timeout(Duration::from_secs(3)),
++            1,
++            false,
++        );
++        toast.countdown_started_at = Some(start);
+         toast.hold(start + Duration::from_secs(1));
+-
++        toast.hold(start + Duration::from_secs(30));
+         assert_eq!(toast.remaining, Some(Duration::from_secs(2)));
+         assert_eq!(
+-            toast.countdown_started_at, None,
+-            "a held toast has no clock"
++            toast.resume(start + Duration::from_secs(60)),
++            Some(Duration::from_secs(2))
+         );
+     }
+ 
+-    #[test]
+-    fn holding_twice_does_not_double_charge_the_countdown() {
+-        let start = Instant::now();
+-        let mut toast = running_toast(Duration::from_secs(3), start);
+-
+-        toast.hold(start + Duration::from_secs(1));
+-        toast.hold(start + Duration::from_secs(9));
+-
+-        assert_eq!(toast.remaining, Some(Duration::from_secs(2)));
+-    }
+-
+-    #[test]
+-    fn resuming_restarts_the_clock_and_owes_only_what_is_left() {
+-        let start = Instant::now();
+-        let mut toast = running_toast(Duration::from_secs(3), start);
+-        toast.hold(start + Duration::from_secs(1));
+-
+-        let resumed_at = start + Duration::from_secs(60);
+-        let owed = toast.resume(resumed_at);
+-
+-        assert_eq!(owed, Some(Duration::from_secs(2)));
+-        assert_eq!(
+-            toast.countdown_started_at,
+-            Some(resumed_at),
+-            "the hovered stretch must not count against the toast"
+-        );
+-    }
+-
+-    #[test]
+-    fn a_toast_held_past_its_timeout_is_due_immediately_on_resume() {
+-        let start = Instant::now();
+-        let mut toast = running_toast(Duration::from_secs(3), start);
+-
+-        toast.hold(start + Duration::from_secs(5));
+-
+-        assert_eq!(toast.remaining, Some(Duration::ZERO));
+-        assert_eq!(
+-            toast.resume(start + Duration::from_secs(6)),
+-            None,
+-            "nothing left to serve means dismiss rather than restart"
+-        );
+-    }
+-
+-    #[test]
+-    fn a_collapsed_deck_fans_cards_by_a_fixed_step() {
+-        let slots = stack_layout(&[100., 60., 140.], 0.);
+-
+-        for (depth, slot) in slots.iter().enumerate() {
+-            assert_eq!(slot.top, depth as f32 * STACK_LAYER_OFFSET);
+-            assert_eq!(slot.inset, depth as f32 * STACK_LAYER_INSET);
+-            assert_eq!(
+-                slot.height, 100.,
+-                "the deck squeezes every card to the front card so its lower edge stays even"
++    #[gpui::test]
++    fn keys_coalesce_only_the_same_operation_and_dismiss_preserves_history(
++        cx: &mut gpui::TestAppContext,
++    ) {
++        let host = cx.new(|_| NotificationHost::new());
++        host.update(cx, |host, cx| {
++            let first = host.notify(
++                NotificationRequest::new(NotificationLevel::Info, "Checking").key("local:check"),
++                cx,
+             );
+-        }
+-        assert_eq!(slots[0].content_opacity, 1.);
+-        assert_eq!(
+-            (slots[1].content_opacity, slots[2].content_opacity),
+-            (0., 0.),
+-            "cards behind the front one read as bare plates"
+-        );
+-    }
+-
+-    #[test]
+-    fn an_open_stack_queues_cards_at_their_own_height() {
+-        let slots = stack_layout(&[100., 60., 140.], 1.);
+-
+-        assert_eq!(slots[0].top, 0.);
+-        assert_eq!(slots[1].top, 100. + TOAST_GAP);
+-        assert_eq!(slots[2].top, 100. + TOAST_GAP + 60. + TOAST_GAP);
+-        assert_eq!(
+-            slots.iter().map(|slot| slot.height).collect::<Vec<_>>(),
+-            vec![100., 60., 140.]
+-        );
+-        for slot in &slots {
+-            assert_eq!(slot.inset, 0., "an open stack is a flush column");
+-            assert_eq!(slot.content_opacity, 1.);
+-        }
+-    }
+-
+-    #[test]
+-    fn the_transition_stays_between_its_two_end_states() {
+-        let heights = [100., 60., 140.];
+-        let collapsed = stack_layout(&heights, 0.);
+-        let open = stack_layout(&heights, 1.);
+-        let midway = stack_layout(&heights, 0.5);
+-
+-        for depth in 0..heights.len() {
+-            let (from, to, at) = (collapsed[depth], open[depth], midway[depth]);
++            let second = host.notify(
++                NotificationRequest::new(NotificationLevel::Success, "Checked").key("local:check"),
++                cx,
++            );
++            assert_eq!(first, second);
++            assert_eq!(host.history.len(), 1);
++            assert_eq!(host.history[0].occurrences, 2);
++            host.set_hovered(true, cx);
++            host.set_hovered(false, cx);
++            let resumed_epoch = host.visible[0].timer_epoch;
++            host.notify(
++                NotificationRequest::new(NotificationLevel::Success, "Updated").key("local:check"),
++                cx,
++            );
+             assert!(
+-                at.top >= from.top && at.top <= to.top,
+-                "card {depth} left the span between its two resting places"
++                host.visible[0].timer_epoch > resumed_epoch,
++                "an earlier resumed timer must never match a replacement preview"
+             );
+-            assert!(at.inset <= from.inset && at.inset >= to.inset);
+-        }
+-    }
+-
+-    #[test]
+-    fn the_host_reserves_only_what_it_draws() {
+-        let heights = [100., 60., 140.];
+-
+-        assert_eq!(
+-            stack_height(&heights, 0.),
+-            100. + 2. * STACK_LAYER_OFFSET,
+-            "collapsed, the deck is the front card plus the fanned edges"
+-        );
+-        assert_eq!(
+-            stack_height(&heights, 1.),
+-            100. + TOAST_GAP + 60. + TOAST_GAP + 140.
+-        );
+-        assert!(
+-            stack_height(&heights, 0.) < stack_height(&heights, 1.),
+-            "a collapsed deck must not claim the open stack's hover area"
+-        );
+-    }
+-
+-    #[test]
+-    fn a_lone_toast_needs_no_deck_arithmetic() {
+-        let slots = stack_layout(&[120.], 0.);
+-
+-        assert_eq!(slots.len(), 1);
+-        assert_eq!((slots[0].top, slots[0].inset), (0., 0.));
+-        assert_eq!(slots[0].height, 120.);
+-        assert_eq!(stack_height(&[120.], 0.), 120.);
+-    }
+-
+-    #[test]
+-    fn an_empty_stack_has_no_layout() {
+-        assert!(stack_layout(&[], 0.).is_empty());
+-        assert_eq!(stack_height(&[], 0.), 0.);
+-    }
+-
+-    #[test]
+-    fn invalidating_the_timer_orphans_the_in_flight_dismissal() {
+-        let start = Instant::now();
+-        let mut toast = running_toast(Duration::from_secs(3), start);
+-        let scheduled_epoch = toast.timer_epoch;
+-
+-        let live_epoch = toast.invalidate_timer();
+-
+-        assert_ne!(
+-            scheduled_epoch, live_epoch,
+-            "the epoch a pending dismiss captured must no longer match"
+-        );
+-    }
+-
+-    #[test]
+-    fn resolves_auto_dismiss_duration() {
+-        assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(3));
+-        assert_eq!(ERROR_TIMEOUT, Duration::from_secs(5));
+-        assert_eq!(MAX_VISIBLE, 3);
+-        assert_eq!(
+-            auto_dismiss_timeout(NotificationLevel::Info, false, None),
+-            Some(DEFAULT_TIMEOUT)
+-        );
+-        assert_eq!(
+-            auto_dismiss_timeout(NotificationLevel::Error, false, None),
+-            Some(ERROR_TIMEOUT)
+-        );
+-        assert_eq!(
+-            auto_dismiss_timeout(
+-                NotificationLevel::Success,
+-                false,
+-                Some(Duration::from_millis(750))
+-            ),
+-            Some(Duration::from_millis(750))
+-        );
+-        assert_eq!(
+-            auto_dismiss_timeout(
+-                NotificationLevel::Warning,
+-                true,
+-                Some(Duration::from_secs(1))
+-            ),
+-            None
+-        );
+-    }
+-
+-    #[test]
+-    fn toast_bounds_fit_narrow_windows_and_full_stacks() {
+-        assert_eq!(toast_width(960.), 350.);
+-        assert_eq!(toast_width(300.), 268.);
+-        assert_eq!(toast_width(20.), 0.);
+-        for height in [400., 640., 900.] {
+-            let content = toast_content_height(height, 3);
+-            assert!(content <= 144.);
+-            assert!(3. * (content + TOAST_CHROME_HEIGHT) + 2. * TOAST_GAP + 56. + 16. <= height);
+-        }
++            host.notify(
++                NotificationRequest::new(NotificationLevel::Success, "Checked").key("remote:check"),
++                cx,
++            );
++            assert_eq!(host.history.len(), 2);
++            host.dismiss(first);
++            assert_eq!(host.history.len(), 2);
++            assert_eq!(host.unread_count(), 2);
++            host.show_details(first, cx);
++            assert!(host.is_center_open());
++            assert_eq!(host.unread_count(), 1);
++            host.clear_read(cx);
++            assert_eq!(host.history.len(), 1);
++            assert_eq!(host.selected, None);
++        });
+     }
+ 
+     #[gpui::test]
+-    fn keyboard_actions_pause_expiry_copy_full_text_and_dismiss(cx: &mut gpui::TestAppContext) {
+-        use super::{NotificationHost, NotificationRequest};
++    fn keyboard_opens_detail_copies_full_error_and_closes_with_escape(
++        cx: &mut gpui::TestAppContext,
++    ) {
+         use gpui::{KeyUpEvent, Keystroke};
+-
+         cx.update(crate::keyboard::bind_keys);
++        cx.update(crate::modal::bind_keys);
+         let (host, cx) = cx.add_window_view(|_, cx| {
+             let mut host = NotificationHost::new();
+-            host.notify(
+-                NotificationRequest::new(NotificationLevel::Info, "Saved")
+-                    .message("Full diagnostic detail"),
+-                cx,
+-            );
++            host.error("Could not apply", "Full diagnostic detail", cx);
+             host
+         });
+         cx.update(|window, _| window.activate_window());
+-        cx.simulate_keystrokes("tab");
++        let press = |cx: &mut gpui::VisualTestContext, keys: &str| {
++            for key in keys.split_whitespace() {
++                cx.simulate_keystrokes(key);
++                cx.simulate_event(KeyUpEvent {
++                    keystroke: Keystroke::parse(key).unwrap(),
++                });
++            }
++        };
++        press(cx, "tab");
+         host.read_with(cx, |host, _| {
+-            assert!(
+-                host.focused,
+-                "notification actions must pause expiry while focused"
+-            );
++            assert!(host.focused);
+             assert!(host.visible[0].countdown_started_at.is_none());
+         });
+-        cx.simulate_keystrokes("enter");
+-        cx.simulate_event(KeyUpEvent {
+-            keystroke: Keystroke::parse("enter").unwrap(),
++        press(cx, "enter");
++        host.read_with(cx, |host, _| {
++            assert!(host.is_center_open());
++            assert_eq!(host.unread_count(), 0);
+         });
++        // Close, back, copy: the center starts at its fixed close button.
++        press(cx, "tab tab enter");
+         cx.update(|_, cx| {
+             assert_eq!(
+                 cx.read_from_clipboard().and_then(|item| item.text()),
+-                Some("Saved\nFull diagnostic detail".into())
++                Some("Could not apply\nFull diagnostic detail".into())
++            )
++        });
++        press(cx, "escape");
++        host.read_with(cx, |host, _| assert!(!host.is_center_open()));
++    }
++
++    #[gpui::test]
++    fn long_details_scroll_while_copy_and_close_remain_inside_small_windows(
++        cx: &mut gpui::TestAppContext,
++    ) {
++        cx.update(crate::keyboard::bind_keys);
++        cx.update(crate::modal::bind_keys);
++        let (host, cx) = cx.add_window_view(|_, cx| {
++            let mut host = NotificationHost::new();
++            let id = host.error("配置未写入 · 設定を書き込めません", "x".repeat(6000), cx);
++            host.show_details(id, cx);
++            host
++        });
++        cx.update(|window, _| window.activate_window());
++        for (width, height) in [(960., 640.), (420., 400.)] {
++            cx.simulate_resize(gpui::size(px(width), px(height)));
++            host.update(cx, |_, cx| cx.notify());
++            cx.run_until_parked();
++            let card = cx.debug_bounds("notification-center-card").unwrap();
++            let copy = cx.debug_bounds("notification-copy").unwrap();
++            let header = cx.debug_bounds("notification-center-header").unwrap();
++            let footer = cx.debug_bounds("notification-center-footer").unwrap();
++            assert!(
++                card.left() >= px(16.) && card.right() <= px(width - 16.),
++                "{card:?}"
+             );
++            assert!(
++                header.top() >= px(64.) && footer.bottom() <= px(height - 16.),
++                "{header:?} / {footer:?}"
++            );
++            assert!(
++                copy.top() >= header.bottom() && copy.bottom() < footer.top(),
++                "{copy:?}"
++            );
++            host.read_with(cx, |host, _| {
++                assert!(host.center_scroll.max_offset().y > px(0.))
++            });
++            cx.simulate_keystrokes("pagedown");
++            host.read_with(cx, |host, _| {
++                assert!(host.center_scroll.offset().y < px(0.))
++            });
++        }
++    }
++
++    #[gpui::test]
++    fn detail_and_back_navigation_keep_focus_inside_the_center(cx: &mut gpui::TestAppContext) {
++        use gpui::{KeyUpEvent, Keystroke};
++        cx.update(crate::keyboard::bind_keys);
++        cx.update(crate::modal::bind_keys);
++        let (host, cx) = cx.add_window_view(|_, cx| {
++            let mut host = NotificationHost::new();
++            host.error("Not applied", "Details", cx);
++            host.open_center(cx);
++            host
+         });
+-        cx.simulate_keystrokes("tab space");
+-        cx.simulate_event(KeyUpEvent {
+-            keystroke: Keystroke::parse("space").unwrap(),
++        cx.update(|window, _| window.activate_window());
++        let press = |cx: &mut gpui::VisualTestContext, key: &str| {
++            cx.simulate_keystrokes(key);
++            cx.simulate_event(KeyUpEvent {
++                keystroke: Keystroke::parse(key).unwrap(),
++            });
++        };
++        press(cx, "tab");
++        press(cx, "enter");
++        cx.update(|window, cx| {
++            let host = host.read(cx);
++            assert!(host.selected.is_some());
++            assert!(host.center_close_focus.as_ref().unwrap().is_focused(window));
+         });
+-        host.read_with(cx, |host, _| assert!(host.visible.is_empty()));
+-    }
+-}
++        press(cx, "tab");
++        press(cx, "enter");
++        cx.update(|window, cx| {
++            let host = host.read(cx);
++            assert!(host.selected.is_none());
++            assert!(host.center_close_focus.as_ref().unwrap().is_focused(window));
++        });
++        press(cx, "escape");
++        host.read_with(cx, |host, _| assert!(!host.center_open));
++    }
++}
+--- /dev/null
++++ b/src/table.rs
+@@ -0,0 +1,163 @@
++//! A shared column contract for data tables. Header and body use the same
++//! specification; the owner chooses paging/virtualization and row actions.
++
++use gpui::{AnyElement, ElementId, SharedString, div, prelude::*, px};
++
++use crate::{
++    theme,
++    tokens::{self, ConsoleStyle, TextRole},
++};
++
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub enum ColumnWidth {
++    Fixed(f32),
++    Flex { minimum: f32, weight: f32 },
++}
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum Alignment {
++    #[default]
++    Start,
++    End,
++}
++
++#[derive(Clone, Debug)]
++pub struct Column {
++    pub label: SharedString,
++    pub width: ColumnWidth,
++    pub alignment: Alignment,
++}
++
++impl Column {
++    pub fn fixed(label: impl Into<SharedString>, width: f32) -> Self {
++        Self {
++            label: label.into(),
++            width: ColumnWidth::Fixed(width.max(0.)),
++            alignment: Alignment::Start,
++        }
++    }
++
++    pub fn flex(label: impl Into<SharedString>, minimum: f32, weight: f32) -> Self {
++        Self {
++            label: label.into(),
++            width: ColumnWidth::Flex {
++                minimum: minimum.max(0.),
++                weight: weight.max(0.01),
++            },
++            alignment: Alignment::Start,
++        }
++    }
++
++    pub fn align_end(mut self) -> Self {
++        self.alignment = Alignment::End;
++        self
++    }
++}
++
++pub fn minimum_width(columns: &[Column]) -> f32 {
++    columns
++        .iter()
++        .map(|column| match column.width {
++            ColumnWidth::Fixed(width) => width,
++            ColumnWidth::Flex { minimum, .. } => minimum,
++        })
++        .sum::<f32>()
++        + tokens::space::LG * 2.
++        + tokens::space::MD * columns.len().saturating_sub(1) as f32
++}
++
++/// Put the resulting table inside a horizontal scroll viewport when its
++/// containing pane is narrower than this minimum.
++pub fn frame(id: impl Into<ElementId>, columns: &[Column]) -> gpui::Stateful<gpui::Div> {
++    div()
++        .id(id)
++        .role(gpui::Role::Table)
++        .flex()
++        .flex_col()
++        .w_full()
++        .min_w(px(minimum_width(columns)))
++}
++
++fn cell(column: &Column) -> gpui::Div {
++    let base = div().flex().items_center().min_w_0().overflow_hidden();
++    let base = match column.width {
++        ColumnWidth::Fixed(width) => base.w(px(width)).flex_none(),
++        ColumnWidth::Flex { minimum, weight } => {
++            base.flex_basis(px(0.)).flex_grow(weight).min_w(px(minimum))
++        }
++    };
++    match column.alignment {
++        Alignment::Start => base,
++        Alignment::End => base.justify_end().text_align(gpui::TextAlign::Right),
++    }
++}
++
++fn row_frame(id: impl Into<ElementId>) -> gpui::Stateful<gpui::Div> {
++    div()
++        .id(id)
++        .role(gpui::Role::Row)
++        .flex()
++        .items_center()
++        .w_full()
++        .min_h(px(tokens::layout::ROW_HEIGHT))
++        .gap(px(tokens::space::MD))
++        .px_4()
++        .py_2()
++}
++
++pub fn header(id: impl Into<ElementId>, columns: &[Column]) -> gpui::Stateful<gpui::Div> {
++    row_frame(id)
++        .min_h(px(tokens::layout::COMPACT_ROW_HEIGHT))
++        .text_role(TextRole::Caption)
++        .text_color(theme::muted())
++        .border_b_1()
++        .border_color(theme::border())
++        .children(columns.iter().enumerate().map(|(index, column)| {
++            cell(column)
++                .id(index)
++                .role(gpui::Role::ColumnHeader)
++                .child(div().min_w_0().truncate().child(column.label.clone()))
++        }))
++}
++
++pub fn row(
++    id: impl Into<ElementId>,
++    columns: &[Column],
++    cells: Vec<AnyElement>,
++    last: bool,
++) -> gpui::Stateful<gpui::Div> {
++    debug_assert_eq!(
++        columns.len(),
++        cells.len(),
++        "table rows must share the header column contract"
++    );
++    row_frame(id)
++        .text_role(TextRole::Body)
++        .text_color(theme::text())
++        .when(!last, |row| row.border_b_1().border_color(theme::border()))
++        .children(
++            columns
++                .iter()
++                .zip(cells)
++                .enumerate()
++                .map(|(index, (column, child))| {
++                    cell(column).id(index).role(gpui::Role::Cell).child(child)
++                }),
++        )
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn column_minimum_includes_fixed_actions_and_gutters() {
++        let columns = [
++            Column::flex("Name", 180., 2.),
++            Column::flex("Endpoint", 200., 3.),
++            Column::fixed("Actions", 80.),
++        ];
++        assert_eq!(minimum_width(&columns), 516.);
++        assert_eq!(minimum_width(&[]), 32.);
++    }
++}
+--- a/src/text_input.rs
++++ b/src/text_input.rs
+@@ -2057,13 +2057,20 @@
+                 theme::border()
+             })
+             .text_color(theme::text())
+-            .text_sm()
+-            .line_height(px(20.))
++            .text_size(px(crate::tokens::TextRole::Control.metrics().0))
++            .line_height(px(crate::tokens::TextRole::Control.metrics().1))
+             .when(self.search_field || self.compact, |element| {
+-                element.px_2().py_1()
++                element.px_2().py(px(3.))
+             })
+             .when(!self.search_field && !self.compact, |element| {
+-                element.px_3().py_2()
++                element.px_3().py(px(5.))
++            })
++            .when(!self.multiline && !self.code, |element| {
++                element.h(px(if self.search_field || self.compact {
++                    crate::tokens::control::COMPACT
++                } else {
++                    crate::tokens::control::DEFAULT
++                }))
+             });
+         if self.code {
+             base.font_family(crate::assets::monospace_font_family())
+@@ -2500,6 +2507,27 @@
+     }
+ 
+     #[gpui::test]
++    fn console_input_sizes_keep_a_full_line_box_for_cjk_and_latin(cx: &mut TestAppContext) {
++        for compact in [false, true] {
++            let (input, window_cx) = cx.add_window_view(|_, cx| {
++                let input = TextInput::new(cx, "").with_content("中文输入 · 日本語 · Latin gjpq");
++                if compact { input.compact() } else { input }
++            });
++            window_cx.update(|window, _| window.activate_window());
++            input.read_with(window_cx, |input, _| {
++                let bounds = input.last_bounds.expect("text was laid out");
++                assert!(bounds.size.height >= px(20.), "{bounds:?}");
++                assert!(
++                    input
++                        .last_layout
++                        .as_ref()
++                        .is_some_and(|line| line.width > px(0.))
++                );
++            });
++        }
++    }
++
++    #[gpui::test]
+     fn clipboard_and_history_shortcuts_reach_a_focused_masked_input(cx: &mut TestAppContext) {
+         cx.update(bind_keys);
+         let (input, cx) = cx.add_window_view(|window, cx| {
+--- /dev/null
++++ b/src/tokens.rs
+@@ -0,0 +1,71 @@
++//! Geometry and typography for the desktop console.
++//!
++//! Colors remain in [`crate::theme`] so existing user themes keep working.
++//! These are logical pixels: platform scale factors are applied by GPUI.
++
++use gpui::{FontWeight, Styled, px};
++
++pub mod space {
++    pub const XS: f32 = 4.;
++    pub const SM: f32 = 8.;
++    pub const MD: f32 = 12.;
++    pub const LG: f32 = 16.;
++    pub const XL: f32 = 24.;
++    pub const XXL: f32 = 32.;
++}
++
++pub mod control {
++    pub const COMPACT: f32 = 28.;
++    pub const DEFAULT: f32 = 32.;
++    pub const LARGE: f32 = 36.;
++    pub const ICON: f32 = 16.;
++    pub const ICON_SMALL: f32 = 14.;
++}
++
++pub mod radius {
++    pub const CONTROL: f32 = 6.;
++    pub const PANEL: f32 = 8.;
++    pub const OVERLAY: f32 = 10.;
++}
++
++pub mod layout {
++    pub const NAVIGATION_WIDTH: f32 = 220.;
++    pub const TOOLBAR_HEIGHT: f32 = 56.;
++    pub const ROW_HEIGHT: f32 = 44.;
++    pub const COMPACT_ROW_HEIGHT: f32 = 36.;
++    pub const INSPECTOR_WIDTH: f32 = 360.;
++    pub const MIN_PRIMARY_WITH_INSPECTOR: f32 = 640.;
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum TextRole {
++    PageTitle,
++    SectionTitle,
++    Body,
++    Control,
++    Caption,
++}
++
++impl TextRole {
++    pub const fn metrics(self) -> (f32, f32, FontWeight) {
++        match self {
++            Self::PageTitle => (24., 30., FontWeight::SEMIBOLD),
++            Self::SectionTitle => (15., 22., FontWeight::SEMIBOLD),
++            Self::Body => (13., 20., FontWeight::NORMAL),
++            Self::Control => (14., 20., FontWeight::NORMAL),
++            Self::Caption => (12., 18., FontWeight::NORMAL),
++        }
++    }
++}
++
++/// Explicit roles keep line boxes stable across platform font metrics.
++pub trait ConsoleStyle: Styled {
++    fn text_role(self, role: TextRole) -> Self {
++        let (size, height, weight) = role.metrics();
++        self.text_size(px(size))
++            .line_height(px(height))
++            .font_weight(weight)
++    }
++}
++
++impl<T: Styled> ConsoleStyle for T {}
+--- a/i18n/en/notifications.toml
++++ b/i18n/en/notifications.toml
+@@ -1,2 +1,13 @@
+-"notifications.copy" = "Copy notification"
++"notifications.copy" = "Copy details"
+ "notifications.dismiss" = "Dismiss notification"
++"notifications.details" = "Details"
++"notifications.kind.info" = "New notification"
++"notifications.kind.success" = "Completed"
++"notifications.kind.warning" = "Needs attention"
++"notifications.kind.error" = "Could not complete"
++"notifications.center" = "Notifications"
++"notifications.session" = "This launch · read does not mean resolved"
++"notifications.back" = "Back"
++"notifications.empty" = "No notifications in this launch."
++"notifications.mark_read" = "Mark all read"
++"notifications.clear_read" = "Clear read"
+--- a/i18n/ja/notifications.toml
++++ b/i18n/ja/notifications.toml
+@@ -1,2 +1,13 @@
+-"notifications.copy" = "通知をコピー"
++"notifications.copy" = "詳細をコピー"
+ "notifications.dismiss" = "通知を閉じる"
++"notifications.details" = "詳細"
++"notifications.kind.info" = "新しい通知"
++"notifications.kind.success" = "完了しました"
++"notifications.kind.warning" = "確認が必要です"
++"notifications.kind.error" = "操作を完了できませんでした"
++"notifications.center" = "通知"
++"notifications.session" = "今回の起動 · 既読は解決済みではありません"
++"notifications.back" = "戻る"
++"notifications.empty" = "今回の起動ではまだ通知がありません。"
++"notifications.mark_read" = "すべて既読にする"
++"notifications.clear_read" = "既読を削除"
+--- a/i18n/zh-Hans/notifications.toml
++++ b/i18n/zh-Hans/notifications.toml
+@@ -1,2 +1,13 @@
+-"notifications.copy" = "复制通知内容"
++"notifications.copy" = "复制详情"
+ "notifications.dismiss" = "关闭通知"
++"notifications.details" = "详情"
++"notifications.kind.info" = "有新的消息"
++"notifications.kind.success" = "操作已完成"
++"notifications.kind.warning" = "需要留意"
++"notifications.kind.error" = "操作未完成"
++"notifications.center" = "通知"
++"notifications.session" = "本次启动 · 已读不代表已解决"
++"notifications.back" = "返回"
++"notifications.empty" = "本次启动还没有通知。"
++"notifications.mark_read" = "全部标为已读"
++"notifications.clear_read" = "清除已读"

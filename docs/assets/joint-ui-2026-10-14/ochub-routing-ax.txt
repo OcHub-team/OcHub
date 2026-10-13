@@ -1,0 +1,53 @@
+- [0] AXWindow "OcHub" [actions=[raise]]
+  - [1] AXPopUpButton "本地配置" [actions=[press]]
+  - [2] AXButton "打开 总览" [actions=[press]]
+  - [3] AXButton "打开 供应商与路由" [actions=[press]]
+  - [4] AXButton "打开 用量" [actions=[press]]
+  - [5] AXButton "打开 会话" [actions=[press]]
+  - [6] AXButton "应用连接" [actions=[press]]
+  - [7] AXButton "打开 MCP 服务器" [actions=[press]]
+  - [8] AXButton "打开 技能" [actions=[press]]
+  - [9] AXButton "打开 网络代理" [actions=[press]]
+  - [10] AXButton "打开 远程节点" [actions=[press]]
+  - [11] AXButton "打开 高级工具" [actions=[press]]
+  - [12] AXButton "通知中心" [actions=[press]]
+  - [13] AXButton "主题" [actions=[press]]
+  - [14] AXButton "设置" [actions=[press]]
+  - [15] AXButton "关于" [actions=[press]]
+  - [16] AXButton "overview-time-range 选项 24 小时" [actions=[press]]
+  - [17] AXButton "overview-time-range 选项 7 天" [actions=[press]]
+  - [18] AXButton "overview-time-range 选项 30 天" [actions=[press]]
+  - [19] AXButton "刷新" [actions=[press]]
+  - [20] AXButton "管理路由" [actions=[press]]
+  - [21] AXTextField "搜索路由或上游接口" = "搜索路由或上游接口"
+  - [22] AXButton "日常编码 · 路由验收 · 查看" [actions=[press]]
+  - [23] AXPopUpButton "路由默认策略" [actions=[press]]
+  - [24] AXButton "overview-route-dialect 选项 Messages" [actions=[press]]
+  - [25] AXButton "overview-route-dialect 选项 Responses" [actions=[press]]
+  - [26] AXButton "overview-route-dialect 选项 Chat" [actions=[press]]
+  - [27] AXTextField "输入客户端发送的模型名" = "assistant"
+  - [28] AXButton "assistant" [actions=[press]]
+  - [29] AXButton "gpt-default-qa" [actions=[press]]
+  - AXStaticText "01. 客户端模型: assistant. 请求中携带的模型名"
+  - AXStaticText "02. 路由默认策略: claude-sonnet-qa. 命中规则：assistant"
+  - AXStaticText "03. 配置候选上游: 2 个候选. 优先级 → 协议 → 权重"
+  - AXStaticText "主用 · Messages · messages · claude-sonnet-qa · 优先级 0 · 权重 1 · 可参与"
+  - AXStaticText "已停用上游 · messages · claude-sonnet-qa · 优先级 0 · 权重 1 · 接口已停用"
+  - AXStaticText "其他模型 · Chat · chat · claude-sonnet-qa · 优先级 0 · 权重 1 · 模型不在接口范围内"
+  - AXStaticText "备用 · Responses · responses · claude-sonnet-qa · 优先级 10 · 权重 1 · 可参与"
+  - [30] AXButton "收起被排除的上游" [actions=[press]]
+  - [31] AXButton "打开" [actions=[press]]
+  - [32] AXButton "打开" [actions=[press]]
+  - [33] AXButton "打开" [actions=[press]]
+  - [34] AXButton "打开" [actions=[press]]
+  - [35] AXButton "打开" [actions=[press]]
+  - [36] AXButton "打开" [actions=[press]]
+  - [37] AXButton "打开" [actions=[press]]
+  - [38] AXButton "打开" [actions=[press]]
+  - [39] AXButton "查看用量" [actions=[press]]
+  - [40] AXButton "全部记录" [actions=[press]]
+  - [41] AXButton "打开会话" [actions=[press]]
+  - [42] AXButton "查看用量" [actions=[press]]
+  - [43] AXButton [actions=[press]]
+  - [44] AXButton [help="this button also has an action to zoom the window" actions=[press,zoomwindow,showmenu]]
+  - [45] AXButton [actions=[press]]

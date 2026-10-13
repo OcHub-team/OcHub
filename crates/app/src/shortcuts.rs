@@ -11,18 +11,11 @@ actions!(ochub_shortcuts, [Save, Cancel, CloseWindow, OpenSettings]);
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("escape", Cancel, None)]);
 
-    #[cfg(target_os = "macos")]
+    use ochub_ui::shortcuts::Shortcut;
     cx.bind_keys([
-        KeyBinding::new("cmd-s", Save, None),
-        KeyBinding::new("cmd-w", CloseWindow, None),
-        KeyBinding::new("cmd-,", OpenSettings, None),
-    ]);
-
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    cx.bind_keys([
-        KeyBinding::new("ctrl-s", Save, None),
-        KeyBinding::new("ctrl-w", CloseWindow, None),
-        KeyBinding::new("ctrl-,", OpenSettings, None),
+        Shortcut::new("cmd-s", "ctrl-s").binding(Save, None),
+        Shortcut::new("cmd-w", "ctrl-w").binding(CloseWindow, None),
+        Shortcut::new("cmd-,", "ctrl-,").binding(OpenSettings, None),
     ]);
 }
 
