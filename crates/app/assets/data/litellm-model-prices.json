@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "2a01fe6e5ca2ed67472ca0ed2909e66811ff8d35",
-    "generated_at": "2026-10-11T10:01:57Z",
+    "revision": "77005080f329dff65dacb70753fea914cf7f4fed",
+    "generated_at": "2026-10-13T10:37:59Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4041,
-    "eligible_entries": 2775
+    "upstream_entries": 4068,
+    "eligible_entries": 2788
   },
   "entries": [
     {
@@ -44,7 +44,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-ai21-labs-jamba-1-5-large.md"
     },
     {
       "model_key": "ai21.jamba-1-5-mini-v1:0",
@@ -55,7 +55,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-ai21-labs-jamba-1-5-mini.md"
     },
     {
       "model_key": "ai21.jamba-instruct-v1:0",
@@ -6823,7 +6823,8 @@
       "output_cost_per_million": "4.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/ap-south-1/meta.llama3-8b-instruct-v1:0",
@@ -6833,7 +6834,8 @@
       "output_cost_per_million": "0.72",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/ap-south-1/minimax.minimax-m2.1",
@@ -7019,7 +7021,8 @@
       "output_cost_per_million": "4.03",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/ca-central-1/meta.llama3-8b-instruct-v1:0",
@@ -7029,7 +7032,8 @@
       "output_cost_per_million": "0.69",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/eu-central-1/anthropic.claude-instant-v1",
@@ -7209,7 +7213,8 @@
       "output_cost_per_million": "3.78",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/eu-west-1/meta.llama3-8b-instruct-v1:0",
@@ -7219,7 +7224,8 @@
       "output_cost_per_million": "0.65",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/eu-west-1/minimax.minimax-m2.1",
@@ -7282,7 +7288,8 @@
       "output_cost_per_million": "4.55",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/eu-west-2/meta.llama3-8b-instruct-v1:0",
@@ -7292,7 +7299,8 @@
       "output_cost_per_million": "0.78",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/eu-west-2/minimax.minimax-m2.1",
@@ -7369,7 +7377,8 @@
       "output_cost_per_million": "0.26",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-7b-instruct.md"
     },
     {
       "model_key": "bedrock/eu-west-3/mistral.mistral-large-2402-v1:0",
@@ -7380,7 +7389,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large.md"
     },
     {
       "model_key": "bedrock/eu-west-3/mistral.mixtral-8x7b-instruct-v0:1",
@@ -7390,7 +7399,8 @@
       "output_cost_per_million": "0.91",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mixtral-8x7b-instruct.md"
     },
     {
       "model_key": "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -7452,7 +7462,8 @@
       "output_cost_per_million": "5.88",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/sa-east-1/meta.llama3-8b-instruct-v1:0",
@@ -7462,7 +7473,8 @@
       "output_cost_per_million": "1.01",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/sa-east-1/minimax.minimax-m2.1",
@@ -7597,7 +7609,8 @@
       "output_cost_per_million": "3.5",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/us-east-1/meta.llama3-8b-instruct-v1:0",
@@ -7607,7 +7620,8 @@
       "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/us-east-1/minimax.minimax-m2.1",
@@ -7645,7 +7659,8 @@
       "output_cost_per_million": "0.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-7b-instruct.md"
     },
     {
       "model_key": "bedrock/us-east-1/mistral.mistral-large-2402-v1:0",
@@ -7656,7 +7671,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large.md"
     },
     {
       "model_key": "bedrock/us-east-1/mistral.mixtral-8x7b-instruct-v0:1",
@@ -7666,7 +7681,8 @@
       "output_cost_per_million": "0.7",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mixtral-8x7b-instruct.md"
     },
     {
       "model_key": "bedrock/us-east-1/moonshotai.kimi-k2-thinking",
@@ -8363,7 +8379,8 @@
       "output_cost_per_million": "3.5",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/us-west-1/meta.llama3-8b-instruct-v1:0",
@@ -8373,7 +8390,8 @@
       "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/us-west-2/anthropic.claude-instant-v1",
@@ -8455,7 +8473,8 @@
       "output_cost_per_million": "0.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-7b-instruct.md"
     },
     {
       "model_key": "bedrock/us-west-2/mistral.mistral-large-2402-v1:0",
@@ -8466,7 +8485,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large.md"
     },
     {
       "model_key": "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1",
@@ -8476,7 +8495,8 @@
       "output_cost_per_million": "0.7",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mixtral-8x7b-instruct.md"
     },
     {
       "model_key": "bedrock/us-west-2/moonshotai.kimi-k2-thinking",
@@ -9971,6 +9991,83 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://platform.openai.com/docs/models/computer-use-preview"
+    },
+    {
+      "model_key": "computer-use-preview-2025-03-11",
+      "provider": "openai",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "12",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://developers.openai.com/api/docs/models/computer-use-preview"
+    },
+    {
+      "model_key": "coralbricks/deepseek-v4.1-flash",
+      "provider": "coralbricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.01",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": "0.09",
+      "special_pricing_fields": [],
+      "source_url": "https://www.coralbricks.ai/pricing"
+    },
+    {
+      "model_key": "coralbricks/deepseek-v4.1-flash-fast",
+      "provider": "coralbricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.01",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": "0.09",
+      "special_pricing_fields": [],
+      "source_url": "https://www.coralbricks.ai/pricing"
+    },
+    {
+      "model_key": "coralbricks/deepseek-v4.1-flash-fast-fp4",
+      "provider": "coralbricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.01",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": "0.09",
+      "special_pricing_fields": [],
+      "source_url": "https://www.coralbricks.ai/pricing"
+    },
+    {
+      "model_key": "coralbricks/glm-5.3",
+      "provider": "coralbricks",
+      "mode": "chat",
+      "input_cost_per_million": "1.12",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": "1.68",
+      "special_pricing_fields": [],
+      "source_url": "https://www.coralbricks.ai/pricing"
+    },
+    {
+      "model_key": "coralbricks/glm-5.3-fast",
+      "provider": "coralbricks",
+      "mode": "chat",
+      "input_cost_per_million": "1.12",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": "1.68",
+      "special_pricing_fields": [],
+      "source_url": "https://www.coralbricks.ai/pricing"
+    },
+    {
+      "model_key": "coralbricks/glm-5.3-fp4",
+      "provider": "coralbricks",
+      "mode": "chat",
+      "input_cost_per_million": "1.12",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": "1.68",
+      "special_pricing_fields": [],
+      "source_url": "https://www.coralbricks.ai/pricing"
     },
     {
       "model_key": "crusoe/deepseek-ai/DeepSeek-R1-0528",
@@ -13049,7 +13146,8 @@
       "output_cost_per_million": "6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-pixtral-large.md"
     },
     {
       "model_key": "fal_ai/fal-ai/moondream3-preview/query",
@@ -17102,6 +17200,21 @@
       "source_url": "https://ai.google.dev/gemini-api/docs/models#gemini-robotics-er-1-5-preview"
     },
     {
+      "model_key": "gemini-robotics-er-2-preview",
+      "provider": "vertex_ai-language-models",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    {
       "model_key": "gemini/deep-research-max-preview-04-2026",
       "provider": "gemini",
       "mode": "chat",
@@ -18875,6 +18988,20 @@
       ]
     },
     {
+      "model_key": "gpt-4o-mini-search-preview-2025-03-11",
+      "provider": "openai",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.075",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-4o-mini-search-preview"
+    },
+    {
       "model_key": "gpt-4o-search-preview",
       "provider": "openai",
       "mode": "chat",
@@ -18886,6 +19013,20 @@
         "input_cost_per_token_batches",
         "output_cost_per_token_batches"
       ]
+    },
+    {
+      "model_key": "gpt-4o-search-preview-2025-03-11",
+      "provider": "openai",
+      "mode": "chat",
+      "input_cost_per_million": "2.5",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "1.25",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-4o-search-preview"
     },
     {
       "model_key": "gpt-5",
@@ -19608,6 +19749,7 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
+        "cache_creation_input_token_cost_above_272k_tokens_decisions",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_272k_tokens_priority",
         "cache_creation_input_token_cost_batches",
@@ -19615,6 +19757,7 @@
         "cache_creation_input_token_cost_priority",
         "cache_read_input_token_cost_above_272k_tokens",
         "cache_read_input_token_cost_above_272k_tokens_batches",
+        "cache_read_input_token_cost_above_272k_tokens_decisions",
         "cache_read_input_token_cost_above_272k_tokens_flex",
         "cache_read_input_token_cost_above_272k_tokens_priority",
         "cache_read_input_token_cost_batches",
@@ -19622,6 +19765,7 @@
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_272k_tokens",
         "input_cost_per_token_above_272k_tokens_batches",
+        "input_cost_per_token_above_272k_tokens_decisions",
         "input_cost_per_token_above_272k_tokens_flex",
         "input_cost_per_token_above_272k_tokens_priority",
         "input_cost_per_token_batches",
@@ -19629,6 +19773,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_above_272k_tokens",
         "output_cost_per_token_above_272k_tokens_batches",
+        "output_cost_per_token_above_272k_tokens_decisions",
         "output_cost_per_token_above_272k_tokens_flex",
         "output_cost_per_token_above_272k_tokens_priority",
         "output_cost_per_token_batches",
@@ -19764,6 +19909,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://developers.openai.com/api/docs/pricing"
+    },
+    {
+      "model_key": "gpt-audio-mini-2025-10-06",
+      "provider": "openai",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "2.4",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-audio-mini"
     },
     {
       "model_key": "gpt-audio-mini-2025-12-15",
@@ -21010,7 +21166,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-1-70b-instruct.md"
     },
     {
       "model_key": "meta.llama3-1-8b-instruct-v1:0",
@@ -21020,7 +21176,8 @@
       "output_cost_per_million": "0.22",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-1-8b-instruct.md"
     },
     {
       "model_key": "meta.llama3-2-11b-instruct-v1:0",
@@ -21072,7 +21229,8 @@
       "output_cost_per_million": "0.72",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-3-70b-instruct.md"
     },
     {
       "model_key": "meta.llama3-70b-instruct-v1:0",
@@ -21082,7 +21240,8 @@
       "output_cost_per_million": "3.5",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "meta.llama3-8b-instruct-v1:0",
@@ -21092,7 +21251,8 @@
       "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "meta.llama4-maverick-17b-instruct-v1:0",
@@ -21105,7 +21265,8 @@
       "special_pricing_fields": [
         "input_cost_per_token_batches",
         "output_cost_per_token_batches"
-      ]
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-maverick-17b-instruct.md"
     },
     {
       "model_key": "meta.llama4-scout-17b-instruct-v1:0",
@@ -21118,7 +21279,8 @@
       "special_pricing_fields": [
         "input_cost_per_token_batches",
         "output_cost_per_token_batches"
-      ]
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-scout-17b-instruct.md"
     },
     {
       "model_key": "meta/muse-spark-1.1",
@@ -21174,6 +21336,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://ai.developer.meta.com/docs/pricing-rate-limits"
+    },
+    {
+      "model_key": "meta/muse-wonder-1.0",
+      "provider": "meta",
+      "mode": "chat",
+      "input_cost_per_million": "4",
+      "output_cost_per_million": "20",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://dev.meta.ai/docs/pricing-rate-limits"
     },
     {
       "model_key": "microsoft_365_copilot/chat",
@@ -21370,7 +21543,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-7b-instruct.md"
     },
     {
       "model_key": "mistral.mistral-large-2402-v1:0",
@@ -21381,7 +21554,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large.md"
     },
     {
       "model_key": "mistral.mistral-large-2407-v1:0",
@@ -21420,7 +21593,7 @@
         "input_cost_per_token_batches",
         "output_cost_per_token_batches"
       ],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-small.md"
     },
     {
       "model_key": "mistral.mixtral-8x7b-instruct-v0:1",
@@ -21431,7 +21604,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mixtral-8x7b-instruct.md"
     },
     {
       "model_key": "mistral.pixtral-large-2502-v1:0",
@@ -28631,7 +28804,7 @@
       "mode": "chat",
       "input_cost_per_million": "0.042",
       "output_cost_per_million": "0",
-      "cache_read_cost_per_million": "0.042",
+      "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://api.together.ai/v1/models"
@@ -29364,7 +29537,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-1-70b-instruct.md"
     },
     {
       "model_key": "us.meta.llama3-1-8b-instruct-v1:0",
@@ -29374,7 +29547,8 @@
       "output_cost_per_million": "0.22",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-1-8b-instruct.md"
     },
     {
       "model_key": "us.meta.llama3-2-11b-instruct-v1:0",
@@ -29426,7 +29600,8 @@
       "output_cost_per_million": "0.72",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-3-70b-instruct.md"
     },
     {
       "model_key": "us.meta.llama4-maverick-17b-instruct-v1:0",
@@ -29439,7 +29614,8 @@
       "special_pricing_fields": [
         "input_cost_per_token_batches",
         "output_cost_per_token_batches"
-      ]
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-maverick-17b-instruct.md"
     },
     {
       "model_key": "us.meta.llama4-scout-17b-instruct-v1:0",
@@ -29452,7 +29628,8 @@
       "special_pricing_fields": [
         "input_cost_per_token_batches",
         "output_cost_per_token_batches"
-      ]
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-scout-17b-instruct.md"
     },
     {
       "model_key": "us.mistral.pixtral-large-2502-v1:0",
@@ -29463,7 +29640,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-pixtral-large.md"
     },
     {
       "model_key": "us.moonshotai.kimi-k3",
@@ -29655,7 +29832,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x5.md"
     },
     {
       "model_key": "us.xai.grok-4.6",
@@ -31715,6 +31892,21 @@
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     {
+      "model_key": "vertex_ai/gemini-robotics-er-2-preview",
+      "provider": "vertex_ai",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    {
       "model_key": "vertex_ai/gemma-4-26b-a4b-it",
       "provider": "vertex_ai",
       "mode": "chat",
@@ -32999,7 +33191,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x5.md"
     },
     {
       "model_key": "xai/grok-4.20",
@@ -33635,7 +33827,7 @@
         "input_cost_per_token_flex",
         "output_cost_per_token_flex"
       ],
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-4-7.html"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-4-7.md"
     },
     {
       "model_key": "zai.glm-4.7-flash",
@@ -33649,7 +33841,7 @@
         "input_cost_per_token_flex",
         "output_cost_per_token_flex"
       ],
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-4-7-flash.html"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-4-7-flash.md"
     },
     {
       "model_key": "zai.glm-5",
