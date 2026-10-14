@@ -121,6 +121,8 @@ fn validate(policy: &RemotePolicy) -> Result<(), AppError> {
 }
 
 fn enforce_private_permissions(path: &Path) -> Result<(), AppError> {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

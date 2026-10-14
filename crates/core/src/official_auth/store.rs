@@ -124,13 +124,12 @@ pub fn write_secret_bytes(path: &Path, data: &[u8]) -> Result<(), AppError> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::test_support::{env_lock, remove_var, set_var};
 
     #[test]
-    #[cfg(unix)]
     fn secret_file_is_0600() {
         let _guard = env_lock();
         let home = tempfile::tempdir().unwrap();

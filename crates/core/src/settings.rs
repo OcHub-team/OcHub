@@ -3,7 +3,6 @@
 //! Ported from cc-switch `settings.rs`.
 
 use std::fs;
-#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 

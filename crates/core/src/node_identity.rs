@@ -4,6 +4,7 @@
 //! authenticates the machine; this id lets a desktop recognize the same OcHub
 //! node after its hostname, address or SSH alias changes.
 
+#[cfg(unix)]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -64,6 +65,8 @@ fn validate(identity: &NodeIdentity) -> Result<(), AppError> {
 }
 
 fn enforce_private_permissions(path: &Path) -> Result<(), AppError> {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
