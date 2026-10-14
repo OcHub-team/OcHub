@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "77005080f329dff65dacb70753fea914cf7f4fed",
-    "generated_at": "2026-10-13T10:37:59Z",
+    "revision": "b22a0bd9e5531d443da2945951f99573c0a02413",
+    "generated_at": "2026-10-14T08:44:36Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4068,
-    "eligible_entries": 2788
+    "upstream_entries": 4083,
+    "eligible_entries": 2803
   },
   "entries": [
     {
@@ -1013,12 +1013,7 @@
       "output_cost_per_million": "15",
       "cache_read_cost_per_million": "0.3",
       "cache_creation_cost_per_million": "3.75",
-      "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
-        "cache_read_input_token_cost_above_200k_tokens",
-        "input_cost_per_token_above_200k_tokens",
-        "output_cost_per_token_above_200k_tokens"
-      ]
+      "special_pricing_fields": []
     },
     {
       "model_key": "anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -1028,12 +1023,7 @@
       "output_cost_per_million": "15",
       "cache_read_cost_per_million": "0.3",
       "cache_creation_cost_per_million": "3.75",
-      "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
-        "cache_read_input_token_cost_above_200k_tokens",
-        "input_cost_per_token_above_200k_tokens",
-        "output_cost_per_token_above_200k_tokens"
-      ]
+      "special_pricing_fields": []
     },
     {
       "model_key": "anthropic.claude-3-7-sonnet-20240620-v1:0",
@@ -2786,11 +2776,12 @@
       "model_key": "azure/gpt-3.5-turbo-instruct-0914",
       "provider": "azure_text",
       "mode": "completion",
-      "input_cost_per_million": "1.5",
-      "output_cost_per_million": "2",
+      "input_cost_per_million": "1.65",
+      "output_cost_per_million": "2.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     {
       "model_key": "azure/gpt-35-turbo",
@@ -2828,21 +2819,23 @@
       "model_key": "azure/gpt-35-turbo-instruct",
       "provider": "azure_text",
       "mode": "completion",
-      "input_cost_per_million": "1.5",
-      "output_cost_per_million": "2",
+      "input_cost_per_million": "1.65",
+      "output_cost_per_million": "2.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     {
       "model_key": "azure/gpt-35-turbo-instruct-0914",
       "provider": "azure_text",
       "mode": "completion",
-      "input_cost_per_million": "1.5",
-      "output_cost_per_million": "2",
+      "input_cost_per_million": "1.65",
+      "output_cost_per_million": "2.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     {
       "model_key": "azure/gpt-4",
@@ -2912,31 +2905,34 @@
       "model_key": "azure/gpt-4-turbo",
       "provider": "azure",
       "mode": "chat",
-      "input_cost_per_million": "10",
-      "output_cost_per_million": "30",
+      "input_cost_per_million": "11",
+      "output_cost_per_million": "33",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     {
       "model_key": "azure/gpt-4-turbo-2024-04-09",
       "provider": "azure",
       "mode": "chat",
-      "input_cost_per_million": "10",
-      "output_cost_per_million": "30",
+      "input_cost_per_million": "11",
+      "output_cost_per_million": "33",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     {
       "model_key": "azure/gpt-4-turbo-vision-preview",
       "provider": "azure",
       "mode": "chat",
-      "input_cost_per_million": "10",
-      "output_cost_per_million": "30",
+      "input_cost_per_million": "11",
+      "output_cost_per_million": "33",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     {
       "model_key": "azure/gpt-4.1",
@@ -4998,6 +4994,20 @@
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "20"
+    },
+    {
+      "model_key": "azure_ai/claude-fable-5-5",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "10",
+      "output_cost_per_million": "50",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": "12.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "20",
+      "source_url": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
     {
       "model_key": "azure_ai/claude-haiku-4-5",
@@ -17576,6 +17586,27 @@
       "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
     },
     {
+      "model_key": "gemini/gemini-4-argon",
+      "provider": "gemini",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    {
       "model_key": "gemini/gemini-exp-1114",
       "provider": "gemini",
       "mode": "chat",
@@ -17909,6 +17940,17 @@
         "input_cost_per_token_above_100k_tokens",
         "output_cost_per_token_above_100k_tokens"
       ],
+      "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
+    },
+    {
+      "model_key": "github_copilot/gemini-4-argon",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
       "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
     },
     {
@@ -27792,18 +27834,128 @@
       "cache_read_cost_per_million": "0.0028",
       "cache_creation_cost_per_million": "0",
       "special_pricing_fields": [],
-      "source_url": "https://www.tencentcloud.com/products/tokenhub"
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
     },
     {
       "model_key": "tencent/deepseek-v4-pro",
       "provider": "tencent",
       "mode": "chat",
-      "input_cost_per_million": "0.435",
-      "output_cost_per_million": "0.87",
-      "cache_read_cost_per_million": "0.003625",
+      "input_cost_per_million": "1.74",
+      "output_cost_per_million": "3.48",
+      "cache_read_cost_per_million": "0.145",
       "cache_creation_cost_per_million": "0",
       "special_pricing_fields": [],
-      "source_url": "https://www.tencentcloud.com/products/tokenhub"
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/deepseek-v4-pro-0813",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "1.32",
+      "output_cost_per_million": "3.96",
+      "cache_read_cost_per_million": "0.044",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/deepseek-v4.1-flash",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/glm-5.2",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/glm-5.3",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/glm-5.3-flash",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/glm-5.3-flashx",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "0.37",
+      "output_cost_per_million": "1.25",
+      "cache_read_cost_per_million": "0.075",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/kimi-k2.7-code",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "0.95",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.19",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/kimi-k2.7-code-highspeed",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "1.9",
+      "output_cost_per_million": "8",
+      "cache_read_cost_per_million": "0.38",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/kimi-k2.8-preview",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/kimi-k3",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": "0",
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
     },
     {
       "model_key": "tencent/minimax-m3",
@@ -27814,7 +27966,7 @@
       "cache_read_cost_per_million": "0.06",
       "cache_creation_cost_per_million": "0",
       "special_pricing_fields": [],
-      "source_url": "https://www.tencentcloud.com/products/tokenhub"
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
     },
     {
       "model_key": "tensormesh/deepseek-ai/DeepSeek-V4-Flash",
@@ -28450,9 +28602,9 @@
       "model_key": "together_ai/moonshotai/Kimi-K3",
       "provider": "together_ai",
       "mode": "chat",
-      "input_cost_per_million": "2.7",
-      "output_cost_per_million": "13.5",
-      "cache_read_cost_per_million": "0.27",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
+      "cache_read_cost_per_million": "0.3",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://api.together.ai/v1/models"
@@ -28736,12 +28888,12 @@
       "model_key": "together_ai/Qwen/Qwen3.7-Max",
       "provider": "together_ai",
       "mode": "chat",
-      "input_cost_per_million": "2.5",
-      "output_cost_per_million": "7.5",
-      "cache_read_cost_per_million": "0.5",
+      "input_cost_per_million": "1.5",
+      "output_cost_per_million": "4.5",
+      "cache_read_cost_per_million": "0.3",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
+      "source_url": "https://www.together.ai/pricing"
     },
     {
       "model_key": "together_ai/Qwen/Qwen3.7-Plus",
@@ -31855,6 +32007,48 @@
       "input_cost_per_million": "1.5",
       "output_cost_per_million": "7.5",
       "cache_read_cost_per_million": "0.15",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    {
+      "model_key": "vertex_ai/gemini-4-argon",
+      "provider": "vertex_ai",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    {
+      "model_key": "vertex_ai/gemini-4-argon-cyber-permissive",
+      "provider": "vertex_ai",
+      "mode": "chat",
+      "input_cost_per_million": "4",
+      "output_cost_per_million": "20",
+      "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "cache_read_input_token_cost_batches",
