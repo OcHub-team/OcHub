@@ -45,9 +45,7 @@
 "overview.app.client_unknown" = "未确认客户端读取"
 "overview.app_state_scope" = "展示 OcHub 的选择或已管理标记，不检查客户端是否正在使用；完整连接与草稿从应用页打开。"
 "overview.drafts" = "{count} 份草稿"
-"overview.open_app" = "打开"
 "overview.usage" = "已记录用量"
-"overview.open_usage" = "查看用量"
 "overview.usage.records" = "记录数量"
 "overview.usage.cost" = "估算费用 · USD"
 "overview.usage.tokens" = "处理 token（含缓存）"
@@ -108,3 +106,5 @@
 "overview.rule.dialect.mismatch" = "不符合规则指定的协议"
 "overview.unsupported.dialect" = "不支持此协议转换"
 "overview.model.mismatch" = "模型不在接口范围内"
+
+"overview.app.open.aria" = "打开 {app} 的连接"

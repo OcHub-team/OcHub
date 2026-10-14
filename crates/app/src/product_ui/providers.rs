@@ -9,127 +9,107 @@ pub struct ProviderCard {
     pub id: SharedString,
     pub name: SharedString,
     pub endpoint: SharedString,
-    pub icon: IconName,
     pub is_current: bool,
     pub is_drag_source: bool,
     pub drag_handle: Option<AnyElement>,
     pub quota: Option<AnyElement>,
     pub current_label: SharedString,
     pub actions: Vec<AnyElement>,
+    pub secondary_actions: Vec<AnyElement>,
 }
 
 /// Connection card used by the provider list.
 pub fn provider_card(spec: ProviderCard) -> gpui::Stateful<gpui::Div> {
-    components::panel()
+    div()
         .id(spec.id)
         .relative()
         .opacity(if spec.is_drag_source { 0. } else { 1. })
         .flex()
-        .flex_row()
-        .items_stretch()
+        .flex_col()
         .w_full()
         .overflow_hidden()
-        .border_color(if spec.is_current {
-            theme::accent()
-        } else {
-            theme::border()
-        })
-        .hover(|style| {
-            style
-                .border_color(theme::border_strong())
-                .shadow(theme::shadow_hover())
-        })
-        .when_some(spec.drag_handle, |card, handle| card.child(handle))
+        .border_b_1()
+        .border_color(theme::border())
         .child(
             div()
                 .flex()
-                .flex_row()
-                .items_center()
-                .flex_1()
-                .min_w_0()
-                .gap_3()
-                .px_4()
-                .py_3()
+                .items_stretch()
+                .w_full()
+                .when_some(spec.drag_handle, |card, handle| card.child(handle))
                 .child(
                     div()
                         .flex()
+                        .flex_row()
                         .items_center()
-                        .justify_center()
-                        .w(px(30.))
-                        .h(px(30.))
-                        .flex_none()
-                        .rounded_md()
-                        .bg(if spec.is_current {
-                            theme::sidebar_selected()
-                        } else {
-                            theme::surface_hover()
-                        })
-                        .child(icon(
-                            if spec.is_current {
-                                IconName::Check
-                            } else {
-                                spec.icon
-                            },
-                            if spec.is_current {
-                                theme::accent()
-                            } else {
-                                theme::subtext()
-                            },
-                            16.,
-                        )),
+                        .flex_1()
+                        .min_w_0()
+                        .gap_3()
+                        .px_3()
+                        .py_3()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .min_w_0()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(theme::text())
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(spec.name),
+                                        )
+                                        .when(spec.is_current, |row| {
+                                            row.child(components::badge(
+                                                BadgeTone::Accent,
+                                                spec.current_label,
+                                            ))
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(theme::muted())
+                                        .text_xs()
+                                        .child(spec.endpoint),
+                                )
+                                .children(spec.quota),
+                        ),
                 )
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_1()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .min_w_0()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(theme::text())
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(spec.name),
-                                )
-                                .when(spec.is_current, |row| {
-                                    row.child(components::badge(
-                                        BadgeTone::Accent,
-                                        spec.current_label,
-                                    ))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme::muted())
-                                .text_xs()
-                                .child(spec.endpoint),
-                        )
-                        .children(spec.quota),
+                        .flex_row()
+                        .items_center()
+                        .flex_none()
+                        .gap_2()
+                        .py_3()
+                        .pr_2()
+                        .children(spec.actions),
                 ),
         )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .flex_none()
-                .gap_2()
-                .py_3()
-                .pr_4()
-                .children(spec.actions),
-        )
+        .when(!spec.secondary_actions.is_empty(), |row| {
+            row.child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_2()
+                    .px_3()
+                    .pb_3()
+                    .children(spec.secondary_actions),
+            )
+        })
 }
 
 pub struct ActiveProviderHero {
@@ -153,15 +133,8 @@ pub fn active_provider_hero(spec: ActiveProviderHero) -> gpui::Div {
         .items_center()
         .justify_center()
         .flex_shrink_0()
-        .w(px(46.))
-        .h(px(46.))
-        .rounded_lg()
-        .bg(if has_current {
-            theme::c(spec.accent)
-        } else {
-            theme::surface_hover()
-        })
-        .when(has_current, |tile| tile.shadow_xs())
+        .w(px(32.))
+        .h(px(32.))
         .child(icon(
             if spec.is_gateway {
                 IconName::Layers
@@ -169,7 +142,7 @@ pub fn active_provider_hero(spec: ActiveProviderHero) -> gpui::Div {
                 spec.icon
             },
             if has_current {
-                theme::accent_text()
+                theme::c(spec.accent)
             } else {
                 theme::muted()
             },
@@ -195,13 +168,18 @@ pub fn active_provider_hero(spec: ActiveProviderHero) -> gpui::Div {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(spec.current_label),
                     )
-                    .child(components::badge(BadgeTone::Success, spec.direct_label)),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(spec.direct_label),
+                    ),
             )
             .child(
                 div()
                     .text_color(theme::text())
-                    .text_lg()
-                    .font_weight(FontWeight::BOLD)
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
                     .truncate()
                     .child(name),
             )
@@ -246,8 +224,8 @@ pub fn active_provider_hero(spec: ActiveProviderHero) -> gpui::Div {
             .child(
                 div()
                     .text_color(theme::text())
-                    .text_lg()
-                    .font_weight(FontWeight::BOLD)
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(spec.empty_title),
             )
             .child(
@@ -262,16 +240,10 @@ pub fn active_provider_hero(spec: ActiveProviderHero) -> gpui::Div {
         .flex()
         .flex_row()
         .items_center()
-        .gap_4()
+        .gap_3()
         .w_full()
-        .px_5()
-        .py_4()
-        .border_color(if has_current {
-            theme::accent()
-        } else {
-            theme::border()
-        })
-        .when(has_current, |panel| panel.shadow(theme::shadow_panel()))
+        .px_4()
+        .py_3()
         .child(icon_tile)
         .child(info)
         .children(spec.actions)

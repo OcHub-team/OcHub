@@ -141,3 +141,5 @@
 "provider_editor.workbench.pending_required" = "Check the previous application first. New edits are retained; saving and applying are paused until its result is known. Confirm how to keep your edits before leaving."
 "provider_editor.workbench.reconcile" = "Check previous application"
 "provider_editor.workbench.result_unknown" = "The previous application result is unknown: {error}. It may have completed remotely. Reconnect and check it; current edits will not be overwritten."
+
+"provider_editor.form.presets.placeholder" = "Choose a service…"

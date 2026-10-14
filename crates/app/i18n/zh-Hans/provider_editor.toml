@@ -143,3 +143,5 @@
 "provider_editor.workbench.pending_required" = "请先核对上次应用。当前新输入已保留，核对前不会再次保存或应用；离开时请确认是否保留这些输入。"
 "provider_editor.workbench.reconcile" = "核对上次应用"
 "provider_editor.workbench.result_unknown" = "无法确认上次应用结果：{error}。操作可能已在远端完成；请重新连接后核对，当前输入不会被覆盖。"
+
+"provider_editor.form.presets.placeholder" = "选择服务…"

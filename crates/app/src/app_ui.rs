@@ -200,6 +200,8 @@ impl Section {
 pub struct AppRoot {
     overview_view: Entity<OverviewView>,
     applications_expanded: bool,
+    maintenance_expanded: bool,
+    provider_actions: Option<String>,
     app: Arc<AppState>,
     selected_app: AppId,
     managed_apps: HashMap<AppId, crate::app_meta::ManagedApp>,
@@ -806,6 +808,11 @@ impl AppRoot {
         let mut this = Self {
             overview_view,
             applications_expanded: initial_section == Section::Providers,
+            maintenance_expanded: matches!(
+                initial_section,
+                Section::Network | Section::Remote | Section::Tools
+            ),
+            provider_actions: None,
             app,
             selected_app: initial_app,
             managed_apps: Self::load_app_metadata(),
@@ -1382,6 +1389,7 @@ impl AppRoot {
     }
 
     fn clear_provider_page(&mut self) {
+        self.provider_actions = None;
         self.providers.clear();
         self.editor_drafts.clear();
         self.provider_presentations.clear();
@@ -1652,6 +1660,7 @@ impl AppRoot {
                 return;
             }
             self.selected_app = app;
+            self.provider_actions = None;
             self.applications_expanded = true;
             self.section = Section::Providers;
             self.editor = None;
@@ -1911,6 +1920,10 @@ impl AppRoot {
                 return;
             }
             self.section = section;
+            if matches!(section, Section::Network | Section::Remote | Section::Tools) {
+                self.maintenance_expanded = true;
+            }
+            self.provider_actions = None;
             self.editor = None;
             self.showing_app_settings = false;
             // Reload the destination view's data so it reflects current state.
@@ -3867,38 +3880,64 @@ impl AppRoot {
                         cx,
                     )),
             )
-            .child(Self::render_sidebar_group(
-                raw(k::CONSOLE_NAV_ENVIRONMENT),
-                appearance,
-            ))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_2()
-                    .child(self.render_nav_item(
-                        "nav-network-proxy",
-                        raw(k::SHELL_SIDEBAR_NAV_PROXY),
-                        Section::Network,
+                div().px_2().mt_3().child(
+                    shell_screen::nav_item(
+                        "nav-maintenance",
+                        t(k::CONSOLE_NAV_ENVIRONMENT),
+                        IconName::Tools,
+                        matches!(
+                            self.section,
+                            Section::Network | Section::Remote | Section::Tools
+                        ),
                         appearance,
-                        cx,
+                    )
+                    .aria_expanded(self.maintenance_expanded)
+                    .child(icon(
+                        if self.maintenance_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        },
+                        theme::muted(),
+                        14.,
                     ))
-                    .child(self.render_nav_item(
-                        "nav-remote-nodes",
-                        raw(k::SHELL_SIDEBAR_NAV_REMOTE),
-                        Section::Remote,
-                        appearance,
-                        cx,
-                    ))
-                    .child(self.render_nav_item(
-                        "nav-tools",
-                        raw(k::SHELL_SIDEBAR_NAV_TOOLS),
-                        Section::Tools,
-                        appearance,
-                        cx,
-                    )),
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.maintenance_expanded = !this.maintenance_expanded;
+                        cx.notify();
+                    })),
+                ),
             )
+            .when(self.maintenance_expanded, |nav| {
+                nav.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .px_2()
+                        .child(self.render_nav_item(
+                            "nav-network-proxy",
+                            raw(k::SHELL_SIDEBAR_NAV_PROXY),
+                            Section::Network,
+                            appearance,
+                            cx,
+                        ))
+                        .child(self.render_nav_item(
+                            "nav-remote-nodes",
+                            raw(k::SHELL_SIDEBAR_NAV_REMOTE),
+                            Section::Remote,
+                            appearance,
+                            cx,
+                        ))
+                        .child(self.render_nav_item(
+                            "nav-tools",
+                            raw(k::SHELL_SIDEBAR_NAV_TOOLS),
+                            Section::Tools,
+                            appearance,
+                            cx,
+                        )),
+                )
+            })
             .when(std::env::var_os("MS_GALLERY").is_some(), |nav| {
                 nav.child(div().px_2().child(self.render_nav_item(
                     "nav-gallery",
@@ -3915,12 +3954,14 @@ impl AppRoot {
             self.notifications.read(cx).is_center_open(),
             appearance,
         )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme::muted())
-                .child(self.notifications.read(cx).unread_count().to_string()),
-        )
+        .when(self.notifications.read(cx).unread_count() > 0, |row| {
+            row.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(self.notifications.read(cx).unread_count().to_string()),
+            )
+        })
         .on_click(cx.listener(|this, _, _, cx| {
             this.notifications
                 .update(cx, |host, cx| host.toggle_center(cx))
@@ -4123,7 +4164,7 @@ impl AppRoot {
                 })
         });
 
-        let actions = vec![
+        let secondary_actions = vec![
             components::action_button(
                 SharedString::from(format!("edit-{}", provider.id)),
                 t(edit_label_key),
@@ -4161,10 +4202,14 @@ impl AppRoot {
                 cx.notify();
             }))
             .into_any_element(),
+        ];
+        let expanded = self.provider_actions.as_deref() == Some(provider.id.as_str());
+        let disclosure_id = provider.id.clone();
+        let actions = vec![
             components::action_button(
                 SharedString::from(format!("switch-{}", provider.id)),
                 t(main_label_key),
-                is_import || !(is_current || (is_additive && is_in_live)),
+                false,
             )
             .aria_label(SharedString::from(tf!(main_aria_key, name = provider_name)))
             .aria_selected(!is_import && (is_current || (is_additive && is_in_live)))
@@ -4178,13 +4223,34 @@ impl AppRoot {
                 }
             }))
             .into_any_element(),
+            components::icon_only_button_tone(
+                SharedString::from(format!("provider-actions-{}", provider.id)),
+                tf!(k::SHELL_ACTION_MORE_ARIA, name = provider_name),
+                if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                },
+                ButtonTone::Ghost,
+                ButtonSize::Sm,
+            )
+            .aria_expanded(expanded)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.provider_actions = if expanded {
+                    None
+                } else {
+                    Some(disclosure_id.clone())
+                };
+                this.provider_list_state.remeasure();
+                cx.notify();
+            }))
+            .into_any_element(),
         ];
 
         let card = provider_screens::provider_card(provider_screens::ProviderCard {
             id: SharedString::from(format!("provider-card-{}", provider.id)),
             name: provider_name,
             endpoint: base_url,
-            icon: self.app_icon(&self.selected_app),
             is_current,
             is_drag_source,
             drag_handle: is_sortable
@@ -4194,6 +4260,11 @@ impl AppRoot {
             quota: quota_line,
             current_label: t(k::SHELL_BADGE_CURRENT),
             actions,
+            secondary_actions: if expanded {
+                secondary_actions
+            } else {
+                Vec::new()
+            },
         });
 
         PaintOffsetY::new(px(drag_offset), card)

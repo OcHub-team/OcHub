@@ -203,9 +203,9 @@ pub struct ProviderEditor {
     kv_rows: HashMap<String, Vec<KvRow>>,
     grid_rows: HashMap<String, Vec<GridRow>>,
     next_row_id: usize,
-    /// Index of the last applied preset (drives the preset segmented control's
-    /// selection highlight only; applying a preset behaves exactly as before).
+    /// Index of the last applied preset, shown by the preset dropdown.
     selected_preset: Option<usize>,
+    preset_dropdown_open: bool,
     /// Codec presets, resolved once. Building one runs a full `decode`, and
     /// `render_form_intro` runs every frame — this must not be recomputed
     /// there.
@@ -369,6 +369,7 @@ impl ProviderEditor {
         } else if self.open_select_field.take().is_some()
             || self.open_model_suggestion.take().is_some()
             || std::mem::take(&mut self.station_dropdown_open)
+            || std::mem::take(&mut self.preset_dropdown_open)
         {
             cx.notify();
         } else {
@@ -511,6 +512,7 @@ impl ProviderEditor {
             grid_rows: HashMap::new(),
             next_row_id: 0,
             selected_preset,
+            preset_dropdown_open: false,
             presets,
             open_select_field: None,
             preview_collapsed: HashSet::new(),
@@ -4459,7 +4461,8 @@ impl ProviderEditor {
         let mut intro = div().flex().flex_col().gap_5().w_full().min_w_0();
         // Station mode owns the endpoint, so the preset picker does not apply
         // there.
-        if self.tab == EditorTab::Basic
+        if ((self.tab == EditorTab::Basic && !self.is_editing())
+            || (self.tab == EditorTab::Advanced && self.is_editing()))
             && self.source == ProviderSource::Direct
             && !self.presets.is_empty()
         {
@@ -4469,18 +4472,32 @@ impl ProviderEditor {
                 .map(|preset| preset.name.as_str())
                 .collect();
             let selected = self.selected_preset.unwrap_or(usize::MAX);
-            let on_select = cx.listener(move |this, position: &usize, _window, cx| {
-                this.apply_preset(*position, cx);
-            });
+            let on_event = cx.listener(
+                move |this, event: &components::SelectDropdownEvent, _window, cx| {
+                    match *event {
+                        components::SelectDropdownEvent::Open(open) => {
+                            this.preset_dropdown_open = open
+                        }
+                        components::SelectDropdownEvent::Select(index) => {
+                            this.preset_dropdown_open = false;
+                            this.apply_preset(index, cx);
+                        }
+                    }
+                    this.form_list_state.remeasure();
+                    cx.notify();
+                },
+            );
             intro = intro.child(components::field(
                 t(k::PROVIDER_EDITOR_FORM_PRESETS_LABEL),
                 false,
                 None,
-                components::segmented(
+                components::select_dropdown_with_placeholder(
                     "editor-presets",
                     &names,
                     selected,
-                    move |position, window, cx| on_select(&position, window, cx),
+                    self.preset_dropdown_open,
+                    t(k::PROVIDER_EDITOR_FORM_PRESETS_PLACEHOLDER),
+                    move |event, window, cx| on_event(&event, window, cx),
                 ),
             ));
         }
@@ -4720,17 +4737,20 @@ impl Render for ProviderEditor {
             .flex()
             .items_center()
             .gap_2()
-            .when(self.app_type.is_some(), |actions| {
-                actions.child(
-                    components::button(
-                        "editor-convert",
-                        t(k::PROVIDER_EDITOR_ACTION_CONVERT),
-                        ButtonTone::Ghost,
-                        ButtonSize::Sm,
+            .when(
+                self.app_type.is_some() && self.tab == EditorTab::Advanced,
+                |actions| {
+                    actions.child(
+                        components::button(
+                            "editor-convert",
+                            t(k::PROVIDER_EDITOR_ACTION_CONVERT),
+                            ButtonTone::Ghost,
+                            ButtonSize::Sm,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.open_convert(cx))),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.open_convert(cx))),
-                )
-            })
+                },
+            )
             .child(
                 components::button(
                     "editor-docs",
@@ -4926,19 +4946,23 @@ impl Render for ProviderEditor {
                     .items_center()
                     .gap_2()
                     .flex_none()
-                    .child(
-                        components::button(
-                            "editor-check",
-                            t(k::PROVIDER_EDITOR_CODEX_CHECK),
-                            ButtonTone::Ghost,
-                            ButtonSize::Sm,
+                    .when(self.tab == EditorTab::Files, |actions| {
+                        actions.child(
+                            components::button(
+                                "editor-check",
+                                t(k::PROVIDER_EDITOR_CODEX_CHECK),
+                                ButtonTone::Ghost,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    if !this.saving {
+                                        this.check_configuration(window, cx);
+                                    }
+                                },
+                            )),
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if !this.saving {
-                                this.check_configuration(window, cx);
-                            }
-                        })),
-                    )
+                    })
                     .child(save_button)
                     .child(apply_button),
             );

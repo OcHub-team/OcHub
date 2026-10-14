@@ -18,7 +18,6 @@
 "mcp.delete.confirm" = "Delete"
 "mcp.delete.message" = "Delete the server \"{name}\"? This cannot be undone."
 "mcp.delete.title" = "Delete MCP server"
-"mcp.empty.action" = "Add a server"
 "mcp.empty.hint" = "Add one, or import the servers your apps already have configured."
 "mcp.empty.title" = "No MCP servers yet"
 "mcp.form.app_toggle.aria" = "Enable this server for {app}"
@@ -54,3 +53,7 @@
 "mcp.status.sync_failed" = "Sync failed: {error}"
 "mcp.status.synced" = "Enabled servers synced to your apps"
 "mcp.status.update_failed" = "Update failed: {error}"
+
+"mcp.action.more" = "Import and sync"
+
+"mcp.card.manage.aria" = "Manage {name}"

@@ -123,3 +123,5 @@
 "shell.sidebar.update.badge_aria" = "打开 {name}（有新版本 {version}）"
 "shell.warnings.separator" = "；"
 "shell.warnings.summary" = "{count} 条警告：{details}"
+
+"shell.action.more.aria" = "更多操作：{name}"

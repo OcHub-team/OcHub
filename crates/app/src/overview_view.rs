@@ -14,6 +14,7 @@ use ochub_core::application::{
 
 use crate::components::{self, BadgeTone, ButtonSize, ButtonTone};
 use crate::i18n::{k, raw, t};
+use crate::icons::{IconName, icon};
 use crate::layout;
 use crate::remote::WorkspaceBackend;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -352,7 +353,7 @@ impl OverviewView {
                     tf!(k::OVERVIEW_APP_STORED, count = app.provider_count)
                 }
             });
-        let mut row = div()
+        let row = div()
             .flex()
             .flex_wrap()
             .items_center()
@@ -372,32 +373,39 @@ impl OverviewView {
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme::text())
-                            .child(app.display_name.clone()),
+                            .child(app.display_name.clone())
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_color(theme::muted())
+                                    .child(summary),
+                            ),
                     )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_sm()
-                            .text_color(theme::text())
-                            .child(summary),
-                    )
-                    .child(div().text_xs().text_color(theme::muted()).child(
-                        if !app.config_available {
-                            raw(k::OVERVIEW_APP_CONFIG_UNAVAILABLE).to_string()
-                        } else if app.stale_local_selection {
-                            raw(k::OVERVIEW_APP_SELECTION_STALE).to_string()
-                        } else if app.connection_count > 1 {
-                            tf!(k::OVERVIEW_APP_MANAGED_COUNT, count = app.connection_count)
-                        } else if let Some(connection) = connection {
-                            if connection.gateway_route_id.is_some() {
-                                raw(k::OVERVIEW_APP_ROUTE_LINK).to_string()
-                            } else {
-                                raw(k::OVERVIEW_APP_ROUTE_UNLINKED).to_string()
-                            }
-                        } else {
-                            raw(k::OVERVIEW_APP_CLIENT_UNKNOWN).to_string()
+                    .when(
+                        !app.config_available
+                            || app.stale_local_selection
+                            || app.connection_count > 1,
+                        |info| {
+                            info.child(div().text_xs().text_color(theme::muted()).child(
+                                if !app.config_available {
+                                    raw(k::OVERVIEW_APP_CONFIG_UNAVAILABLE).to_string()
+                                } else if app.stale_local_selection {
+                                    raw(k::OVERVIEW_APP_SELECTION_STALE).to_string()
+                                } else if app.connection_count > 1 {
+                                    tf!(k::OVERVIEW_APP_MANAGED_COUNT, count = app.connection_count)
+                                } else if let Some(connection) = connection {
+                                    if connection.gateway_route_id.is_some() {
+                                        raw(k::OVERVIEW_APP_ROUTE_LINK).to_string()
+                                    } else {
+                                        raw(k::OVERVIEW_APP_ROUTE_UNLINKED).to_string()
+                                    }
+                                } else {
+                                    raw(k::OVERVIEW_APP_CLIENT_UNKNOWN).to_string()
+                                },
+                            ))
                         },
-                    )),
+                    ),
             )
             .when(app.draft_count > 0, |row| {
                 row.child(components::badge(
@@ -406,35 +414,33 @@ impl OverviewView {
                 ))
             });
         if let Ok(app_id) = AppId::parse(&app.app) {
-            row = row.child(
-                components::button(
-                    SharedString::from(format!("overview-app-{}", app.app)),
-                    t(k::OVERVIEW_OPEN_APP),
-                    ButtonTone::Ghost,
-                    ButtonSize::Sm,
-                )
-                .on_click(
-                    cx.listener(move |_, _, _, cx| cx.emit(OverviewEvent::App(app_id.clone()))),
-                ),
-            );
+            ochub_ui::keyboard::interactive(
+                row.id(SharedString::from(format!("overview-app-{}", app.app)))
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(tf!(
+                        k::OVERVIEW_APP_OPEN_ARIA,
+                        app = app.display_name
+                    )))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::surface_hover()))
+                    .child(icon(IconName::ChevronRight, theme::muted(), 14.))
+                    .on_click(
+                        cx.listener(move |_, _, _, cx| cx.emit(OverviewEvent::App(app_id.clone()))),
+                    ),
+            )
+            .into_any_element()
+        } else {
+            row.into_any_element()
         }
-        row.into_any_element()
     }
 
     fn render_usage(&self, snapshot: &OverviewSnapshot, cx: &mut Context<Self>) -> AnyElement {
-        let open = components::button(
-            "overview-open-usage",
-            t(k::OVERVIEW_OPEN_USAGE),
-            ButtonTone::Ghost,
-            ButtonSize::Sm,
-        )
-        .on_click(cx.listener(|_, _, _, cx| cx.emit(OverviewEvent::Usage)));
         let mut section = div()
             .flex()
             .flex_col()
             .gap_3()
             .min_w_0()
-            .child(self.section_heading(t(k::OVERVIEW_USAGE), open.into_any_element()));
+            .child(self.section_heading(t(k::OVERVIEW_USAGE), gpui::Empty.into_any_element()));
         if let Some(usage) = &snapshot.usage.data {
             section = section.child(
                 div()
@@ -742,21 +748,11 @@ impl OverviewView {
     fn render_performance(
         &self,
         snapshot: &OverviewSnapshot,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> AnyElement {
-        let open = components::button(
-            "overview-open-performance",
-            t(k::OVERVIEW_OPEN_USAGE),
-            ButtonTone::Ghost,
-            ButtonSize::Sm,
-        )
-        .on_click(cx.listener(|_, _, _, cx| cx.emit(OverviewEvent::Usage)));
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .min_w_0()
-            .child(self.section_heading(t(k::OVERVIEW_PERFORMANCE), open.into_any_element()));
+        let mut section = div().flex().flex_col().gap_3().min_w_0().child(
+            self.section_heading(t(k::OVERVIEW_PERFORMANCE), gpui::Empty.into_any_element()),
+        );
         let Some(performance) = &snapshot.performance.data else {
             return section.child(self.unavailable_section()).into_any_element();
         };

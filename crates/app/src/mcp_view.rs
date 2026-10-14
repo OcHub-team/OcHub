@@ -95,6 +95,8 @@ pub struct McpView {
     status: Option<SharedString>,
     status_level: Option<NotificationLevel>,
     form_mode: FormMode,
+    expanded_server: Option<String>,
+    maintenance_open: bool,
     form_baseline: Vec<String>,
     editing_id: Option<String>,
     name: Entity<TextInput>,
@@ -185,6 +187,8 @@ impl McpView {
             status: None,
             status_level: None,
             form_mode: FormMode::List,
+            expanded_server: None,
+            maintenance_open: false,
             form_baseline: Vec::new(),
             editing_id: None,
             name,
@@ -272,6 +276,8 @@ impl McpView {
         self.enabled_apps = enabled_apps.into();
         self.server_load = ServerLoad::default();
         self.form_mode = FormMode::List;
+        self.expanded_server = None;
+        self.maintenance_open = false;
         self.confirm_delete = None;
         self.list_state.remeasure();
         self.reload(cx);
@@ -645,22 +651,24 @@ impl McpView {
         enabled: bool,
         label: SharedString,
     ) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(SharedString::from(element_id))
-            .role(gpui::Role::Switch)
-            .aria_label(SharedString::from(aria))
-            .aria_toggled(if enabled {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .cursor_pointer()
-            .child(layout::toggle(enabled))
-            .child(div().text_color(theme::subtext()).text_xs().child(label))
+        ochub_ui::keyboard::interactive(
+            div()
+                .id(SharedString::from(element_id))
+                .role(gpui::Role::Switch)
+                .aria_label(SharedString::from(aria))
+                .aria_toggled(if enabled {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .cursor_pointer()
+                .child(layout::toggle(enabled))
+                .child(div().text_color(theme::subtext()).text_xs().child(label)),
+        )
     }
 
     fn render_app_toggle(
@@ -690,12 +698,37 @@ impl McpView {
         let apps = Self::enabled_apps_label(server);
         let name = server.name.clone();
         let desc = server.description.clone();
+        let expanded = self.expanded_server.as_deref() == Some(server.id.as_str());
+        let disclosure_id = server.id.clone();
 
         tool_screens::mcp_card(tool_screens::McpCard {
             name: SharedString::from(name),
             endpoint: SharedString::from(endpoint),
             description: desc.map(SharedString::from),
             apps_label: SharedString::from(tf!(k::MCP_CARD_APPS_LABEL, apps = apps)),
+            expanded,
+            disclosure: components::icon_only_button_tone(
+                format!("mcp-expand-{}", server.id),
+                tf!(k::MCP_CARD_MANAGE_ARIA, name = server.name),
+                if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                },
+                ButtonTone::Ghost,
+                ButtonSize::Sm,
+            )
+            .aria_expanded(expanded)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.expanded_server = if expanded {
+                    None
+                } else {
+                    Some(disclosure_id.clone())
+                };
+                this.list_state.remeasure();
+                cx.notify();
+            }))
+            .into_any_element(),
             actions: vec![
                 components::button(
                     format!("mcp-edit-{}", server.id),
@@ -784,12 +817,12 @@ impl McpView {
             t(k::MCP_EMPTY_HINT),
             Some(
                 components::button(
-                    "mcp-add-empty",
-                    t(k::MCP_EMPTY_ACTION),
+                    "mcp-import-empty",
+                    t(k::MCP_ACTION_IMPORT),
                     ButtonTone::Primary,
                     ButtonSize::Sm,
                 )
-                .on_click(cx.listener(|this, _event, _window, cx| this.start_add(cx)))
+                .on_click(cx.listener(|this, _event, _window, cx| this.do_import_all(cx)))
                 .into_any_element(),
             ),
         )
@@ -947,35 +980,49 @@ impl Render for McpView {
                             )),
                         )
                         .child(
-                            components::icon_button_tone(
-                                "mcp-import-all",
-                                t(k::MCP_ACTION_IMPORT),
-                                IconName::Archive,
-                                ButtonTone::Neutral,
+                            components::icon_only_button_tone(
+                                "mcp-maintenance",
+                                t(k::MCP_ACTION_MORE),
+                                IconName::Settings,
+                                ButtonTone::Ghost,
                                 ButtonSize::Sm,
                             )
-                            .on_click(cx.listener(
-                                |this, _event, _window, cx| {
-                                    this.do_import_all(cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            components::icon_button_tone(
-                                "mcp-sync",
-                                t(k::MCP_ACTION_SYNC),
-                                IconName::Refresh,
-                                ButtonTone::Neutral,
-                                ButtonSize::Sm,
-                            )
-                            .on_click(cx.listener(
-                                |this, _event, _window, cx| {
-                                    this.do_sync(cx);
-                                },
-                            )),
+                            .aria_expanded(self.maintenance_open)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.maintenance_open = !this.maintenance_open;
+                                cx.notify();
+                            })),
                         ),
                 ),
             )
+            .when(self.maintenance_open, |page| {
+                page.child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .px_6()
+                        .pb_3()
+                        .child(
+                            components::button(
+                                "mcp-import-all",
+                                t(k::MCP_ACTION_IMPORT),
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.do_import_all(cx))),
+                        )
+                        .child(
+                            components::button(
+                                "mcp-sync",
+                                t(k::MCP_ACTION_SYNC),
+                                ButtonTone::Neutral,
+                                ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.do_sync(cx))),
+                        ),
+                )
+            })
             .child(layout::virtual_body(
                 "mcp-list-body",
                 list,

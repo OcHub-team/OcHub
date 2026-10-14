@@ -45,9 +45,7 @@
 "overview.app.client_unknown" = "クライアントでの読み込みは未確認"
 "overview.app_state_scope" = "OcHub の選択や管理マークを表示しており、クライアントの使用状況は確認していません。全接続と下書きはアプリページで確認できます。"
 "overview.drafts" = "下書き {count} 件"
-"overview.open_app" = "開く"
 "overview.usage" = "記録済み使用量"
-"overview.open_usage" = "使用量を表示"
 "overview.usage.records" = "記録数"
 "overview.usage.cost" = "推定費用 · USD"
 "overview.usage.tokens" = "処理 token（キャッシュを含む）"
@@ -108,3 +106,5 @@
 "overview.rule.dialect.mismatch" = "指定プロトコルと不一致"
 "overview.unsupported.dialect" = "未対応のプロトコル変換"
 "overview.model.mismatch" = "モデルが対象外"
+
+"overview.app.open.aria" = "{app} の接続を開く"

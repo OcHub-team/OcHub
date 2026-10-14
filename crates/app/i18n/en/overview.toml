@@ -45,9 +45,7 @@
 "overview.app.client_unknown" = "Client adoption is unconfirmed"
 "overview.app_state_scope" = "Shows OcHub selections or managed markers, not what a client is currently using. Open the app for all connections and drafts."
 "overview.drafts" = "{count} drafts"
-"overview.open_app" = "Open"
 "overview.usage" = "Recorded usage"
-"overview.open_usage" = "View usage"
 "overview.usage.records" = "Recorded items"
 "overview.usage.cost" = "Estimated cost · USD"
 "overview.usage.tokens" = "Processed tokens (including cache)"
@@ -108,3 +106,5 @@
 "overview.rule.dialect.mismatch" = "Different bound protocol"
 "overview.unsupported.dialect" = "Unsupported protocol conversion"
 "overview.model.mismatch" = "Model not supported"
+
+"overview.app.open.aria" = "Open connections for {app}"

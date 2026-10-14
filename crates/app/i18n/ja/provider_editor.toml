@@ -141,3 +141,5 @@
 "provider_editor.workbench.pending_required" = "先に前回の適用を確認してください。新しい入力は保持され、結果確認までは保存・適用を停止します。移動する前に入力を残す方法を確認してください。"
 "provider_editor.workbench.reconcile" = "前回の適用を確認"
 "provider_editor.workbench.result_unknown" = "前回の適用結果を確認できません：{error}。リモートで完了している可能性があります。再接続して確認してください。現在の入力は上書きしません。"
+
+"provider_editor.form.presets.placeholder" = "サービスを選択…"

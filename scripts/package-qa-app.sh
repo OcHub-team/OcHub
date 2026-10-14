@@ -54,6 +54,7 @@ if [[ -n "${icon_build_dir}" ]]; then
 fi
 install -m 644 "${script_dir}/build-app-icon.sh" "${cached_icon_builder}"
 rsync -a --delete "crates/app/assets/" "${resources_dir}/assets/"
+codesign --force --deep --sign - "${app_path}"
 touch "${app_path}"
 
 printf 'QA app ready: %s\n' "${app_path}"

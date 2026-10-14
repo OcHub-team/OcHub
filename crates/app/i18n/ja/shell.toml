@@ -122,3 +122,5 @@
 "shell.sidebar.update.badge_aria" = "{name} を開く（新バージョン {version}）"
 "shell.warnings.separator" = "、"
 "shell.warnings.summary" = "警告 {count} 件：{details}"
+
+"shell.action.more.aria" = "{name} のその他の操作"

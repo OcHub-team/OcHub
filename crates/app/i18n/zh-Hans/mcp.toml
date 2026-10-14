@@ -22,7 +22,6 @@
 "mcp.delete.confirm" = "删除"
 "mcp.delete.message" = "确定删除服务器「{name}」吗？此操作不可撤销。"
 "mcp.delete.title" = "删除 MCP 服务器"
-"mcp.empty.action" = "新增服务器"
 "mcp.empty.hint" = "新增服务器，或从各应用现有配置一键导入。"
 "mcp.empty.title" = "还没有配置 MCP 服务器"
 "mcp.form.app_toggle.aria" = "表单中启用 {app}"
@@ -58,3 +57,7 @@
 "mcp.status.sync_failed" = "同步失败: {error}"
 "mcp.status.synced" = "已同步启用的服务器到应用"
 "mcp.status.update_failed" = "更新失败: {error}"
+
+"mcp.action.more" = "导入与同步"
+
+"mcp.card.manage.aria" = "管理 {name}"

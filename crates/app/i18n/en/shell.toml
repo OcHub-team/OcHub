@@ -122,3 +122,5 @@
 "shell.sidebar.update.badge_aria" = "Open {name} (new version {version})"
 "shell.warnings.separator" = "; "
 "shell.warnings.summary" = "{count} warnings: {details}"
+
+"shell.action.more.aria" = "More actions for {name}"
