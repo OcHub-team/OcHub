@@ -87,3 +87,21 @@ Windows / Linux 原生渲染与 CI 尚未在本机执行。共享库保留了对
 - 按要求不推送、不部署。对外发布前应先推送 GPUI，再推送 UI，最后推送应用和文档提交。
 
 本地复现命令及可选 GPUI 本地缓存入口见 [LOCAL-UI-DEVELOPMENT.md](LOCAL-UI-DEVELOPMENT.md)。
+
+## 后续推送与联合发布（2026-10-14）
+
+收到推送与联合发版要求后，已推送共同 GPUI、共享 UI、两个应用及独立用户文档仓库。上节记录的是发布前的本地验收阶段。
+
+| 发布 | 标签提交 | 结果 |
+|---|---|---|
+| [OcHub v0.5.25](https://github.com/OcHub-team/OcHub/releases/tag/v0.5.25) | `5fe0134f1aca468252eb0427377d719702090824` | 25 个资产，已设为最新正式版 |
+| [OcHerdr v0.2.17](https://github.com/OcHub-team/OcHerdr/releases/tag/v0.2.17) | `147c7e206ca04c250d7eef3fe6e95a348eba9bde` | 13 个资产，已设为最新正式版 |
+
+- 共享 UI 的 `main` 为 `088d23ecbd6bf392b3cbc4b89e002b06d8dbb8ec`；后续修复仅调整测试导入的平台条件，应用继续锁定上述已验收的 `04567c1` 生产实现。[共享库 CI](https://github.com/OcHub-team/ochub-ui/actions/runs/38505626008) 的 macOS、Windows、Linux 与 WASM 检查全部通过。
+- 发布前修复了 Windows 设置模块的 `PathBuf` 导入、平台测试辅助项的条件编译，以及 OcHerdr portable 输入队列的弃用调用。OcHub 网关的 `result_large_err` 提示也已解决。[OcHub CI](https://github.com/OcHub-team/OcHub/actions/runs/38506351468) 和 [OcHerdr CI](https://github.com/OcHub-team/OcHerdr/actions/runs/38506272425) 全部通过。
+- [OcHub 发布流程](https://github.com/OcHub-team/OcHub/actions/runs/38507207026) 与 [OcHerdr 发布流程](https://github.com/OcHub-team/OcHerdr/actions/runs/38507475161) 均成功，包含四个平台的打包、产物证明及 Homebrew 更新通知。Homebrew cask 已分别更新至 `0.5.25` 和 `0.2.17`。
+- 校验和清单分别覆盖 22 和 11 个发布文件，与 GitHub 资产摘要一致；桌面更新清单、OcHub 三个平台的无界面节点更新清单均核对通过。实际下载的两个 macOS Apple Silicon 更新包通过 SHA-256、Minisign、产物证明及包内版本检查。OcHub Linux AppImage 和独立 CLI 的实际下载文件也通过 SHA-256 与 Minisign 检查。
+- OcHub macOS 包使用 Developer ID 签名，本次未公证。OcHerdr 当前 Apple 证书密码未配置，按现有发布流程使用 ad-hoc 签名，需通过 DMG 手动安装或更新；两个发布页面均明确说明签名状态。
+- 用户文档 `dcd5391` 的 [CI 与部署](https://github.com/OcHub-team/ochub-docs/actions/runs/38505236528) 成功，已在[线上总览页](https://docs.ochub.org/zh/guides/overview/)核对新的调用方策略、候选上游及路由推演说明。
+
+Windows 与 Linux 的编译和测试已验证；两平台的原生界面渲染仍未在本机验收。
