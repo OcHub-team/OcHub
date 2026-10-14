@@ -59,20 +59,20 @@ async fn authorize(
     state: &GatewayState,
     headers: &HeaderMap,
     inlet: Dialect,
-) -> Result<Option<GatewayKey>, Response> {
+) -> Result<Option<GatewayKey>, Box<Response>> {
     let require = state.config.read().await.require_key;
     let secret = presented_secret(headers);
     match secret {
         Some(s) => match state.db.find_gateway_key(&s) {
             Ok(Some(k)) => Ok(Some(k)),
-            Ok(None) if require => Err(unauthorized(inlet)),
+            Ok(None) if require => Err(Box::new(unauthorized(inlet))),
             Ok(None) => Ok(None),
             Err(e) => {
                 log::warn!("[gateway] key lookup failed: {e}");
-                Err(unauthorized(inlet))
+                Err(Box::new(unauthorized(inlet)))
             }
         },
-        None if require => Err(unauthorized(inlet)),
+        None if require => Err(Box::new(unauthorized(inlet))),
         None => Ok(None),
     }
 }
@@ -125,7 +125,7 @@ async fn handle_responses(
     if is_ws {
         let key = match authorize(&state, &parts.headers, Dialect::Responses).await {
             Ok(k) => k,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
         match pipeline::responses_ws_available(&state, key.as_ref()) {
             Ok(true) => {}
@@ -165,7 +165,7 @@ async fn handle_compact(
 ) -> Response {
     let key = match authorize(&state, &headers, Dialect::Responses).await {
         Ok(key) => key,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     run_http_operation(state, Dialect::Responses, headers, body, key, true).await
 }
@@ -204,7 +204,7 @@ async fn run_http(
 ) -> Response {
     let key = match authorize(&state, &headers, inlet).await {
         Ok(k) => k,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     run_http_operation(state, inlet, headers, body, key, false).await
 }
@@ -782,7 +782,7 @@ async fn handle_count_tokens(
 ) -> Response {
     let key = match authorize(&state, &headers, Dialect::Messages).await {
         Ok(key) => key,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match pipeline::count_tokens(state, body, key, headers).await {
         PipelineOutcome::Json {
@@ -806,7 +806,7 @@ async fn handle_count_tokens(
 async fn handle_models(State(state): State<GatewayState>, headers: HeaderMap) -> Response {
     let key = match authorize(&state, &headers, Dialect::Chat).await {
         Ok(key) => key,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let route = match key.as_ref().and_then(|key| key.route_id.as_deref()) {
         Some(route_id) => match state.db.get_gateway_route_by_id(route_id) {
