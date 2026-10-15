@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "b22a0bd9e5531d443da2945951f99573c0a02413",
-    "generated_at": "2026-10-14T08:44:36Z",
+    "revision": "84e8204d7faad99726b17c32ec9df4f877239eb2",
+    "generated_at": "2026-10-15T08:19:36Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4083,
-    "eligible_entries": 2803
+    "upstream_entries": 4122,
+    "eligible_entries": 2805
   },
   "entries": [
     {
@@ -4994,20 +4994,6 @@
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "20"
-    },
-    {
-      "model_key": "azure_ai/claude-fable-5-5",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "10",
-      "output_cost_per_million": "50",
-      "cache_read_cost_per_million": "0.25",
-      "cache_creation_cost_per_million": "12.5",
-      "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
-      ],
-      "cache_creation_1h_cost_per_million": "20",
-      "source_url": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
     {
       "model_key": "azure_ai/claude-haiku-4-5",
@@ -27614,6 +27600,17 @@
       "special_pricing_fields": []
     },
     {
+      "model_key": "scx-ai/DeepSeek-V4.1-flash",
+      "provider": "scx-ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://scx.ai/models/deepseek-v4-1-flash"
+    },
+    {
       "model_key": "scx-ai/GLM-5.2",
       "provider": "scx-ai",
       "mode": "chat",
@@ -27623,6 +27620,28 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://scx.ai/pricing"
+    },
+    {
+      "model_key": "scx-ai/GLM-5.3",
+      "provider": "scx-ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.98",
+      "output_cost_per_million": "3.08",
+      "cache_read_cost_per_million": "0.18",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://scx.ai/models/glm-5-3"
+    },
+    {
+      "model_key": "scx-ai/Kimi-K3",
+      "provider": "scx-ai",
+      "mode": "chat",
+      "input_cost_per_million": "2.83",
+      "output_cost_per_million": "14.13",
+      "cache_read_cost_per_million": "0.28",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://scx.ai/models/kimi-k3"
     },
     {
       "model_key": "scx-ai/Qwen3.8-Max",
