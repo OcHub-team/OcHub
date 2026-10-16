@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "84e8204d7faad99726b17c32ec9df4f877239eb2",
-    "generated_at": "2026-10-15T08:19:36Z",
+    "revision": "ecbea93381782591e3e8bf90af145aa68163484a",
+    "generated_at": "2026-10-16T08:12:09Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4122,
-    "eligible_entries": 2805
+    "upstream_entries": 4189,
+    "eligible_entries": 2857
   },
   "entries": [
     {
@@ -5109,6 +5109,20 @@
       "source_url": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
     {
+      "model_key": "azure_ai/claude-opus-5-5-fast",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.4",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
+      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models"
+    },
+    {
       "model_key": "azure_ai/claude-sonnet-4-5",
       "provider": "azure_ai",
       "mode": "chat",
@@ -6460,6 +6474,17 @@
       "source_url": "https://inference.baseten.co/v1/models"
     },
     {
+      "model_key": "baseten/meta-models/muse-spark-open",
+      "provider": "baseten",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "4.25",
+      "cache_read_cost_per_million": "0.15",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inference.baseten.co/v1/models"
+    },
+    {
       "model_key": "baseten/MiniMaxAI/MiniMax-M2.5",
       "provider": "baseten",
       "mode": "chat",
@@ -6549,6 +6574,17 @@
       "input_cost_per_million": "0.6",
       "output_cost_per_million": "2.4",
       "cache_read_cost_per_million": "0.12",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inference.baseten.co/v1/models"
+    },
+    {
+      "model_key": "baseten/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B",
+      "provider": "baseten",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.04",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://inference.baseten.co/v1/models"
@@ -14838,6 +14874,17 @@
       "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
+      "model_key": "fireworks_ai/accounts/fireworks/models/muse-spark-open",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "4.25",
+      "cache_read_cost_per_million": "0.15",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://fireworks.ai/models/fireworks/muse-spark-open"
+    },
+    {
       "model_key": "fireworks_ai/accounts/fireworks/models/mythomax-l2-13b",
       "provider": "fireworks_ai",
       "mode": "chat",
@@ -16882,7 +16929,6 @@
       "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
@@ -16937,7 +16983,6 @@
         "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_priority",
-        "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
         "input_cost_per_token_above_200k_tokens_priority",
@@ -19548,6 +19593,17 @@
       "source_url": "https://developers.openai.com/api/docs/pricing"
     },
     {
+      "model_key": "gpt-5.5-cyber-preview",
+      "provider": "openai",
+      "mode": "chat",
+      "input_cost_per_million": "12.5",
+      "output_cost_per_million": "75",
+      "cache_read_cost_per_million": "1.25",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://developers.openai.com/api/docs/pricing"
+    },
+    {
       "model_key": "gpt-5.6",
       "provider": "openai",
       "mode": "chat",
@@ -20358,6 +20414,402 @@
       "source_url": "https://docs.inceptionlabs.ai/get-started/models"
     },
     {
+      "model_key": "inferenceapis/deepseek-ai/DeepSeek-V3",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.19",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.19",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.19",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Pro",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "1.72",
+      "output_cost_per_million": "5.15",
+      "cache_read_cost_per_million": "0.17",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-ai/DeepSeek-V4-Pro-0813",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "1.72",
+      "output_cost_per_million": "5.15",
+      "cache_read_cost_per_million": "0.17",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-ai/DeepSeek-V4.1-Flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.4",
+      "output_cost_per_million": "1.6",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-chat",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.19",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.4",
+      "output_cost_per_million": "1.6",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-reasoner",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.19",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-v3",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.19",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-v4-flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.19",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-v4-pro",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "1.72",
+      "output_cost_per_million": "5.15",
+      "cache_read_cost_per_million": "0.17",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/deepseek-v4.1-flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.4",
+      "output_cost_per_million": "1.6",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/glm-5.3",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "1.82",
+      "output_cost_per_million": "5.72",
+      "cache_read_cost_per_million": "0.34",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/glm-5.3-flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.66",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/gpt-oss-120b",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.8",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/gpt-oss-20b",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.04",
+      "output_cost_per_million": "0.19",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/kimi-k2.7-code",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.89",
+      "output_cost_per_million": "4.42",
+      "cache_read_cost_per_million": "0.18",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/llama-3.1-8b-instant",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/llama-3.3-70b",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/llama-3.3-70b-instruct",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/llama-3.3-70b-versatile",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/meta-llama/Llama-3.3-70B-Instruct",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/minimax-m3",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.39",
+      "output_cost_per_million": "1.56",
+      "cache_read_cost_per_million": "0.08",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/MiniMaxAI/MiniMax-M3",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.39",
+      "output_cost_per_million": "1.56",
+      "cache_read_cost_per_million": "0.08",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/moonshotai/Kimi-K2.7-Code",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.89",
+      "output_cost_per_million": "4.42",
+      "cache_read_cost_per_million": "0.18",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/openai/gpt-oss-120b",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.8",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/openai/gpt-oss-20b",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.04",
+      "output_cost_per_million": "0.19",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/Qwen/Qwen3-VL-235B-A22B-Instruct",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.26",
+      "output_cost_per_million": "1.15",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/Qwen/Qwen3.8-Flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/qwen3-vl",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.26",
+      "output_cost_per_million": "1.15",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/qwen3-vl-235b",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.26",
+      "output_cost_per_million": "1.15",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/qwen3.8-flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/zai-org/GLM-5.3",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "1.82",
+      "output_cost_per_million": "5.72",
+      "cache_read_cost_per_million": "0.34",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
+      "model_key": "inferenceapis/zai-org/GLM-5.3-Flash",
+      "provider": "inferenceapis",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.66",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inferenceapis.com/pricing"
+    },
+    {
       "model_key": "j2-light",
       "provider": "ai21",
       "mode": "completion",
@@ -20476,6 +20928,26 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
+    },
+    {
+      "model_key": "jp.amazon.nova-2-lite-v1:0",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "0.396",
+      "output_cost_per_million": "3.311",
+      "cache_read_cost_per_million": "0.099",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-northeast-1/index.json"
     },
     {
       "model_key": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -24994,6 +25466,28 @@
       "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     {
+      "model_key": "oci/openai.gpt-oss-120b",
+      "provider": "oci",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
+    },
+    {
+      "model_key": "oci/openai.gpt-oss-20b",
+      "provider": "oci",
+      "mode": "chat",
+      "input_cost_per_million": "0.07",
+      "output_cost_per_million": "0.3",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
+    },
+    {
       "model_key": "oci/xai.grok-3",
       "provider": "oci",
       "mode": "chat",
@@ -25082,6 +25576,36 @@
       "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     {
+      "model_key": "oci/xai.grok-4.20-0309-non-reasoning",
+      "provider": "oci",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "2.5",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
+      "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
+    },
+    {
+      "model_key": "oci/xai.grok-4.20-0309-reasoning",
+      "provider": "oci",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "2.5",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
+      "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
+    },
+    {
       "model_key": "oci/xai.grok-4.20-multi-agent",
       "provider": "oci",
       "mode": "chat",
@@ -25090,6 +25614,36 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
+      "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
+    },
+    {
+      "model_key": "oci/xai.grok-4.20-non-reasoning",
+      "provider": "oci",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "2.5",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
+      "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
+    },
+    {
+      "model_key": "oci/xai.grok-4.20-reasoning",
+      "provider": "oci",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "2.5",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
       "source_url": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     {
@@ -25433,8 +25987,13 @@
       "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html"
+      "special_pricing_fields": [
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
     },
     {
       "model_key": "openai.gpt-oss-20b-1:0",
@@ -25444,8 +26003,13 @@
       "output_cost_per_million": "0.3",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-20b.html"
+      "special_pricing_fields": [
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
     },
     {
       "model_key": "openai.gpt-oss-safeguard-120b",
@@ -27184,8 +27748,8 @@
       "model_key": "sail/deepseek-ai/DeepSeek-V4.1-Flash",
       "provider": "sail",
       "mode": "chat",
-      "input_cost_per_million": "0.15",
-      "output_cost_per_million": "0.6",
+      "input_cost_per_million": "0.09",
+      "output_cost_per_million": "0.3",
       "cache_read_cost_per_million": "0.006",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
@@ -28497,6 +29061,17 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
+      "model_key": "together_ai/meta-models/Muse-Spark-Open-816B-A42B",
+      "provider": "together_ai",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "4.25",
+      "cache_read_cost_per_million": "0.15",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.together.ai/docs/serverless-models"
+    },
+    {
       "model_key": "together_ai/MiniMaxAI/MiniMax-M2.7",
       "provider": "together_ai",
       "mode": "chat",
@@ -28657,6 +29232,17 @@
       "input_cost_per_million": "0.6",
       "output_cost_per_million": "3.6",
       "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.together.ai/v1/models"
+    },
+    {
+      "model_key": "together_ai/nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+      "provider": "together_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.02",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://api.together.ai/v1/models"
@@ -31760,6 +32346,17 @@
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     {
+      "model_key": "vertex_ai/deepseek-ai/deepseek-v4.1-flash-maas",
+      "provider": "vertex_ai-deepseek_models",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    {
       "model_key": "vertex_ai/gemini-2.0-flash",
       "provider": "vertex_ai",
       "mode": "chat",
@@ -31796,7 +32393,6 @@
       "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
@@ -31875,7 +32471,6 @@
         "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_priority",
-        "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
         "input_cost_per_token_above_200k_tokens_priority",
@@ -32951,6 +33546,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://wandb.ai/site/pricing/tokens/"
+    },
+    {
+      "model_key": "wandb/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B",
+      "provider": "wandb",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.75",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://openrouter.ai/api/v1/models/nvidia/nemotron-3.5-super-vl/endpoints"
     },
     {
       "model_key": "wandb/openai/gpt-oss-120b",
