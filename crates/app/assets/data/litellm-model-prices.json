@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "1fd7f81f97cffec77621964ba18998b224281726",
-    "generated_at": "2026-10-17T07:49:24Z",
+    "revision": "e979bd0ecf836976373e12624585962dd3356f3a",
+    "generated_at": "2026-10-18T08:03:23Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4200,
-    "eligible_entries": 2871
+    "upstream_entries": 4211,
+    "eligible_entries": 2876
   },
   "entries": [
     {
@@ -11556,6 +11556,28 @@
       "source_url": "https://deepinfra.com/pricing"
     },
     {
+      "model_key": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash",
+      "provider": "deepinfra",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.42",
+      "cache_read_cost_per_million": "0.0042",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://deepinfra.com/deepseek-ai/DeepSeek-V4.1-Flash"
+    },
+    {
+      "model_key": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "provider": "deepinfra",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.42",
+      "cache_read_cost_per_million": "0.0042",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://deepinfra.com/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    },
+    {
       "model_key": "deepinfra/google/gemini-2.5-flash",
       "provider": "deepinfra",
       "mode": "chat",
@@ -13272,7 +13294,8 @@
       "output_cost_per_million": "0.13",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-1b-instruct.md"
     },
     {
       "model_key": "eu.meta.llama3-2-3b-instruct-v1:0",
@@ -13282,7 +13305,8 @@
       "output_cost_per_million": "0.19",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-3b-instruct.md"
     },
     {
       "model_key": "eu.mistral.pixtral-large-2502-v1:0",
@@ -18704,7 +18728,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html"
     },
     {
       "model_key": "global.zai.glm-5.3",
@@ -21962,7 +21986,8 @@
       "output_cost_per_million": "0.1",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-1b-instruct.md"
     },
     {
       "model_key": "meta.llama3-2-3b-instruct-v1:0",
@@ -21972,7 +21997,8 @@
       "output_cost_per_million": "0.15",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-3b-instruct.md"
     },
     {
       "model_key": "meta.llama3-2-90b-instruct-v1:0",
@@ -26399,6 +26425,39 @@
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
     },
     {
+      "model_key": "openinfer/@oi/GLM-5.3-Flash",
+      "provider": "openinfer",
+      "mode": "chat",
+      "input_cost_per_million": "0.195",
+      "output_cost_per_million": "1.56",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.openinfer.ai/v1/models"
+    },
+    {
+      "model_key": "openinfer/@oi/Qwen3.5-27B",
+      "provider": "openinfer",
+      "mode": "chat",
+      "input_cost_per_million": "0.195",
+      "output_cost_per_million": "1.56",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.openinfer.ai/v1/models"
+    },
+    {
+      "model_key": "openinfer/@oi/Qwen3.5-9B",
+      "provider": "openinfer",
+      "mode": "chat",
+      "input_cost_per_million": "5",
+      "output_cost_per_million": "0.15",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.openinfer.ai/v1/models"
+    },
+    {
       "model_key": "ovhcloud/DeepSeek-R1-Distill-Llama-70B",
       "provider": "ovhcloud",
       "mode": "chat",
@@ -30750,7 +30809,8 @@
       "output_cost_per_million": "0.1",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-1b-instruct.md"
     },
     {
       "model_key": "us.meta.llama3-2-3b-instruct-v1:0",
@@ -30760,7 +30820,8 @@
       "output_cost_per_million": "0.15",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-3b-instruct.md"
     },
     {
       "model_key": "us.meta.llama3-2-90b-instruct-v1:0",
@@ -31052,7 +31113,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html"
     },
     {
       "model_key": "us.zai.glm-5.3",
