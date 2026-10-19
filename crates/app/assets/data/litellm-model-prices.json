@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "e979bd0ecf836976373e12624585962dd3356f3a",
-    "generated_at": "2026-10-18T08:03:23Z",
+    "revision": "6762d65eb866a670e0b8c93d5e6135c06857a2e9",
+    "generated_at": "2026-10-19T08:54:44Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4211,
-    "eligible_entries": 2876
+    "upstream_entries": 4220,
+    "eligible_entries": 2885
   },
   "entries": [
     {
@@ -6496,6 +6496,28 @@
       "source_url": "https://inference.baseten.co/v1/models"
     },
     {
+      "model_key": "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "provider": "baseten",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.007",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inference.baseten.co/v1/models"
+    },
+    {
+      "model_key": "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast",
+      "provider": "baseten",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "2.4",
+      "cache_read_cost_per_million": "0.014",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inference.baseten.co/v1/models"
+    },
+    {
       "model_key": "baseten/deepseek-ai/DeepSeek-V4.1-Flash-Fast",
       "provider": "baseten",
       "mode": "chat",
@@ -8932,7 +8954,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html"
     },
     {
       "model_key": "bedrock_mantle/qwen.qwen3-next-80b-a3b-instruct",
@@ -13916,6 +13938,21 @@
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
+      "model_key": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash-1017",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
+    },
+    {
       "model_key": "fireworks_ai/accounts/fireworks/models/devstral-small-2505",
       "provider": "fireworks_ai",
       "mode": "chat",
@@ -18145,6 +18182,17 @@
       "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
     },
     {
+      "model_key": "github_copilot/claude-opus-4.8-fast",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "10",
+      "output_cost_per_million": "50",
+      "cache_read_cost_per_million": "1",
+      "cache_creation_cost_per_million": "12.5",
+      "special_pricing_fields": [],
+      "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
+    },
+    {
       "model_key": "github_copilot/claude-opus-5",
       "provider": "github_copilot",
       "mode": "chat",
@@ -18163,6 +18211,17 @@
       "output_cost_per_million": "20",
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": "5",
+      "special_pricing_fields": [],
+      "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
+    },
+    {
+      "model_key": "github_copilot/claude-sonnet-4.6",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": "3.75",
       "special_pricing_fields": [],
       "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
     },
@@ -18243,6 +18302,51 @@
         "cache_read_input_token_cost_above_272k_tokens",
         "input_cost_per_token_above_272k_tokens",
         "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
+    },
+    {
+      "model_key": "github_copilot/grok-4.5",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
+      "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
+    },
+    {
+      "model_key": "github_copilot/grok-4.6",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
+      "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
+    },
+    {
+      "model_key": "github_copilot/grok-4.7",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
       ],
       "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
     },
@@ -29333,6 +29437,17 @@
     },
     {
       "model_key": "together_ai/deepseek-ai/DeepSeek-V4.1-Flash",
+      "provider": "together_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.together.ai/v1/models"
+    },
+    {
+      "model_key": "together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017",
       "provider": "together_ai",
       "mode": "chat",
       "input_cost_per_million": "0.3",
