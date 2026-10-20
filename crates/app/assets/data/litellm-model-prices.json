@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "6762d65eb866a670e0b8c93d5e6135c06857a2e9",
-    "generated_at": "2026-10-19T08:54:44Z",
+    "revision": "c9d081b72a72ecf34c6a9bf7f1ac841402f33cb2",
+    "generated_at": "2026-10-20T08:33:52Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4220,
-    "eligible_entries": 2885
+    "upstream_entries": 4224,
+    "eligible_entries": 2886
   },
   "entries": [
     {
@@ -10574,7 +10574,7 @@
       "input_cost_per_million": "2.5",
       "output_cost_per_million": "7.5",
       "cache_read_cost_per_million": "0.5",
-      "cache_creation_cost_per_million": null,
+      "cache_creation_cost_per_million": "3.125",
       "special_pricing_fields": [],
       "source_url": "https://www.alibabacloud.com/help/en/model-studio/models"
     },
@@ -14291,7 +14291,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/accounts/fireworks/models/gpt-oss-20b",
@@ -14853,6 +14853,21 @@
       "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
+      "model_key": "fireworks_ai/accounts/fireworks/models/minimax-m3p1-flash",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.015",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://platform.minimax.io/docs/guides/pricing"
+    },
+    {
       "model_key": "fireworks_ai/accounts/fireworks/models/ministral-3-14b-instruct-2512",
       "provider": "fireworks_ai",
       "mode": "chat",
@@ -15082,7 +15097,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
@@ -15097,7 +15112,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://docs.fireworks.ai/serverless/pricing"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/accounts/fireworks/models/nemotron-nano-v2-12b-vl",
@@ -16505,7 +16520,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/gpt-oss-20b",
@@ -16676,7 +16691,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/nemotron-lightning-3p5-30b-a3b",
@@ -16691,7 +16706,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://docs.fireworks.ai/serverless/pricing"
+      "source_url": "https://api.fireworks.ai/v1/serverless/models?format=nested"
     },
     {
       "model_key": "fireworks_ai/qwen3p7-plus",
@@ -18288,7 +18303,8 @@
       "output_cost_per_million": "2",
       "cache_read_cost_per_million": "0.025",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://github.blog/changelog/2026-10-19-github-copilot-models-deprecated-on-october-19-2026"
     },
     {
       "model_key": "github_copilot/gpt-5.4",
@@ -27468,7 +27484,7 @@
       "input_cost_per_million": "2.5",
       "output_cost_per_million": "7.5",
       "cache_read_cost_per_million": "0.5",
-      "cache_creation_cost_per_million": null,
+      "cache_creation_cost_per_million": "3.125",
       "special_pricing_fields": [],
       "source_url": "https://www.alibabacloud.com/help/en/model-studio/models"
     },
@@ -27765,7 +27781,7 @@
       "input_cost_per_million": "2.5",
       "output_cost_per_million": "7.5",
       "cache_read_cost_per_million": "0.5",
-      "cache_creation_cost_per_million": null,
+      "cache_creation_cost_per_million": "3.125",
       "special_pricing_fields": [],
       "source_url": "https://www.qwencloud.com/models"
     },
@@ -31181,7 +31197,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x4.md"
     },
     {
       "model_key": "us.writer.palmyra-x5-v1:0",
@@ -34606,7 +34622,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-x4.md"
     },
     {
       "model_key": "writer.palmyra-x5-v1:0",
