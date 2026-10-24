@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "f2118fc7670ba3fa736d9b8f4deef9077a45a720",
-    "generated_at": "2026-10-22T08:38:13Z",
+    "revision": "e04e89c7010809cc051b14f0e43d71dd018cdaee",
+    "generated_at": "2026-10-24T08:08:47Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4244,
-    "eligible_entries": 2904
+    "upstream_entries": 4260,
+    "eligible_entries": 2905
   },
   "entries": [
     {
@@ -29857,6 +29857,17 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
+      "model_key": "together_ai/MiniMaxAI/MiniMax-M3.1-Flash",
+      "provider": "together_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.015",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.together.ai/pricing"
+    },
+    {
       "model_key": "together_ai/mistralai/Ministral-3-14B-Instruct-2512",
       "provider": "together_ai",
       "mode": "chat",
@@ -33681,7 +33692,10 @@
       "output_cost_per_million": "1.15",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
       "source_url": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
     },
     {
@@ -33692,7 +33706,10 @@
       "output_cost_per_million": "0.7",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
       "source_url": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
     },
     {
