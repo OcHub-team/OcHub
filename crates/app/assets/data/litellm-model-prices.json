@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "e04e89c7010809cc051b14f0e43d71dd018cdaee",
-    "generated_at": "2026-10-24T08:08:47Z",
+    "revision": "dddbaa803d6e9fcc862ea7a5412f771cb1ae040e",
+    "generated_at": "2026-10-25T08:26:39Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4260,
-    "eligible_entries": 2905
+    "upstream_entries": 4307,
+    "eligible_entries": 2947
   },
   "entries": [
     {
@@ -7311,6 +7311,267 @@
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
+      "model_key": "bedrock/claude_platform/claude-fable-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "10",
+      "output_cost_per_million": "50",
+      "cache_read_cost_per_million": "1",
+      "cache_creation_cost_per_million": "12.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "20",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-fable-5-1",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "10",
+      "output_cost_per_million": "50",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": "12.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "20",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-haiku-4-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": "1.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "2",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-haiku-5-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_100k_tokens_batches",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "0.2",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-opus-4-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "5",
+      "output_cost_per_million": "25",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": "6.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "10",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-opus-4-6",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "5",
+      "output_cost_per_million": "25",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": "6.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "10",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-opus-4-7",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "5",
+      "output_cost_per_million": "25",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": "6.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "10",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-opus-4-8",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "5",
+      "output_cost_per_million": "25",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": "6.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "10",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-opus-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "5",
+      "output_cost_per_million": "25",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": "6.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "10",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-opus-5-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "4",
+      "output_cost_per_million": "20",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "8",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-sonnet-4-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": "3.75",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "6",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-sonnet-4-6",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": "3.75",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "6",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-sonnet-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "2.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "4",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
+      "model_key": "bedrock/claude_platform/claude-sonnet-5-5",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": "2.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "4",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
       "model_key": "bedrock/eu-central-1/anthropic.claude-instant-v1",
       "provider": "bedrock",
       "mode": "chat",
@@ -9392,6 +9653,26 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.cerebras.ai/blog/openai-gpt-oss-120b-runs-fastest-on-cerebras"
+    },
+    {
+      "model_key": "cerebras/llama-3.1-70b",
+      "provider": "cerebras",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
+    },
+    {
+      "model_key": "cerebras/llama-3.1-8b",
+      "provider": "cerebras",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.1",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": []
     },
     {
       "model_key": "cerebras/llama-3.3-70b",
@@ -20210,6 +20491,12 @@
       "cache_read_cost_per_million": "0.4",
       "cache_creation_cost_per_million": "5",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20249,6 +20536,7 @@
       "cache_read_cost_per_million": "1.25",
       "cache_creation_cost_per_million": "15.625",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_read_input_token_cost_above_272k_tokens",
         "input_cost_per_token_above_272k_tokens",
@@ -20265,6 +20553,12 @@
       "cache_read_cost_per_million": "0.02",
       "cache_creation_cost_per_million": "0.25",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20305,6 +20599,12 @@
       "cache_read_cost_per_million": "0.4",
       "cache_creation_cost_per_million": "5",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20345,6 +20645,12 @@
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20385,6 +20691,12 @@
       "cache_read_cost_per_million": "1",
       "cache_creation_cost_per_million": "12.5",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20429,6 +20741,12 @@
       "cache_read_cost_per_million": "0.01",
       "cache_creation_cost_per_million": "0.125",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_decisions",
@@ -20473,6 +20791,12 @@
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20513,6 +20837,12 @@
       "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -23322,6 +23652,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://docs.mistral.ai/models/zai-glm-5-3"
+    },
+    {
+      "model_key": "mistral/zai-glm-5-3-flash",
+      "provider": "mistral",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.mistral.ai/models/zai-glm-5-3-flash"
     },
     {
       "model_key": "mistral/zai-glm-latest",
@@ -26739,6 +27080,281 @@
         "output_cost_per_token_priority"
       ],
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
+    },
+    {
+      "model_key": "opencode_go/beam-free",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/claude-haiku-5-5",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.10000000000000001",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": "0.125",
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/deepseek-v4-pro",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "1.32",
+      "output_cost_per_million": "3.96",
+      "cache_read_cost_per_million": "0.044",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/deepseek-v4.1-flash",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/gemini-4-argon",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/glm-5.2",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/glm-5.3",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/glm-5.3-flash",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/hy3",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.58",
+      "cache_read_cost_per_million": "0.035",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/hy4-preview",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.834",
+      "output_cost_per_million": "2.501",
+      "cache_read_cost_per_million": "0.042000000000000006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/kimi-k2.7-code",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.9499999999999999",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.19",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/kimi-k3",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": "3",
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/kimi-k3.1-pro",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.20000000000000002",
+      "cache_creation_cost_per_million": "2",
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/longcat-2.0",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/longcat-2.5-preview-free",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0",
+      "output_cost_per_million": "0",
+      "cache_read_cost_per_million": "0",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/mimo-v2.5",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.28",
+      "cache_read_cost_per_million": "0.0028",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/mimo-v2.5-pro",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.435",
+      "output_cost_per_million": "0.87",
+      "cache_read_cost_per_million": "0.003625",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/mimo-v2.6-flash",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.28",
+      "cache_read_cost_per_million": "0.0028",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/mimo-v2.6-pro",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.435",
+      "output_cost_per_million": "0.87",
+      "cache_read_cost_per_million": "0.003625",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/minimax-m3",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.06",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/minimax-m3.1-flash",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.015",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/qwen3.7-plus",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.40000000000000003",
+      "output_cost_per_million": "1.6000000000000001",
+      "cache_read_cost_per_million": "0.04",
+      "cache_creation_cost_per_million": "0.5",
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/qwen3.8-flash",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.46999999999999995",
+      "cache_read_cost_per_million": "0.016",
+      "cache_creation_cost_per_million": "0.20000000000000002",
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/qwen3.8-max",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": "2.5",
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
+    },
+    {
+      "model_key": "opencode_go/step-5-preview",
+      "provider": "opencode_go",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "2.7",
+      "cache_read_cost_per_million": "0.10000000000000001",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://opencode.ai/v2/docs/console/go/"
     },
     {
       "model_key": "openinfer/@oi/GLM-5.3-Flash",
