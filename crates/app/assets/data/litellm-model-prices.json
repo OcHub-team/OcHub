@@ -3,16 +3,60 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "dddbaa803d6e9fcc862ea7a5412f771cb1ae040e",
-    "generated_at": "2026-10-25T08:26:39Z",
+    "revision": "cfe0100e1fca613e7b1af27dd1fe4807ca4d1d1a",
+    "generated_at": "2026-10-27T09:01:24Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4307,
-    "eligible_entries": 2947
+    "upstream_entries": 4323,
+    "eligible_entries": 2959
   },
   "entries": [
+    {
+      "model_key": "abliteration/abliterated-model",
+      "provider": "abliteration",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "3",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://abliteration.ai/pricing"
+    },
+    {
+      "model_key": "abliteration/abliterated-model-large",
+      "provider": "abliteration",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://abliteration.ai/pricing"
+    },
+    {
+      "model_key": "abliteration/abliterated-model-large-flash",
+      "provider": "abliteration",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "2",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://abliteration.ai/pricing"
+    },
+    {
+      "model_key": "abliteration/abliterated-model-large-v2",
+      "provider": "abliteration",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://abliteration.ai/pricing"
+    },
     {
       "model_key": "ai21.j2-mid-v1",
       "provider": "bedrock",
@@ -19292,6 +19336,22 @@
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html"
     },
     {
+      "model_key": "global.openai.gpt-6.1-terra",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.05",
+      "cache_creation_cost_per_million": "1.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+    },
+    {
       "model_key": "global.xai.grok-4.6",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -20555,8 +20615,10 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_batches",
         "cache_creation_input_token_cost_above_12hr_flex",
         "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
@@ -20601,8 +20663,10 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_batches",
         "cache_creation_input_token_cost_above_12hr_flex",
         "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
@@ -20647,8 +20711,10 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_batches",
         "cache_creation_input_token_cost_above_12hr_flex",
         "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
@@ -20693,10 +20759,14 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast",
+        "cache_creation_input_token_cost_above_12hr_batches",
         "cache_creation_input_token_cost_above_12hr_flex",
         "cache_creation_input_token_cost_above_12hr_priority",
+        "cache_creation_input_token_cost_above_12hr_ultrafast",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20743,8 +20813,10 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_batches",
         "cache_creation_input_token_cost_above_12hr_flex",
         "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
@@ -20793,8 +20865,10 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_batches",
         "cache_creation_input_token_cost_above_12hr_flex",
         "cache_creation_input_token_cost_above_12hr_priority",
         "cache_creation_input_token_cost_above_272k_tokens",
@@ -20839,10 +20913,14 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_12hr",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast",
+        "cache_creation_input_token_cost_above_12hr_batches",
         "cache_creation_input_token_cost_above_12hr_flex",
         "cache_creation_input_token_cost_above_12hr_priority",
+        "cache_creation_input_token_cost_above_12hr_ultrafast",
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_batches",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
@@ -20872,6 +20950,54 @@
         "output_cost_per_token_above_272k_tokens_flex",
         "output_cost_per_token_above_272k_tokens_priority",
         "output_cost_per_token_above_272k_tokens_ultrafast",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://developers.openai.com/api/docs/pricing"
+    },
+    {
+      "model_key": "gpt-6.1-terra",
+      "provider": "openai",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.05",
+      "cache_creation_cost_per_million": "1.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_above_12hr_batches",
+        "cache_creation_input_token_cost_above_12hr_flex",
+        "cache_creation_input_token_cost_above_12hr_priority",
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_batches",
+        "cache_creation_input_token_cost_above_272k_tokens_flex",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_batches",
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_batches",
+        "cache_read_input_token_cost_above_272k_tokens_flex",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens_batches",
+        "input_cost_per_token_above_272k_tokens_flex",
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_batches",
+        "output_cost_per_token_above_272k_tokens_flex",
+        "output_cost_per_token_above_272k_tokens_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
@@ -28620,6 +28746,61 @@
       "source_url": "https://www.qwencloud.com/models"
     },
     {
+      "model_key": "refuseless/deepseek-v4.1-flash-abliterated",
+      "provider": "refuseless",
+      "mode": "chat",
+      "input_cost_per_million": "0.22",
+      "output_cost_per_million": "0.75",
+      "cache_read_cost_per_million": "0.045",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://refuseless.com/pricing"
+    },
+    {
+      "model_key": "refuseless/deepseek-v4.1-flash-fast",
+      "provider": "refuseless",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0.15",
+      "cache_read_cost_per_million": "0.003",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://refuseless.com/pricing"
+    },
+    {
+      "model_key": "refuseless/glm-5.3-abliterated",
+      "provider": "refuseless",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "2.25",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://refuseless.com/pricing"
+    },
+    {
+      "model_key": "refuseless/glm-5.3-flash-abliterated",
+      "provider": "refuseless",
+      "mode": "chat",
+      "input_cost_per_million": "0.25",
+      "output_cost_per_million": "0.8",
+      "cache_read_cost_per_million": "0.15",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://refuseless.com/pricing"
+    },
+    {
+      "model_key": "refuseless/minimax-m3.1-flash",
+      "provider": "refuseless",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0.25",
+      "cache_read_cost_per_million": "0.002",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://refuseless.com/pricing"
+    },
+    {
       "model_key": "replicate/anthropic/claude-3.5-haiku",
       "provider": "replicate",
       "mode": "chat",
@@ -32010,6 +32191,22 @@
         "output_cost_per_token_above_272k_tokens_ultrafast"
       ],
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html"
+    },
+    {
+      "model_key": "us.openai.gpt-6.1-terra",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "1.1",
+      "output_cost_per_million": "5.5",
+      "cache_read_cost_per_million": "0.055",
+      "cache_creation_cost_per_million": "1.375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
     },
     {
       "model_key": "us.writer.palmyra-x4-v1:0",
