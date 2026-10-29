@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "000d4f6bb3c8d3cf0e2bb9540a61ccd77ffcd5b9",
-    "generated_at": "2026-10-28T09:41:11Z",
+    "revision": "032342d2b7695c6db7a22f3b78cf6740090c640e",
+    "generated_at": "2026-10-29T09:59:32Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4332,
-    "eligible_entries": 2967
+    "upstream_entries": 4429,
+    "eligible_entries": 3055
   },
   "entries": [
     {
@@ -111,6 +111,149 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    {
+      "model_key": "aiand/deepseek-ai/deepseek-v4-flash",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.25",
+      "cache_read_cost_per_million": "0.08",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/deepseek-ai/deepseek-v4-pro",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "2.5",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/deepseek-ai/deepseek-v4.1-flash",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/google/gemma-4-31b-it",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.05",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/moonshotai/kimi-k2.7-code",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.75",
+      "output_cost_per_million": "3.5",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/moonshotai/kimi-k3",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "12.5",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/motif-technologies/motif-3",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.5",
+      "output_cost_per_million": "2",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/openai/gpt-oss-120b",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.08",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/qwen/qwen3.6-27b",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.32",
+      "output_cost_per_million": "3.2",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/qwen/qwen3.8-27b",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.4",
+      "output_cost_per_million": "3",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/zai-org/glm-5.2",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/zai-org/glm-5.3",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
+    },
+    {
+      "model_key": "aiand/zai-org/glm-5.3-flash",
+      "provider": "aiand",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.aiand.com/v1/models"
     },
     {
       "model_key": "aihubmix/agnes-2.5-flash",
@@ -2020,6 +2163,22 @@
       "source_url": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models"
     },
     {
+      "model_key": "azure/apac/gpt-6.1-terra",
+      "provider": "azure",
+      "mode": "chat",
+      "input_cost_per_million": "1.2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.06",
+      "cache_creation_cost_per_million": "1.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/gpt-6-1-terra-now-generally-available-in-microsoft-foundry-build-agents-that-see/4567769"
+    },
+    {
       "model_key": "azure/chat-latest",
       "provider": "azure",
       "mode": "chat",
@@ -2675,6 +2834,22 @@
         "output_cost_per_token_above_272k_tokens"
       ],
       "source_url": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models"
+    },
+    {
+      "model_key": "azure/eu/gpt-6.1-terra",
+      "provider": "azure",
+      "mode": "chat",
+      "input_cost_per_million": "1.2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.06",
+      "cache_creation_cost_per_million": "1.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/gpt-6-1-terra-now-generally-available-in-microsoft-foundry-build-agents-that-see/4567769"
     },
     {
       "model_key": "azure/eu/o1",
@@ -4111,6 +4286,22 @@
       "source_url": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models"
     },
     {
+      "model_key": "azure/gpt-6.1-terra",
+      "provider": "azure",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.05",
+      "cache_creation_cost_per_million": "1.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/gpt-6-1-terra-now-generally-available-in-microsoft-foundry-build-agents-that-see/4567769"
+    },
+    {
       "model_key": "azure/gpt-audio",
       "provider": "azure",
       "mode": "chat",
@@ -5040,6 +5231,22 @@
       "source_url": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models"
     },
     {
+      "model_key": "azure/us/gpt-6.1-terra",
+      "provider": "azure",
+      "mode": "chat",
+      "input_cost_per_million": "1.1",
+      "output_cost_per_million": "5.5",
+      "cache_read_cost_per_million": "0.055",
+      "cache_creation_cost_per_million": "1.375",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/gpt-6-1-terra-now-generally-available-in-microsoft-foundry-build-agents-that-see/4567769"
+    },
+    {
       "model_key": "azure/us/gpt-chat-latest",
       "provider": "azure",
       "mode": "chat",
@@ -5412,7 +5619,7 @@
       "mode": "chat",
       "input_cost_per_million": "2",
       "output_cost_per_million": "10",
-      "cache_read_cost_per_million": "0.2",
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": "2.5",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
@@ -6011,6 +6218,22 @@
         "output_cost_per_token_above_272k_tokens"
       ],
       "source_url": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models"
+    },
+    {
+      "model_key": "azure_ai/gpt-6.1-terra",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "5",
+      "cache_read_cost_per_million": "0.05",
+      "cache_creation_cost_per_million": "1.25",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
+      ],
+      "source_url": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/gpt-6-1-terra-now-generally-available-in-microsoft-foundry-build-agents-that-see/4567769"
     },
     {
       "model_key": "azure_ai/gpt-chat-latest",
@@ -7068,6 +7291,42 @@
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-minimax-minimax-m2-5.html"
     },
     {
+      "model_key": "bedrock/ap-northeast-1/mistral.voxtral-mini-3b-2507",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0.05",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-northeast-1/index.json"
+    },
+    {
+      "model_key": "bedrock/ap-northeast-1/mistral.voxtral-small-24b-2507",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.12",
+      "output_cost_per_million": "0.36",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-northeast-1/index.json"
+    },
+    {
       "model_key": "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking",
       "provider": "bedrock",
       "mode": "chat",
@@ -7250,6 +7509,42 @@
         "output_cost_per_token_flex"
       ],
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-minimax-minimax-m2-5.html"
+    },
+    {
+      "model_key": "bedrock/ap-southeast-2/mistral.voxtral-mini-3b-2507",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.0412",
+      "output_cost_per_million": "0.0412",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-southeast-2/index.json"
+    },
+    {
+      "model_key": "bedrock/ap-southeast-2/mistral.voxtral-small-24b-2507",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.103",
+      "output_cost_per_million": "0.309",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-southeast-2/index.json"
     },
     {
       "model_key": "bedrock/ap-southeast-2/qwen.qwen3-next-80b-a3b",
@@ -7911,6 +8206,42 @@
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-minimax-minimax-m2-5.html"
     },
     {
+      "model_key": "bedrock/eu-west-2/mistral.voxtral-mini-3b-2507",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.06",
+      "output_cost_per_million": "0.06",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/eu-west-2/index.json"
+    },
+    {
+      "model_key": "bedrock/eu-west-2/mistral.voxtral-small-24b-2507",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "0.16",
+      "output_cost_per_million": "0.47",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/eu-west-2/index.json"
+    },
+    {
       "model_key": "bedrock/eu-west-2/nvidia.nemotron-super-3-120b",
       "provider": "bedrock",
       "mode": "chat",
@@ -8538,7 +8869,8 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "7.2"
+      "cache_creation_1h_cost_per_million": "7.2",
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     {
       "model_key": "bedrock/us-gov-east-1/anthropic.claude-sonnet-5",
@@ -8578,7 +8910,8 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "7.2"
+      "cache_creation_1h_cost_per_million": "7.2",
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     {
       "model_key": "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0",
@@ -8823,7 +9156,8 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "7.2"
+      "cache_creation_1h_cost_per_million": "7.2",
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     {
       "model_key": "bedrock/us-gov-west-1/anthropic.claude-sonnet-5",
@@ -8863,7 +9197,8 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_1hr"
       ],
-      "cache_creation_1h_cost_per_million": "7.2"
+      "cache_creation_1h_cost_per_million": "7.2",
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     {
       "model_key": "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0",
@@ -9666,6 +10001,39 @@
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html"
     },
     {
+      "model_key": "bigmodel/glm-5.3",
+      "provider": "bigmodel",
+      "mode": "chat",
+      "input_cost_per_million": "1.1428571428571428",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.2857142857142857",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.bigmodel.cn/cn/guide/start/pricing"
+    },
+    {
+      "model_key": "bigmodel/glm-5.3-flash",
+      "provider": "bigmodel",
+      "mode": "chat",
+      "input_cost_per_million": "0.1142857142857143",
+      "output_cost_per_million": "0.4",
+      "cache_read_cost_per_million": "0.032857142857142855",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.bigmodel.cn/cn/guide/start/pricing"
+    },
+    {
+      "model_key": "bigmodel/glm-5.3-flashx",
+      "provider": "bigmodel",
+      "mode": "chat",
+      "input_cost_per_million": "0.2857142857142857",
+      "output_cost_per_million": "1",
+      "cache_read_cost_per_million": "0.08142857142857142",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.bigmodel.cn/cn/guide/start/pricing"
+    },
+    {
       "model_key": "c4ai-aya-expanse-32b",
       "provider": "cohere_chat",
       "mode": "chat",
@@ -10152,7 +10520,8 @@
         "output_cost_per_token_above_200k_tokens",
         "output_cost_per_token_batches"
       ],
-      "cache_creation_1h_cost_per_million": "6"
+      "cache_creation_1h_cost_per_million": "6",
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     {
       "model_key": "claude-sonnet-4-6",
@@ -11128,22 +11497,28 @@
       "model_key": "databricks/databricks-claude-fable-5",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "10.00006",
+      "input_cost_per_million": "9.99999",
       "output_cost_per_million": "50.00002",
       "cache_read_cost_per_million": "1.00002",
-      "cache_creation_cost_per_million": "12.50004",
-      "special_pricing_fields": [],
+      "cache_creation_cost_per_million": "12.49997",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.99998",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-claude-fable-5-1",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "10.00006",
+      "input_cost_per_million": "9.99999",
       "output_cost_per_million": "50.00002",
-      "cache_read_cost_per_million": "0.25004",
-      "cache_creation_cost_per_million": "12.50004",
-      "special_pricing_fields": [],
+      "cache_read_cost_per_million": "0.24997",
+      "cache_creation_cost_per_million": "12.49997",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.99998",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11154,29 +11529,57 @@
       "output_cost_per_million": "5.00003",
       "cache_read_cost_per_million": "0.10003",
       "cache_creation_cost_per_million": "1.24999",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "1.99997",
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-claude-haiku-5-5",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.10003",
+      "output_cost_per_million": "0.50001",
+      "cache_read_cost_per_million": "0.01001",
+      "cache_creation_cost_per_million": "0.12502",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_100k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
+        "cache_read_input_token_cost_above_100k_tokens",
+        "input_cost_per_token_above_100k_tokens",
+        "output_cost_per_token_above_100k_tokens"
+      ],
+      "cache_creation_1h_cost_per_million": "0.19999",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-claude-opus-4",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "15.000020000000002",
-      "output_cost_per_million": "75.00003000000001",
+      "input_cost_per_million": "15.00002",
+      "output_cost_per_million": "75.0001",
       "cache_read_cost_per_million": "1.50003",
       "cache_creation_cost_per_million": "18.74999",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "29.99997",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-claude-opus-4-1",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "15.000020000000002",
-      "output_cost_per_million": "75.00003000000001",
+      "input_cost_per_million": "15.00002",
+      "output_cost_per_million": "75.0001",
       "cache_read_cost_per_million": "1.50003",
       "cache_creation_cost_per_million": "18.74999",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "29.99997",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11184,10 +11587,13 @@
       "provider": "databricks",
       "mode": "chat",
       "input_cost_per_million": "5.00003",
-      "output_cost_per_million": "25.000010000000002",
+      "output_cost_per_million": "25.00001",
       "cache_read_cost_per_million": "0.50001",
       "cache_creation_cost_per_million": "6.25002",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "9.99999",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11195,10 +11601,13 @@
       "provider": "databricks",
       "mode": "chat",
       "input_cost_per_million": "5.00003",
-      "output_cost_per_million": "25.000010000000002",
+      "output_cost_per_million": "25.00001",
       "cache_read_cost_per_million": "0.50001",
       "cache_creation_cost_per_million": "6.25002",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "9.99999",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11209,7 +11618,10 @@
       "output_cost_per_million": "25.00001",
       "cache_read_cost_per_million": "0.50001",
       "cache_creation_cost_per_million": "6.25002",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "9.99999",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11220,7 +11632,10 @@
       "output_cost_per_million": "25.00001",
       "cache_read_cost_per_million": "0.50001",
       "cache_creation_cost_per_million": "6.25002",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "9.99999",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11231,7 +11646,10 @@
       "output_cost_per_million": "25.00001",
       "cache_read_cost_per_million": "0.50001",
       "cache_creation_cost_per_million": "6.25002",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "9.99999",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11274,34 +11692,84 @@
       "model_key": "databricks/databricks-claude-sonnet-4-5",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "2.9999900000000002",
-      "output_cost_per_million": "15.000020000000002",
+      "input_cost_per_million": "2.99999",
+      "output_cost_per_million": "15.00002",
       "cache_read_cost_per_million": "0.30002",
       "cache_creation_cost_per_million": "3.74997",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "5.99998",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-claude-sonnet-4-6",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "2.9999900000000002",
-      "output_cost_per_million": "15.000020000000002",
+      "input_cost_per_million": "2.99999",
+      "output_cost_per_million": "15.00002",
       "cache_read_cost_per_million": "0.30002",
       "cache_creation_cost_per_million": "3.74997",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "5.99998",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-claude-sonnet-5",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "2.99999",
-      "output_cost_per_million": "15.00002",
-      "cache_read_cost_per_million": "0.30002",
-      "cache_creation_cost_per_million": "3.74997",
-      "special_pricing_fields": [],
+      "input_cost_per_million": "1.99997",
+      "output_cost_per_million": "9.99999",
+      "cache_read_cost_per_million": "0.19999",
+      "cache_creation_cost_per_million": "2.49998",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "4.00001",
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-claude-sonnet-5-5",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "1.99997",
+      "output_cost_per_million": "9.99999",
+      "cache_read_cost_per_million": "0.10003",
+      "cache_creation_cost_per_million": "2.49998",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "4.00001",
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-deepseek-v4-1-flash",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.30002",
+      "output_cost_per_million": "1.20001",
+      "cache_read_cost_per_million": "0.03003",
+      "cache_creation_cost_per_million": "0.30002",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
+    },
+    {
+      "model_key": "databricks/databricks-deepseek-v4-1-flash-1017",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.30002",
+      "output_cost_per_million": "1.20001",
+      "cache_read_cost_per_million": "0.007",
+      "cache_creation_cost_per_million": "0.30002",
+      "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-deepseek-v4-flash-0731",
@@ -11337,6 +11805,17 @@
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
+      "model_key": "databricks/databricks-gemini-2-5-flash-lite",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.12502",
+      "output_cost_per_million": "0.50001",
+      "cache_read_cost_per_million": "0.01253",
+      "cache_creation_cost_per_million": "0.12502",
+      "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
       "model_key": "databricks/databricks-gemini-2-5-pro",
       "provider": "databricks",
       "mode": "chat",
@@ -11348,12 +11827,39 @@
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
+      "model_key": "databricks/databricks-gemini-3-1-flash-image",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.62503",
+      "output_cost_per_million": "3.74997",
+      "cache_read_cost_per_million": "0.62503",
+      "cache_creation_cost_per_million": "0.62503",
+      "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
       "model_key": "databricks/databricks-gemini-3-1-flash-lite",
       "provider": "databricks",
       "mode": "chat",
       "input_cost_per_million": "0.31248",
       "output_cost_per_million": "1.87502",
       "cache_read_cost_per_million": "0.03122",
+      "cache_creation_cost_per_million": "0.31248",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-gemini-3-1-flash-lite-image",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.31248",
+      "output_cost_per_million": "1.87502",
+      "cache_read_cost_per_million": "0.31248",
       "cache_creation_cost_per_million": "0.31248",
       "special_pricing_fields": [],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
@@ -11366,7 +11872,18 @@
       "output_cost_per_million": "15.000020000000002",
       "cache_read_cost_per_million": "0.24997",
       "cache_creation_cost_per_million": "2.49998",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_200k_tokens",
+        "cache_read_input_token_cost_above_200k_tokens_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11377,7 +11894,12 @@
       "output_cost_per_million": "11.24998",
       "cache_read_cost_per_million": "0.18753",
       "cache_creation_cost_per_million": "1.87502",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11388,18 +11910,60 @@
       "output_cost_per_million": "3.12501",
       "cache_read_cost_per_million": "0.03752",
       "cache_creation_cost_per_million": "0.37499",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-gemini-3-6-flash",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "1.87502",
-      "output_cost_per_million": "9.37503",
-      "cache_read_cost_per_million": "0.18753",
-      "cache_creation_cost_per_million": "1.87502",
-      "special_pricing_fields": [],
+      "input_cost_per_million": "0.74998",
+      "output_cost_per_million": "3.74997",
+      "cache_read_cost_per_million": "0.07497",
+      "cache_creation_cost_per_million": "0.74998",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-gemini-3-7-flash",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.74998",
+      "output_cost_per_million": "3.74997",
+      "cache_read_cost_per_million": "0.07497",
+      "cache_creation_cost_per_million": "0.74998",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-gemini-3-8-flash",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.74998",
+      "output_cost_per_million": "3.74997",
+      "cache_read_cost_per_million": "0.07497",
+      "cache_creation_cost_per_million": "0.74998",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11410,7 +11974,12 @@
       "output_cost_per_million": "3.74997",
       "cache_read_cost_per_million": "0.06251",
       "cache_creation_cost_per_million": "0.62503",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11422,6 +11991,33 @@
       "cache_read_cost_per_million": "0.24997",
       "cache_creation_cost_per_million": "2.49998",
       "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-gemini-3-pro-image",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "2.49998",
+      "output_cost_per_million": "15.00002",
+      "cache_read_cost_per_million": "2.49998",
+      "cache_creation_cost_per_million": "2.49998",
+      "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-gemini-4-argon",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "2.49998",
+      "output_cost_per_million": "12.49997",
+      "cache_read_cost_per_million": "0.12502",
+      "cache_creation_cost_per_million": "2.49998",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11443,7 +12039,12 @@
       "output_cost_per_million": "4.39999",
       "cache_read_cost_per_million": "0.25998",
       "cache_creation_cost_per_million": "1.4",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     {
@@ -11454,7 +12055,12 @@
       "output_cost_per_million": "4.39999",
       "cache_read_cost_per_million": "0.25998",
       "cache_creation_cost_per_million": "1.4",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     {
@@ -11465,7 +12071,12 @@
       "output_cost_per_million": "0.50001",
       "cache_read_cost_per_million": "0.03003",
       "cache_creation_cost_per_million": "0.15001",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     {
@@ -11476,7 +12087,12 @@
       "output_cost_per_million": "9.999990000000002",
       "cache_read_cost_per_million": "0.12502",
       "cache_creation_cost_per_million": "1.24999",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11487,7 +12103,12 @@
       "output_cost_per_million": "9.999990000000002",
       "cache_read_cost_per_million": "0.12502",
       "cache_creation_cost_per_million": "1.24999",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11498,7 +12119,12 @@
       "output_cost_per_million": "14",
       "cache_read_cost_per_million": "0.175",
       "cache_creation_cost_per_million": "1.75",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11509,7 +12135,18 @@
       "output_cost_per_million": "15.000020000000002",
       "cache_read_cost_per_million": "0.24997",
       "cache_creation_cost_per_million": "2.49998",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11520,7 +12157,12 @@
       "output_cost_per_million": "4.50002",
       "cache_read_cost_per_million": "0.07497",
       "cache_creation_cost_per_million": "0.74998",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11538,11 +12180,24 @@
       "model_key": "databricks/databricks-gpt-5-6-luna",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "1.00002",
-      "output_cost_per_million": "5.99998",
-      "cache_read_cost_per_million": "0.10003",
-      "cache_creation_cost_per_million": "1.24999",
-      "special_pricing_fields": [],
+      "input_cost_per_million": "0.19999",
+      "output_cost_per_million": "1.20001",
+      "cache_read_cost_per_million": "0.02002",
+      "cache_creation_cost_per_million": "0.24997",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11553,18 +12208,44 @@
       "output_cost_per_million": "19.99998",
       "cache_read_cost_per_million": "0.39998",
       "cache_creation_cost_per_million": "5.00003",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-gpt-5-6-terra",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "2.49998",
-      "output_cost_per_million": "15.00002",
-      "cache_read_cost_per_million": "0.24997",
-      "cache_creation_cost_per_million": "3.12501",
-      "special_pricing_fields": [],
+      "input_cost_per_million": "1.99997",
+      "output_cost_per_million": "12.00003",
+      "cache_read_cost_per_million": "0.19999",
+      "cache_creation_cost_per_million": "2.49998",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11575,7 +12256,12 @@
       "output_cost_per_million": "1.9999700000000004",
       "cache_read_cost_per_million": "0.02499",
       "cache_creation_cost_per_million": "0.24997",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11587,6 +12273,54 @@
       "cache_read_cost_per_million": "0.00497",
       "cache_creation_cost_per_million": "0.04998",
       "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-gpt-6-1-terra",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "1.00002",
+      "output_cost_per_million": "5.00003",
+      "cache_read_cost_per_million": "0.04998",
+      "cache_creation_cost_per_million": "1.24999",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/databricks-gpt-6-astra",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "9.99999",
+      "output_cost_per_million": "50.00002",
+      "cache_read_cost_per_million": "1.00002",
+      "cache_creation_cost_per_million": "12.49997",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens_priority",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
@@ -11623,6 +12357,17 @@
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
+      "model_key": "databricks/databricks-grok-4-7",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "2.49998",
+      "output_cost_per_million": "7.50001",
+      "cache_read_cost_per_million": "0.62503",
+      "cache_creation_cost_per_million": "2.49998",
+      "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
       "model_key": "databricks/databricks-inkling",
       "provider": "databricks",
       "mode": "chat",
@@ -11634,6 +12379,17 @@
       "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     {
+      "model_key": "databricks/databricks-kimi-k2-7",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "0.94997",
+      "output_cost_per_million": "4.00001",
+      "cache_read_cost_per_million": "0.18998",
+      "cache_creation_cost_per_million": "0.94997",
+      "special_pricing_fields": [],
+      "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
+    {
       "model_key": "databricks/databricks-kimi-k3",
       "provider": "databricks",
       "mode": "chat",
@@ -11641,7 +12397,12 @@
       "output_cost_per_million": "15.00002",
       "cache_read_cost_per_million": "0.30002",
       "cache_creation_cost_per_million": "2.99999",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     {
@@ -11696,7 +12457,12 @@
       "output_cost_per_million": "2.20003",
       "cache_read_cost_per_million": "0.22001",
       "cache_creation_cost_per_million": "0.22001",
-      "special_pricing_fields": [],
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
       "source_url": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     {
@@ -16665,6 +17431,28 @@
       "special_pricing_fields": []
     },
     {
+      "model_key": "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.21",
+      "output_cost_per_million": "0.84",
+      "cache_read_cost_per_million": "0.0042",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+    },
+    {
+      "model_key": "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-spot",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.21",
+      "output_cost_per_million": "0.84",
+      "cache_read_cost_per_million": "0.0042",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+    },
+    {
       "model_key": "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-us",
       "provider": "fireworks_ai",
       "mode": "chat",
@@ -16739,6 +17527,17 @@
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
     },
     {
+      "model_key": "fireworks_ai/accounts/fireworks/routers/glm-5p3-spot",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.98",
+      "output_cost_per_million": "3.08",
+      "cache_read_cost_per_million": "0.182",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+    },
+    {
       "model_key": "fireworks_ai/accounts/fireworks/routers/glm-5p3-us",
       "provider": "fireworks_ai",
       "mode": "chat",
@@ -16787,6 +17586,17 @@
       "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
+      "model_key": "fireworks_ai/accounts/fireworks/routers/kimi-k3-spot",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "2.1",
+      "output_cost_per_million": "10.5",
+      "cache_read_cost_per_million": "0.21",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.fireworks.ai/v1/serverless/models"
+    },
+    {
       "model_key": "fireworks_ai/accounts/fireworks/routers/kimi-k3-us",
       "provider": "fireworks_ai",
       "mode": "chat",
@@ -16800,6 +17610,17 @@
         "output_cost_per_token_priority"
       ],
       "source_url": "https://docs.fireworks.ai/serverless/pricing"
+    },
+    {
+      "model_key": "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash",
+      "provider": "fireworks_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.105",
+      "output_cost_per_million": "0.21",
+      "cache_read_cost_per_million": "0.021",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
       "model_key": "fireworks_ai/deepseek-v4-flash",
@@ -17606,11 +18427,13 @@
         "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens_batches",
         "input_cost_per_token_above_200k_tokens_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens_batches",
         "output_cost_per_token_above_200k_tokens_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex",
@@ -17696,11 +18519,13 @@
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens_batches",
         "input_cost_per_token_above_200k_tokens_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens_batches",
         "output_cost_per_token_above_200k_tokens_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex",
@@ -20158,7 +20983,6 @@
         "cache_read_input_token_cost_flex",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
-        "input_cost_per_token_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex"
       ],
@@ -20177,7 +21001,6 @@
         "cache_read_input_token_cost_flex",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
-        "input_cost_per_token_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex"
       ],
@@ -23288,6 +24111,17 @@
       "source_url": "https://mistral.ai/technology/"
     },
     {
+      "model_key": "mistral/deepseek-v4-1-flash-1017",
+      "provider": "mistral",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.007",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.mistral.ai/models/deepseek-v4-flash-1017"
+    },
+    {
       "model_key": "mistral/devstral-latest",
       "provider": "mistral",
       "mode": "chat",
@@ -23533,9 +24367,9 @@
       "model_key": "mistral/mistral-large-4",
       "provider": "mistral",
       "mode": "chat",
-      "input_cost_per_million": "0.68",
-      "output_cost_per_million": "2.09",
-      "cache_read_cost_per_million": "0.068",
+      "input_cost_per_million": "1.36",
+      "output_cost_per_million": "4.18",
+      "cache_read_cost_per_million": "0.14",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://docs.mistral.ai/models/mistral-large-4"
@@ -23544,9 +24378,9 @@
       "model_key": "mistral/mistral-large-4-0",
       "provider": "mistral",
       "mode": "chat",
-      "input_cost_per_million": "0.68",
-      "output_cost_per_million": "2.09",
-      "cache_read_cost_per_million": "0.068",
+      "input_cost_per_million": "1.36",
+      "output_cost_per_million": "4.18",
+      "cache_read_cost_per_million": "0.14",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://docs.mistral.ai/models/mistral-large-4"
@@ -23857,9 +24691,26 @@
       "input_cost_per_million": "3",
       "output_cost_per_million": "15",
       "cache_read_cost_per_million": "0.3",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
+      "cache_creation_cost_per_million": "3",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "6",
       "source_url": "https://platform.kimi.ai/docs/pricing/chat-k3"
+    },
+    {
+      "model_key": "moonshot/kimi-k3.1-pro",
+      "provider": "moonshot",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "2",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "4",
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat"
     },
     {
       "model_key": "moonshot/moonshot-v1-128k",
@@ -28837,9 +29688,9 @@
       "model_key": "refuseless/deepseek-v4.1-flash-abliterated",
       "provider": "refuseless",
       "mode": "chat",
-      "input_cost_per_million": "0.22",
-      "output_cost_per_million": "0.75",
-      "cache_read_cost_per_million": "0.045",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.035",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://refuseless.com/pricing"
@@ -28859,9 +29710,9 @@
       "model_key": "refuseless/glm-5.3-abliterated",
       "provider": "refuseless",
       "mode": "chat",
-      "input_cost_per_million": "1.25",
-      "output_cost_per_million": "2.25",
-      "cache_read_cost_per_million": "0.25",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "2",
+      "cache_read_cost_per_million": "0.15",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://refuseless.com/pricing"
@@ -28870,9 +29721,9 @@
       "model_key": "refuseless/glm-5.3-flash-abliterated",
       "provider": "refuseless",
       "mode": "chat",
-      "input_cost_per_million": "0.25",
-      "output_cost_per_million": "0.8",
-      "cache_read_cost_per_million": "0.15",
+      "input_cost_per_million": "0.12",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.04",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://refuseless.com/pricing"
@@ -30046,6 +30897,296 @@
       "special_pricing_fields": []
     },
     {
+      "model_key": "streamlake/deepseek-r1",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.571",
+      "output_cost_per_million": "2.286",
+      "cache_read_cost_per_million": "0.229",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/DeepSeek-V3",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.286",
+      "output_cost_per_million": "1.143",
+      "cache_read_cost_per_million": "0.114",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/deepseek-v3.1",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.571",
+      "output_cost_per_million": "1.714",
+      "cache_read_cost_per_million": "0.229",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/deepseek-v4-flash",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.28",
+      "cache_read_cost_per_million": "0.028",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/deepseek-v4-flash-0731",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.44",
+      "output_cost_per_million": "1.32",
+      "cache_read_cost_per_million": "0.014",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/deepseek-v4-pro",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "1.74",
+      "output_cost_per_million": "3.48",
+      "cache_read_cost_per_million": "0.145",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/DeepSeek-V4-Pro-0813",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "1.32",
+      "output_cost_per_million": "3.96",
+      "cache_read_cost_per_million": "0.044",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/deepseek-v4.1-flash-1017",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/deepseek-v4.1-flash-260910",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/glm-5",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "1",
+      "output_cost_per_million": "3.2",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/glm-5.1",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/glm-5.2",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/GLM-5.3",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "1.4",
+      "output_cost_per_million": "4.4",
+      "cache_read_cost_per_million": "0.26",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/GLM-5.3-Flash",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/Kimi-K2-Instruct-0905",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.571",
+      "output_cost_per_million": "2.286",
+      "cache_read_cost_per_million": "0.143",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/kimi-k2.6",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.95",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.16",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/kimi-k2.7-code",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.95",
+      "output_cost_per_million": "4",
+      "cache_read_cost_per_million": "0.19",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/mimo-v2.6-flash",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.28",
+      "cache_read_cost_per_million": "0.0028",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/mimo-v2.6-pro",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.435",
+      "output_cost_per_million": "0.87",
+      "cache_read_cost_per_million": "0.0036",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/minimax-m2.5",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": "0.375",
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/minimax-m3",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "2.4",
+      "cache_read_cost_per_million": "0.12",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_512k_tokens",
+        "input_cost_per_token_above_512k_tokens",
+        "output_cost_per_token_above_512k_tokens"
+      ],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/qwen3.5-397b-a17b",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "3.6",
+      "cache_read_cost_per_million": "0.12",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/qwen3.6-27b",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "3.6",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/qwen3.6-35b-a3b",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.375",
+      "output_cost_per_million": "2.25",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/qwen3.8-2.4t-a95b",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": "2.5",
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
+      "model_key": "streamlake/qwen3.8-27b",
+      "provider": "streamlake",
+      "mode": "chat",
+      "input_cost_per_million": "0.5",
+      "output_cost_per_million": "3",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": "0.625",
+      "special_pricing_fields": [],
+      "source_url": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    {
       "model_key": "tencent/deepseek-v4-flash",
       "provider": "tencent",
       "mode": "chat",
@@ -31152,9 +32293,9 @@
       "model_key": "together_ai/Qwen/Qwen3.7-Max",
       "provider": "together_ai",
       "mode": "chat",
-      "input_cost_per_million": "1.5",
-      "output_cost_per_million": "4.5",
-      "cache_read_cost_per_million": "0.3",
+      "input_cost_per_million": "2.5",
+      "output_cost_per_million": "7.5",
+      "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.together.ai/pricing"
@@ -31416,7 +32557,7 @@
         "output_cost_per_token_above_200k_tokens"
       ],
       "cache_creation_1h_cost_per_million": "7.2",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     {
       "model_key": "us-gov.anthropic.claude-sonnet-5",
@@ -34200,11 +35341,13 @@
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens_batches",
         "input_cost_per_token_above_200k_tokens_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens_batches",
         "output_cost_per_token_above_200k_tokens_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex",
@@ -35306,12 +36449,12 @@
       "model_key": "wandb/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.15",
-      "output_cost_per_million": "0.75",
-      "cache_read_cost_per_million": "0.02",
+      "input_cost_per_million": "0.25",
+      "output_cost_per_million": "1.5",
+      "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://openrouter.ai/api/v1/models/nvidia/nemotron-3.5-super-vl/endpoints"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/openai/gpt-oss-120b",
@@ -36313,8 +37456,14 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "cache_read_input_token_cost_above_200k_tokens",
+        "cache_read_input_token_cost_above_200k_tokens_batches",
+        "cache_read_input_token_cost_batches",
         "input_cost_per_token_above_200k_tokens",
-        "output_cost_per_token_above_200k_tokens"
+        "input_cost_per_token_above_200k_tokens_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens_batches",
+        "output_cost_per_token_batches"
       ],
       "source_url": "https://api.x.ai/v1/language-models"
     },
@@ -36642,6 +37791,149 @@
       "cache_creation_cost_per_million": "0",
       "special_pricing_fields": [],
       "source_url": "https://docs.z.ai/guides/overview/pricing"
+    },
+    {
+      "model_key": "zerogpu/deepseek-v4.1-flash",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.003",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/glm-5.3-flash",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.35",
+      "cache_read_cost_per_million": "0.015",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/gpt-4.1-mini",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.4",
+      "output_cost_per_million": "1.6",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/gpt-5.4-nano",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "1.25",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/gpt-5.6-luna",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/gpt-6-luna",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.01",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/gpt-oss-120b",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/LFM2.5-1.2B-Instruct",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.02",
+      "output_cost_per_million": "0.05",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/LFM2.5-1.2B-Thinking",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.02",
+      "output_cost_per_million": "0.05",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/llama-3.1-8b-instruct-fast",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.28",
+      "cache_read_cost_per_million": "0.025",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/llama-3.2-3b-instruct-fast",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.05",
+      "output_cost_per_million": "0.3",
+      "cache_read_cost_per_million": "0.025",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/qwen3-30b-a3b-fp8",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.45",
+      "cache_read_cost_per_million": "0.05",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
+    },
+    {
+      "model_key": "zerogpu/qwen3.6-35b-a3b",
+      "provider": "zerogpu",
+      "mode": "chat",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "1.5",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://docs.zerogpu.ai/docs/model-catalog"
     }
   ]
 }
