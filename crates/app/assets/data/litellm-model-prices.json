@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "da71a03f6efc34410c067a6ecec6e95e80ccce54",
-    "generated_at": "2026-10-31T09:40:12Z",
+    "revision": "60fc121ce8ab995cb2997e0bbd0a980ee93c627d",
+    "generated_at": "2026-11-01T10:29:05Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4550,
-    "eligible_entries": 3155
+    "upstream_entries": 4552,
+    "eligible_entries": 3156
   },
   "entries": [
     {
@@ -9428,7 +9428,8 @@
       "output_cost_per_million": "3.5",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md"
     },
     {
       "model_key": "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0",
@@ -9438,7 +9439,8 @@
       "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
+      "special_pricing_fields": [],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md"
     },
     {
       "model_key": "bedrock/us-gov-west-1/nvidia.nemotron-nano-12b-v2",
@@ -22000,6 +22002,17 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
+      "source_url": "https://developers.openai.com/api/docs/pricing"
+    },
+    {
+      "model_key": "gpt-6-astra-law",
+      "provider": "openai",
+      "mode": "chat",
+      "input_cost_per_million": "10",
+      "output_cost_per_million": "50",
+      "cache_read_cost_per_million": "1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
       "source_url": "https://developers.openai.com/api/docs/pricing"
     },
     {
