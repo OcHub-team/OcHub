@@ -3,8 +3,8 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "60fc121ce8ab995cb2997e0bbd0a980ee93c627d",
-    "generated_at": "2026-11-01T10:29:05Z",
+    "revision": "ff3983c1f627ad09a5e36e45cc92a0cec91afb72",
+    "generated_at": "2026-11-02T11:10:26Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
@@ -37528,7 +37528,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/deepseek-ai/DeepSeek-V4-Flash",
@@ -37660,7 +37660,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/meta-llama/Llama-3.3-70B-Instruct",
