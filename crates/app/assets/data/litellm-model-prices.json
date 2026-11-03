@@ -3,13 +3,13 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "ff3983c1f627ad09a5e36e45cc92a0cec91afb72",
-    "generated_at": "2026-11-02T11:10:26Z",
+    "revision": "ff182c194e0b5f782e4a7d3405361fed11466416",
+    "generated_at": "2026-11-03T10:54:11Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4552,
+    "upstream_entries": 4560,
     "eligible_entries": 3156
   },
   "entries": [
@@ -7314,7 +7314,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/ap-northeast-1/minimax.minimax-m2.1",
@@ -7466,7 +7466,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0",
@@ -7667,7 +7667,7 @@
         "input_cost_per_token_flex",
         "output_cost_per_token_flex"
       ],
-      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/ap-southeast-3/minimax.minimax-m2.1",
@@ -8104,7 +8104,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/eu-north-1/minimax.minimax-m2.1",
@@ -8523,7 +8523,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0",
@@ -8691,7 +8691,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/us-east-1/meta.llama3-70b-instruct-v1:0",
@@ -8868,7 +8868,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/us-east-2/minimax.minimax-m2.1",
@@ -9576,7 +9576,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "bedrock/us-west-2/minimax.minimax-m2.1",
@@ -14449,7 +14449,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     {
       "model_key": "deepseek/deepseek-chat",
@@ -25656,23 +25656,23 @@
       "model_key": "mistral/mistral-large-4",
       "provider": "mistral",
       "mode": "chat",
-      "input_cost_per_million": "1.36",
-      "output_cost_per_million": "4.18",
-      "cache_read_cost_per_million": "0.14",
+      "input_cost_per_million": "0.7",
+      "output_cost_per_million": "2.1",
+      "cache_read_cost_per_million": "0.07",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://docs.mistral.ai/models/mistral-large-4"
+      "source_url": "https://docs.mistral.ai/models/mistral-large-4-0"
     },
     {
       "model_key": "mistral/mistral-large-4-0",
       "provider": "mistral",
       "mode": "chat",
-      "input_cost_per_million": "1.36",
-      "output_cost_per_million": "4.18",
-      "cache_read_cost_per_million": "0.14",
+      "input_cost_per_million": "0.7",
+      "output_cost_per_million": "2.1",
+      "cache_read_cost_per_million": "0.07",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://docs.mistral.ai/models/mistral-large-4"
+      "source_url": "https://docs.mistral.ai/models/mistral-large-4-0"
     },
     {
       "model_key": "mistral/mistral-large-latest",
