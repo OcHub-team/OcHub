@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "ff182c194e0b5f782e4a7d3405361fed11466416",
-    "generated_at": "2026-11-03T10:54:11Z",
+    "revision": "fd4cef22eafaf5e1c18f3a5af6df252a16fa5cce",
+    "generated_at": "2026-11-04T10:56:48Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4560,
-    "eligible_entries": 3156
+    "upstream_entries": 4525,
+    "eligible_entries": 3126
   },
   "entries": [
     {
@@ -1497,10 +1497,12 @@
       "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": "6.25",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "10",
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-east-1/index.json"
     },
     {
       "model_key": "anthropic.claude-opus-5-5",
@@ -1895,10 +1897,12 @@
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": "6.875",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "11",
-      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-northeast-1/index.json"
     },
     {
       "model_key": "apac.anthropic.claude-opus-5-5",
@@ -2086,10 +2090,12 @@
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": "6.875",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "11",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-southeast-2/index.json"
     },
     {
       "model_key": "au.anthropic.claude-opus-5-5",
@@ -2210,17 +2216,6 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/"
-    },
-    {
-      "model_key": "azure/command-r-plus",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "3",
-      "output_cost_per_million": "15",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     {
       "model_key": "azure/computer-use-preview",
@@ -2930,17 +2925,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/eu/o1-preview",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "16.5",
-      "output_cost_per_million": "66",
-      "cache_read_cost_per_million": "8.25",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/eu/o3",
       "provider": "azure",
       "mode": "chat",
@@ -3151,28 +3135,6 @@
       "special_pricing_fields": []
     },
     {
-      "model_key": "azure/gpt-35-turbo-16k",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "3",
-      "output_cost_per_million": "4",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/legacy-models"
-    },
-    {
-      "model_key": "azure/gpt-35-turbo-16k-0613",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "3",
-      "output_cost_per_million": "4",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/legacy-models"
-    },
-    {
       "model_key": "azure/gpt-35-turbo-instruct",
       "provider": "azure_text",
       "mode": "completion",
@@ -3195,17 +3157,6 @@
       "source_url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     {
-      "model_key": "azure/gpt-4",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "30",
-      "output_cost_per_million": "60",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
       "model_key": "azure/gpt-4-0125-preview",
       "provider": "azure",
       "mode": "chat",
@@ -3216,17 +3167,6 @@
       "special_pricing_fields": []
     },
     {
-      "model_key": "azure/gpt-4-0613",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "30",
-      "output_cost_per_million": "60",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/legacy-models"
-    },
-    {
       "model_key": "azure/gpt-4-1106-preview",
       "provider": "azure",
       "mode": "chat",
@@ -3235,28 +3175,6 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
-    },
-    {
-      "model_key": "azure/gpt-4-32k",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "60",
-      "output_cost_per_million": "120",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/legacy-models"
-    },
-    {
-      "model_key": "azure/gpt-4-32k-0613",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "60",
-      "output_cost_per_million": "120",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/legacy-models"
     },
     {
       "model_key": "azure/gpt-4-turbo",
@@ -3386,20 +3304,6 @@
         "output_cost_per_token_batches"
       ],
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure/gpt-4.5-preview",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "75",
-      "output_cost_per_million": "150",
-      "cache_read_cost_per_million": "37.5",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/legacy-models"
     },
     {
       "model_key": "azure/gpt-4o",
@@ -5364,17 +5268,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure/us/o1-preview",
-      "provider": "azure",
-      "mode": "chat",
-      "input_cost_per_million": "16.5",
-      "output_cost_per_million": "66",
-      "cache_read_cost_per_million": "8.25",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
       "model_key": "azure/us/o3",
       "provider": "azure",
       "mode": "chat",
@@ -5527,6 +5420,20 @@
       ],
       "cache_creation_1h_cost_per_million": "0.2",
       "source_url": "https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide"
+    },
+    {
+      "model_key": "azure_ai/claude-mythos-5-1",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "10",
+      "output_cost_per_million": "50",
+      "cache_read_cost_per_million": "0.25",
+      "cache_creation_cost_per_million": "12.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "20",
+      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models"
     },
     {
       "model_key": "azure_ai/claude-opus-4-5",
@@ -5720,17 +5627,6 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    {
-      "model_key": "azure_ai/deepseek-v3",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "1.14",
-      "output_cost_per_million": "4.56",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     {
       "model_key": "azure_ai/deepseek-v3-0324",
@@ -6474,17 +6370,6 @@
       "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     {
-      "model_key": "azure_ai/jamba-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.5",
-      "output_cost_per_million": "0.7",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
       "model_key": "azure_ai/kimi-k2-thinking",
       "provider": "azure_ai",
       "mode": "chat",
@@ -6606,28 +6491,6 @@
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     {
-      "model_key": "azure_ai/Meta-Llama-3-70B-Instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "1.1",
-      "output_cost_per_million": "0.37",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Meta-Llama-3.1-70B-Instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "2.68",
-      "output_cost_per_million": "3.54",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
       "model_key": "azure_ai/ministral-3b",
       "provider": "azure_ai",
       "mode": "chat",
@@ -6637,28 +6500,6 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://marketplace.microsoft.com/en/marketplace/apps/000-000.ministral-3b-2410-offer?tab=Overview"
-    },
-    {
-      "model_key": "azure_ai/mistral-large",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "4",
-      "output_cost_per_million": "12",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/mistral-large-2407",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "2",
-      "output_cost_per_million": "6",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     {
       "model_key": "azure_ai/mistral-large-3",
@@ -6715,17 +6556,6 @@
       "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     {
-      "model_key": "azure_ai/mistral-small",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "1",
-      "output_cost_per_million": "3",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
       "model_key": "azure_ai/mistral-small-2503",
       "provider": "azure_ai",
       "mode": "chat",
@@ -6756,105 +6586,6 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/aoai/"
-    },
-    {
-      "model_key": "azure_ai/Phi-3-medium-128k-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.17",
-      "output_cost_per_million": "0.68",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3-medium-4k-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.17",
-      "output_cost_per_million": "0.68",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3-mini-128k-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.13",
-      "output_cost_per_million": "0.52",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3-mini-4k-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.13",
-      "output_cost_per_million": "0.52",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3-small-128k-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.15",
-      "output_cost_per_million": "0.6",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3-small-8k-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.15",
-      "output_cost_per_million": "0.6",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3.5-mini-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.13",
-      "output_cost_per_million": "0.52",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3.5-MoE-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.16",
-      "output_cost_per_million": "0.64",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
-    },
-    {
-      "model_key": "azure_ai/Phi-3.5-vision-instruct",
-      "provider": "azure_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.13",
-      "output_cost_per_million": "0.52",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     {
       "model_key": "azure_ai/Phi-4",
@@ -9060,9 +8791,12 @@
       "cache_read_cost_per_million": "0.6",
       "cache_creation_cost_per_million": "7.5",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
-      "cache_creation_1h_cost_per_million": "12"
+      "cache_creation_1h_cost_per_million": "12",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-east-1/index.json"
     },
     {
       "model_key": "bedrock/us-gov-east-1/anthropic.claude-opus-5-5",
@@ -9347,9 +9081,12 @@
       "cache_read_cost_per_million": "0.6",
       "cache_creation_cost_per_million": "7.5",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
-      "cache_creation_1h_cost_per_million": "12"
+      "cache_creation_1h_cost_per_million": "12",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-west-1/index.json"
     },
     {
       "model_key": "bedrock/us-gov-west-1/anthropic.claude-opus-5-5",
@@ -10337,16 +10074,6 @@
       "mode": "chat",
       "input_cost_per_million": "0.85",
       "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
-    },
-    {
-      "model_key": "cerebras/llama3.1-70b",
-      "provider": "cerebras",
-      "mode": "chat",
-      "input_cost_per_million": "0.6",
-      "output_cost_per_million": "0.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
@@ -12255,7 +11982,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
     },
     {
       "model_key": "databricks/databricks-gemini-3-5-flash-lite",
@@ -12271,7 +11998,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
     },
     {
       "model_key": "databricks/databricks-gemini-3-6-flash",
@@ -12287,7 +12014,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
     },
     {
       "model_key": "databricks/databricks-gemini-3-7-flash",
@@ -12303,7 +12030,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
     },
     {
       "model_key": "databricks/databricks-gemini-3-8-flash",
@@ -12319,7 +12046,7 @@
         "input_cost_per_token_priority",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
     },
     {
       "model_key": "databricks/databricks-gemini-3-flash",
@@ -13058,7 +12785,7 @@
       "mode": "chat",
       "input_cost_per_million": "0.5",
       "output_cost_per_million": "2.15",
-      "cache_read_cost_per_million": "0.4",
+      "cache_read_cost_per_million": "0.35",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
     },
@@ -13130,7 +12857,7 @@
       "mode": "chat",
       "input_cost_per_million": "0.25",
       "output_cost_per_million": "0.95",
-      "cache_read_cost_per_million": "0.216",
+      "cache_read_cost_per_million": "0.13",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://deepinfra.com/pricing"
@@ -13171,9 +12898,9 @@
       "model_key": "deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731",
       "provider": "deepinfra",
       "mode": "chat",
-      "input_cost_per_million": "0.08",
+      "input_cost_per_million": "0.06",
       "output_cost_per_million": "0.18",
-      "cache_read_cost_per_million": "0.016",
+      "cache_read_cost_per_million": "0.015",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://deepinfra.com/pricing"
@@ -13334,8 +13061,8 @@
       "model_key": "deepinfra/google/gemma-4-31B-it",
       "provider": "deepinfra",
       "mode": "chat",
-      "input_cost_per_million": "0.13",
-      "output_cost_per_million": "0.38",
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.4",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -14820,10 +14547,12 @@
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": "6.875",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "11",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/eu-west-1/index.json"
     },
     {
       "model_key": "eu.anthropic.claude-opus-5-5",
@@ -18798,12 +18527,14 @@
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
         "input_cost_per_token_above_200k_tokens_batches",
+        "input_cost_per_token_above_200k_tokens_flex",
         "input_cost_per_token_above_200k_tokens_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_above_200k_tokens",
         "output_cost_per_token_above_200k_tokens_batches",
+        "output_cost_per_token_above_200k_tokens_flex",
         "output_cost_per_token_above_200k_tokens_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex",
@@ -18890,12 +18621,14 @@
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
         "input_cost_per_token_above_200k_tokens_batches",
+        "input_cost_per_token_above_200k_tokens_flex",
         "input_cost_per_token_above_200k_tokens_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_above_200k_tokens",
         "output_cost_per_token_above_200k_tokens_batches",
+        "output_cost_per_token_above_200k_tokens_flex",
         "output_cost_per_token_above_200k_tokens_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex",
@@ -19107,7 +18840,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+      "source_url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-flash-preview"
     },
     {
       "model_key": "gemini-pro-latest",
@@ -19154,11 +18887,7 @@
       "output_cost_per_million": "5",
       "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "cache_read_input_token_cost_batches",
-        "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
+      "special_pricing_fields": [],
       "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
     },
     {
@@ -20271,10 +20000,12 @@
       "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": "6.25",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "10",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-east-1/index.json"
     },
     {
       "model_key": "global.anthropic.claude-opus-5-5",
@@ -22424,17 +22155,6 @@
       "special_pricing_fields": []
     },
     {
-      "model_key": "groq/llama-guard-3-8b",
-      "provider": "groq",
-      "mode": "chat",
-      "input_cost_per_million": "0.2",
-      "output_cost_per_million": "0.2",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://console.groq.com/docs/model/llama-guard-3-8b"
-    },
-    {
       "model_key": "groq/meta-llama/llama-prompt-guard-2-22m",
       "provider": "groq",
       "mode": "chat",
@@ -23331,10 +23051,12 @@
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": "6.875",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "11",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-northeast-1/index.json"
     },
     {
       "model_key": "jp.anthropic.claude-opus-5-5",
@@ -26296,10 +26018,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.14",
       "output_cost_per_million": "0.28",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.01",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Flash-0731"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/deepseek-ai/DeepSeek-V4-Pro",
@@ -26307,10 +26029,10 @@
       "mode": "chat",
       "input_cost_per_million": "1.75",
       "output_cost_per_million": "3.5",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.14",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Pro"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/deepseek-ai/DeepSeek-V4-Pro-0813",
@@ -26318,10 +26040,10 @@
       "mode": "chat",
       "input_cost_per_million": "1.32",
       "output_cost_per_million": "3.96",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.04",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Pro-0813"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/deepseek-ai/DeepSeek-V4.1-Flash",
@@ -26329,10 +26051,21 @@
       "mode": "chat",
       "input_cost_per_million": "0.3",
       "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.01",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/endpoints?modals=endpoint-details&model-id=deepseek-ai/DeepSeek-V4.1-Flash"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    {
+      "model_key": "nebius/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "provider": "nebius",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/google/gemma-3-27b-it",
@@ -26340,10 +26073,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.1",
       "output_cost_per_million": "0.3",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.04",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/google%2Fgemma-3-27b-it"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/meta-llama/Llama-3.3-70B-Instruct",
@@ -26401,6 +26134,17 @@
       "source_url": "https://nebius.com/prices"
     },
     {
+      "model_key": "nebius/meta-models/muse-spark-open",
+      "provider": "nebius",
+      "mode": "chat",
+      "input_cost_per_million": "1.25",
+      "output_cost_per_million": "4.25",
+      "cache_read_cost_per_million": "0.15",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    {
       "model_key": "nebius/MiniMaxAI/MiniMax-M2.5",
       "provider": "nebius",
       "mode": "chat",
@@ -26417,10 +26161,21 @@
       "mode": "chat",
       "input_cost_per_million": "0.3",
       "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.06",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/MiniMaxAI%2FMiniMax-M3"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    {
+      "model_key": "nebius/MiniMaxAI/MiniMax-M3.1-Flash",
+      "provider": "nebius",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.015",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/mistralai/Mistral-Nemo-Instruct-2407",
@@ -26439,10 +26194,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.95",
       "output_cost_per_million": "4",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.16",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/image2text/moonshotai%2FKimi-K2.6"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/moonshotai/Kimi-K2.7-Code",
@@ -26450,10 +26205,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.95",
       "output_cost_per_million": "4",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.15",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/moonshotai%2FKimi-K2.7-Code"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/moonshotai/Kimi-K3",
@@ -26461,10 +26216,10 @@
       "mode": "chat",
       "input_cost_per_million": "3",
       "output_cost_per_million": "15",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.3",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/image2text/moonshotai%2FKimi-K3"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/NousResearch/Hermes-3-Llama-3.1-405B",
@@ -26483,10 +26238,10 @@
       "mode": "chat",
       "input_cost_per_million": "1",
       "output_cost_per_million": "3",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/NousResearch%2FHermes-4-405B"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/NousResearch/Hermes-4-70B",
@@ -26560,10 +26315,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.3",
       "output_cost_per_million": "0.9",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.06",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2Fnemotron-3-super-120b-a12b"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/nvidia/Nemotron-3-Ultra-550b-a55b",
@@ -26571,10 +26326,21 @@
       "mode": "chat",
       "input_cost_per_million": "1",
       "output_cost_per_million": "3",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNemotron-3-Ultra-550b-a55b"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    {
+      "model_key": "nebius/nvidia/Nemotron-3.5-Super-VL",
+      "provider": "nebius",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "0.9",
+      "cache_read_cost_per_million": "0.06",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/nvidia/Nemotron-3_5-Lightning",
@@ -26582,10 +26348,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.06",
       "output_cost_per_million": "0.24",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.03",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNemotron-3_5-Lightning"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
@@ -26593,10 +26359,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.06",
       "output_cost_per_million": "0.24",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.012",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNVIDIA-Nemotron-3-Nano-30B-A3B"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/openai/gpt-oss-120b",
@@ -26604,10 +26370,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.15",
       "output_cost_per_million": "0.6",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/openai%2Fgpt-oss-120b"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/openbmb/MiniCPM-V-4_5",
@@ -26615,10 +26381,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.658",
       "output_cost_per_million": "1.11",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.13",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/image2text/openbmb%2FMiniCPM-V-4_5"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/Qwen/Qwen2-VL-72B-Instruct",
@@ -26714,10 +26480,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.2",
       "output_cost_per_million": "0.6",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-235B-A22B-Instruct-2507"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/Qwen/Qwen3-30B-A3B",
@@ -26736,10 +26502,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.1",
       "output_cost_per_million": "0.3",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-30B-A3B-Instruct-2507"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/Qwen/Qwen3-32B",
@@ -26780,10 +26546,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.6",
       "output_cost_per_million": "3.6",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3.5-397B-A17B"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/Qwen/Qwen3.8-27B",
@@ -26791,10 +26557,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.45",
       "output_cost_per_million": "3",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3.8-27B"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/Qwen/QwQ-32B",
@@ -26813,10 +26579,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.25",
       "output_cost_per_million": "1",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/reflection%2Fbeam"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/zai-org/GLM-5.1",
@@ -26824,10 +26590,10 @@
       "mode": "chat",
       "input_cost_per_million": "1.4",
       "output_cost_per_million": "4.4",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.26",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.1"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/zai-org/GLM-5.2",
@@ -26835,10 +26601,10 @@
       "mode": "chat",
       "input_cost_per_million": "1.4",
       "output_cost_per_million": "4.4",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.14",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.2"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/zai-org/GLM-5.3",
@@ -26846,10 +26612,10 @@
       "mode": "chat",
       "input_cost_per_million": "1.4",
       "output_cost_per_million": "4.4",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.26",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.3"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "nebius/zai-org/GLM-5.3-Flash",
@@ -26857,10 +26623,10 @@
       "mode": "chat",
       "input_cost_per_million": "0.15",
       "output_cost_per_million": "0.5",
-      "cache_read_cost_per_million": null,
+      "cache_read_cost_per_million": "0.03",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.3-Flash"
+      "source_url": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     {
       "model_key": "novita/baichuan/baichuan-m2-32b",
@@ -27177,7 +26943,7 @@
       "mode": "chat",
       "input_cost_per_million": "1.32",
       "output_cost_per_million": "3.96",
-      "cache_read_cost_per_million": "0.13200000000000002",
+      "cache_read_cost_per_million": "0.044",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://novita.ai/pricing"
@@ -27372,9 +27138,9 @@
       "model_key": "novita/mindai/macaron-v1-tall",
       "provider": "novita",
       "mode": "chat",
-      "input_cost_per_million": "0.45000000000000003",
-      "output_cost_per_million": "2.6",
-      "cache_read_cost_per_million": "0.08",
+      "input_cost_per_million": "0.2475",
+      "output_cost_per_million": "1.43",
+      "cache_read_cost_per_million": "0.044",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://novita.ai/pricing"
@@ -27383,9 +27149,9 @@
       "model_key": "novita/mindai/macaron-v1-venti",
       "provider": "novita",
       "mode": "chat",
-      "input_cost_per_million": "1.5",
-      "output_cost_per_million": "4.5",
-      "cache_read_cost_per_million": "0.3",
+      "input_cost_per_million": "0.825",
+      "output_cost_per_million": "2.475",
+      "cache_read_cost_per_million": "0.165",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://novita.ai/pricing"
@@ -32870,55 +32636,11 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
-      "model_key": "together_ai/deepseek-ai/deepseek-coder-33b-instruct",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.8",
-      "output_cost_per_million": "0.8",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
       "model_key": "together_ai/deepseek-ai/DeepSeek-R1-0528",
       "provider": "together_ai",
       "mode": "chat",
       "input_cost_per_million": "3",
       "output_cost_per_million": "7",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "2",
-      "output_cost_per_million": "2",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.18",
-      "output_cost_per_million": "0.18",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "1.6",
-      "output_cost_per_million": "1.6",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -32990,33 +32712,11 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
-      "model_key": "together_ai/google/gemma-2-27b-it",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.8",
-      "output_cost_per_million": "0.8",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
       "model_key": "together_ai/google/gemma-4-31B-it",
       "provider": "together_ai",
       "mode": "chat",
       "input_cost_per_million": "0.39",
       "output_cost_per_million": "0.97",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/meta-llama/Llama-3-8b-chat-hf",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.2",
-      "output_cost_per_million": "0.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -33072,28 +32772,6 @@
       "mode": "chat",
       "input_cost_per_million": "0.18",
       "output_cost_per_million": "0.59",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.88",
-      "output_cost_per_million": "0.88",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/meta-llama/Meta-Llama-3-8B-Instruct",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.2",
-      "output_cost_per_million": "0.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -33199,17 +32877,6 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
-      "model_key": "together_ai/mistralai/Mistral-7B-Instruct-v0.1",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.2",
-      "output_cost_per_million": "0.2",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
       "model_key": "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
       "provider": "together_ai",
       "mode": "chat",
@@ -33298,28 +32965,6 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
-      "model_key": "together_ai/NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.6",
-      "output_cost_per_million": "0.6",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.88",
-      "output_cost_per_million": "0.88",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
       "model_key": "together_ai/nvidia/nemotron-3-ultra-550b-a55b",
       "provider": "together_ai",
       "mode": "chat",
@@ -33397,28 +33042,6 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
-      "model_key": "together_ai/Qwen/Qwen2-72B-Instruct",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.9",
-      "output_cost_per_million": "0.9",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/Qwen/Qwen2-VL-72B-Instruct",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "1.2",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
       "model_key": "together_ai/Qwen/Qwen2.5-14B-Instruct",
       "provider": "together_ai",
       "mode": "chat",
@@ -33457,17 +33080,6 @@
       "mode": "chat",
       "input_cost_per_million": "0.3",
       "output_cost_per_million": "0.3",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/Qwen/Qwen2.5-Coder-32B-Instruct",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "0.8",
-      "output_cost_per_million": "0.8",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -33622,17 +33234,6 @@
       "mode": "chat",
       "input_cost_per_million": "0.15",
       "output_cost_per_million": "0.47",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.together.ai/v1/models"
-    },
-    {
-      "model_key": "together_ai/Qwen/QwQ-32B",
-      "provider": "together_ai",
-      "mode": "chat",
-      "input_cost_per_million": "1.2",
-      "output_cost_per_million": "1.2",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -33815,10 +33416,12 @@
       "cache_read_cost_per_million": "0.6",
       "cache_creation_cost_per_million": "7.5",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "12",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-west-1/index.json"
     },
     {
       "model_key": "us-gov.anthropic.claude-opus-5-5",
@@ -34282,10 +33885,12 @@
       "cache_read_cost_per_million": "0.55",
       "cache_creation_cost_per_million": "6.875",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_1hr"
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "11",
-      "source_url": "https://aws.amazon.com/bedrock/pricing/"
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-east-1/index.json"
     },
     {
       "model_key": "us.anthropic.claude-opus-5-5",
@@ -35839,26 +35444,6 @@
       "special_pricing_fields": []
     },
     {
-      "model_key": "vertex_ai/claude-3-opus",
-      "provider": "vertex_ai-anthropic_models",
-      "mode": "chat",
-      "input_cost_per_million": "15",
-      "output_cost_per_million": "75",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
-    },
-    {
-      "model_key": "vertex_ai/claude-3-opus@20240229",
-      "provider": "vertex_ai-anthropic_models",
-      "mode": "chat",
-      "input_cost_per_million": "15",
-      "output_cost_per_million": "75",
-      "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": []
-    },
-    {
       "model_key": "vertex_ai/claude-3-sonnet",
       "provider": "vertex_ai-anthropic_models",
       "mode": "chat",
@@ -36636,12 +36221,14 @@
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_above_200k_tokens",
         "input_cost_per_token_above_200k_tokens_batches",
+        "input_cost_per_token_above_200k_tokens_flex",
         "input_cost_per_token_above_200k_tokens_priority",
         "input_cost_per_token_batches",
         "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_above_200k_tokens",
         "output_cost_per_token_above_200k_tokens_batches",
+        "output_cost_per_token_above_200k_tokens_flex",
         "output_cost_per_token_above_200k_tokens_priority",
         "output_cost_per_token_batches",
         "output_cost_per_token_flex",
@@ -36861,7 +36448,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+      "source_url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash"
     },
     {
       "model_key": "vertex_ai/gemini-robotics-er-2-preview",
@@ -36871,11 +36458,7 @@
       "output_cost_per_million": "5",
       "cache_read_cost_per_million": "0.1",
       "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [
-        "cache_read_input_token_cost_batches",
-        "input_cost_per_token_batches",
-        "output_cost_per_token_batches"
-      ],
+      "special_pricing_fields": [],
       "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
     },
     {
@@ -37518,6 +37101,116 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.volcengine.com/docs/82379/1544106"
+    },
+    {
+      "model_key": "wally/deepseek-v4-flash-0731",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "0.44",
+      "output_cost_per_million": "1.32",
+      "cache_read_cost_per_million": "0.014",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
+    },
+    {
+      "model_key": "wally/deepseek-v4-pro-fast",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "1.91",
+      "output_cost_per_million": "3.83",
+      "cache_read_cost_per_million": "0.16",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
+    },
+    {
+      "model_key": "wally/deepseek-v4.1-flash",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
+    },
+    {
+      "model_key": "wally/deepseek-v4.1-flash-1017",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "0.375",
+      "output_cost_per_million": "1.5",
+      "cache_read_cost_per_million": "0.008",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inference.runanywhere.ai/v1/models"
+    },
+    {
+      "model_key": "wally/deepseek-v4.1-flash-f2",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://inference.runanywhere.ai/v1/models"
+    },
+    {
+      "model_key": "wally/deepseek-v4.1-flash-fast",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "2.4",
+      "cache_read_cost_per_million": "0.014",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
+    },
+    {
+      "model_key": "wally/glm-5.3-fast",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "2.1",
+      "output_cost_per_million": "6.6",
+      "cache_read_cost_per_million": "0.39",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
+    },
+    {
+      "model_key": "wally/glm-5.3-flash",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "0.272",
+      "output_cost_per_million": "0.65",
+      "cache_read_cost_per_million": "0.076",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
+    },
+    {
+      "model_key": "wally/kimi-k3",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
+      "cache_read_cost_per_million": "0.3",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
+    },
+    {
+      "model_key": "wally/minimax-m3",
+      "provider": "wally",
+      "mode": "chat",
+      "input_cost_per_million": "0.33",
+      "output_cost_per_million": "1.32",
+      "cache_read_cost_per_million": "0.066",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.runwally.com/pricing"
     },
     {
       "model_key": "wandb/deepseek-ai/DeepSeek-V3.1",
