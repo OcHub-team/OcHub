@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "b02bb99b088601407232ae617d832f59a41558b5",
-    "generated_at": "2026-11-06T10:54:46Z",
+    "revision": "709b27e2688d229ae39fc79a9332583de84d3c30",
+    "generated_at": "2026-11-07T10:12:56Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4758,
-    "eligible_entries": 3351
+    "upstream_entries": 4770,
+    "eligible_entries": 3358
   },
   "entries": [
     {
@@ -2215,7 +2215,7 @@
       "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/"
+      "source_url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     {
       "model_key": "azure/computer-use-preview",
@@ -6418,8 +6418,8 @@
       "model_key": "azure_ai/jais-30b-chat",
       "provider": "azure_ai",
       "mode": "chat",
-      "input_cost_per_million": "3200",
-      "output_cost_per_million": "9710",
+      "input_cost_per_million": "3.2",
+      "output_cost_per_million": "9.71",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -14886,9 +14886,9 @@
       "model_key": "empiriolabs/deepseek-v4-1-flash-1017",
       "provider": "empiriolabs",
       "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": null,
+      "input_cost_per_million": "0.2",
+      "output_cost_per_million": "0.8",
+      "cache_read_cost_per_million": "0.02",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://empiriolabs.ai/models/deepseek-v4-1-flash-1017"
@@ -20708,6 +20708,7 @@
       "special_pricing_fields": [
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_batches",
+        "cache_read_input_token_cost_above_200k_tokens_flex",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_batches",
         "cache_read_input_token_cost_flex",
@@ -20762,7 +20763,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+      "source_url": "https://ai.google.dev/gemini-api/docs/deprecations"
     },
     {
       "model_key": "gemini/gemini-3.1-flash-lite",
@@ -20889,7 +20890,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+      "source_url": "https://ai.google.dev/gemini-api/docs/deprecations"
     },
     {
       "model_key": "gemini/gemini-3.5-flash-lite",
@@ -20952,7 +20953,7 @@
         "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+      "source_url": "https://ai.google.dev/gemini-api/docs/deprecations"
     },
     {
       "model_key": "gemini/gemini-3.8-flash",
@@ -21241,7 +21242,7 @@
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+      "source_url": "https://ai.google.dev/gemini-api/docs/deprecations"
     },
     {
       "model_key": "gemini/lyria-3.5",
@@ -21845,6 +21846,26 @@
         "output_cost_per_token_priority"
       ],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    {
+      "model_key": "global.moonshotai.kimi-k3.1",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "4",
+      "output_cost_per_million": "20",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3-1-highspeed.md"
     },
     {
       "model_key": "global.openai.gpt-5.4",
@@ -25295,6 +25316,26 @@
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.md"
     },
     {
+      "model_key": "in.moonshotai.kimi-k3.1",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "4.4",
+      "output_cost_per_million": "22",
+      "cache_read_cost_per_million": "0.22",
+      "cache_creation_cost_per_million": "5.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3-1-highspeed.md"
+    },
+    {
       "model_key": "inception/mercury-2",
       "provider": "inception",
       "mode": "chat",
@@ -28709,6 +28750,26 @@
         "output_cost_per_token_priority"
       ],
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
+    },
+    {
+      "model_key": "moonshotai.kimi-k3.1",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "4.4",
+      "output_cost_per_million": "22",
+      "cache_read_cost_per_million": "0.22",
+      "cache_creation_cost_per_million": "5.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3-1-highspeed.md"
     },
     {
       "model_key": "morph/morph-dsv41flash",
@@ -35218,6 +35279,28 @@
       "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
     },
     {
+      "model_key": "tencent/hy4",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "0.834",
+      "output_cost_per_million": "2.501",
+      "cache_read_cost_per_million": "0.042",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
+      "model_key": "tencent/hy4-preview",
+      "provider": "tencent",
+      "mode": "chat",
+      "input_cost_per_million": "0.834",
+      "output_cost_per_million": "2.501",
+      "cache_read_cost_per_million": "0.042",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.tencentcloud.com/document/product/1300/78937"
+    },
+    {
       "model_key": "tencent/kimi-k2.7-code",
       "provider": "tencent",
       "mode": "chat",
@@ -37094,6 +37177,26 @@
         "output_cost_per_token_priority"
       ],
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    {
+      "model_key": "us.moonshotai.kimi-k3.1",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "4.4",
+      "output_cost_per_million": "22",
+      "cache_read_cost_per_million": "0.22",
+      "cache_creation_cost_per_million": "5.5",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3-1-highspeed.md"
     },
     {
       "model_key": "us.openai.gpt-5.4",
@@ -40152,9 +40255,9 @@
       "model_key": "wandb/deepseek-ai/DeepSeek-V3.1",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.55",
-      "output_cost_per_million": "1.65",
-      "cache_read_cost_per_million": null,
+      "input_cost_per_million": "0.5",
+      "output_cost_per_million": "1.5",
+      "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
@@ -40175,11 +40278,11 @@
       "provider": "wandb",
       "mode": "chat",
       "input_cost_per_million": "0.13",
-      "output_cost_per_million": "0.28",
-      "cache_read_cost_per_million": "0.07",
+      "output_cost_per_million": "0.27",
+      "cache_read_cost_per_million": "0.05",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/deepseek-ai/DeepSeek-V4-Pro",
@@ -40207,12 +40310,23 @@
       "model_key": "wandb/deepseek-ai/DeepSeek-V4.1-Flash",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.2",
+      "input_cost_per_million": "0.13",
       "output_cost_per_million": "0.65",
-      "cache_read_cost_per_million": "0.03",
+      "cache_read_cost_per_million": "0.002",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
+    },
+    {
+      "model_key": "wandb/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "provider": "wandb",
+      "mode": "chat",
+      "input_cost_per_million": "0.13",
+      "output_cost_per_million": "0.65",
+      "cache_read_cost_per_million": "0.002",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/google/gemma-4-26B-A4B-it",
@@ -40251,12 +40365,12 @@
       "model_key": "wandb/ibm-granite/granite-4.2-8b",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.1",
+      "input_cost_per_million": "0.06",
       "output_cost_per_million": "0.15",
-      "cache_read_cost_per_million": "0.05",
+      "cache_read_cost_per_million": "0.015",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/JetBrains/Mellum2-12B-A2.5B-Instruct",
@@ -40339,12 +40453,12 @@
       "model_key": "wandb/moonshotai/Kimi-K2.7-Code",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.71",
-      "output_cost_per_million": "3.5",
-      "cache_read_cost_per_million": "0.15",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "3",
+      "cache_read_cost_per_million": "0.12",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
@@ -40372,9 +40486,9 @@
       "model_key": "wandb/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.25",
-      "output_cost_per_million": "1.5",
-      "cache_read_cost_per_million": "0.05",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.02",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
@@ -40449,12 +40563,12 @@
       "model_key": "wandb/Qwen/Qwen3.6-35B-A3B",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.25",
-      "output_cost_per_million": "1.25",
-      "cache_read_cost_per_million": null,
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.89",
+      "cache_read_cost_per_million": "0.035",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://wandb.ai/site/pricing/tokens/"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "wandb/Qwen/Qwen3.8-27B",
@@ -40471,9 +40585,9 @@
       "model_key": "wandb/reflection/Beam-1.0-501B-A23B",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "1",
-      "output_cost_per_million": "3",
-      "cache_read_cost_per_million": "0.1",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1",
+      "cache_read_cost_per_million": "0.04",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
@@ -40482,7 +40596,7 @@
       "model_key": "wandb/zai-org/GLM-5.2",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.76",
+      "input_cost_per_million": "0.62",
       "output_cost_per_million": "2.42",
       "cache_read_cost_per_million": "0.14",
       "cache_creation_cost_per_million": null,
@@ -40493,8 +40607,8 @@
       "model_key": "wandb/zai-org/GLM-5.3",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "1.2",
-      "output_cost_per_million": "4",
+      "input_cost_per_million": "0.75",
+      "output_cost_per_million": "3",
       "cache_read_cost_per_million": "0.19",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -40504,12 +40618,12 @@
       "model_key": "wandb/zai-org/GLM-5.3-Flash",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.15",
-      "output_cost_per_million": "0.5",
-      "cache_read_cost_per_million": "0.05",
+      "input_cost_per_million": "0.12",
+      "output_cost_per_million": "0.38",
+      "cache_read_cost_per_million": "0.02",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
-      "source_url": "https://docs.wandb.ai/inference/models.md"
+      "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
     },
     {
       "model_key": "watsonx/bigscience/mt0-xxl",
@@ -40537,8 +40651,8 @@
       "model_key": "watsonx/core42/jais-13b-chat",
       "provider": "watsonx",
       "mode": "chat",
-      "input_cost_per_million": "500",
-      "output_cost_per_million": "2000",
+      "input_cost_per_million": "1.8",
+      "output_cost_per_million": "1.8",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": []
