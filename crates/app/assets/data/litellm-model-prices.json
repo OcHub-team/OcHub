@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "709b27e2688d229ae39fc79a9332583de84d3c30",
-    "generated_at": "2026-11-07T10:12:56Z",
+    "revision": "43112547fb9c0a8d482f4fe031e09a6c2cc234e1",
+    "generated_at": "2026-11-08T10:24:40Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4770,
-    "eligible_entries": 3358
+    "upstream_entries": 4870,
+    "eligible_entries": 3360
   },
   "entries": [
     {
@@ -20818,6 +20818,7 @@
       "special_pricing_fields": [
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_batches",
+        "cache_read_input_token_cost_above_200k_tokens_flex",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_batches",
         "cache_read_input_token_cost_flex",
@@ -20850,6 +20851,7 @@
       "special_pricing_fields": [
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_batches",
+        "cache_read_input_token_cost_above_200k_tokens_flex",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_batches",
         "cache_read_input_token_cost_flex",
@@ -28637,6 +28639,20 @@
       "source_url": "https://platform.kimi.ai/docs/pricing/chat"
     },
     {
+      "model_key": "moonshot/kimi-k3.1-pro-highspeed",
+      "provider": "moonshot",
+      "mode": "chat",
+      "input_cost_per_million": "4",
+      "output_cost_per_million": "20",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "4",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "8",
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat"
+    },
+    {
       "model_key": "moonshot/moonshot-v1-128k",
       "provider": "moonshot",
       "mode": "chat",
@@ -35678,6 +35694,17 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
+      "model_key": "together_ai/essentialai/rnj-1-instruct",
+      "provider": "together_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.15",
+      "cache_read_cost_per_million": null,
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://www.together.ai/models/rnj-1-instruct"
+    },
+    {
       "model_key": "together_ai/google/gemma-4-31B-it",
       "provider": "together_ai",
       "mode": "chat",
@@ -36176,9 +36203,9 @@
       "model_key": "together_ai/Qwen/Qwen3.7-Max",
       "provider": "together_ai",
       "mode": "chat",
-      "input_cost_per_million": "1.5",
-      "output_cost_per_million": "4.5",
-      "cache_read_cost_per_million": "0.3",
+      "input_cost_per_million": "2.5",
+      "output_cost_per_million": "7.5",
+      "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.together.ai/pricing"
