@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "eae60c0bc93324d99dd16739650dc0e59d8753c7",
-    "generated_at": "2026-11-09T11:34:54Z",
+    "revision": "433163a8e29bcd01998d5c8e0b8260bb0c542d83",
+    "generated_at": "2026-11-10T11:14:57Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 4870,
-    "eligible_entries": 3360
+    "upstream_entries": 4892,
+    "eligible_entries": 3382
   },
   "entries": [
     {
@@ -1326,6 +1326,20 @@
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
+      "model_key": "anthropic.claude-fable-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "anthropic.claude-haiku-4-5-20251001-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -1396,6 +1410,20 @@
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "20",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
+      "model_key": "anthropic.claude-mythos-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
@@ -5445,6 +5473,34 @@
       "cache_creation_1h_cost_per_million": "20"
     },
     {
+      "model_key": "azure_ai/claude-fable-5-2",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "model_key": "azure_ai/claude-fable-5-2-fast",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "16",
+      "output_cost_per_million": "80",
+      "cache_read_cost_per_million": "0.4",
+      "cache_creation_cost_per_million": "20",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "32",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
       "model_key": "azure_ai/claude-haiku-4-5",
       "provider": "azure_ai",
       "mode": "chat",
@@ -7582,6 +7638,24 @@
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
     },
     {
+      "model_key": "bedrock/claude_platform/claude-fable-5-2",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    {
       "model_key": "bedrock/claude_platform/claude-haiku-4-5",
       "provider": "bedrock",
       "mode": "chat",
@@ -8840,6 +8914,19 @@
       "cache_creation_1h_cost_per_million": "24"
     },
     {
+      "model_key": "bedrock/us-gov-east-1/anthropic.claude-fable-5-2",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "9.6",
+      "output_cost_per_million": "48",
+      "cache_read_cost_per_million": "0.24",
+      "cache_creation_cost_per_million": "12",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.2"
+    },
+    {
       "model_key": "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0",
       "provider": "bedrock",
       "mode": "chat",
@@ -8870,6 +8957,20 @@
         "output_cost_per_token_above_100k_tokens"
       ],
       "cache_creation_1h_cost_per_million": "0.24",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
+      "model_key": "bedrock/us-gov-east-1/anthropic.claude-mythos-5-2",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "9.6",
+      "output_cost_per_million": "48",
+      "cache_read_cost_per_million": "0.24",
+      "cache_creation_cost_per_million": "12",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.2",
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
@@ -9248,6 +9349,19 @@
       "cache_creation_1h_cost_per_million": "24"
     },
     {
+      "model_key": "bedrock/us-gov-west-1/anthropic.claude-fable-5-2",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "9.6",
+      "output_cost_per_million": "48",
+      "cache_read_cost_per_million": "0.24",
+      "cache_creation_cost_per_million": "12",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.2"
+    },
+    {
       "model_key": "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0",
       "provider": "bedrock",
       "mode": "chat",
@@ -9278,6 +9392,20 @@
         "output_cost_per_token_above_100k_tokens"
       ],
       "cache_creation_1h_cost_per_million": "0.24",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
+      "model_key": "bedrock/us-gov-west-1/anthropic.claude-mythos-5-2",
+      "provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_million": "9.6",
+      "output_cost_per_million": "48",
+      "cache_read_cost_per_million": "0.24",
+      "cache_creation_cost_per_million": "12",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.2",
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
@@ -10731,6 +10859,24 @@
         "output_cost_per_token_batches"
       ],
       "cache_creation_1h_cost_per_million": "20",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "model_key": "claude-fable-5-2",
+      "provider": "anthropic",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     {
@@ -14071,7 +14217,7 @@
       "model_key": "deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
       "provider": "deepinfra",
       "mode": "chat",
-      "input_cost_per_million": "0.085",
+      "input_cost_per_million": "0.075",
       "output_cost_per_million": "0.4",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
@@ -16111,6 +16257,20 @@
       "cache_creation_1h_cost_per_million": "22"
     },
     {
+      "model_key": "eu.anthropic.claude-fable-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8.8",
+      "output_cost_per_million": "44",
+      "cache_read_cost_per_million": "0.22",
+      "cache_creation_cost_per_million": "11",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "17.6",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -16143,6 +16303,20 @@
         "output_cost_per_token_above_100k_tokens"
       ],
       "cache_creation_1h_cost_per_million": "0.22",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
+      "model_key": "eu.anthropic.claude-mythos-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8.8",
+      "output_cost_per_million": "44",
+      "cache_read_cost_per_million": "0.22",
+      "cache_creation_cost_per_million": "11",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "17.6",
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
@@ -19885,34 +20059,12 @@
       "source_url": "https://api.fireworks.ai/v1/serverless/models"
     },
     {
-      "model_key": "friendliai/deepseek-ai/DeepSeek-V3.2",
-      "provider": "friendliai",
-      "mode": "chat",
-      "input_cost_per_million": "0.5",
-      "output_cost_per_million": "1.5",
-      "cache_read_cost_per_million": "0.25",
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.friendli.ai/serverless/v1/models"
-    },
-    {
       "model_key": "friendliai/google/gemma-4-31B-it",
       "provider": "friendliai",
       "mode": "chat",
       "input_cost_per_million": "0.14",
       "output_cost_per_million": "0.4",
       "cache_read_cost_per_million": null,
-      "cache_creation_cost_per_million": null,
-      "special_pricing_fields": [],
-      "source_url": "https://api.friendli.ai/serverless/v1/models"
-    },
-    {
-      "model_key": "friendliai/MiniMaxAI/MiniMax-M2.5",
-      "provider": "friendliai",
-      "mode": "chat",
-      "input_cost_per_million": "0.3",
-      "output_cost_per_million": "1.2",
-      "cache_read_cost_per_million": "0.06",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://api.friendli.ai/serverless/v1/models"
@@ -20229,7 +20381,6 @@
       "cache_read_cost_per_million": "0.125",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_flex",
@@ -20324,7 +20475,6 @@
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_priority",
@@ -20354,7 +20504,6 @@
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "input_cost_per_token_above_200k_tokens",
         "input_cost_per_token_batches",
@@ -21343,6 +21492,17 @@
       "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
     },
     {
+      "model_key": "github_copilot/claude-fable-5.2",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [],
+      "source_url": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml"
+    },
+    {
       "model_key": "github_copilot/claude-haiku-4.5",
       "provider": "github_copilot",
       "mode": "chat",
@@ -21616,6 +21776,20 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "global.anthropic.claude-fable-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -21662,6 +21836,20 @@
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "20",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
+      "model_key": "global.anthropic.claude-mythos-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
@@ -24637,9 +24825,12 @@
       "cache_read_cost_per_million": "2",
       "cache_creation_cost_per_million": "25",
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_12hr"
+        "cache_creation_input_token_cost_above_12hr",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens"
       ],
-      "source_url": "https://developers.openai.com/api/docs/models/gpt-6-cyber"
+      "source_url": "https://developers.openai.com/api/docs/pricing"
     },
     {
       "model_key": "gpt-6-luna",
@@ -27597,6 +27788,21 @@
       "source_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-scout-17b-instruct.md"
     },
     {
+      "model_key": "meta/muse-ember-1.0",
+      "provider": "meta",
+      "mode": "chat",
+      "input_cost_per_million": "0.1",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.004",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
+      "source_url": "https://dev.meta.ai/docs/pricing-rate-limits"
+    },
+    {
       "model_key": "meta/muse-spark-1.1",
       "provider": "meta",
       "mode": "chat",
@@ -27789,6 +27995,17 @@
         "input_cost_per_token_above_512k_tokens",
         "output_cost_per_token_above_512k_tokens"
       ]
+    },
+    {
+      "model_key": "minimax/MiniMax-M3.1-Flash",
+      "provider": "minimax",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.6",
+      "cache_read_cost_per_million": "0.015",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://platform.minimax.io/docs/guides/pricing-paygo"
     },
     {
       "model_key": "mistral.devstral-2-123b",
@@ -35694,6 +35911,17 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
+      "model_key": "together_ai/elorian-labs/glimpse-1.0",
+      "provider": "together_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.6",
+      "output_cost_per_million": "3",
+      "cache_read_cost_per_million": "0.06",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.together.ai/v1/models"
+    },
+    {
       "model_key": "together_ai/essentialai/rnj-1-instruct",
       "provider": "together_ai",
       "mode": "chat",
@@ -36390,6 +36618,20 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "us-gov.anthropic.claude-fable-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "9.6",
+      "output_cost_per_million": "48",
+      "cache_read_cost_per_million": "0.24",
+      "cache_creation_cost_per_million": "12",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.2",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "us-gov.anthropic.claude-haiku-5-5",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -36406,6 +36648,20 @@
         "output_cost_per_token_above_100k_tokens"
       ],
       "cache_creation_1h_cost_per_million": "0.24",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
+      "model_key": "us-gov.anthropic.claude-mythos-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "9.6",
+      "output_cost_per_million": "48",
+      "cache_read_cost_per_million": "0.24",
+      "cache_creation_cost_per_million": "12",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "19.2",
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
@@ -36758,6 +37014,20 @@
       "source_url": "https://aws.amazon.com/bedrock/pricing/"
     },
     {
+      "model_key": "us.anthropic.claude-fable-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8.8",
+      "output_cost_per_million": "44",
+      "cache_read_cost_per_million": "0.22",
+      "cache_creation_cost_per_million": "11",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "17.6",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
       "model_key": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
       "provider": "bedrock_converse",
       "mode": "chat",
@@ -36818,6 +37088,20 @@
         "cache_creation_input_token_cost_above_1hr"
       ],
       "cache_creation_1h_cost_per_million": "22",
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+    },
+    {
+      "model_key": "us.anthropic.claude-mythos-5-2",
+      "provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_million": "8.8",
+      "output_cost_per_million": "44",
+      "cache_read_cost_per_million": "0.22",
+      "cache_creation_cost_per_million": "11",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "17.6",
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     {
@@ -38573,6 +38857,42 @@
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     {
+      "model_key": "vertex_ai/claude-fable-5-2",
+      "provider": "vertex_ai-anthropic_models",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
+      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    {
+      "model_key": "vertex_ai/claude-fable-5-2@default",
+      "provider": "vertex_ai-anthropic_models",
+      "mode": "chat",
+      "input_cost_per_million": "8",
+      "output_cost_per_million": "40",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": "10",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr",
+        "cache_creation_input_token_cost_batches",
+        "cache_read_input_token_cost_batches",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches"
+      ],
+      "cache_creation_1h_cost_per_million": "16",
+      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    {
       "model_key": "vertex_ai/claude-fable-5@default",
       "provider": "vertex_ai-anthropic_models",
       "mode": "chat",
@@ -39214,7 +39534,6 @@
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_priority",
@@ -39270,7 +39589,6 @@
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_priority",
@@ -39300,7 +39618,6 @@
       "cache_read_cost_per_million": "0.2",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
-        "cache_creation_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens",
         "cache_read_input_token_cost_above_200k_tokens_priority",
         "cache_read_input_token_cost_priority",
@@ -40348,9 +40665,9 @@
       "model_key": "wandb/deepseek-ai/DeepSeek-V4.1-Flash-1017",
       "provider": "wandb",
       "mode": "chat",
-      "input_cost_per_million": "0.13",
-      "output_cost_per_million": "0.65",
-      "cache_read_cost_per_million": "0.002",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://www.coreweave.com/products/coreweave-forge/serverless-inference"
