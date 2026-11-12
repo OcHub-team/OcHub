@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "8b8ec4e3a64facae7af657ab06bc214dd5bf9060",
-    "generated_at": "2026-11-11T10:59:41Z",
+    "revision": "52d1c4cd80162fbf03d7f92def0cb1631f1edfd4",
+    "generated_at": "2026-11-12T11:14:08Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 5873,
-    "eligible_entries": 3445
+    "upstream_entries": 5919,
+    "eligible_entries": 3447
   },
   "entries": [
     {
@@ -8414,7 +8414,9 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "input_cost_per_token_flex",
-        "output_cost_per_token_flex"
+        "input_cost_per_token_priority",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
       ],
       "source_url": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json"
     },
@@ -12378,12 +12380,15 @@
       "model_key": "databricks/databricks-claude-fable-5-2",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "8",
-      "output_cost_per_million": "40",
-      "cache_read_cost_per_million": "8",
-      "cache_creation_cost_per_million": "8",
-      "special_pricing_fields": [],
-      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
+      "input_cost_per_million": "8.00002",
+      "output_cost_per_million": "40.00003",
+      "cache_read_cost_per_million": "0.19999",
+      "cache_creation_cost_per_million": "9.99999",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "15.99997",
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
       "model_key": "databricks/databricks-claude-haiku-4-5",
@@ -12885,6 +12890,17 @@
       "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     {
+      "model_key": "databricks/databricks-gemini-4-carbon",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "2",
+      "cache_creation_cost_per_million": "2",
+      "special_pricing_fields": [],
+      "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
+    },
+    {
       "model_key": "databricks/databricks-gemma-3-12b",
       "provider": "databricks",
       "mode": "chat",
@@ -13344,10 +13360,24 @@
       "model_key": "databricks/system.ai.claude-fable-5-2",
       "provider": "databricks",
       "mode": "chat",
-      "input_cost_per_million": "8",
-      "output_cost_per_million": "40",
-      "cache_read_cost_per_million": "8",
-      "cache_creation_cost_per_million": "8",
+      "input_cost_per_million": "8.00002",
+      "output_cost_per_million": "40.00003",
+      "cache_read_cost_per_million": "0.19999",
+      "cache_creation_cost_per_million": "9.99999",
+      "special_pricing_fields": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "cache_creation_1h_cost_per_million": "15.99997",
+      "source_url": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    {
+      "model_key": "databricks/system.ai.gemini-4-carbon",
+      "provider": "databricks",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "2",
+      "cache_creation_cost_per_million": "2",
       "special_pricing_fields": [],
       "source_url": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
     },
@@ -13522,8 +13552,8 @@
       "model_key": "deepinfra/anthropic/claude-sonnet-5",
       "provider": "deepinfra",
       "mode": "chat",
-      "input_cost_per_million": "2",
-      "output_cost_per_million": "10",
+      "input_cost_per_million": "3",
+      "output_cost_per_million": "15",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -14130,7 +14160,7 @@
       "model_key": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
       "provider": "deepinfra",
       "mode": "chat",
-      "input_cost_per_million": "0.019",
+      "input_cost_per_million": "0.029",
       "output_cost_per_million": "0.03",
       "cache_read_cost_per_million": null,
       "cache_creation_cost_per_million": null,
@@ -14320,8 +14350,8 @@
       "model_key": "deepinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning",
       "provider": "deepinfra",
       "mode": "chat",
-      "input_cost_per_million": "0.08",
-      "output_cost_per_million": "0.2",
+      "input_cost_per_million": "0.06",
+      "output_cost_per_million": "0.16",
       "cache_read_cost_per_million": "0.04",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
@@ -42810,8 +42840,10 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
       "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
