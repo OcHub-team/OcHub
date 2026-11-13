@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "52d1c4cd80162fbf03d7f92def0cb1631f1edfd4",
-    "generated_at": "2026-11-12T11:14:08Z",
+    "revision": "6abacd329b70dc668f69c705eb7118fbd639cd96",
+    "generated_at": "2026-11-13T11:00:09Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 5919,
-    "eligible_entries": 3447
+    "upstream_entries": 5979,
+    "eligible_entries": 3454
   },
   "entries": [
     {
@@ -5855,6 +5855,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/deepseek-v4-1-flash-is-coming-to-microsoft-foundry/4556431"
+    },
+    {
+      "model_key": "azure_ai/deepseek-v4.1-flash-1017",
+      "provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1.2",
+      "cache_read_cost_per_million": "0.006",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://ai.azure.com/catalog/models/DeepSeek-V4.1-Flash-1017"
     },
     {
       "model_key": "azure_ai/FW-DeepSeek-V3.2",
@@ -21402,6 +21413,27 @@
       "source_url": "https://aistudio.google.com/docs/pricing#gemini-4-carbon"
     },
     {
+      "model_key": "gemini/gemini-4-hydrogen",
+      "provider": "gemini",
+      "mode": "chat",
+      "input_cost_per_million": "1.5",
+      "output_cost_per_million": "7.5",
+      "cache_read_cost_per_million": "0.075",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen"
+    },
+    {
       "model_key": "gemini/gemini-exp-1114",
       "provider": "gemini",
       "mode": "chat",
@@ -22924,6 +22956,17 @@
       "source_url": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     {
+      "model_key": "gmi/google/gemini-4-carbon",
+      "provider": "gmi",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "10",
+      "cache_read_cost_per_million": "0.1",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    {
       "model_key": "gmi/google/gemma-4-26b-a4b-it",
       "provider": "gmi",
       "mode": "chat",
@@ -23694,6 +23737,21 @@
       "cache_read_cost_per_million": "0.5",
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
+      "source_url": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    {
+      "model_key": "gmi/xai/grok4.7",
+      "provider": "gmi",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "6",
+      "cache_read_cost_per_million": "0.5",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_above_200k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
       "source_url": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     {
@@ -37282,6 +37340,17 @@
       "source_url": "https://api.together.ai/v1/models"
     },
     {
+      "model_key": "together_ai/thinkingmachines/Inkling-2-Small",
+      "provider": "together_ai",
+      "mode": "chat",
+      "input_cost_per_million": "0.3",
+      "output_cost_per_million": "1",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://api.together.ai/v1/models"
+    },
+    {
       "model_key": "together_ai/together/Tev1-4B-experimental",
       "provider": "together_ai",
       "mode": "chat",
@@ -40224,6 +40293,17 @@
       "special_pricing_fields": []
     },
     {
+      "model_key": "vertex_ai/deep-research-preview-04-2026",
+      "provider": "vertex_ai",
+      "mode": "chat",
+      "input_cost_per_million": "2",
+      "output_cost_per_million": "12",
+      "cache_read_cost_per_million": "0.2",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://cloud.google.com/model-garden/pricing"
+    },
+    {
       "model_key": "vertex_ai/deep-research-pro-preview-12-2025",
       "provider": "vertex_ai-language-models",
       "mode": "chat",
@@ -40645,6 +40725,27 @@
         "input_cost_per_token_batches",
         "input_cost_per_token_priority",
         "output_cost_per_token_batches",
+        "output_cost_per_token_priority"
+      ],
+      "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    {
+      "model_key": "vertex_ai/gemini-4-hydrogen",
+      "provider": "vertex_ai",
+      "mode": "chat",
+      "input_cost_per_million": "1.5",
+      "output_cost_per_million": "7.5",
+      "cache_read_cost_per_million": "0.075",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [
+        "cache_read_input_token_cost_batches",
+        "cache_read_input_token_cost_flex",
+        "cache_read_input_token_cost_priority",
+        "input_cost_per_token_batches",
+        "input_cost_per_token_flex",
+        "input_cost_per_token_priority",
+        "output_cost_per_token_batches",
+        "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
