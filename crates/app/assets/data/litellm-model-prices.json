@@ -3,14 +3,14 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "6abacd329b70dc668f69c705eb7118fbd639cd96",
-    "generated_at": "2026-11-13T11:00:09Z",
+    "revision": "6fc368a15c7a54f63d9265f6f4d3d91333b641c3",
+    "generated_at": "2026-11-14T10:28:33Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 5979,
-    "eligible_entries": 3454
+    "upstream_entries": 5987,
+    "eligible_entries": 3459
   },
   "entries": [
     {
@@ -4114,16 +4114,12 @@
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
         "cache_creation_input_token_cost_above_272k_tokens_flex",
-        "cache_creation_input_token_cost_flex",
         "cache_read_input_token_cost_above_272k_tokens",
         "cache_read_input_token_cost_above_272k_tokens_flex",
-        "cache_read_input_token_cost_flex",
         "input_cost_per_token_above_272k_tokens",
         "input_cost_per_token_above_272k_tokens_flex",
-        "input_cost_per_token_flex",
         "output_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens_flex",
-        "output_cost_per_token_flex"
+        "output_cost_per_token_above_272k_tokens_flex"
       ],
       "source_url": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/"
     },
@@ -4161,17 +4157,9 @@
       "cache_creation_cost_per_million": "0.125",
       "special_pricing_fields": [
         "cache_creation_input_token_cost_above_272k_tokens",
-        "cache_creation_input_token_cost_above_272k_tokens_flex",
-        "cache_creation_input_token_cost_flex",
         "cache_read_input_token_cost_above_272k_tokens",
-        "cache_read_input_token_cost_above_272k_tokens_flex",
-        "cache_read_input_token_cost_flex",
         "input_cost_per_token_above_272k_tokens",
-        "input_cost_per_token_above_272k_tokens_flex",
-        "input_cost_per_token_flex",
-        "output_cost_per_token_above_272k_tokens",
-        "output_cost_per_token_above_272k_tokens_flex",
-        "output_cost_per_token_flex"
+        "output_cost_per_token_above_272k_tokens"
       ],
       "source_url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -14369,6 +14357,17 @@
       "source_url": "https://deepinfra.com/pricing"
     },
     {
+      "model_key": "deepinfra/nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+      "provider": "deepinfra",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.02",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://deepinfra.com/nvidia/NVIDIA-Nemotron-3.5-Super-VL"
+    },
+    {
       "model_key": "deepinfra/nvidia/NVIDIA-Nemotron-Nano-9B-v2",
       "provider": "deepinfra",
       "mode": "chat",
@@ -14788,6 +14787,17 @@
       "source_url": "https://deepinfra.com/pricing"
     },
     {
+      "model_key": "deepinfra/tencent/Hy4-preview",
+      "provider": "deepinfra",
+      "mode": "chat",
+      "input_cost_per_million": "0.834",
+      "output_cost_per_million": "2.501",
+      "cache_read_cost_per_million": "0.042",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://deepinfra.com/tencent/Hy4-preview"
+    },
+    {
       "model_key": "deepinfra/thinkingmachines/Inkling",
       "provider": "deepinfra",
       "mode": "chat",
@@ -14830,6 +14840,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://deepinfra.com/pricing"
+    },
+    {
+      "model_key": "deepinfra/XiaomiMiMo/MiMo-V2.6-Flash",
+      "provider": "deepinfra",
+      "mode": "chat",
+      "input_cost_per_million": "0.14",
+      "output_cost_per_million": "0.28",
+      "cache_read_cost_per_million": "0.0028",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://deepinfra.com/XiaomiMiMo/MiMo-V2.6-Flash"
     },
     {
       "model_key": "deepinfra/zai-org/GLM-4.5",
@@ -14906,6 +14927,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://deepinfra.com/pricing"
+    },
+    {
+      "model_key": "deepinfra/zai-org/GLM-5.3-Flash",
+      "provider": "deepinfra",
+      "mode": "chat",
+      "input_cost_per_million": "0.15",
+      "output_cost_per_million": "0.5",
+      "cache_read_cost_per_million": "0.03",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://deepinfra.com/zai-org/GLM-5.3-Flash"
     },
     {
       "model_key": "deepseek-chat",
@@ -21942,6 +21974,17 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [],
       "source_url": "https://github.blog/changelog/2026-11-09-gemini-4-carbon-in-github-copilot"
+    },
+    {
+      "model_key": "github_copilot/gemini-4-hydrogen",
+      "provider": "github_copilot",
+      "mode": "chat",
+      "input_cost_per_million": "1.5",
+      "output_cost_per_million": "7.5",
+      "cache_read_cost_per_million": "0.075",
+      "cache_creation_cost_per_million": null,
+      "special_pricing_fields": [],
+      "source_url": "https://github.blog/changelog/2026-11-13-gemini-4-hydrogen-in-github-copilot"
     },
     {
       "model_key": "github_copilot/gpt-5-mini",
@@ -40661,13 +40704,10 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "cache_read_input_token_cost_batches",
-        "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_batches",
-        "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_batches",
-        "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -40682,13 +40722,10 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "cache_read_input_token_cost_batches",
-        "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_batches",
-        "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_batches",
-        "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -40739,13 +40776,10 @@
       "cache_creation_cost_per_million": null,
       "special_pricing_fields": [
         "cache_read_input_token_cost_batches",
-        "cache_read_input_token_cost_flex",
         "cache_read_input_token_cost_priority",
         "input_cost_per_token_batches",
-        "input_cost_per_token_flex",
         "input_cost_per_token_priority",
         "output_cost_per_token_batches",
-        "output_cost_per_token_flex",
         "output_cost_per_token_priority"
       ],
       "source_url": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
