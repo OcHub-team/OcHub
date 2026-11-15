@@ -3,13 +3,13 @@
   "source": {
     "name": "LiteLLM",
     "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "revision": "6fc368a15c7a54f63d9265f6f4d3d91333b641c3",
-    "generated_at": "2026-11-14T10:28:33Z",
+    "revision": "09ce4f50ed1298882747c6e279ea6760f1527384",
+    "generated_at": "2026-11-15T10:55:50Z",
     "license": "MIT",
     "license_url": "https://github.com/BerriAI/litellm/blob/main/LICENSE"
   },
   "stats": {
-    "upstream_entries": 5987,
+    "upstream_entries": 5993,
     "eligible_entries": 3459
   },
   "entries": [
